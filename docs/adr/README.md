@@ -1,0 +1,32 @@
+# Architecture decision records
+
+This page lists the architecture decision records (ADRs) of cloudflare-tokengate. It is for security reviewers and contributors who want to know why the system is built the way it is.
+
+Each ADR uses the format from [0001](0001-record-architecture-decisions.md): Status, Context, Decision, Consequences. The current design is described in [architecture.md](../architecture.md).
+
+| ADR | Decision | Status |
+|---|---|---|
+| [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted |
+| [0002](0002-workload-identity-tokens-for-callers.md) | Callers authenticate with workload identity tokens | Accepted |
+| [0003](0003-cloudflare-workers-and-two-d1-databases.md) | Cloudflare Workers with two D1 databases | Accepted |
+| [0004](0004-envelope-encryption-bound-to-destination.md) | Envelope encryption bound to the destination, not Secrets Store | Accepted |
+| [0005](0005-grant-model.md) | Grant model: Conditions, anchor rules, trusted events, tenant pin | Accepted |
+| [0006](0006-no-policy-caching.md) | No policy caching | Accepted |
+| [0007](0007-server-rendered-admin-ui-without-client-javascript.md) | Server-rendered admin UI without client JavaScript | Accepted |
+| [0008](0008-login-providers-from-environment.md) | Login providers from the environment; email linking only for invited users | Accepted |
+| [0009](0009-telemetry-design.md) | Telemetry in D1, optional queue and R2 archive, no Analytics Engine | Accepted |
+| [0010](0010-dependency-injection-for-tests.md) | Dependency injection for tests | Accepted |
+| [0011](0011-oauth-state-in-host-cookie.md) | OAuth state in a `__Host-` cookie | Accepted |
+| [0012](0012-apache-2-0-license.md) | Apache-2.0 license | Accepted |
+| [0013](0013-operator-variables-outside-wrangler-config.md) | Operator variables outside `wrangler.jsonc` | Accepted |
+| [0014](0014-integrity-rules-in-sql.md) | Integrity rules and audit rows enforced in SQL | Accepted |
+
+## Adding an ADR
+
+1. Copy the structure of an existing ADR.
+2. Use the next free number and a short kebab-case title.
+3. Set the status to `Proposed` in the pull request. Change it to `Accepted` when the pull request merges.
+4. If the ADR replaces an earlier one, set the earlier one's status to `Superseded by NNNN`. Do not edit its other sections.
+5. Add a row to the table above.
+
+[CONTRIBUTING.md](../../CONTRIBUTING.md) says which changes need an ADR.

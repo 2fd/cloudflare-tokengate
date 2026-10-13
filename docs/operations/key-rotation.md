@@ -1,0 +1,226 @@
+# Key rotation
+
+This page explains how to rotate the key-encryption key (KEK) that protects stored credentials, and
+how to recover when a key is replaced or lost. It is for owners and platform engineers.
+
+## How the keyring works
+
+Each credential is sealed with a fresh data key, and that data key is wrapped with a KEK from the
+Keyring (`src/crypto/envelope.ts`). The sealed value records the key id (`kid`) that wrapped it. Both
+layers are bound to the service id, base URL and injection ([I-CRED-2](../threat-model.md#i-cred-2)).
+
+The keyring comes from exactly one of two Worker secrets (`src/crypto/keyring.ts`):
+
+| Secret | Format | Key ids |
+|---|---|---|
+| `TOKENGATE_KEK` | Standard base64 of 32 random bytes | Always `k1` |
+| `TOKENGATE_KEYRING` | JSON `{"active":"k2","keys":{"k1":"<base64>","k2":"<base64>"}}` | Your choice; `active` seals new credentials |
+
+- Key ids match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. Every key is 32 bytes.
+- If both secrets are set, the keyring fails with `both_kek_and_keyring_set`. The proxy then answers
+  `503 not_configured` for every service, and credential changes are refused.
+- Cloudflare cannot return a secret's value. Keep every key in your own vault. If you lose a key,
+  you lose every credential sealed with it ([known limitations](../threat-model.md#credentials-and-responses)).
+
+### Key check values
+
+A key check value (KCV) identifies a key without revealing it: the first 8 bytes of
+HMAC-SHA256(key, `tokengate/v1/kek-check`), in hex.
+
+- Settings > Encryption keys lists each loaded key id with its "Check value", whether it is
+  "Used for new credentials", and how many "Credentials encrypted with it".
+- `pnpm -s keyring check` prints the same values for a secret read from stdin
+  (`scripts/keyring.ts`). It uses the Worker's parser, so it reports the same errors.
+- The gateway records a KCV for each key id the first time a credential is sealed with it
+  (`keyring_kcv` in `settings`). It never silently replaces that value while other credentials use
+  the key id. If the key behind a key id changes, `/readyz` reports `keyring: false` and the
+  dashboard shows an error banner.
+
+## Before you start
+
+- You are an owner. Only owners see "Re-encrypt credentials with the active key".
+- You can run `pnpm wrangler` against the account (`pnpm wrangler login`), from a clone of the
+  repository with `pnpm install` done, on Node.js 22.18 or later (`pnpm keyring` needs type stripping).
+- You have `jq`.
+- In the commands below, `vault-read <item>` and `vault-write <item>` stand for your vault's CLI (for
+  example `op read op://<vault>/<item>/password`). Keys travel through pipes and environment
+  variables only; they are never written to disk or passed as command arguments.
+
+Each `wrangler secret` command deploys a new Worker version at once. New isolates use the new
+Keyring. A request that is already running finishes with the old one.
+
+## Rotate from `TOKENGATE_KEK` to a keyring
+
+Use this the first time. The current `TOKENGATE_KEK` becomes key id `k1`; the new key becomes `k2`.
+
+1. Open Settings > Encryption keys and note the check value of `k1`.
+2. Check that your vault copy is the deployed key. The printed `kid k1 kcv` must equal the value from
+   step 1:
+
+   ```sh
+   vault-read tokengate-kek-k1 | pnpm -s keyring check
+   ```
+
+   If the values differ, stop: the vault copy is not the deployed key. Find the right key first.
+3. Generate the new key and store it in the vault. The key goes to stdout, its KCV to stderr:
+
+   ```sh
+   pnpm -s keyring generate | vault-write tokengate-kek-k2
+   ```
+
+4. Build the keyring and check it. The output must show `active k2` and both key ids:
+
+   ```sh
+   K1="$(vault-read tokengate-kek-k1)" K2="$(vault-read tokengate-kek-k2)" \
+     jq -cn '{active: "k2", keys: {k1: $ENV.K1, k2: $ENV.K2}}' | pnpm -s keyring check
+   ```
+
+5. Set `TOKENGATE_KEYRING` and delete `TOKENGATE_KEK` in one request. Setting them in two steps
+   would leave a window with both secrets set, or with neither:
+
+   ```sh
+   K1="$(vault-read tokengate-kek-k1)" K2="$(vault-read tokengate-kek-k2)" \
+     jq -cn '{TOKENGATE_KEYRING: ({active: "k2", keys: {k1: $ENV.K1, k2: $ENV.K2}} | tojson), TOKENGATE_KEK: null}' \
+     | pnpm wrangler secret bulk
+   ```
+
+6. Reload Settings > Encryption keys. Check that `k1` and `k2` are listed with the check values from
+   step 4, and that `k2` is marked "active".
+7. Check `/readyz`: `checks.keyring` is `true`.
+8. Select "Re-encrypt credentials with the active key". The notice says "Credentials re-encrypted
+   with the active key."
+9. If the notice says some credentials changed while it ran, select the button again.
+10. Check that the page says "Every stored credential uses the active key." and that `k1` shows 0
+    "Credentials encrypted with it".
+11. [Remove the old key](#remove-the-old-key).
+
+Re-encryption opens each credential and seals it again under the active key, with the same binding
+([I-CRED-2](../threat-model.md#i-cred-2)). The plaintext stays in memory. It writes one
+`keyring.rewrap` audit event ([I-AUDIT-1](../threat-model.md#i-audit-1)). If any credential cannot be
+opened, nothing is written and the page lists the affected services.
+
+## Rotate a keyring
+
+The same steps, with `TOKENGATE_KEYRING` only. Example: from active `k2` to a new `k3`.
+
+1. Check the vault copy of the current key against Settings > Encryption keys:
+
+   ```sh
+   vault-read tokengate-kek-k2 | pnpm -s keyring check
+   ```
+
+2. Generate the new key: `pnpm -s keyring generate | vault-write tokengate-kek-k3`.
+3. Set the new keyring with both keys and `k3` active:
+
+   ```sh
+   K2="$(vault-read tokengate-kek-k2)" K3="$(vault-read tokengate-kek-k3)" \
+     jq -cn '{active: "k3", keys: {k2: $ENV.K2, k3: $ENV.K3}}' | pnpm wrangler secret put TOKENGATE_KEYRING
+   ```
+
+4. Do steps 6 to 11 of the previous procedure, with `k3` as the active key and `k2` as the old key.
+
+Never reuse a key id for different key material. The gateway then reports the key id as changed.
+
+## Remove the old key
+
+Remove a key only when no credential uses it. A Credential sealed with a key id that is not in the
+Keyring cannot be opened: its service answers `503 credential_unavailable` (reason
+`keyring_missing_key`), and the dashboard shows an error banner.
+
+1. Check that the old key id shows 0 "Credentials encrypted with it" in Settings > Encryption keys.
+2. Set the keyring without the old key:
+
+   ```sh
+   K2="$(vault-read tokengate-kek-k2)" jq -cn '{active: "k2", keys: {k2: $ENV.K2}}' \
+     | pnpm wrangler secret put TOKENGATE_KEYRING
+   ```
+
+3. Check `/readyz`: `checks.keyring` is `true`.
+4. Keep the old key in the vault for as long as a backup can contain credentials sealed with it:
+   D1 Time Travel goes back 30 days on Workers Paid, and any `d1 export` file you keep. To restore
+   such a backup, add the old key back to the keyring as a non-active key, then re-encrypt
+   ([backup and restore](backup-restore.md)).
+
+## Recover from a replaced key
+
+Symptom: an error banner says "Key id(s) ... now hold a different key than the one stored
+credentials were sealed with", `/readyz` reports `keyring: false`, and affected services answer
+`503 credential_unavailable` (reason `credential_binding_mismatch`). Typical cause: someone set a new
+value with `wrangler secret put TOKENGATE_KEK`, so key id `k1` now names different key material.
+
+To enter again a credential that no longer opens, the service page asks for the base URL and
+injection again (it does not prefill them, because a service row changed in D1 looks the same) and
+for the destination host under "Confirm destination host". Take all three from an out-of-band source
+([incident response](incident-response.md#a-service-destination-was-changed-outside-the-admin-ui)).
+
+Saving or entering a credential again does not clear the alert while other credentials still use the
+key id. Choose one recovery:
+
+**Option A: restore the original key** (preferred).
+
+1. Put the original key back:
+
+   ```sh
+   vault-read tokengate-kek-k1 | pnpm wrangler secret put TOKENGATE_KEK
+   ```
+
+2. Check that the check value in Settings matches the one `pnpm -s keyring check` prints for it.
+3. If someone saved credentials while the new key was in place, enter those credentials again. Key
+   check values are per key id, not per credential: the alert clears, but credentials sealed with
+   the replacement key fail with `credential_unavailable` ([known limitations](../threat-model.md#credentials-and-responses)).
+
+**Option B: accept the new key.** Use this only if the original key is lost.
+
+1. Enter every credential the old key sealed again, on each service page under "Change credential or
+   destination".
+2. In Settings > Encryption keys, select "Re-encrypt credentials with the active key". It opens every
+   Credential under the changed key id. If all of them open, it records the new check value and the
+   alert clears; the notice says "New key confirmed: every credential opens with it." Otherwise
+   nothing is written, and the page lists the services whose credential still needs the old key.
+
+## If a key is lost
+
+Without the key, the credentials it sealed cannot be recovered, also not from D1 Time Travel or an
+export.
+
+1. Generate a new key: `pnpm -s keyring generate | vault-write tokengate-kek-k2`. If `k2` is already
+   in use, pick the next unused key id.
+2. Set it under a new key id, so it does not collide with the recorded check value of the lost key.
+   For a Worker that has `TOKENGATE_KEK`:
+
+   ```sh
+   K2="$(vault-read tokengate-kek-k2)" \
+     jq -cn '{TOKENGATE_KEYRING: ({active: "k2", keys: {k2: $ENV.K2}} | tojson), TOKENGATE_KEK: null}' \
+     | pnpm wrangler secret bulk
+   ```
+
+   If the Worker already uses `TOKENGATE_KEYRING`, pipe the new keyring JSON to
+   `pnpm wrangler secret put TOKENGATE_KEYRING` instead, and keep every key you still have.
+
+3. Get a new credential from each upstream and enter it on each service page. Enter the base URL,
+   injection and destination host too, as in [Recover from a replaced key](#recover-from-a-replaced-key). Until then, the
+   dashboard lists the missing key id and those services answer `503 credential_unavailable`.
+4. Check that the error banner is gone and `/readyz` reports `keyring: true`.
+
+## If a key leaked
+
+A leaked KEK alone does not expose credentials. Combined with a copy of the `services` table (a D1
+export, a Time Travel restore, D1 read access), it does.
+
+1. Rotate the key with the procedure above, including [removing the old key](#remove-the-old-key).
+2. Rotate every upstream credential sealed with the leaked key ([credential rotation](credential-rotation.md)):
+   old backups still hold those credentials sealed with the leaked key.
+3. Follow [incident response](incident-response.md).
+
+## Rollbacks and secrets
+
+A Worker version includes its secrets. `wrangler rollback` to a version from before a key change
+restores that version's keyring; wrangler asks you to confirm when secrets differ. Do not confirm a
+rollback that brings back a removed or replaced key. See [upgrades](upgrades.md#roll-back).
+
+## Related pages
+
+- [configuration.md](../configuration.md#keyring-tokengate_kek-or-tokengate_keyring): Keyring
+  secrets and errors.
+- [backup-restore.md](backup-restore.md): which key a restore needs.
+- [troubleshooting.md](troubleshooting.md): `credential_unavailable` and `not_configured`.

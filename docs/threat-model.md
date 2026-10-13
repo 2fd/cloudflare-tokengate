@@ -1,0 +1,334 @@
+# Threat model
+
+This page lists what cloudflare-tokengate protects, who it defends against, the invariants that hold
+the design together and the limits it does not cover. It is for security reviewers, operators who
+sign off on a deployment and contributors who change security-sensitive code.
+
+Every invariant has an ID (for example I-CRED-2). Other pages cite these IDs. Each ID names the
+module that enforces it and the tests whose `describe()` name starts with it.
+`bash scripts/check-threat-ids.sh` fails if an ID on this page has no such test.
+
+## Scope and assumptions
+
+- Each company deploys its own copy to its own Cloudflare account. There is no shared service and
+  no cross-company tenancy.
+- The Cloudflare platform (Workers runtime, D1, secrets, TLS, the edge) is trusted.
+- People who can deploy the Worker or read its secrets have full trust. They can change the code,
+  read the keyring and therefore every credential. This model does not defend against them.
+- Upstream APIs are trusted to enforce their own authorization for the credential they receive.
+  The gateway only limits which callers may send which requests.
+- Caller provider issuers (GitHub, GitLab, other OIDC issuers) and login providers are trusted to sign only
+  true claims.
+
+## Assets
+
+| Asset | Where it lives | Why it matters |
+|---|---|---|
+| Upstream credentials | `services.credential_sealed` in `DB`, sealed with the keyring | Direct access to upstream APIs; the main asset. |
+| Keyring (`TOKENGATE_KEK` or `TOKENGATE_KEYRING`) | Worker secret; your vault | Opens every credential. Losing it loses every credential. |
+| Admin sessions | `__Host-tokengate_session` cookie; SHA-256 of the id in `sessions` | A session acts with the user's role. |
+| Policy (caller providers, services, grants, users) | `DB` | Decides who can use which credential. |
+| Request records | `request_log` in `TELEMETRY_DB`; optional R2 archive | Allowlisted claims (repository, actor, ref, run), client IP, user agent. |
+| Audit events | `audit_log` in `DB`; `audit.event` log lines | Evidence of every admin change. |
+| Caller tokens | In transit only | A valid token passes verification until it expires. |
+
+## Actors
+
+| Actor | Can do | Main controls |
+|---|---|---|
+| Anyone on the internet | Mint a valid GitHub Actions or GitLab.com OIDC token for any audience from their own repository, because these issuers are shared. Send any request to `/proxy/*`, `/auth/*`, `/healthz`, `/readyz`. | Audience check (I-JWT-1), tenant pin required on shared issuers (I-TEN-1), deny by default (I-AUTHZ-1). |
+| CI workload in your tenant | Present a token with claims that describe its repository, ref, event and workflow. Includes untrusted pull request code. | Grants pin immutable IDs or a workflow path (I-AUTHZ-2; workflow pins follow repository names, see [Callers and tokens](#callers-and-tokens)); untrusted events need an exact opt-in (I-AUTHZ-3); conditions fail closed (I-AUTHZ-4); rules limit method and path (I-AUTHZ-1, I-PATH-1). |
+| Org member who can create repositories | Create a repository inside the tenant. Its tokens pass the tenant pin. | Anchor rules: a grant pins an exact `repository_id` or `job_workflow_ref` (GitLab: `project_id` or `ci_config_ref_uri`) (I-AUTHZ-2). A new repository matches no repository-pinned grant. A `job_workflow_ref` or `ci_config_ref_uri` grant admits any repository or project that runs the pinned workflow or configuration, and a renamed, transferred or deleted pinned repository can be recreated: add `repository_id` / `project_id` and hardcode the gateway URL in the pinned file ([Callers and tokens](#callers-and-tokens)). |
+| Repository writer or admin | Push branches and tags, start `workflow_dispatch`, create environments, change branch protection, rulesets and environment rules. | Conditions on `ref`, `environment` and `ref_protected` are only as strong as the repository settings. Save-time warnings flag broad globs and missing `ref_protected exact true` ([policies](policies.md)). |
+| Admin user (`admin` role) | Create and change caller providers, services and grants; enter and test credentials; export configuration. | Can USE a credential through a grant but cannot EXTRACT it from the gateway (I-CRED-1, I-CRED-2). Every change is audited (I-AUDIT-1). |
+| Owner user (`owner` role) | Everything an admin can do, plus users, settings, keyring re-encryption and session revocation. | RBAC table (I-RBAC-1); last-owner trigger (I-OWNER-1). |
+| Viewer user (`viewer` role) | Read every admin page except the create forms, including request records. | No page shows secret material (I-RBAC-1, I-CRED-1). |
+| Holder of D1 read access or a D1 backup | Read sealed credentials, request records, emails, audit events. | Credentials are sealed; the keyring is not in D1 (I-CRED-2). Session ids are stored hashed (I-SESS-1). |
+| Holder of D1 write access | Insert or change any row. | Cannot open a credential (I-CRED-2). Can change a service's destination: the stored credential then fails closed, and the next credential entry is blocked until the admin types the destination host. A service the writer strips of its credential or inserts has no such check ([known limitations](#admin-side)). Can create a caller provider and grant and so USE Credentials, and can make any user an owner, without an audit event. Treat D1 write as admin-equivalent ([break-glass](operations/break-glass.md) relies on it). |
+| Worker deployer, keyring holder | Deploy code, which can read every secret. Set secrets. Hold a copy of the keyring. | Out of scope: full trust. |
+
+## Trust boundaries
+
+```mermaid
+flowchart LR
+  caller["CI job<br/>(caller token)"] -->|"1 caller → proxy"| gw["tokengate Worker"]
+  browser["Admin browser"] -->|"3 browser → admin"| gw
+  gw -->|"2 proxy → upstream<br/>(Credential injected)"| up["Upstream API"]
+  gw -->|"4 Worker → D1"| d1[("DB / TELEMETRY_DB")]
+  gw -->|"5 Worker → IdP / JWKS"| idp["Caller provider JWKS,<br/>Login provider"]
+```
+
+1. **Caller → proxy.** Untrusted input: headers, path, query, body. The token is verified before
+   any claim is trusted (I-TOK-2, I-JWT-1). The tenant pin runs before the caller learns whether the
+   service exists (I-TEN-1).
+2. **Proxy → upstream.** The outbound request is rebuilt from an allowlist. Only the credential
+   and allowlisted headers leave the gateway (I-TOK-1, I-INJ-1). The URL stays under the service
+   base URL (I-PATH-1, I-SSRF-1). Redirects are never followed (I-REDIR-1). Response headers are
+   filtered (I-RESP-1). Response bodies pass through untouched (see
+   [Known limitations](#known-limitations)).
+3. **Browser → admin.** Server-rendered HTML without scripts. Sessions (I-SESS-1), CSRF
+   (I-CSRF-1), OAuth state (I-OAUTH-1), RBAC (I-RBAC-1), host pinning (I-DEPLOY-1).
+4. **Worker → D1.** D1 is the source of truth and is read on every request; there is no policy
+   cache. Integrity rules that matter are enforced in SQL: last owner (I-OWNER-1), bootstrap
+   (I-BOOT-1), invite linking (I-LINK-1), audit atomicity (I-AUDIT-1).
+5. **Worker → IdP and JWKS.** JWKS fetches are gated per URI (I-JWT-2). GitHub and OIDC admin
+   logins use the authorization code flow with PKCE. Cloudflare Access logins verify the
+   `Cf-Access-Jwt-Assertion` header against the team keys. The OIDC ID token comes straight
+   from the discovered token endpoint over TLS, which OpenID Connect Core
+   [§3.1.3.7](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation) accepts in
+   place of a signature check.
+
+## Invariants
+
+"Enforced in" names the modules that make the invariant true. "Tested in" lists the test files
+whose `describe()` names the ID. Paths are relative to the repository root.
+
+| ID | Invariant | Enforced in | Tested in |
+|---|---|---|---|
+| <a id="i-tok-1"></a>I-TOK-1 | The caller token, from any accepted header, never reaches the upstream. | `src/proxy/forward.ts` (`buildUpstreamHeaders`), `src/proxy/headers.ts` (`REQUEST_ALLOWLIST`, `NEVER_FORWARD`) | `test/security/proxy-token.test.ts`, `test/security/no-leak.test.ts`, `test/unit/proxy/forward.test.ts` |
+| <a id="i-tok-2"></a>I-TOK-2 | Only a compact JWS of at most 16 KiB is accepted. Different tokens in different headers are rejected (`token_ambiguous`). | `src/proxy/caller-token.ts`, `src/identity/jwt.ts` | `test/security/proxy-token.test.ts`, `test/security/jwt.test.ts`, `test/unit/proxy/caller-token.test.ts` |
+| <a id="i-jwt-1"></a>I-JWT-1 | Signature algorithm in the caller provider's allowlist (never `none` or HS\*), exact issuer, non-empty audience of at least 16 characters, maximum token age, required claims. Checked at save time and at request time. | `src/identity/jwt.ts`, `src/policy/validate.ts`, `src/admin/ops/caller-providers.ts` | `test/security/jwt.test.ts`, `test/unit/policy/algs.test.ts`, `test/unit/policy/validate.test.ts`, `test/unit/admin/ops/save-time-invariants.test.ts` |
+| <a id="i-jwt-2"></a>I-JWT-2 | JWKS refetch is gated: at most one fetch per `jwks_uri` per 30 s, so unknown `kid` values cannot amplify traffic. | `src/identity/jwt.ts` | `test/security/jwt.test.ts` |
+| <a id="i-ten-1"></a>I-TEN-1 | Shared issuers (`https://token.actions.githubusercontent.com`, `https://gitlab.com`) require a tenant pin. Every pin condition must hold, else 401 `tenant_mismatch`, before the caller learns whether the service exists. | `src/identity/jwt.ts` (`tenantPinHolds`), `src/proxy/handler.ts` (step order), `src/policy/validate.ts`, `src/identity/profiles/index.ts` | `test/security/proxy-tenant.test.ts`, `test/security/jwt.test.ts`, `test/unit/policy/validate.test.ts`, `test/unit/admin/ops/save-time-invariants.test.ts` |
+| <a id="i-authz-1"></a>I-AUTHZ-1 | Deny by default: no matching grant means 403. Revocation takes effect on the next request (no cache). Method-override query parameters are refused. | `src/policy/evaluate.ts`, `src/db/proxy-context.ts`, `src/policy/glob.ts`, `src/proxy/path.ts` (`hasMethodOverrideParam`) | `test/security/authz-policy.test.ts`, `test/security/proxy-tenant.test.ts`, `test/unit/policy/evaluate.test.ts` |
+| <a id="i-authz-2"></a>I-AUTHZ-2 | A Grant must satisfy an anchor rule: exact, non-negated conditions on immutable IDs, or on a workflow pin (`job_workflow_ref`, `ci_config_ref_uri`), which is path-based and follows repository names ([Callers and tokens](#callers-and-tokens)). Checked at save time, when the caller provider changes, and at request time. | `src/identity/profiles/*.ts` (`anchorRules`), `src/policy/conditions.ts` (`satisfiesAnchorRule`), `src/policy/validate.ts`, `src/policy/evaluate.ts`, `src/admin/ops/caller-providers.ts`, `src/admin/ops/grants.ts` | `test/security/authz-policy.test.ts`, `test/security/provider-anchor-change.test.ts`, `test/security/jwt.test.ts`, `test/unit/policy/validate.test.ts`, `test/unit/admin/ops/save-time-invariants.test.ts` |
+| <a id="i-authz-3"></a>I-AUTHZ-3 | Events outside the profile's trusted events need an exact, non-negated opt-in on the event claim. Globs never opt in. | `src/policy/evaluate.ts`, `src/identity/profiles/github-actions.ts`, `src/identity/profiles/gitlab-ci.ts` | `test/security/authz-policy.test.ts`, `test/security/jwt.test.ts`, `test/unit/policy/evaluate.test.ts` |
+| <a id="i-authz-4"></a>I-AUTHZ-4 | A Condition on a missing or non-scalar claim is false, also when negated. | `src/policy/conditions.ts` | `test/unit/policy/conditions.test.ts` (vectors in `test/vectors/conditions.json`) |
+| <a id="i-path-1"></a>I-PATH-1 | The upstream URL has the base URL's origin and stays under its path (plus the injection prefix). Traversal and encoded variants are rejected with 400 `path_invalid`. | `src/proxy/path.ts`, `src/proxy/routes.ts` | `test/security/proxy-ssrf.test.ts`, `test/unit/proxy/path.test.ts` (vectors in `test/vectors/paths.json`), `test/unit/proxy/forward.test.ts` |
+| <a id="i-inj-1"></a>I-INJ-1 | Caller copies of the injected header or query parameter are removed. The credential appears only in the outbound request. Unknown injection kinds fail closed. | `src/proxy/inject.ts`, `src/proxy/path.ts`, `src/proxy/forward.ts`, `src/policy/validate.ts` (`normalizeInjection`) | `test/security/proxy-token.test.ts`, `test/unit/proxy/inject.test.ts`, `test/unit/proxy/forward.test.ts`, `test/unit/policy/validate.test.ts` |
+| <a id="i-cred-1"></a>I-CRED-1 | The credential never appears in gateway responses, logs, audit diffs, the admin UI (the verify preview is masked), exports, `/readyz` or cron output. The upstream reason phrase is never forwarded. | `src/proxy/inject.ts` (`secretVariants`), `src/proxy/forward.ts`, `src/proxy/handler.ts`, `src/db/audit.ts`, `src/admin/ops/services.ts`, `src/admin/ops/verify.ts`, `src/admin/ops/export.ts`, `src/health.ts` | `test/security/no-leak.test.ts`, `test/security/response-redaction.test.ts`, `test/security/audit-coverage-ops.test.ts`, `test/integration/health.test.ts`, `test/unit/proxy/inject.test.ts`, `test/unit/proxy/forward.test.ts`, `test/unit/policy/validate.test.ts`, `test/unit/telemetry/cron.test.ts`, `test/unit/telemetry/dashboard.test.ts` |
+| <a id="i-cred-2"></a>I-CRED-2 | The sealed credential is bound by AAD to service id, base URL and injection. Changing the base URL or injection requires entering the credential again. A D1-level edit of the base URL or injection fails closed with 503 (`credential_unavailable`, or `not_configured` when the stored base URL is not valid). Entering a credential again for a service whose stored credential does not open requires the admin to type the destination host. | `src/crypto/envelope.ts`, `src/db/services.ts`, `src/admin/ops/services.ts`, `src/proxy/handler.ts` | `test/security/proxy-credential-binding.test.ts`, `test/security/credential-repoint.test.ts`, `test/security/credential-destination-confirm.test.ts`, `test/unit/crypto/envelope.test.ts` (vectors in `test/vectors/sealed.json`) |
+| <a id="i-redir-1"></a>I-REDIR-1 | Upstream fetches use `redirect: 'manual'`. Redirects are returned, never followed. A same-origin `Location` or `Link` under the base path is rewritten to the gateway; outside it, it is dropped. A cross-origin `Location` passes unchanged; cross-origin `Link` values are dropped. | `src/proxy/forward.ts` | `test/security/proxy-redirect.test.ts`, `test/unit/proxy/forward.test.ts` |
+| <a id="i-resp-1"></a>I-RESP-1 | Upstream response headers are filtered (`RESPONSE_DROP`). Headers that echo the credential are dropped and named in `x-tokengate-redacted`. | `src/proxy/forward.ts` (`filterResponseHeaders`), `src/proxy/headers.ts`, `src/proxy/inject.ts` | `test/security/response-redaction.test.ts`, `test/security/response-redaction-url-parsing.test.ts`, `test/security/proxy-redirect.test.ts`, `test/unit/proxy/forward.test.ts`, `test/unit/proxy/inject.test.ts` |
+| <a id="i-ssrf-1"></a>I-SSRF-1 | Base URLs are https, have no credentials, query or fragment, are not IP literals, `localhost`, `*.workers.dev` or the gateway's own host, and match `ALLOWED_UPSTREAM_HOSTS` when set. Checked at save time and on every proxied request. `global_fetch_strictly_public` is on. | `src/policy/validate.ts` (`validateBaseUrl`), `src/proxy/handler.ts` (`storedBaseUrlValid`), `src/config.ts` (`upstreamHostAllowed`), `wrangler.jsonc`, `scripts/check-config.sh` | `test/security/proxy-ssrf.test.ts`, `test/security/deploy-config.test.ts`, `test/security/check-config-test.sh`, `test/unit/policy/validate.test.ts`, `test/unit/admin/ops/save-time-invariants.test.ts` |
+| <a id="i-log-1"></a>I-LOG-1 | No raw token or credential reaches any sink (request log, archive, console, trace). Only the profile's allowlisted claims are stored. The get-token action masks every token it prints. | `src/telemetry/record.ts`, `src/telemetry/sinks.ts`, `src/identity/profiles/*.ts` (`logClaimAllowlist`), `src/policy/conditions.ts` (trace details), `actions/get-token/action.yml` | `test/security/no-leak.test.ts`, `test/security/proxy-logging.test.ts`, `test/security/jwt.test.ts`, `test/security/deploy-config.test.ts`, `test/security/get-token-action.sh`, `test/unit/policy/evaluate.test.ts` |
+| <a id="i-log-2"></a>I-LOG-2 | Unverified claims are never stored. "Create grant from this request" prefills only from verified records. | `src/telemetry/record.ts`, `src/admin/routes/grants.tsx`, `src/admin/routes/requests.tsx` | `test/security/proxy-logging.test.ts`, `test/integration/admin-grants.test.ts` |
+| <a id="i-sess-1"></a>I-SESS-1 | Session ids are stored as SHA-256. User status and role are re-read on every request. Every audited admin write re-checks, in its own D1 batch, that the request's session is still live and the user's current role still holds the route's permission; otherwise nothing is written. "Test credential" commits its audit row with this check before it sends the stored credential, so every use of a stored credential by an admin is audited and nothing is sent when the check fails. Login issues a new id and revokes the previous one. A session is valid only while its login identity is still linked to the user. A login refused at that point writes nothing (no session, audit row or login timestamps). | `src/admin/auth/session.ts`, `src/db/sessions.ts`, `src/db/users.ts` (`recordLoginStatements`), `src/admin/auth/middleware.tsx`, `src/admin/ops/shared.ts` (`commitAudited`), `src/admin/ops/users.ts` | `test/security/session.test.ts`, `test/security/admin-actor-recheck.test.ts` |
+| <a id="i-csrf-1"></a>I-CSRF-1 | Unsafe admin requests need `Sec-Fetch-Site` `same-origin`/`none` (or, without it, an exact `Origin`) AND the `_csrf` synchronizer token. Form bodies are capped at 64 KiB (413) before parsing. | `src/admin/auth/csrf.ts`, `src/admin/auth/middleware.tsx`, `src/admin/render.tsx` (`ADMIN_FORM_MAX_BYTES`) | `test/security/csrf.test.ts` |
+| <a id="i-oauth-1"></a>I-OAUTH-1 | OAuth state lives in one `__Host-` cookie that holds at most 3 pending logins keyed by `state`, each valid for 10 minutes. A callback consumes only the entry whose `state` it returns; a missing or unknown `state` gets 400 and leaves the cookie unchanged. The authorization code is single use at the login provider and bound to PKCE. `return_to` is sanitized at start and at callback, is at most 512 characters after URL serialization and contains no character that JSON escapes (`\` becomes `%5C`), so 3 entries always fit in the cookie (under 4 KB) and only the 3-entry limit drops an entry. | `src/admin/auth/oauth-state.ts`, `src/admin/auth/routes.tsx`, `src/admin/auth/session.ts` (`sanitizeReturnTo`) | `test/security/oauth-state.test.ts`, `test/security/oauth-pending-logins.test.ts` |
+| <a id="i-link-1"></a>I-LINK-1 | Email linking happens only for invited, unexpired users, with an authoritative email. Active and disabled users are never linked by email. | `src/admin/auth/email.ts`, `src/admin/auth/resolve-login.ts`, `src/db/users.ts` | `test/security/login-linking.test.ts`, `test/security/google-issuer-variants.test.ts`, `test/security/oidc-issuer-subject.test.ts`, `test/unit/admin/auth/email.test.ts` |
+| <a id="i-boot-1"></a>I-BOOT-1 | Bootstrap creates at most one owner, once, in SQL-guarded statements. | `src/admin/auth/resolve-login.ts`, `src/db/users.ts` | `test/security/bootstrap.test.ts` |
+| <a id="i-rbac-1"></a>I-RBAC-1 | Every admin route is in the RBAC table. Routes outside the table are denied. The route × role matrix is tested on the real app. | `src/admin/auth/rbac.ts`, `src/admin/auth/middleware.tsx` | `test/security/rbac-routes.test.ts`, `test/unit/admin/auth/rbac.test.ts`, `test/integration/admin-dashboard.test.ts` |
+| <a id="i-audit-1"></a>I-AUDIT-1 | Every admin mutation writes exactly one audit row in the same D1 batch. Failed operations write nothing. | `src/admin/ops/shared.ts`, `src/db/audit.ts`, `src/admin/ops/*.ts`, `src/telemetry/cron.ts` (`credential.expiring`) | `test/security/audit-coverage-ops.test.ts`, `test/security/audit-coverage-routes.test.ts`, `test/unit/telemetry/cron.test.ts` |
+| <a id="i-owner-1"></a>I-OWNER-1 | The last active owner cannot be demoted, disabled or deleted. SQL triggers abort the statement with `last_owner`. | `migrations/0001_initial.sql` (`users_last_owner_update`, `users_last_owner_delete`), `src/admin/ops/users.ts` | `test/unit/admin/ops/users.test.ts` |
+| <a id="i-cfg-1"></a>I-CFG-1 | Malformed configuration disables the affected feature and names the variable. No feature runs half-configured. Errors never echo values. | `src/config.ts`, `src/crypto/keyring.ts` | `test/unit/config.test.ts` |
+| <a id="i-deploy-1"></a>I-DEPLOY-1 | `preview_urls` is false. With `PUBLIC_URL` set, `/admin` and `/auth` answer only on that origin; a malformed `PUBLIC_URL` closes them. Deploys keep dashboard vars (`keep_vars: true`, no blank vars). | `wrangler.jsonc`, `scripts/check-config.sh`, `src/config.ts` (`adminOriginAllowed`), `src/http/security.ts` | `test/security/security-headers.test.ts`, `test/security/deploy-config.test.ts`, `test/security/check-config-test.sh`, `test/unit/config.test.ts` |
+
+`test/security/*.sh` and `scripts/check-config.sh` run in `pnpm test:scripts`, not in vitest.
+
+### Exact semantics
+
+**I-JWT-2, cold isolate.** The gate is per `jwks_uri` and per isolate. While an isolate has never
+loaded keys for a `jwks_uri`, concurrent requests may each fetch, so the first burst of CI jobs does
+not fail. After the first failed fetch, that isolate makes at most one fetch per 30 s for that
+`jwks_uri`, even for concurrent requests. The cold-isolate exception ends at the first
+failure and does not come back.
+
+**I-AUTHZ-1, method overrides.** The proxy refuses (400 `path_invalid`, request record reason
+`query_invalid`) any query with a parameter whose decoded name is `_method`,
+`x-http-method-override`, `x-http-method` or `x-method-override`. The match is case-insensitive. It
+includes names after `;` and PHP name normalization (leading spaces dropped, `.` and space read as
+`_`, `name[...]` read as `name`). It also refuses a parameter name that cannot be decoded or that
+contains a control character. This applies to every injection kind. Request headers that override
+the method or URL (`x-http-method-override`, `x-original-url` and others) are in `NEVER_FORWARD`
+and are filtered at request time.
+
+**I-AUTHZ-1, trailing slash.** A Rule matches a path that ends in `/` only if the rule ends in a
+literal `/`, or if it also matches the same path without the trailing `/`. So `/x/*` and `/x/**`
+never authorize `/x/`. Details: [policies](policies.md).
+
+**I-AUTHZ-2, request time.** A Grant that no longer satisfies the caller provider's anchor rules is
+skipped (trace result `invalid_grant`). Changing a caller provider's anchor claims or tenant pin is
+refused while an enabled grant would stop validating.
+
+**I-RESP-1, what header redaction recognizes.** A response header is dropped when its value
+contains the credential in one of these forms:
+
+- raw;
+- percent-encoded, in any mix of encoded and raw characters and either hex case (this includes the
+  exact form the gateway sends for `query` Injection);
+- form-encoded;
+- with `\` turned into `/`, as URL parsing does in http(s) paths;
+- base64 or base64url at any byte alignment (for example `base64("Bearer <credential>")`);
+- for `basic`, the base64 user-pass and the secret part of a `user:pass` Credential;
+- for `path` Credentials made of several segments, each segment of 16 or more characters.
+
+A cross-origin `Location` is checked as the upstream sent it, before the gateway parses it.
+
+## Known limitations
+
+These are accepted behaviors, not bugs. A report that shows a way past one of the stated bounds is
+a vulnerability (see [SECURITY.md](../SECURITY.md)).
+
+### Credentials and responses
+
+- **Response bodies are not redacted.** I-CRED-1 covers data the gateway generates. Upstream
+  response bodies stream to the caller byte for byte, so streaming and compression keep working. If
+  an upstream endpoint returns the credential in its body, any caller whose grant reaches that
+  endpoint receives it. Example: Discord `GET` and `PATCH /api/webhooks/{id}/{token}` return the
+  webhook object with its `token` field. A Credential obtained this way keeps working after the
+  Grant is revoked. Scope grants so they do not reach such endpoints. For `path` Injection
+  (Slack, Discord webhooks), grant only `POST /`; the grant form warns about any other method.
+- **Header redaction has limits.** Other transformations are not detected: double
+  percent-encoding, hex, hashing, reversed or split copies, base64 of credentials shorter than about
+  12 characters. When a same-origin `Location` or `Link` is rewritten, URL parsing removes `.` and
+  `..` segments; this matters only for a credential that itself contains `/./` or `/../`.
+- **Admins can use credentials but not extract them from the gateway.** An admin can create a caller
+  provider (including an issuer they control) and a grant, and then call the upstream with any
+  Credential. The gateway never shows, exports or logs the credential (I-CRED-1), and repointing it
+  needs the plaintext (I-CRED-2). What a caller can do with the upstream API, including reading
+  secrets the API itself returns or minting new keys, is limited only by the grant's rules and the
+  upstream.
+- **Method rules apply to the request line only.** The gateway does not inspect request bodies. On
+  upstreams that honor a form-body `_method` (Rails `Rack::MethodOverride`, Symfony/Laravel, Spring
+  `HiddenHttpMethodFilter`, ASP.NET Core form override), a grant that allows `POST` on a path also
+  allows any method the upstream accepts through body override on that path. Do not use a
+  POST-only grant as a weaker permission on such upstreams.
+- **KEK loss is credential loss.** No recovery exists without the keyring. Generate the key outside
+  Cloudflare and keep a copy in your vault ([key rotation](operations/key-rotation.md)).
+- **Key check values are per key id, not per credential.** If you replace `TOKENGATE_KEK` (kid
+  `k1`), `/readyz` reports `keyring: false` and the dashboard shows a banner. If you restore the old
+  key after saving credentials with the new one, the alert clears, but those newer credentials fail
+  with `credential_unavailable` ([key rotation](operations/key-rotation.md)).
+
+### Callers and tokens
+
+- **Caller tokens are bearer tokens.** A token works for every request until it expires or exceeds
+  the caller provider's maximum token age (default 600 s; at most 900 s for GitHub Actions and
+  3600 s for other profiles). The gateway does not enforce single use of `jti`. The get-token action
+  masks tokens in step logs only. Redirecting the stderr of `tokengate-token` defeats the mask
+  ([GitHub Actions callers](callers/github-actions.md)).
+- **Pre-trust errors reveal some configuration.** Anyone can learn which issuers are configured: an
+  unknown `iss` gets `issuer_unknown`, a known one gets a later code. This needs no valid
+  signature. Anyone with a validly signed token from a configured issuer also learns the expected
+  audience from the `audience_mismatch` hint. Neither is a secret. Service existence stays
+  hidden until the tenant pin passes (I-TEN-1), with one exception below.
+- **The injection-header token source reveals header-Injection slugs.** When a request has neither
+  `x-tokengate-token` nor an `Authorization` header with the `Bearer` or `token` scheme, the
+  gateway reads the token from the service's injection header (`header` Injection only).
+  Any value in that header changes the error from `token_missing` to another code. An
+  unauthenticated caller can therefore confirm that a slug exists, is enabled and uses `header`
+  Injection with a given header name.
+- **Signing-key removal is not instant.** A JWKS stays cached in each isolate for up to 10 minutes.
+  A key that the issuer removes keeps verifying until the isolate refetches.
+- **Repository settings carry part of the policy.** Conditions on `ref`, `environment` and
+  `ref_protected` trust the repository's branch protection, rulesets and environment rules. A
+  workflow that references an environment that does not exist creates it without protection rules
+  ([GitHub docs](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)).
+  A Grant anchored on `job_workflow_ref` admits every repository in the tenant that can call that
+  reusable workflow. In such a token, `repository_id`, `ref`, `ref_protected` and `environment`
+  describe the calling repository, which any org member can create. See [policies](policies.md).
+- **A reusable workflow hands its token to the caller's choices.** A called workflow reads `vars`,
+  `inputs`, inherited secrets, environments and self-hosted runners from the calling repository. If
+  any of them decides where the token goes, or a caller runner runs the job, the caller gets a
+  bearer token that matches the `job_workflow_ref` Grant for every one of its Rules until the token
+  expires. The gateway cannot tell where a token was sent before. The called workflow must hardcode
+  the gateway URL and a GitHub-hosted runner, and the Grant should allow only the calls the workflow
+  makes
+  ([GitHub Actions callers](callers/github-actions.md#central-reusable-workflow-for-the-organization)).
+  A GitLab configuration pinned with `ci_config_ref_uri` takes its CI/CD variables and runners from
+  the project that runs it, with the same result
+  ([GitLab CI callers](callers/gitlab-ci.md#pinned-ci-configuration)).
+- **Workflow pins are names.** `job_workflow_ref` and `ci_config_ref_uri` are built from the
+  repository or project path, not from an immutable ID. After the pinned repository or project is
+  renamed, transferred or deleted, anyone who can create one with the same path in the tenant writes
+  the pinned file and matches every Grant pinned to it. `job_workflow_sha` or `ci_config_sha` as an
+  extra exact condition pins the file content, at the cost of updating the Grant after every commit
+  on the pinned ref. The recreated repository or project still supplies its own variables and
+  runners, as in "A reusable workflow hands its token to the caller's choices"
+  ([policies](policies.md#anchor-rules)).
+- **Generic issuers have no protected-ref check.** Branch claims such as Buildkite's `build_branch`
+  can be chosen by whoever starts the build, and carry the tag name in tag builds. The generic
+  profile has no event guard and no `ref_protected` equivalent
+  ([generic OIDC](callers/generic-oidc.md#buildkite)).
+- **GitLab child and downstream pipelines.** `parent_pipeline` and `pipeline` report the same source
+  whatever started the upstream pipeline, including fork merge request pipelines. They need an exact
+  opt-in (I-AUTHZ-3). If you opt in, also require `ref_protected exact true`; merge request refs are
+  never protected. A `pipeline` opt-in with `ref_protected exact true` still admits downstream
+  pipelines on protected branches whose variables come from the upstream pipeline. This is the same
+  trust level as `trigger` and `api`.
+
+### Availability and traffic
+
+- **The rate limiter fails open and is approximate.** `PROXY_RATE_LIMITER` is optional. When bound,
+  it counts per grant and per Cloudflare location. If the binding throws, the request continues: it
+  caps blast radius, it does not authorize.
+- **Revocation does not cut open streams.** Policy is read on every request (I-AUTHZ-1), but a
+  response that is already streaming continues after you disable the grant, service or caller
+  provider. The service timeout covers only the time to response headers.
+- **Pre-trust logging is throttled.** Rejections before the tenant pin passes are recorded at most
+  10 per minute per isolate, with `path` clipped to 256 characters and `untrusted_iss` to 128, and
+  no user agent. Above the budget they are dropped, so the request log is not a complete record of
+  anonymous probing.
+- **Anonymous traffic is not throttled by the Worker.** Use a Cloudflare WAF rate-limiting rule for
+  `/auth/*` and token-less `/proxy/*`. Bot Fight Mode can block CI callers on datacenter IPs and
+  cannot be skipped per path; disable it on the gateway zone, or use Super Bot Fight Mode with a skip
+  rule for `/proxy/` ([zone settings](operations/cloudflare-zone-settings.md)).
+
+### Platform
+
+- **Workers adds `CF-Worker` to outbound requests.** Every upstream request carries
+  `CF-Worker: <zone>`, which names the deploying zone. It cannot be removed
+  ([Cloudflare HTTP request headers](https://developers.cloudflare.com/fundamentals/reference/http-request-headers/)).
+- **Same-zone upstreams pass through the front door.** With `global_fetch_strictly_public`, a fetch
+  to a host in your own zone goes through Cloudflare's edge, so Access and WAF rules apply to it
+  ([compatibility flags](https://developers.cloudflare.com/workers/configuration/compatibility-flags/)).
+- **The edge can normalize URLs.** Cloudflare can normalize the request URL before the Worker sees
+  it. The path checks (I-PATH-1) run on what the Worker receives and are defense in depth. If you
+  change the zone's URL normalization, test path handling again.
+
+### Admin side
+
+- **OAuth state has no server-side single-use record.** Replay protection relies on (1) the browser
+  storing the cookie without the consumed entry after the first matching callback, (2) the
+  10-minute expiry and (3) the login provider rejecting a reused authorization code, which is bound
+  to PKCE and the client secret. The cookie is neither encrypted nor MACed. Its integrity relies on
+  the browser's `__Host-` rules: no other site or subdomain can set it, so a forged callback fails
+  the state check. A user can change only their own cookie, which affects only their own login. The
+  PKCE verifier in the cookie is readable only by someone who already holds the browser's cookies,
+  including the session. Unauthenticated `/auth/*/start` makes no D1 writes.
+- **Another site can push out a pending login.** A callback with a wrong or missing `state` changes
+  nothing, so a cross-site link to `/auth/*/callback` cannot cancel a sign-in. But each top-level
+  navigation to `/auth/*/start` adds an entry, and the cookie keeps only the 3 newest. A page that
+  opens `/auth/*/start` 3 times while a user is at the login provider makes that sign-in fail with
+  "This sign-in attempt expired"; the user starts again. It gains no access. Each navigation drops
+  at most the oldest entry, whatever `return_to` it carries (3 entries of the largest size fit in
+  the cookie), so it takes 3 navigations, or fewer only when the user has other sign-ins in
+  progress in the same browser. The same limit applies when one browser starts more than 3
+  sign-ins at once.
+- **GitHub and OIDC sessions outlive IdP changes.** Org membership and email domain are checked at
+  sign-in. A session then lasts up to 12 hours idle and 7 days in total. To remove someone at once,
+  disable the user in Users; that revokes their sessions (I-SESS-1). Cloudflare Access sessions are
+  re-validated on every admin request.
+- **A D1 restore brings back ended sessions.** Revocation is the `revoked_at` column in `DB`, with
+  no record outside it. A Time Travel or export restore resets every session ended after the
+  restore point, including by sign-out, Users > End sessions, a disable or role change, or
+  break-glass. Such a session works again until it expires. After every restore of `DB`, end every
+  admin session ([backup and restore](operations/backup-restore.md#checks-after-a-restore)).
+- **D1 write access bypasses the admin UI.** Changes made with `wrangler d1 execute` are not
+  audited. Restrict D1 access in your Cloudflare account like admin access.
+- **A D1 writer can stage a service for the next credential.** When a changed base URL or
+  injection makes the stored credential fail to open, the service page marks them "not confirmed",
+  does not prefill them, and saves a credential only after the admin types the destination host
+  (I-CRED-2). When the writer instead clears `credential_sealed` or inserts a service row, the page
+  shows a service without a credential (`credential_missing`), and no earlier destination exists to
+  check against. A credential entered there goes to the writer's host. Check the base URL out of
+  band before you enter a credential for a service that had one, and set `ALLOWED_UPSTREAM_HOSTS`
+  ([incident response](operations/incident-response.md#a-service-destination-was-changed-outside-the-admin-ui)).
+- **`ALLOWED_UPSTREAM_HOSTS` and `PUBLIC_URL` fail open when unset.** Unset means any public https
+  upstream and admin on every hostname. `scripts/check-config.sh` rejects blank values in
+  `wrangler.jsonc`. After a Worker rollback, check both variables again
+  ([configuration](configuration.md)).
+
+## Changing this model
+
+1. If you add or change a security property, add or edit its row here.
+2. Name a `describe()` block in a test with the ID, for example
+   `describe('I-CRED-2: ...', ...)`.
+3. Run `bash scripts/check-threat-ids.sh`. It reads the IDs from this page and fails for any ID
+   without a test.
+4. Record the design reason in an ADR under [adr/](adr/) if the change alters a trust decision.
+
+Related: [architecture](architecture.md), [policies](policies.md), [errors](errors.md),
+[configuration](configuration.md), [observability](observability.md),
+[incident response](operations/incident-response.md).

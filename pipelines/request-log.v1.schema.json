@@ -1,0 +1,29 @@
+{
+  "fields": [
+    { "name": "id", "type": "string", "required": true },
+    { "name": "ts", "type": "int64", "required": true },
+    { "name": "outcome", "type": "string", "required": true },
+    { "name": "reason", "type": "string", "required": false },
+    { "name": "status", "type": "int32", "required": true },
+    { "name": "upstream_status", "type": "int32", "required": false },
+    { "name": "method", "type": "string", "required": true },
+    { "name": "path", "type": "string", "required": true },
+    { "name": "service_slug", "type": "string", "required": false },
+    { "name": "service_id", "type": "string", "required": false },
+    { "name": "caller_provider_id", "type": "string", "required": false },
+    { "name": "grant_id", "type": "string", "required": false },
+    { "name": "claims_verified", "type": "int32", "required": true },
+    { "name": "caller_subject", "type": "string", "required": false },
+    { "name": "caller_repository", "type": "string", "required": false },
+    { "name": "caller_claims", "type": "string", "required": false },
+    { "name": "jti", "type": "string", "required": false },
+    { "name": "untrusted_iss", "type": "string", "required": false },
+    { "name": "duration_ms", "type": "int64", "required": true },
+    { "name": "upstream_ms", "type": "int64", "required": false },
+    { "name": "weight", "type": "float64", "required": true },
+    { "name": "ip", "type": "string", "required": false },
+    { "name": "user_agent", "type": "string", "required": false },
+    { "name": "colo", "type": "string", "required": false },
+    { "name": "schema_version", "type": "int32", "required": true }
+  ]
+}

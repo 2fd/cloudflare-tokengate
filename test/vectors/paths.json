@@ -1,0 +1,526 @@
+{
+  "description": "Caller path canonicalization (src/proxy/path.ts canonicalizePath) and upstream URL construction (buildUpstreamUrl). Invariant I-PATH-1. 'path' is the pathname after /proxy/<slug>; matchPath is what grant rules see.",
+  "accept": [
+    {
+      "path": "",
+      "matchPath": "/",
+      "note": "empty path means /"
+    },
+    {
+      "path": "/",
+      "matchPath": "/"
+    },
+    {
+      "path": "/api/chat.postMessage",
+      "matchPath": "/api/chat.postMessage"
+    },
+    {
+      "path": "/repos/a/b/",
+      "matchPath": "/repos/a/b/",
+      "note": "trailing slash allowed"
+    },
+    {
+      "path": "/repos/a/b/contents/.github%2Fworkflows%2Fci.yml",
+      "matchPath": "/repos/a/b/contents/.github/workflows/ci.yml",
+      "note": "%2F is a separator for matching and is forwarded unchanged"
+    },
+    {
+      "path": "/repos/a/b/contents/docs%2freadme.md",
+      "matchPath": "/repos/a/b/contents/docs/readme.md",
+      "note": "lowercase %2f"
+    },
+    {
+      "path": "/.well-known/x",
+      "matchPath": "/.well-known/x",
+      "note": "leading dot in a name is not a dot segment"
+    },
+    {
+      "path": "/a/...",
+      "matchPath": "/a/...",
+      "note": "three dots is a name"
+    },
+    {
+      "path": "/a/..b",
+      "matchPath": "/a/..b"
+    },
+    {
+      "path": "/v1/files/%20name%41",
+      "matchPath": "/v1/files/%20name%41",
+      "note": "ordinary escapes kept verbatim"
+    },
+    {
+      "path": "/users/me@example.com",
+      "matchPath": "/users/me@example.com"
+    },
+    {
+      "path": "/https:evil.example/x",
+      "matchPath": "/https:evil.example/x",
+      "note": "a colon is only text after the leading /"
+    },
+    {
+      "path": "/a/b~c/d-e_f/g!$&'()*+,=:@",
+      "matchPath": "/a/b~c/d-e_f/g!$&'()*+,=:@"
+    },
+    {
+      "path": "/files/caf%C3%A9",
+      "matchPath": "/files/caf%C3%A9",
+      "note": "valid UTF-8 escapes kept verbatim"
+    }
+  ],
+  "reject": [
+    {
+      "path": "a/b",
+      "reason": "does not start with /"
+    },
+    {
+      "path": "https://evil.example/x",
+      "reason": "absolute URL (scheme)"
+    },
+    {
+      "path": "//evil.example/x",
+      "reason": "scheme-relative / empty segment"
+    },
+    {
+      "path": "/a//b",
+      "reason": "empty segment"
+    },
+    {
+      "path": "/a/%2Fb",
+      "reason": "empty segment via %2F"
+    },
+    {
+      "path": "/a%2F",
+      "reason": "trailing %2F leaves an empty segment"
+    },
+    {
+      "path": "/%2F%2Fevil.example",
+      "reason": "encoded scheme-relative"
+    },
+    {
+      "path": "/..",
+      "reason": "dot-dot segment"
+    },
+    {
+      "path": "/a/../b",
+      "reason": "dot-dot segment"
+    },
+    {
+      "path": "/a/./b",
+      "reason": "dot segment"
+    },
+    {
+      "path": "/a/.",
+      "reason": "trailing dot segment"
+    },
+    {
+      "path": "/a/%2e%2e/b",
+      "reason": "encoded dot-dot"
+    },
+    {
+      "path": "/a/%2E%2E/b",
+      "reason": "encoded dot-dot (uppercase)"
+    },
+    {
+      "path": "/a/.%2e/b",
+      "reason": "mixed encoded dot-dot"
+    },
+    {
+      "path": "/a/file%2etxt",
+      "reason": "%2e is rejected anywhere"
+    },
+    {
+      "path": "/a/..%2fb",
+      "reason": "dot-dot before encoded slash"
+    },
+    {
+      "path": "/a/..%2Fb",
+      "reason": "dot-dot before encoded slash (uppercase)"
+    },
+    {
+      "path": "/a/..;/b",
+      "reason": "Tomcat-style path parameter traversal"
+    },
+    {
+      "path": "/a/.;/b",
+      "reason": "path parameter on dot segment"
+    },
+    {
+      "path": "/a;jsessionid=1/b",
+      "reason": "path parameter"
+    },
+    {
+      "path": "/a/%3bb",
+      "reason": "encoded semicolon"
+    },
+    {
+      "path": "/a\\b",
+      "reason": "backslash"
+    },
+    {
+      "path": "/\\evil.example/x",
+      "reason": "backslash after leading slash"
+    },
+    {
+      "path": "/a/%5cb",
+      "reason": "encoded backslash"
+    },
+    {
+      "path": "/a/%5C..%5Cb",
+      "reason": "encoded backslash traversal"
+    },
+    {
+      "path": "/a/%00b",
+      "reason": "encoded NUL"
+    },
+    {
+      "path": "/a/%0d%0aX-Injected:1",
+      "reason": "encoded CR LF"
+    },
+    {
+      "path": "/a/%7f",
+      "reason": "encoded DEL"
+    },
+    {
+      "path": "/a/b\u0000",
+      "reason": "raw NUL"
+    },
+    {
+      "path": "/a/b\nc",
+      "reason": "raw newline"
+    },
+    {
+      "path": "/a/b\tc",
+      "reason": "raw tab"
+    },
+    {
+      "path": "/a/b\u007fc",
+      "reason": "raw DEL"
+    },
+    {
+      "path": "/a b",
+      "reason": "raw space"
+    },
+    {
+      "path": "/a?b=c",
+      "reason": "raw query delimiter inside path"
+    },
+    {
+      "path": "/a#b",
+      "reason": "raw fragment delimiter inside path"
+    },
+    {
+      "path": "/café",
+      "reason": "non-ASCII must arrive percent-encoded"
+    },
+    {
+      "path": "/a|b",
+      "reason": "character not allowed by RFC 3986"
+    },
+    {
+      "path": "/a/%u002e%u002e/b",
+      "reason": "IIS %u escape"
+    },
+    {
+      "path": "/a/%zz",
+      "reason": "invalid escape"
+    },
+    {
+      "path": "/a/%2",
+      "reason": "truncated escape"
+    },
+    {
+      "path": "/a/%",
+      "reason": "lone percent"
+    },
+    {
+      "path": "/a/%252e%252e/b",
+      "reason": "double-encoded dot (%25)"
+    },
+    {
+      "path": "/a/%25",
+      "reason": "encoded percent"
+    },
+    {
+      "path": "/a/%c0%ae%c0%ae/b",
+      "reason": "overlong UTF-8 dot-dot"
+    },
+    {
+      "path": "/a/%C0%AFb",
+      "reason": "overlong UTF-8 slash"
+    },
+    {
+      "path": "/a/%ff",
+      "reason": "escape that is not valid UTF-8"
+    }
+  ],
+  "upstream": [
+    {
+      "note": "bearer: base path + caller path + caller query",
+      "baseUrl": "https://slack.com/api",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/chat.postMessage",
+      "search": "?a=1&b=%20x",
+      "url": "https://slack.com/api/chat.postMessage?a=1&b=%20x"
+    },
+    {
+      "note": "root base URL",
+      "baseUrl": "https://api.github.com",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/repos/a/b/contents/.github%2Fworkflows%2Fci.yml",
+      "search": "",
+      "url": "https://api.github.com/repos/a/b/contents/.github%2Fworkflows%2Fci.yml"
+    },
+    {
+      "note": "query injection removes caller copies (also encoded and differently cased names)",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "query",
+        "param": "key"
+      },
+      "path": "/items",
+      "search": "?key=caller&q=1&%6Bey=sneaky&KEY=upper&keyx=kept",
+      "url": "https://api.example.com/v1/items?q=1&keyx=kept&key=SECRET-VALUE-0123456789"
+    },
+    {
+      "note": "query injection with no caller query",
+      "baseUrl": "https://api.example.com",
+      "injection": {
+        "kind": "query",
+        "param": "api_key"
+      },
+      "path": "/",
+      "search": "",
+      "url": "https://api.example.com/?api_key=SECRET-VALUE-0123456789"
+    },
+    {
+      "note": "path injection, empty prefix (webhook style): the bare root maps to the secret without a trailing slash",
+      "baseUrl": "https://hooks.example.com/services/T000/B000",
+      "injection": {
+        "kind": "path"
+      },
+      "path": "/",
+      "search": "",
+      "url": "https://hooks.example.com/services/T000/B000/SECRET-VALUE-0123456789"
+    },
+    {
+      "note": "path injection, Telegram style prefix",
+      "baseUrl": "https://api.telegram.org",
+      "injection": {
+        "kind": "path",
+        "prefix": "/bot"
+      },
+      "path": "/sendMessage",
+      "search": "",
+      "url": "https://api.telegram.org/botSECRET-VALUE-0123456789/sendMessage"
+    },
+    {
+      "note": "invalid caller path",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/../admin",
+      "search": "",
+      "url": null
+    },
+    {
+      "note": "query string with a fragment delimiter",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/x",
+      "search": "?a=1#frag",
+      "url": null
+    },
+    {
+      "note": "base URL with a query is unusable",
+      "baseUrl": "https://api.example.com/v1?x=1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/x",
+      "search": "",
+      "url": null
+    },
+    {
+      "note": "query injection with an undecodable caller parameter name",
+      "baseUrl": "https://api.example.com",
+      "injection": {
+        "kind": "query",
+        "param": "key"
+      },
+      "path": "/x",
+      "search": "?%E0%A4%A=1",
+      "url": null
+    },
+    {
+      "note": "query injection: caller copy after \";\" (servers that split on \";\") fails closed",
+      "baseUrl": "https://api.example.com",
+      "injection": {
+        "kind": "query",
+        "param": "key"
+      },
+      "path": "/x",
+      "search": "?a=1;key=caller",
+      "url": null
+    },
+    {
+      "note": "non-https base URL is unusable",
+      "baseUrl": "http://api.example.com",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/x",
+      "search": "",
+      "url": null
+    },
+    {
+      "note": "path injection under a base path with a multi-segment prefix",
+      "baseUrl": "https://api.example.com/v2",
+      "injection": {
+        "kind": "path",
+        "prefix": "/hooks/bot"
+      },
+      "path": "/send",
+      "search": "?a=1",
+      "url": "https://api.example.com/v2/hooks/botSECRET-VALUE-0123456789/send?a=1"
+    },
+    {
+      "note": "method override: _method in the query is refused (I-AUTHZ-1)",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/items/1",
+      "search": "?_method=DELETE",
+      "url": null
+    },
+    {
+      "note": "method override: name compared case-insensitively",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/items/1",
+      "search": "?a=1&_METHOD=put",
+      "url": null
+    },
+    {
+      "note": "method override: percent-encoded name",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/items/1",
+      "search": "?%5Fmethod=DELETE",
+      "url": null
+    },
+    {
+      "note": "method override: name after ';'",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/items/1",
+      "search": "?a=1;_method=DELETE",
+      "url": null
+    },
+    {
+      "note": "method override: PHP reads '.method' and ' _method' as _method",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/items/1",
+      "search": "?.method=DELETE",
+      "url": null
+    },
+    {
+      "note": "method override: PHP reads '+_method' as _method",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/items/1",
+      "search": "?+_method=DELETE",
+      "url": null
+    },
+    {
+      "note": "method override: PHP reads '_method[]' as _method",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/items/1",
+      "search": "?_method[]=DELETE",
+      "url": null
+    },
+    {
+      "note": "method override: X-HTTP-Method-Override as a query parameter",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/items/1",
+      "search": "?X-HTTP-Method-Override=DELETE",
+      "url": null
+    },
+    {
+      "note": "method override: x-method-override as a query parameter",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/items/1",
+      "search": "?x-method-override=PATCH",
+      "url": null
+    },
+    {
+      "note": "undecodable query parameter name fails closed",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/items/1",
+      "search": "?%zz=1",
+      "url": null
+    },
+    {
+      "note": "method override: PHP cuts names at NUL, so _method%00x is _method (control characters fail closed)",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/items/1",
+      "search": "?_method%00x=DELETE",
+      "url": null
+    },
+    {
+      "note": "query injection: a caller name with a control character fails closed (PHP reads key%00 as key)",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "query",
+        "param": "key"
+      },
+      "path": "/items",
+      "search": "?key%00=caller",
+      "url": null
+    },
+    {
+      "note": "similar names and values are forwarded",
+      "baseUrl": "https://api.example.com/v1",
+      "injection": {
+        "kind": "bearer"
+      },
+      "path": "/items/1",
+      "search": "?method=DELETE&_methods=x&q=_method",
+      "url": "https://api.example.com/v1/items/1?method=DELETE&_methods=x&q=_method"
+    }
+  ],
+  "secret": "SECRET-VALUE-0123456789"
+}

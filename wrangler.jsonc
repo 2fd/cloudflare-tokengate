@@ -1,0 +1,68 @@
+// cloudflare-tokengate — Worker configuration.
+// Reference: docs/configuration.md. Optional features are commented out; uncomment to enable.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "tokengate",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": [
+    "nodejs_compat",
+    // Same-zone upstreams go through Cloudflare's front door (Access, WAF) instead of
+    // straight to the origin. See docs/threat-model.md (I-SSRF-1).
+    "global_fetch_strictly_public"
+  ],
+  "workers_dev": true,
+  // Version preview URLs would run old code against production data and secrets (I-DEPLOY-1).
+  "preview_urls": false,
+  "observability": {
+    "enabled": true,
+    // Audit events are emitted as log lines; sampling below 1 can drop them.
+    "head_sampling_rate": 1
+  },
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/*", "!/static/*"]
+  },
+  "d1_databases": [
+    // Control plane: users, sessions, caller providers, services, grants, settings, audit log.
+    { "binding": "DB", "database_name": "tokengate", "migrations_dir": "migrations" },
+    // Request log and rollups. Kept separate so telemetry volume can never fill the control plane.
+    {
+      "binding": "TELEMETRY_DB",
+      "database_name": "tokengate-telemetry",
+      "migrations_dir": "migrations-telemetry"
+    }
+  ],
+  "triggers": {
+    // Hourly: rollups, retention, expiry notices. See src/telemetry/cron.ts.
+    "crons": ["7 * * * *"]
+  },
+  // Operator vars (PUBLIC_URL, ALLOWED_UPSTREAM_HOSTS, BOOTSTRAP_OWNER_EMAILS, AUTH_*; full list in
+  // docs/configuration.md) are set in the dashboard (Worker > Settings > Variables and Secrets).
+  // keep_vars makes deploys leave them alone. Any name added under "vars" here is re-uploaded on every
+  // deploy and overwrites the dashboard value, so set each var in one place only and never commit ""
+  // placeholders: an emptied PUBLIC_URL / ALLOWED_UPSTREAM_HOSTS silently turns off host pinning and
+  // the upstream allowlist (I-DEPLOY-1, I-SSRF-1). scripts/check-config.sh enforces this.
+  "keep_vars": true
+
+  // --- Optional: batch request-log writes through a queue (Workers Paid). See docs/observability.md.
+  // "queues": {
+  //   "producers": [{ "binding": "REQUEST_LOG_QUEUE", "queue": "tokengate-request-log" }],
+  //   "consumers": [{
+  //     "queue": "tokengate-request-log",
+  //     "max_batch_size": 100,
+  //     "max_batch_timeout": 30,
+  //     "max_retries": 10,
+  //     // D1 executes one query at a time; more consumers only add contention.
+  //     "max_concurrency": 2,
+  //     "dead_letter_queue": "tokengate-request-log-dlq"
+  //   }]
+  // },
+
+  // --- Optional: archive every request record to R2 via Basin Pipelines. Run scripts/setup-archive.sh.
+  // "pipelines": [{ "binding": "REQUEST_ARCHIVE", "stream": "<stream-id>" }],
+
+  // --- Optional: per-grant request ceiling (approximate, counted per Cloudflare location).
+  // "ratelimits": [{ "name": "PROXY_RATE_LIMITER", "namespace_id": "<unique positive integer>", "simple": { "limit": 600, "period": 60 } }]
+}

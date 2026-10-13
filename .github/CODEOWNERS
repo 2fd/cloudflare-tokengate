@@ -1,0 +1,12 @@
+# Security-sensitive paths need a maintainer review (see CONTRIBUTING.md#security-sensitive-code).
+*                       @2fd
+/src/crypto/            @2fd
+/src/identity/          @2fd
+/src/policy/            @2fd
+/src/proxy/             @2fd
+/src/admin/auth/        @2fd
+/src/http/              @2fd
+/migrations/            @2fd
+/migrations-telemetry/  @2fd
+/wrangler.jsonc         @2fd
+/.github/workflows/     @2fd

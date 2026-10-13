@@ -1,0 +1,348 @@
+# Architecture
+
+This page describes how cloudflare-tokengate is built: its components, the proxy pipeline, the data model and the source layout. It is for security reviewers and contributors.
+
+The code is the reference. Each section names the files that implement it. Invariant IDs such as [I-CRED-2](threat-model.md#i-cred-2) are defined in [threat-model.md](threat-model.md). Terms follow the glossary in [concepts.md](concepts.md). Design decisions and their reasons are in the [ADRs](adr/README.md).
+
+## Components
+
+tokengate is one Cloudflare Worker with two D1 databases. Each company deploys its own copy in its own Cloudflare account.
+
+```mermaid
+flowchart LR
+  CI["CI job (caller)"] -->|"/proxy/&lt;slug&gt;/... + workload identity token"| W
+  Browser["Admin browser"] -->|"/admin, /auth"| W
+  subgraph W["Worker (src/index.ts)"]
+    P["Proxy pipeline"]
+    A["Admin UI + login"]
+    C["Hourly cron"]
+    Q["Queue consumer (optional)"]
+  end
+  P -->|"credential injected"| U["Upstream API"]
+  P -->|"JWKS"| I["Caller provider issuer"]
+  A -->|"OAuth / OIDC / Access"| L["Login provider"]
+  W --> DB[("D1: DB<br/>control plane")]
+  W --> TDB[("D1: TELEMETRY_DB<br/>request log")]
+  P -.-> RQ["REQUEST_LOG_QUEUE (optional)"]
+  P -.-> PL["REQUEST_ARCHIVE pipeline (optional) → R2"]
+```
+
+| Component | Binding or route | Role |
+|---|---|---|
+| Proxy | `ANY /proxy/:slug`, `ANY /proxy/:slug/*` | Verifies the caller token, authorizes the request, injects the credential and forwards. |
+| Admin UI | `/admin/*` | Server-rendered pages to manage services, caller providers, grants, users and settings. |
+| Login | `/auth/login`, `/auth/:login_provider/start`, `/auth/:login_provider/callback`, `POST /auth/logout` | Signs users in through a login provider (`github`, `oidc` or `access`; Google login uses `oidc`). |
+| Health | `GET /healthz`, `GET /readyz` | Liveness without I/O; readiness as booleans only. See [observability.md](observability.md). |
+| Static files | `/static/*` (Workers Assets, binding `ASSETS`) | `public/static/app.css`. `run_worker_first` sends every other path to the Worker. |
+| Cron | `scheduled`, `7 * * * *` | Rollups, retention purge, credential-expiry notices, heartbeat. |
+| Queue consumer | `queue`, binding `REQUEST_LOG_QUEUE` (optional) | Batches request records into `TELEMETRY_DB`. |
+| Control plane | D1 binding `DB` | Users, sessions, caller providers, services, grants, settings, audit log. |
+| Telemetry | D1 binding `TELEMETRY_DB` | Request log and hourly rollups. |
+| Archive | Pipelines binding `REQUEST_ARCHIVE` (optional) | Streams every request record to R2. |
+| Rate limiter | Rate limiting binding `PROXY_RATE_LIMITER` (optional) | Caps requests per grant. |
+
+All bindings, variables and secrets are listed in [configuration.md](configuration.md).
+
+## Entry points
+
+`src/index.ts` exports three handlers. Each builds a `Deps` object (see [Dependency injection](#dependency-injection-and-tests)) and delegates:
+
+- `fetch`: the Hono app from `src/app.ts`.
+- `scheduled`: `runCron` in `src/telemetry/cron.ts`.
+- `queue`: `consumeRequestLogBatch` in `src/telemetry/queue-consumer.ts`.
+
+`createApp()` in `src/app.ts` registers routes in this order. The order matters:
+
+1. A middleware that builds `Deps` for the request.
+2. Proxy routes (`src/proxy/routes.ts`). They come before the security middleware because proxy responses carry their own header policy.
+3. The security middleware (`src/http/security.ts`). It applies to every response outside `/proxy`: CSP without `script-src`, `nosniff`, `no-referrer`, HSTS on https, and `no-store` on `/admin` and `/auth`. When `PUBLIC_URL` is set, it answers 404 for `/admin` and `/auth` on any other origin. When `PUBLIC_URL` is malformed, it answers 404 for `/admin` and `/auth` on every origin ([I-DEPLOY-1](threat-model.md#i-deploy-1)).
+4. Health routes (`src/health.ts`).
+5. Login routes and the admin middleware (`src/admin/auth/routes.tsx`).
+6. Admin pages (`src/admin/routes/index.ts`).
+7. `GET /` redirects to `/admin`.
+
+## Proxy pipeline
+
+`handleProxy` in `src/proxy/handler.ts` runs these steps in this order. A failing step returns a gateway error built by `gatewayError()` in `src/lib/errors.ts`. Error codes are documented in [errors.md](errors.md). When the record reason differs from the error code, it is shown in brackets.
+
+| Step | What happens | Module | Failure |
+|---|---|---|---|
+| 1 | Create the request id (`req_<ULID>`) and start the clock. | `src/lib/ids.ts` | — |
+| 2 | Check the method is in `PROXY_METHODS` (`GET HEAD POST PUT PATCH DELETE OPTIONS`). | `src/policy/types.ts` | 405 `method_not_allowed` |
+| 3 | Extract the caller token from `x-tokengate-token`, or from `Authorization` with scheme `Bearer` or `token`. Accept only one distinct compact JWS ([I-TOK-2](threat-model.md#i-tok-2)). | `src/proxy/caller-token.ts` | 400 `token_ambiguous`, 401 `token_malformed` |
+| 4 | Load the context in one D1 batch: the service by slug, enabled caller providers, matching grants, settings. If no token was found in step 3 and the service is enabled and uses `header` Injection, read the token from that header. Decode the token payload without verifying it. | `src/db/proxy-context.ts` | 401 `token_missing`, 401 `token_malformed` |
+| 5 | Select the caller provider whose `issuer` equals the unverified `iss`. The `iss` is only a lookup key. Resolve its profile. | `src/identity/profiles/index.ts` | 401 `issuer_unknown`, 503 `not_configured` (`profile_unknown`) |
+| 6 | Check the JWS header: `alg` is asymmetric and in the caller provider's list; `kid` is present and well-formed. | `src/identity/jwt.ts` | 401 `token_malformed` |
+| 7 | Verify signature and claims with jose: exact issuer, audience, max token age, required claims ([I-JWT-1](threat-model.md#i-jwt-1)). JWKS fetches are gated per `jwks_uri` ([I-JWT-2](threat-model.md#i-jwt-2)). | `src/identity/jwt.ts` | 401 `signature_invalid`, `audience_mismatch`, `token_expired`, `token_too_old`, `claims_invalid`, `token_malformed`; 503 `jwks_unavailable` |
+| 8 | Check the tenant pin ([I-TEN-1](threat-model.md#i-ten-1)). From here on, the caller is verified and its allowlisted claims may be stored ([I-LOG-2](threat-model.md#i-log-2)). | `src/identity/jwt.ts` | 401 `tenant_mismatch` |
+| 9 | Reveal whether the service exists. This happens only after step 8, so outsiders cannot list slugs. | `src/proxy/handler.ts` | 404 `service_not_found` (`service_disabled` or `service_not_found`) |
+| 10 | Canonicalize the caller path. Reject traversal and encoded variants ([I-PATH-1](threat-model.md#i-path-1)). | `src/proxy/path.ts` | 400 `path_invalid` |
+| 11 | Evaluate the grants of this caller provider: anchor rules, conditions, event guard, rules. Deny by default ([I-AUTHZ-1](threat-model.md#i-authz-1) to [I-AUTHZ-4](threat-model.md#i-authz-4)). | `src/policy/evaluate.ts` | 403 `no_matching_grant`, 403 `event_not_trusted` |
+| 12 | If `PROXY_RATE_LIMITER` is bound, call it with key `grant:<id>`. If the binding throws, the request continues. | `src/proxy/handler.ts` | 429 `rate_limited` with `retry-after: 60` |
+| 13 | Open the credential. Load the keyring, re-validate the stored base URL ([I-SSRF-1](threat-model.md#i-ssrf-1)), check the stored injection is canonical, and decrypt with the AAD over service id, base URL and injection ([I-CRED-2](threat-model.md#i-cred-2)). | `src/crypto/keyring.ts`, `src/crypto/envelope.ts`, `src/policy/validate.ts` | 503 `credential_unavailable` (`credential_missing`, `injection_invalid`, `credential_binding_mismatch`, `keyring_missing_key`, `sealed_malformed`); 503 `not_configured` (keyring error, `base_url_invalid`) |
+| 14 | Build the upstream URL and headers from an allowlist. Drop caller tokens and caller copies of the injected header or parameter ([I-TOK-1](threat-model.md#i-tok-1), [I-INJ-1](threat-model.md#i-inj-1)). Inject the credential. Fetch with `redirect: 'manual'` and a timeout that covers only the wait for headers. | `src/proxy/path.ts`, `src/proxy/forward.ts`, `src/proxy/inject.ts`, `src/proxy/headers.ts` | 400 `path_invalid` (`query_invalid`), 503 `credential_unavailable` (`credential_invalid`), 502 `upstream_unreachable`, 504 `upstream_timeout` |
+| 15 | Return the upstream response. Filter headers, rewrite or drop `Location` and `Link` ([I-REDIR-1](threat-model.md#i-redir-1)), drop headers that echo the credential ([I-RESP-1](threat-model.md#i-resp-1)). Do not forward the reason phrase. Stream the body unchanged. A status outside 200 to 599 is not forwarded. | `src/proxy/forward.ts`, `src/proxy/handler.ts` | 502 `upstream_unreachable` (`upstream_invalid_status`) |
+| 16 | Schedule the request record in `waitUntil`. It never changes or delays the response. | `src/telemetry/record.ts`, `src/telemetry/sinks.ts` | — |
+
+An unexpected exception (for example, D1 unavailable) returns 500 `internal_error`. Only the error name is logged.
+
+Every proxy response carries `x-tokengate-request-id`, `x-tokengate-source` (`gateway` or `upstream`) and `cache-control: no-store`.
+
+```mermaid
+sequenceDiagram
+  participant C as Caller
+  participant G as Worker
+  participant D as D1 (DB)
+  participant I as Issuer JWKS
+  participant U as Upstream
+  participant T as D1 (TELEMETRY_DB)
+  C->>G: request + caller token
+  G->>D: one batch: service, caller providers, grants, settings
+  G->>I: JWKS (cached per isolate, refetch gated)
+  G->>G: verify, tenant pin, path, grants, open credential
+  G->>U: request + credential (caller token removed)
+  U-->>G: response
+  G-->>C: filtered headers + original body
+  G-)T: request record (waitUntil)
+```
+
+### Request records
+
+`scheduleRecord` in `src/proxy/handler.ts` decides whether a record is written:
+
+- Outcome is `allowed` when the upstream answered, `error` for a gateway status of 500 or more, and `denied` otherwise.
+- Allowed records are kept with probability `allowed_sample_rate`. Each kept record has `weight = 1 / rate`.
+- Records without a verified caller (pre-trust failures) are capped at 10 per minute per isolate (`PRETRUST_LOG_BUDGET_PER_MINUTE` in `src/telemetry/sinks.ts`). They store no caller claims, a shorter path, a shorter untrusted `iss` and no user agent ([I-LOG-2](threat-model.md#i-log-2)).
+- `buildRequestRecord` in `src/telemetry/record.ts` copies only the profile's allowlisted claims. It copies two request headers: `cf-connecting-ip` always, and `user-agent` for verified callers only ([I-LOG-1](threat-model.md#i-log-1)).
+- The stored `path` is the raw path after `/proxy/<slug>`, as received. It is not decoded or canonicalized, and it has no query string.
+
+`recordRequest` sends the record to `REQUEST_LOG_QUEUE` when bound, or inserts it directly into `TELEMETRY_DB`. If the queue send fails, it falls back to the direct insert. Inserts are `INSERT OR IGNORE` on the request id, so retries never duplicate a row. When `REQUEST_ARCHIVE` is bound, the record is also sent to the pipeline (`src/telemetry/archive.ts`, schema `pipelines/request-log.v1.schema.json`). Sink failures are logged as fixed codes only.
+
+## Admin request path
+
+A request to `/admin/*` passes these gates (`src/admin/auth/middleware.tsx`):
+
+1. Host pinning in the security middleware ([I-DEPLOY-1](threat-model.md#i-deploy-1)).
+2. A live session: cookie hash found, not revoked, not expired, user active, login identity still linked ([I-SESS-1](threat-model.md#i-sess-1)).
+3. For Cloudflare Access sessions, the Access JWT is validated again and its `sub` must match the session.
+4. The route must be in the RBAC table in `src/admin/auth/rbac.ts`. Unknown routes are denied ([I-RBAC-1](threat-model.md#i-rbac-1)).
+5. For unsafe methods, and for routes the RBAC table marks as mutating: body size cap of 64 KiB (413), then the fetch-metadata or `Origin` check and the `_csrf` token check ([I-CSRF-1](threat-model.md#i-csrf-1)).
+6. The user's role must have the route's permission.
+
+Every admin mutation lives in `src/admin/ops/*`. Each op writes its change and exactly one audit event in one `db.batch()` ([I-AUDIT-1](threat-model.md#i-audit-1)). The page modules in `src/admin/routes/*` only parse forms, call ops and render.
+
+## Background work
+
+The hourly cron (`src/telemetry/cron.ts`) runs these steps. Steps 1 to 3 each run even if an earlier one failed. Step 4 runs only if steps 1 to 3 succeeded.
+
+1. Rollup: recompute the last 3 closed hours of `request_rollup_hourly` from `request_log`, then up to 24 older hours after the `rollup_watermark` (after a complete run, the hour before those 3). Recomputes never lower stored rollups (`src/telemetry/rollup.ts`, [observability.md](observability.md#rollups)).
+2. Purge: delete request records, rollups and audit events older than their retention, delete sessions that ended more than one day ago, and enforce `request_log_max_rows` (`src/telemetry/retention.ts`). Request log deletes run in chunks of 5,000 rows, at most 40 statements per run. Retention floors are re-applied here.
+3. Credential expiry: write a `credential.expiring` audit event for a service when its credential crosses 14 days and again 3 days before `credential_expires_at`. If both thresholds are crossed at once, write one event.
+4. Heartbeat: write `cron_last_success_at`.
+
+If any step failed, the cron writes `cron_last_error` and `cron_last_error_at`, logs `cron.failed` and rethrows.
+
+The queue consumer (`src/telemetry/queue-consumer.ts`) validates each message. It acknowledges and drops invalid messages. It writes valid ones in one D1 batch. On a D1 error it retries the whole batch after 30 seconds.
+
+Settings, retention and the archive are described in [observability.md](observability.md) and [configuration.md](configuration.md).
+
+## Data model
+
+Timestamps are integer milliseconds since the Unix epoch. IDs are `<prefix>_<ULID>` from `src/lib/ids.ts`. ULIDs are time-ordered, so request ids also serve as a time index.
+
+### Control plane: `DB` (`migrations/`)
+
+| Table | Content | Notes |
+|---|---|---|
+| `users` | Users: email, role (`owner`, `admin`, `viewer`), status (`invited`, `active`, `disabled`), invite expiry. | Triggers `users_last_owner_update` and `users_last_owner_delete` abort any change that removes the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). |
+| `user_identities` | Login identity `(login_provider, subject)` → User. | Created only by invite linking or bootstrap ([I-LINK-1](threat-model.md#i-link-1), [I-BOOT-1](threat-model.md#i-boot-1)). |
+| `sessions` | Admin sessions, keyed by SHA-256 of the session id. | Holds the CSRF synchronizer token, idle and absolute expiry ([I-SESS-1](threat-model.md#i-sess-1)). |
+| `caller_providers` | Issuer, `jwks_uri`, audience (16 chars or more), profile, allowed algorithms, max token age, tenant pin, anchor claims. | `profile` cannot change after creation. |
+| `services` | Slug, base URL, injection (canonical JSON), forwarded headers, timeout, sealed credential, hint, expiry, verify check. | `credential_sealed` is bound to `(id, base_url, injection)` ([I-CRED-2](threat-model.md#i-cred-2)). |
+| `grants` | Caller provider, service, conditions (JSON), rules (JSON), enabled, expiry. | Partial index `grants_lookup` serves the proxy query. |
+| `settings` | Key → JSON value. | Runtime settings and internal state (see below). |
+| `audit_log` | Audit events: actor, action, target, summary, redacted diff. | Diffs never contain secrets ([I-CRED-1](threat-model.md#i-cred-1)). |
+
+Pending OAuth logins are not stored in D1. They live only in the `__Host-tokengate_oauth` cookie (up to 3 pending logins, keyed by `state`; [ADR 0011](adr/0011-oauth-state-in-host-cookie.md)).
+
+Runtime settings and their defaults (`src/db/settings.ts`). Values outside the bounds are rejected when saved and clamped when read.
+
+| Key | Default | Bounds |
+|---|---|---|
+| `request_log_retention_days` | 14 | 1 to 3650 |
+| `audit_log_retention_days` | 365 | 90 to 3650 |
+| `rollup_retention_days` | 400 | 30 to 3650 |
+| `allowed_sample_rate` | 1 | 0 to 1 |
+| `request_log_max_rows` | 5,000,000 | 10,000 to 50,000,000 |
+
+Internal state keys: `bootstrap_completed_at`, `cron_last_success_at`, `cron_last_error`, `cron_last_error_at`, `keyring_kcv`, `credential_expiry_notices`, `rollup_watermark`.
+
+```mermaid
+erDiagram
+  users ||--o{ user_identities : "signs in with"
+  users ||--o{ sessions : has
+  caller_providers ||--o{ grants : "verifies callers for"
+  services ||--o{ grants : "is reached through"
+```
+
+A Service or caller provider that a grant references cannot be deleted. The admin UI lists the grants to delete first.
+
+### Telemetry: `TELEMETRY_DB` (`migrations-telemetry/`)
+
+| Table | Content | Notes |
+|---|---|---|
+| `request_log` | One request record per proxied request that the pipeline recorded: outcome, reason, statuses, method, raw path, service, caller provider, grant, allowlisted claims, policy trace (authorization denials only), timings, weight, IP, user agent (verified callers only), colo. | `WITHOUT ROWID`, primary key is the request id. `claims_verified = 0` means all caller fields are empty ([I-LOG-2](threat-model.md#i-log-2)). |
+| `request_rollup_hourly` | Hourly sums per `(hour, service_id, grant_id, outcome, status_class)`: weighted request count, upstream auth failures, duration sum and latency buckets. | `''` stands for an unknown service or grant. |
+
+### Schema guard
+
+`src/generated/schema-head.ts` holds the newest migration filename for each database. `src/db/migrations.ts` compares it with wrangler's `d1_migrations` table. `/readyz` reports `schema: false` and the dashboard shows a banner when a database is behind. `test/unit/schema-head.test.ts` fails if the file drifts from the migration directories.
+
+## Module map
+
+Each line gives the module's purpose and the invariants it enforces.
+
+```text
+src/
+  index.ts              Worker entry: fetch, scheduled, queue.
+  app.ts                Composes routes in a fixed order. No behavior.
+  deps.ts               Deps interface (env, fetch, now, random, waitUntil) and production values.
+  env.ts                Typed view of vars, secrets and optional bindings.
+  config.ts             Per-feature config parsing; a malformed feature is disabled (I-CFG-1); admin host pinning predicate (I-DEPLOY-1).
+  health.ts             /healthz and /readyz; keyring and cron checks reused by the dashboard.
+  http/security.ts      Browser security headers and host pinning for non-proxy routes (I-DEPLOY-1).
+  lib/
+    errors.ts           gatewayError(): the only builder of proxy error responses; codes are public.
+    ids.ts              <prefix>_<ULID> generator.
+    bucket.ts           Per-isolate token bucket (log volume cap, not a security control).
+    encoding.ts         base64, base64url, UTF-8 helpers.
+    json.ts             JSON parsing that never throws; canonical JSON.
+  crypto/
+    keyring.ts          Parses TOKENGATE_KEK / TOKENGATE_KEYRING into non-extractable keys; key check values.
+    envelope.ts         Sealed format v1: AES-256-GCM with a per-seal DEK and destination-bound AAD (I-CRED-2).
+    hash.ts             SHA-256, HMAC, constant-time comparison, random tokens.
+  identity/
+    jwt.ts              Token shape, unverified peek, jose verification, JWKS registry, tenant pin (I-JWT-1, I-JWT-2, I-TEN-1).
+    types.ts            IssuerProfile and verified caller types.
+    profiles/           github-actions, gitlab-ci, generic: anchor rules, trusted events, tenant claims, log allowlists (I-AUTHZ-2, I-AUTHZ-3, I-TEN-1).
+  policy/
+    conditions.ts       Condition evaluation; fails closed on missing or non-scalar claims (I-AUTHZ-4).
+    evaluate.ts         First matching grant wins; deny by default; anchors re-checked at request time (I-AUTHZ-1..4).
+    glob.ts             Linear-time glob for rules and conditions; no RegExp.
+    validate.ts         Save-time validation of services, caller providers, grants (I-AUTHZ-2, I-TEN-1, I-SSRF-1, I-INJ-1).
+    presets.ts          GitHub Actions grant builder; produces plain conditions.
+    types.ts            Condition, Rule, Injection, PROXY_METHODS.
+  proxy/
+    handler.ts          The 16-step pipeline above.
+    routes.ts           Mounts ANY /proxy/:slug[/*].
+    caller-token.ts     Caller token extraction (I-TOK-2).
+    path.ts             Path canonicalization, upstream URL building, query checks (I-PATH-1, I-INJ-1).
+    headers.ts          Request allowlist, never-forward list, response drop list (I-TOK-1, I-RESP-1).
+    inject.ts           Credential injection and the encodings used for redaction (I-INJ-1, I-CRED-1).
+    forward.ts          Outbound headers, fetch with redirect: 'manual', response filtering (I-REDIR-1, I-RESP-1).
+  db/
+    proxy-context.ts    The single per-request control-plane read (no caching).
+    services.ts         Services repository; only the credential statement writes base_url and injection (I-CRED-2).
+    caller-providers.ts Caller providers repository with SQL guards.
+    grants.ts           Grants repository with SQL guards.
+    users.ts            Users and identities; guarded linking and bootstrap (I-LINK-1, I-BOOT-1).
+    sessions.ts         Session rows; validity decided in SQL on every load (I-SESS-1).
+    audit.ts            Audit statements for the same batch as the change; audit.event log line (I-AUDIT-1).
+    settings.ts         Settings defaults, bounds and state keys.
+    requests.ts         request_log inserts (INSERT OR IGNORE) and reads.
+    rollups.ts          Rollup statements and live aggregates.
+    migrations.ts       Schema guard against d1_migrations.
+    rows.ts, types.ts   Row mappers; malformed JSON becomes a value that fails closed.
+  telemetry/
+    record.ts           Builds request records; redaction by construction (I-LOG-1, I-LOG-2).
+    sinks.ts            Queue or direct insert, archive, pre-trust budget.
+    queue-consumer.ts   REQUEST_LOG_QUEUE consumer.
+    archive.ts          Archive record shape (matches pipelines/request-log.v1.schema.json).
+    cron.ts             Hourly maintenance.
+    rollup.ts           Hourly rollups.
+    retention.ts        Retention purge and request_log_max_rows soft cap.
+    dashboard.ts        Dashboard data and alerts.
+    types.ts            RequestRecord type.
+  admin/
+    auth/               Login providers (github.ts, oidc.ts, access.ts), email trust (email.ts), login resolution (resolve-login.ts),
+                        sessions (session.ts), CSRF (csrf.ts), RBAC (rbac.ts), OAuth state cookie (oauth-state.ts),
+                        middleware and routes (I-SESS-1, I-CSRF-1, I-OAUTH-1, I-LINK-1, I-BOOT-1, I-RBAC-1).
+    ops/                Mutations; one change and one audit event per batch (I-AUDIT-1); credentials never in results (I-CRED-1).
+    routes/             Server-rendered pages (dashboard, services, caller providers, grants, requests, audit, users, settings).
+    views/              Layout, components, formatting, reason texts. No client JavaScript.
+    grant-text.ts       Text format of conditions and rules in the grant form.
+    service-templates.ts Prefill values for the "Add a service" form.
+    render.tsx          Page rendering, size-capped form parsing, redirect after POST.
+  generated/
+    schema-head.ts      Newest migration per database.
+```
+
+Other directories:
+
+| Path | Content |
+|---|---|
+| `migrations/`, `migrations-telemetry/` | D1 schemas. `pnpm run deploy` applies both. |
+| `pipelines/request-log.v1.schema.json` | Archive stream schema. |
+| `scripts/keyring.ts` | Generates and checks keyring values outside Cloudflare (`pnpm keyring`). |
+| `scripts/setup-archive.sh` | Creates the optional R2 archive. |
+| `scripts/check-config.sh` | Checks `wrangler.jsonc` deployment guardrails. |
+| `scripts/check-threat-ids.sh` | Checks every invariant ID has a test `describe()`. |
+| `actions/get-token/` | Composite GitHub Action that mints a caller token. See its [README](../actions/get-token/README.md). |
+| `test/` | `unit/`, `integration/`, `security/`, `vectors/`, `helpers/`. |
+
+## Dependency injection and tests
+
+Security-critical code takes its side effects from a `Deps` object (`src/deps.ts`):
+
+```ts
+interface Deps {
+  env: AppEnv;
+  fetch: typeof fetch;   // upstreams, JWKS, discovery, login providers
+  now(): number;
+  random(length: number): Uint8Array;
+  waitUntil(promise: Promise<unknown>): void;
+}
+```
+
+Production values come from `productionDeps()`. `createApp({ makeDeps })` lets tests replace them. jose receives `deps.fetch` through its `customFetch` option.
+
+Tests run inside workerd with `@cloudflare/vitest-plugin` and real local D1 databases. `test/helpers/apply-migrations.ts` applies both schemas. Tests use no HTTP mocking library:
+
+- `test/helpers/app.ts` builds the real app with an injected `fetch`, clock and collected `waitUntil` promises. The default `fetch` throws, so an unexpected outbound call fails the test.
+- `test/helpers/jwt.ts` creates test issuers whose JWKS are served through the injected `fetch`.
+- `test/helpers/proxy-fixtures.ts` seeds a caller provider, a service with a sealed credential and a grant, plus a fake upstream that records what it received.
+- `test/vectors/` holds fixed vectors: sealed credentials (`sealed.json`), paths, globs and conditions.
+- Every invariant ID is named in at least one test `describe()` name. `bash scripts/check-threat-ids.sh` checks this.
+
+Run everything with `pnpm check`. Test conventions are in [CONTRIBUTING.md](../CONTRIBUTING.md). The reasons for this approach are in [ADR 0010](adr/0010-dependency-injection-for-tests.md).
+
+## Why two databases
+
+The control plane and the request log have different write patterns and different failure costs.
+
+- Request volume decides the size of `request_log`. Proxy traffic, including rejected requests from anyone on the internet, could fill one database. A D1 database has a size limit. If the control plane shared it, a full database would block admin changes, including revocation.
+- Retention purges and rollups scan `request_log` every hour. In a separate database, this work does not compete with the per-request control-plane read.
+- Backups and restores of the control plane stay small.
+
+See [ADR 0003](adr/0003-cloudflare-workers-and-two-d1-databases.md).
+
+## Why no policy caching
+
+The proxy reads the service, caller providers, grants and settings from D1 on every request, in one batch (`src/db/proxy-context.ts`). Disabling a grant, service or caller provider therefore takes effect on the next request. There is no propagation delay to document or to wait for during an incident. The cost is one D1 round trip per request. See [ADR 0006](adr/0006-no-policy-caching.md).
+
+Some data is cached per isolate. None of it decides authorization:
+
+| Cache | Lifetime | Module |
+|---|---|---|
+| JWKS per `jwks_uri` | jose refreshes after 10 minutes; at most one fetch per 30 seconds per `jwks_uri` | `src/identity/jwt.ts` |
+| OIDC discovery for admin login | 1 hour; a failed discovery for 30 seconds | `src/admin/auth/oidc.ts` |
+| Schema status | `ok` or `ahead`: isolate lifetime. `behind` or `unknown`: 60 seconds | `src/db/migrations.ts` |
+| `/readyz` answer | 10 seconds | `src/health.ts` |
+
+## Related pages
+
+- [Threat model](threat-model.md): invariants, actors, known limitations.
+- [Policies](policies.md): Conditions, rules, anchor claims, trusted events.
+- [Configuration](configuration.md): variables, secrets, bindings.
+- [Observability](observability.md): request log, rollups, archive, health.
+- [ADRs](adr/README.md) and [roadmap](roadmap.md).

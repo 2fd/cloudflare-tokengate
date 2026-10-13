@@ -1,0 +1,61 @@
+{
+  "name": "cloudflare-tokengate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted credential broker for Cloudflare Workers: callers present a workload identity token (e.g. GitHub Actions OIDC), the gateway injects the upstream API credential.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "packageManager": "pnpm@11.22.0",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler d1 migrations apply DB --remote && wrangler d1 migrations apply TELEMETRY_DB --remote && wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local && wrangler d1 migrations apply TELEMETRY_DB --local",
+    "types": "wrangler types",
+    "typecheck": "wrangler types --check && tsc --noEmit && tsc --noEmit -p scripts",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:scripts",
+    "keyring": "node scripts/keyring.ts",
+    "test:scripts": "bash scripts/check-config.sh && bash scripts/check-threat-ids.sh && bash test/security/check-config-test.sh && bash test/security/get-token-action.sh && node scripts/check-links.mjs"
+  },
+  "dependencies": {
+    "hono": "^4.13.13",
+    "jose": "^6.2.12",
+    "oauth4webapi": "^3.8.8"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "@cloudflare/vitest-plugin": "^1.4.0",
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3",
+    "wrangler": "^4.149.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "Control-plane database (users, sessions, caller providers, services, grants, settings, audit log). Created for you; `pnpm run deploy` applies its migrations."
+      },
+      "TELEMETRY_DB": {
+        "description": "Request log and hourly rollups, kept separate so telemetry volume cannot fill the control plane. Created for you; `pnpm run deploy` applies its migrations."
+      },
+      "TOKENGATE_KEK": {
+        "description": "**Required.** Key that encrypts stored upstream credentials: 32 random bytes, base64. Generate it outside Cloudflare with `openssl rand -base64 32` and keep a copy in your vault: losing it loses every stored credential. For rotation, see docs/operations/key-rotation.md in the repository."
+      },
+      "AUTH_GITHUB_CLIENT_SECRET": {
+        "description": "Client secret of a [GitHub OAuth App](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app) for admin login. Also set the `AUTH_GITHUB_CLIENT_ID` variable after deploying. Leave empty if you use another login provider."
+      },
+      "AUTH_OIDC_CLIENT_SECRET": {
+        "description": "Client secret for admin login through any OpenID Connect provider. Also set the `AUTH_OIDC_ISSUER` and `AUTH_OIDC_CLIENT_ID` variables after deploying. Leave empty if unused; do not combine with Google login."
+      },
+      "AUTH_GOOGLE_CLIENT_SECRET": {
+        "description": "Client secret of a [Google OAuth client](https://developers.google.com/identity/protocols/oauth2/openid-connect) for admin login. Also set the `AUTH_GOOGLE_CLIENT_ID` variable after deploying. Leave empty if unused; do not combine with OIDC login."
+      }
+    }
+  }
+}

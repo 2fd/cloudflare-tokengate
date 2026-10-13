@@ -1,0 +1,413 @@
+{
+  "description": "Claim condition semantics (docs/policies.md, I-AUTHZ-4). Strings compare as-is, booleans as \"true\"/\"false\", safe integers as decimal text. Missing, null, array, object and unsafe-number claims make the condition false even when negated. Claim names are literal top-level keys.",
+  "cases": [
+    {
+      "name": "exact string match",
+      "condition": {
+        "claim": "repository_id",
+        "match": "exact",
+        "values": ["123"]
+      },
+      "claims": {
+        "repository_id": "123"
+      },
+      "ok": true
+    },
+    {
+      "name": "exact is one of values",
+      "condition": {
+        "claim": "ref_type",
+        "match": "exact",
+        "values": ["branch", "tag"]
+      },
+      "claims": {
+        "ref_type": "tag"
+      },
+      "ok": true
+    },
+    {
+      "name": "exact mismatch",
+      "condition": {
+        "claim": "repository_id",
+        "match": "exact",
+        "values": ["123"]
+      },
+      "claims": {
+        "repository_id": "1234"
+      },
+      "ok": false
+    },
+    {
+      "name": "exact is case-sensitive",
+      "condition": {
+        "claim": "environment",
+        "match": "exact",
+        "values": ["prod"]
+      },
+      "claims": {
+        "environment": "Prod"
+      },
+      "ok": false
+    },
+    {
+      "name": "exact does not trim",
+      "condition": {
+        "claim": "environment",
+        "match": "exact",
+        "values": ["prod"]
+      },
+      "claims": {
+        "environment": "prod "
+      },
+      "ok": false
+    },
+    {
+      "name": "safe integer compares as decimal text",
+      "condition": {
+        "claim": "project_id",
+        "match": "exact",
+        "values": ["42"]
+      },
+      "claims": {
+        "project_id": 42
+      },
+      "ok": true
+    },
+    {
+      "name": "negative safe integer",
+      "condition": {
+        "claim": "n",
+        "match": "exact",
+        "values": ["-7"]
+      },
+      "claims": {
+        "n": -7
+      },
+      "ok": true
+    },
+    {
+      "name": "boolean true compares as \"true\"",
+      "condition": {
+        "claim": "ref_protected",
+        "match": "exact",
+        "values": ["true"]
+      },
+      "claims": {
+        "ref_protected": true
+      },
+      "ok": true
+    },
+    {
+      "name": "boolean false compares as \"false\"",
+      "condition": {
+        "claim": "ref_protected",
+        "match": "exact",
+        "values": ["true"]
+      },
+      "claims": {
+        "ref_protected": false
+      },
+      "ok": false
+    },
+    {
+      "name": "string \"true\" (GitHub style)",
+      "condition": {
+        "claim": "ref_protected",
+        "match": "exact",
+        "values": ["true"]
+      },
+      "claims": {
+        "ref_protected": "true"
+      },
+      "ok": true
+    },
+    {
+      "name": "missing claim fails",
+      "condition": {
+        "claim": "environment",
+        "match": "exact",
+        "values": ["prod"]
+      },
+      "claims": {},
+      "ok": false
+    },
+    {
+      "name": "missing claim fails even when negated",
+      "condition": {
+        "claim": "environment",
+        "match": "exact",
+        "values": ["prod"],
+        "negate": true
+      },
+      "claims": {},
+      "ok": false
+    },
+    {
+      "name": "null fails even when negated",
+      "condition": {
+        "claim": "environment",
+        "match": "exact",
+        "values": ["prod"],
+        "negate": true
+      },
+      "claims": {
+        "environment": null
+      },
+      "ok": false
+    },
+    {
+      "name": "array fails",
+      "condition": {
+        "claim": "groups",
+        "match": "exact",
+        "values": ["admins"]
+      },
+      "claims": {
+        "groups": ["admins"]
+      },
+      "ok": false
+    },
+    {
+      "name": "array fails even when negated",
+      "condition": {
+        "claim": "groups",
+        "match": "exact",
+        "values": ["evil"],
+        "negate": true
+      },
+      "claims": {
+        "groups": ["admins"]
+      },
+      "ok": false
+    },
+    {
+      "name": "object fails even when negated",
+      "condition": {
+        "claim": "kubernetes.io",
+        "match": "exact",
+        "values": ["x"],
+        "negate": true
+      },
+      "claims": {
+        "kubernetes.io": {
+          "namespace": "x"
+        }
+      },
+      "ok": false
+    },
+    {
+      "name": "unsafe integer fails",
+      "condition": {
+        "claim": "id",
+        "match": "exact",
+        "values": ["9007199254740993"]
+      },
+      "claims": {
+        "id": 9007199254740992
+      },
+      "ok": false
+    },
+    {
+      "name": "unsafe integer fails even when negated",
+      "condition": {
+        "claim": "id",
+        "match": "exact",
+        "values": ["1"],
+        "negate": true
+      },
+      "claims": {
+        "id": 9007199254740992
+      },
+      "ok": false
+    },
+    {
+      "name": "fractional number fails",
+      "condition": {
+        "claim": "n",
+        "match": "exact",
+        "values": ["1.5"]
+      },
+      "claims": {
+        "n": 1.5
+      },
+      "ok": false
+    },
+    {
+      "name": "negated exact: present and not listed",
+      "condition": {
+        "claim": "event_name",
+        "match": "exact",
+        "values": ["pull_request", "pull_request_target"],
+        "negate": true
+      },
+      "claims": {
+        "event_name": "push"
+      },
+      "ok": true
+    },
+    {
+      "name": "negated exact: listed",
+      "condition": {
+        "claim": "event_name",
+        "match": "exact",
+        "values": ["pull_request", "pull_request_target"],
+        "negate": true
+      },
+      "claims": {
+        "event_name": "pull_request_target"
+      },
+      "ok": false
+    },
+    {
+      "name": "glob match",
+      "condition": {
+        "claim": "ref",
+        "match": "glob",
+        "values": ["refs/heads/release/*"]
+      },
+      "claims": {
+        "ref": "refs/heads/release/1.0"
+      },
+      "ok": true
+    },
+    {
+      "name": "glob * does not cross /",
+      "condition": {
+        "claim": "ref",
+        "match": "glob",
+        "values": ["refs/heads/*"]
+      },
+      "claims": {
+        "ref": "refs/heads/x/y"
+      },
+      "ok": false
+    },
+    {
+      "name": "glob any of values",
+      "condition": {
+        "claim": "ref",
+        "match": "glob",
+        "values": ["refs/heads/main", "refs/tags/v*"]
+      },
+      "claims": {
+        "ref": "refs/tags/v2"
+      },
+      "ok": true
+    },
+    {
+      "name": "negated glob: present and matches none",
+      "condition": {
+        "claim": "ref",
+        "match": "glob",
+        "values": ["refs/heads/dependabot/**"],
+        "negate": true
+      },
+      "claims": {
+        "ref": "refs/heads/main"
+      },
+      "ok": true
+    },
+    {
+      "name": "negated glob: matches",
+      "condition": {
+        "claim": "ref",
+        "match": "glob",
+        "values": ["refs/heads/dependabot/**"],
+        "negate": true
+      },
+      "claims": {
+        "ref": "refs/heads/dependabot/npm/x"
+      },
+      "ok": false
+    },
+    {
+      "name": "dotted claim name is literal, not nested",
+      "condition": {
+        "claim": "oidc.circleci.com/project-id",
+        "match": "exact",
+        "values": ["p1"]
+      },
+      "claims": {
+        "oidc.circleci.com/project-id": "p1"
+      },
+      "ok": true
+    },
+    {
+      "name": "dotted claim name never reads nested objects",
+      "condition": {
+        "claim": "kubernetes.io.namespace",
+        "match": "exact",
+        "values": ["prod"]
+      },
+      "claims": {
+        "kubernetes.io": {
+          "namespace": "prod"
+        }
+      },
+      "ok": false
+    },
+    {
+      "name": "inherited properties are not claims",
+      "condition": {
+        "claim": "constructor",
+        "match": "exact",
+        "values": ["x"],
+        "negate": true
+      },
+      "claims": {},
+      "ok": false
+    },
+    {
+      "name": "empty string claim is a value",
+      "condition": {
+        "claim": "environment",
+        "match": "exact",
+        "values": ["prod"],
+        "negate": true
+      },
+      "claims": {
+        "environment": ""
+      },
+      "ok": true
+    },
+    {
+      "name": "malformed: empty values fail even when negated",
+      "condition": {
+        "claim": "environment",
+        "match": "exact",
+        "values": [],
+        "negate": true
+      },
+      "claims": {
+        "environment": "prod"
+      },
+      "ok": false
+    },
+    {
+      "name": "malformed: unknown match fails even when negated",
+      "condition": {
+        "claim": "environment",
+        "match": "regex",
+        "values": ["p.*"],
+        "negate": true
+      },
+      "claims": {
+        "environment": "x"
+      },
+      "ok": false
+    },
+    {
+      "name": "malformed: invalid glob fails even when negated",
+      "condition": {
+        "claim": "ref",
+        "match": "glob",
+        "values": ["*/*/*/*/*/*/*/*/*"],
+        "negate": true
+      },
+      "claims": {
+        "ref": "refs/heads/main"
+      },
+      "ok": false
+    }
+  ]
+}

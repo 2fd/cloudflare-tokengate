@@ -1,0 +1,290 @@
+// Users and login identities. Linking and bootstrap are SQL-guarded batches: every statement
+// repeats the precondition in its WHERE clause, so a concurrent or replayed attempt is a no-op
+// instead of a second link or a second owner (I-LINK-1, I-BOOT-1).
+import { auditStatement } from './audit';
+import { userFromRow } from './rows';
+import { revokeSessionsForUserStatement } from './sessions';
+import type { AuditEvent, Role, User, UserStatus } from './types';
+
+/** Boolean SQL expression plus its binds, ANDed into every WHERE clause (see admin/ops/shared). */
+type SqlGuard = { sql: string; binds: unknown[] };
+
+/** How long an invitation (or a login reset) stays redeemable. */
+export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+export interface UserListEntry extends User {
+  identity_count: number;
+}
+
+export interface UserIdentity {
+  login_provider: string;
+  subject: string;
+  user_id: string;
+  email: string | null;
+  created_at: number;
+  last_used_at: number | null;
+}
+
+export async function getUser(db: D1Database, id: string): Promise<User | null> {
+  const row = await db.prepare('SELECT * FROM users WHERE id = ?').bind(id).first();
+  return row ? userFromRow(row) : null;
+}
+
+/** Case-insensitive (the column is COLLATE NOCASE). */
+export async function getUserByEmail(db: D1Database, email: string): Promise<User | null> {
+  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  return row ? userFromRow(row) : null;
+}
+
+export async function listUsers(db: D1Database): Promise<UserListEntry[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT users.*, (SELECT count(*) FROM user_identities WHERE user_id = users.id) AS identity_count
+       FROM users ORDER BY email`,
+    )
+    .all<Record<string, unknown>>();
+  return results.map((row) => ({
+    ...userFromRow(row),
+    identity_count: Number(row.identity_count),
+  }));
+}
+
+export async function countActiveOwners(db: D1Database): Promise<number> {
+  const row = await db
+    .prepare("SELECT count(*) AS n FROM users WHERE role = 'owner' AND status = 'active'")
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+export async function listIdentities(db: D1Database, userId: string): Promise<UserIdentity[]> {
+  const { results } = await db
+    .prepare('SELECT * FROM user_identities WHERE user_id = ? ORDER BY created_at')
+    .bind(userId)
+    .all<UserIdentity>();
+  return results;
+}
+
+/** The user bound to an exact (login provider, subject) identity, whatever its status. */
+export async function findUserByIdentity(
+  db: D1Database,
+  loginProvider: string,
+  subject: string,
+): Promise<User | null> {
+  const row = await db
+    .prepare(
+      `SELECT users.* FROM user_identities JOIN users ON users.id = user_identities.user_id
+       WHERE user_identities.login_provider = ? AND user_identities.subject = ?`,
+    )
+    .bind(loginProvider, subject)
+    .first();
+  return row ? userFromRow(row) : null;
+}
+
+/** An invitation that can still be redeemed by email at `now`. */
+export async function findRedeemableInvite(
+  db: D1Database,
+  email: string,
+  now: number,
+): Promise<User | null> {
+  const row = await db
+    .prepare("SELECT * FROM users WHERE email = ? AND status = 'invited' AND invite_expires_at > ?")
+    .bind(email, now)
+    .first();
+  return row ? userFromRow(row) : null;
+}
+
+export function inviteUserStatements(
+  db: D1Database,
+  input: { id: string; email: string; role: Role; now: number; inviteExpiresAt: number },
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(
+        `INSERT INTO users (id, email, name, role, status, invite_expires_at, created_at, updated_at)
+         VALUES (?, ?, NULL, ?, 'invited', ?, ?, ?)`,
+      )
+      .bind(input.id, input.email, input.role, input.inviteExpiresAt, input.now, input.now),
+  ];
+}
+
+/** Extends a pending invitation. Only touches users that are still `invited`. */
+export function renewInviteStatements(
+  db: D1Database,
+  input: { id: string; now: number; inviteExpiresAt: number },
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(
+        "UPDATE users SET invite_expires_at = ?, updated_at = ? WHERE id = ? AND status = 'invited'",
+      )
+      .bind(input.inviteExpiresAt, input.now, input.id),
+  ];
+}
+
+/**
+ * Role and/or status change. Any change of either revokes the user's sessions, so the next request
+ * re-authenticates under the new role. The last-owner trigger aborts the whole batch with
+ * `last_owner` when the change would leave no active owner (I-OWNER-1). With a `guard`, every
+ * statement applies only while it holds; the users UPDATE runs last because it may change what the
+ * guard reads.
+ */
+export function updateUserStatements(
+  db: D1Database,
+  input: { id: string; now: number; role?: Role; status?: Exclude<UserStatus, 'invited'> },
+  guard?: SqlGuard,
+): D1PreparedStatement[] {
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+  if (input.role !== undefined) {
+    sets.push('role = ?');
+    binds.push(input.role);
+  }
+  if (input.status !== undefined) {
+    sets.push('status = ?');
+    binds.push(input.status);
+  }
+  if (sets.length === 0) return [];
+  return [
+    revokeSessionsForUserStatement(db, input.id, input.now, guard),
+    db
+      .prepare(`UPDATE users SET ${sets.join(', ')}, updated_at = ? WHERE id = ?${andGuard(guard)}`)
+      .bind(...binds, input.now, input.id, ...(guard?.binds ?? [])),
+  ];
+}
+
+/**
+ * "Reset login": forget every identity, return the user to `invited` with a fresh expiry and end
+ * their sessions. The next login links a new identity through the invite path. With a `guard`,
+ * every statement applies only while it holds; the users UPDATE runs last (see updateUserStatements).
+ */
+export function resetLoginStatements(
+  db: D1Database,
+  input: { id: string; now: number; inviteExpiresAt: number },
+  guard?: SqlGuard,
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(`DELETE FROM user_identities WHERE user_id = ?${andGuard(guard)}`)
+      .bind(input.id, ...(guard?.binds ?? [])),
+    revokeSessionsForUserStatement(db, input.id, input.now, guard),
+    db
+      .prepare(
+        `UPDATE users SET status = 'invited', invite_expires_at = ?, updated_at = ? WHERE id = ?${andGuard(guard)}`,
+      )
+      .bind(input.inviteExpiresAt, input.now, input.id, ...(guard?.binds ?? [])),
+  ];
+}
+
+function andGuard(guard: SqlGuard | undefined): string {
+  return guard ? ` AND (${guard.sql})` : '';
+}
+
+export interface LinkInput {
+  userId: string;
+  email: string;
+  loginProvider: string;
+  subject: string;
+  name: string | null;
+  now: number;
+  audit: AuditEvent;
+}
+
+/**
+ * Links a login identity to an invited user and activates it (I-LINK-1). Every statement is
+ * guarded by "this user is still invited, unexpired, with this email", and the UPDATE that flips
+ * the status runs last, so the audit row and identity are written exactly when the link happens.
+ * The caller checks `meta.changes === 1` on the last result.
+ */
+export function linkInvitedUserStatements(db: D1Database, input: LinkInput): D1PreparedStatement[] {
+  const guard =
+    "EXISTS (SELECT 1 FROM users WHERE id = ? AND email = ? AND status = 'invited' AND invite_expires_at > ?)";
+  const guardBinds = [input.userId, input.email, input.now];
+  return [
+    auditStatement(db, input.audit, { sql: guard, binds: guardBinds }),
+    db
+      .prepare(
+        `INSERT INTO user_identities (login_provider, subject, user_id, email, created_at, last_used_at)
+         SELECT ?, ?, ?, ?, ?, NULL WHERE ${guard}`,
+      )
+      .bind(
+        input.loginProvider,
+        input.subject,
+        input.userId,
+        input.email,
+        input.now,
+        ...guardBinds,
+      ),
+    db
+      .prepare(
+        `UPDATE users SET status = 'active', invite_expires_at = NULL, name = COALESCE(name, ?), updated_at = ?
+         WHERE id = ? AND email = ? AND status = 'invited' AND invite_expires_at > ?`,
+      )
+      .bind(input.name, input.now, ...guardBinds),
+  ];
+}
+
+export interface BootstrapInput {
+  userId: string;
+  email: string;
+  loginProvider: string;
+  subject: string;
+  name: string | null;
+  now: number;
+  audit: AuditEvent;
+}
+
+/**
+ * Creates the first owner (I-BOOT-1). The user INSERT only happens while no owner exists and
+ * `bootstrap_completed_at` is absent; identity, settings marker and audit row are each conditioned
+ * on that new user row existing. The caller checks `meta.changes === 1` on the first result.
+ */
+export function bootstrapOwnerStatements(
+  db: D1Database,
+  input: BootstrapInput,
+): D1PreparedStatement[] {
+  const created = 'EXISTS (SELECT 1 FROM users WHERE id = ?)';
+  return [
+    db
+      .prepare(
+        `INSERT INTO users (id, email, name, role, status, invite_expires_at, created_at, updated_at)
+         SELECT ?, ?, ?, 'owner', 'active', NULL, ?, ?
+         WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'owner')
+           AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'bootstrap_completed_at')`,
+      )
+      .bind(input.userId, input.email, input.name, input.now, input.now),
+    db
+      .prepare(
+        `INSERT INTO user_identities (login_provider, subject, user_id, email, created_at, last_used_at)
+         SELECT ?, ?, ?, ?, ?, NULL WHERE ${created}`,
+      )
+      .bind(input.loginProvider, input.subject, input.userId, input.email, input.now, input.userId),
+    db
+      .prepare(
+        `INSERT INTO settings (key, value, updated_at, updated_by)
+         SELECT 'bootstrap_completed_at', ?, ?, ? WHERE ${created}`,
+      )
+      .bind(JSON.stringify(input.now), input.now, input.userId, input.userId),
+    auditStatement(db, input.audit, { sql: created, binds: [input.userId] }),
+  ];
+}
+
+/**
+ * Records a successful login on the user and on the identity used. Both updates apply only while
+ * `guard` holds, the same guard as the session insert, so a refused login records nothing (I-SESS-1).
+ */
+export function recordLoginStatements(
+  db: D1Database,
+  input: { userId: string; loginProvider: string; subject: string; now: number },
+  guard: SqlGuard,
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(`UPDATE users SET last_login_at = ? WHERE id = ?${andGuard(guard)}`)
+      .bind(input.now, input.userId, ...guard.binds),
+    db
+      .prepare(
+        `UPDATE user_identities SET last_used_at = ? WHERE login_provider = ? AND subject = ?${andGuard(guard)}`,
+      )
+      .bind(input.now, input.loginProvider, input.subject, ...guard.binds),
+  ];
+}

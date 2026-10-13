@@ -1,0 +1,66 @@
+{
+  "description": "Known-answer vectors for sealed credential format v1 (docs/architecture.md). Generated with node:crypto as an independent reference. random_hex lists the outputs of random() in call order: DEK (32), iv (12), dek_iv (12). aad_utf8 is credentialAad(service_id, base_url, injection_json).",
+  "kcv": [
+    {
+      "key_b64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "kcv": "42abd514f4965eb9"
+    },
+    {
+      "key_b64": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8=",
+      "kcv": "3cbeb7ad57a6a6d7"
+    }
+  ],
+  "sealed": [
+    {
+      "name": "bearer credential under TOKENGATE_KEK (kid k1)",
+      "env": {
+        "TOKENGATE_KEK": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+      },
+      "random_hex": [
+        "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+        "404142434445464748494a4b",
+        "505152535455565758595a5b"
+      ],
+      "service_id": "svc_01JABCDEFGHJKMNPQRSTVWXYZ0",
+      "base_url": "https://slack.com/api",
+      "injection_json": "{\"kind\":\"bearer\"}",
+      "aad_utf8": "tokengate/v1/service-credential\nsvc_01JABCDEFGHJKMNPQRSTVWXYZ0\nhttps://slack.com/api\n{\"kind\":\"bearer\"}",
+      "plaintext": "test-bot-token-0000000000-0000000000000-abcdefghijklmnopqrstuvwx",
+      "sealed": "{\"v\":1,\"kid\":\"k1\",\"iv\":\"QEFCQ0RFRkdISUpL\",\"wdek\":\"sgYUV8B1n8F0nxdO4cyt-tMez9gWRKwVHLDa4Mx9q0vtMcTAC9AlDysDKCimQbln\",\"dek_iv\":\"UFFSU1RVVldYWVpb\",\"ct\":\"tjHO9X0Uqn9_Rj9D4CR8QiO-rbPFcJfuXtOkMFDa_zL6Iy8uBuyRCyz1XuD4ttSHt_KCXNCEv40PlroUU9MjafL1kyqMcEHmPLJdTRWPF4M\"}"
+    },
+    {
+      "name": "header credential under TOKENGATE_KEYRING active k2, non-ASCII plaintext",
+      "env": {
+        "TOKENGATE_KEYRING": "{\"active\":\"k2\",\"keys\":{\"k1\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"k2\":\"gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8=\"}}"
+      },
+      "random_hex": [
+        "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "c0c1c2c3c4c5c6c7c8c9cacb",
+        "d0d1d2d3d4d5d6d7d8d9dadb"
+      ],
+      "service_id": "svc_01JZZZZZZZZZZZZZZZZZZZZZZZ",
+      "base_url": "https://api.example.com/v2",
+      "injection_json": "{\"kind\":\"header\",\"name\":\"x-api-key\",\"prefix\":\"Key \"}",
+      "aad_utf8": "tokengate/v1/service-credential\nsvc_01JZZZZZZZZZZZZZZZZZZZZZZZ\nhttps://api.example.com/v2\n{\"kind\":\"header\",\"name\":\"x-api-key\",\"prefix\":\"Key \"}",
+      "plaintext": "clé-secrète-✓-🔑",
+      "sealed": "{\"v\":1,\"kid\":\"k2\",\"iv\":\"wMHCw8TFxsfIycrL\",\"wdek\":\"ADoO8TwUmN4IgiKJvfh-iZtF8LeLv69CPEngbqf48ce7FRtZFOHKVVS2mkULjg91\",\"dek_iv\":\"0NHS09TV1tfY2drb\",\"ct\":\"Lwz4WhOzh-achTu4lEn2OWPh85rQkkZ3eroBEnel1AAv88hph68\"}"
+    },
+    {
+      "name": "empty plaintext (ct is the tag only)",
+      "env": {
+        "TOKENGATE_KEK": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+      },
+      "random_hex": [
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "000000000000000000000000",
+        "010101010101010101010101"
+      ],
+      "service_id": "svc_x",
+      "base_url": "https://hooks.slack.com/services",
+      "injection_json": "{\"kind\":\"path\",\"prefix\":\"\"}",
+      "aad_utf8": "tokengate/v1/service-credential\nsvc_x\nhttps://hooks.slack.com/services\n{\"kind\":\"path\",\"prefix\":\"\"}",
+      "plaintext": "",
+      "sealed": "{\"v\":1,\"kid\":\"k1\",\"iv\":\"AAAAAAAAAAAAAAAA\",\"wdek\":\"iDwaypd6l5krq5jn55itJzSRcCRufOkjDCT4E2L2Ac6gIqyKw7ek9iKukjYEkm8W\",\"dek_iv\":\"AQEBAQEBAQEBAQEB\",\"ct\":\"iJbBPxGg0QjECMUcRpZpng\"}"
+    }
+  ]
+}

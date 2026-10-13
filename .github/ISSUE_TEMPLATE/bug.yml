@@ -1,0 +1,24 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include tokens, credentials, or full request logs. Security issues go to SECURITY.md, not here.
+  - type: input
+    id: version
+    attributes:
+      label: Version (tag or commit)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Include the gateway error code (`x-tokengate-error`) and request id if relevant.

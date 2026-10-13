@@ -1,0 +1,106 @@
+{
+  "description": "Glob semantics shared by rule paths and claim conditions (docs/policies.md). '*' = zero or more characters except '/', '**' = zero or more characters including '/', everything else literal and case-sensitive, whole-value match.",
+  "matches": [
+    { "pattern": "/api/chat.postMessage", "value": "/api/chat.postMessage", "match": true },
+    {
+      "pattern": "/api/chat.postMessage",
+      "value": "/api/chat.postmessage",
+      "match": false,
+      "note": "case-sensitive"
+    },
+    {
+      "pattern": "/api/chat.postMessage",
+      "value": "/api/chat.postMessage/",
+      "match": false,
+      "note": "anchored at the end"
+    },
+    {
+      "pattern": "/api/chat.postMessage",
+      "value": "/x/api/chat.postMessage",
+      "match": false,
+      "note": "anchored at the start"
+    },
+    { "pattern": "/api/*", "value": "/api/chat.postMessage", "match": true },
+    { "pattern": "/api/*", "value": "/api/", "match": true, "note": "* matches zero characters" },
+    { "pattern": "/api/*", "value": "/api", "match": false },
+    { "pattern": "/api/*", "value": "/api/a/b", "match": false, "note": "* never crosses /" },
+    { "pattern": "/api/**", "value": "/api/a/b", "match": true },
+    { "pattern": "/api/**", "value": "/api/", "match": true },
+    { "pattern": "/api/**", "value": "/api", "match": false, "note": "the / before ** is literal" },
+    { "pattern": "/**", "value": "/", "match": true },
+    { "pattern": "/**", "value": "/anything/at/all", "match": true },
+    { "pattern": "**", "value": "", "match": true },
+    { "pattern": "*", "value": "", "match": true },
+    { "pattern": "*", "value": "a/b", "match": false },
+    {
+      "pattern": "/repos/*/*/contents/**",
+      "value": "/repos/acme/app/contents/docs/readme.md",
+      "match": true
+    },
+    {
+      "pattern": "/repos/*/*/contents/**",
+      "value": "/repos/acme/app/extra/contents/x",
+      "match": false
+    },
+    { "pattern": "/v1/*/messages", "value": "/v1/x/messages", "match": true },
+    {
+      "pattern": "/v1/*/messages",
+      "value": "/v1//messages",
+      "match": true,
+      "note": "* may be empty; the proxy rejects // before matching"
+    },
+    {
+      "pattern": "/a/**/b",
+      "value": "/a/b",
+      "match": false,
+      "note": "both slashes around ** are literal"
+    },
+    { "pattern": "/a/**/b", "value": "/a//b", "match": true },
+    { "pattern": "/a/**/b", "value": "/a/x/y/b", "match": true },
+    { "pattern": "/a**b", "value": "/a/x/b", "match": true },
+    { "pattern": "/a*b", "value": "/a/x/b", "match": false },
+    { "pattern": "/a***b", "value": "/a/x/b", "match": true, "note": "a run of stars is one **" },
+    { "pattern": "refs/heads/*", "value": "refs/heads/main", "match": true },
+    { "pattern": "refs/heads/*", "value": "refs/heads/feature/x", "match": false },
+    { "pattern": "refs/heads/release/*", "value": "refs/heads/release/1.0", "match": true },
+    { "pattern": "refs/tags/v*", "value": "refs/tags/v1.2.3", "match": true },
+    { "pattern": "refs/tags/v*", "value": "refs/tags/1.2.3", "match": false },
+    { "pattern": "v*.*.*", "value": "v1.2.3", "match": true },
+    { "pattern": "v*.*.*", "value": "v1.2", "match": false },
+    { "pattern": "*-prod", "value": "eu-prod", "match": true },
+    { "pattern": "*-prod", "value": "eu-prod-2", "match": false },
+    { "pattern": "a?b", "value": "axb", "match": false, "note": "? is literal" },
+    { "pattern": "a?b", "value": "a?b", "match": true },
+    { "pattern": "[ab]", "value": "a", "match": false, "note": "[] is literal" },
+    { "pattern": "[ab]", "value": "[ab]", "match": true },
+    {
+      "pattern": "a\\*b",
+      "value": "a\\xb",
+      "match": true,
+      "note": "no escapes: backslash is literal and * is still a wildcard"
+    },
+    { "pattern": "a.b", "value": "axb", "match": false, "note": ". is literal" },
+    { "pattern": "/ünïcode/*", "value": "/ünïcode/ok", "match": true },
+    {
+      "pattern": "*a*a*a*a*a*a*a*b",
+      "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "match": false,
+      "note": "pathological for backtracking matchers"
+    },
+    {
+      "pattern": "**a**a**a**a**a**a**a**b",
+      "value": "a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a",
+      "match": false,
+      "note": "pathological for backtracking matchers"
+    }
+  ],
+  "invalid": [
+    { "pattern": "", "note": "empty" },
+    { "pattern": "*/*/*/*/*/*/*/*/*", "note": "9 wildcards" },
+    { "pattern": "**/**/**/**/**/**/**/**/**", "note": "9 wildcards" }
+  ],
+  "valid": [
+    { "pattern": "*/*/*/*/*/*/*/*", "note": "8 wildcards" },
+    { "pattern": "****", "note": "one ** token" }
+  ]
+}

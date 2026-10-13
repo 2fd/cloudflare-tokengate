@@ -1,0 +1,95 @@
+name: tokengate get-token
+description: >
+  Mint a GitHub Actions OIDC token for a cloudflare-tokengate deployment and install the
+  `tokengate-token` helper so later steps can mint fresh tokens (they expire after ~5 minutes).
+author: cloudflare-tokengate contributors
+branding:
+  icon: key
+  color: blue
+
+inputs:
+  url:
+    description: >
+      Base https:// URL of the gateway, e.g. https://tokengate.example.com. Steps that use the outputs send the token here.
+      In a reusable workflow, use a literal: vars and inputs there come from the calling repository.
+    required: true
+  audience:
+    description: Audience configured on the gateway's GitHub Actions caller provider (org variable TOKENGATE_AUDIENCE recommended).
+    required: true
+
+outputs:
+  token:
+    description: OIDC token for the gateway (masked). Valid for about 5 minutes; use `tokengate-token` for long jobs.
+    value: ${{ steps.mint.outputs.token }}
+  url:
+    description: Gateway base URL without trailing slash.
+    value: ${{ steps.mint.outputs.url }}
+  proxy-base:
+    description: "Proxy base URL: <url>/proxy. Append /<service-slug>/<path>."
+    value: ${{ steps.mint.outputs.proxy-base }}
+
+runs:
+  using: composite
+  steps:
+    - id: mint
+      shell: bash
+      env:
+        TOKENGATE_URL_INPUT: ${{ inputs.url }}
+        TOKENGATE_AUDIENCE_INPUT: ${{ inputs.audience }}
+      # github-env: GITHUB_PATH gets only the runner-owned $RUNNER_TEMP/tokengate-bin;
+      # values written to GITHUB_ENV/GITHUB_OUTPUT are validated below (no whitespace or control chars).
+      run: | # zizmor: ignore[github-env]
+        set -euo pipefail
+        if [[ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
+          echo "::error::No OIDC token available. Add 'permissions: id-token: write' to the job. Workflows triggered from forks never receive OIDC tokens."
+          exit 1
+        fi
+        url="${TOKENGATE_URL_INPUT%/}"
+        # A newline in either input would inject extra lines into GITHUB_ENV/GITHUB_OUTPUT.
+        if [[ ! "$url" =~ ^https://[^[:space:][:cntrl:]]+$ ]]; then
+          echo "::error::input 'url' must be an https:// URL without whitespace"
+          exit 1
+        fi
+        if [[ ! "$TOKENGATE_AUDIENCE_INPUT" =~ ^[^[:space:][:cntrl:]]+$ ]]; then
+          echo "::error::input 'audience' must be non-empty and contain no whitespace"
+          exit 1
+        fi
+
+        # Helper used by this step and by later steps: prints a fresh token for the audience.
+        bin_dir="${RUNNER_TEMP}/tokengate-bin"
+        mkdir -p "$bin_dir"
+        cat > "$bin_dir/tokengate-token" <<'HELPER'
+        #!/usr/bin/env bash
+        # Usage: tokengate-token [audience]   (defaults to $TOKENGATE_AUDIENCE)
+        # Prints a fresh token on stdout and registers it with the runner's log masker (I-LOG-1).
+        set -euo pipefail
+        audience="${1:-${TOKENGATE_AUDIENCE:?set TOKENGATE_AUDIENCE or pass the audience}}"
+        response="$(curl -sS --fail-with-body --get \
+          -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+          --data-urlencode "audience=${audience}" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}")"
+        token="$(printf '%s' "$response" | jq -r '.value // empty')"
+        # Compact JWS only: also stops a malformed value from smuggling workflow commands via stderr.
+        if [[ ! "$token" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]]; then
+          echo "tokengate-token: GitHub did not return a token" >&2
+          exit 1
+        fi
+        # Every call mints a new value the runner has never seen, so mask it before printing.
+        # The runner parses workflow commands on stderr too, which keeps stdout clean for $(...).
+        printf '::add-mask::%s\n' "$token" >&2
+        printf '%s\n' "$token"
+        HELPER
+        chmod +x "$bin_dir/tokengate-token"
+        echo "$bin_dir" >> "$GITHUB_PATH"
+
+        # The helper has already masked the token.
+        token="$(TOKENGATE_AUDIENCE="$TOKENGATE_AUDIENCE_INPUT" "$bin_dir/tokengate-token")"
+        {
+          echo "TOKENGATE_URL=${url}"
+          echo "TOKENGATE_AUDIENCE=${TOKENGATE_AUDIENCE_INPUT}"
+        } >> "$GITHUB_ENV"
+        {
+          echo "token=${token}"
+          echo "url=${url}"
+          echo "proxy-base=${url}/proxy"
+        } >> "$GITHUB_OUTPUT"

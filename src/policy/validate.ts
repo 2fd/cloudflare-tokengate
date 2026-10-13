@@ -1,0 +1,771 @@
+// Save-time validation of services, caller providers and grants (docs/policies.md, docs/concepts.md); pure, no I/O.
+// Enforces anchor rules (I-AUTHZ-2), tenant pins (I-TEN-1), algs/audience/token age (I-JWT-1),
+// base URLs (I-SSRF-1), injection and forward-header shapes (I-INJ-1) and credential hygiene.
+import { upstreamHostAllowed } from '../config';
+import type { CallerProvider, Service } from '../db/types';
+import type { IssuerProfile, ProfileId } from '../identity/types';
+import { canonicalJson } from '../lib/json';
+import { headerListed, NEVER_FORWARD, REQUEST_ALLOWLIST } from '../proxy/headers';
+import { CLAIM_NAME_MAX_LENGTH, conditionShapeError, satisfiesAnchorRule } from './conditions';
+import { globError } from './glob';
+import {
+  type Condition,
+  type Injection,
+  PROXY_METHODS,
+  type Rule,
+  type ValidationResult,
+  type VerifyCheck,
+} from './types';
+
+/**
+ * JWS algorithms a caller provider may accept; never `none` or HMAC (I-JWT-1). Must equal
+ * VERIFIABLE_ALGS in src/identity/jwt.ts (asserted by test/unit/policy/algs.test.ts).
+ */
+export const ALLOWED_ALGS = [
+  'RS256',
+  'RS384',
+  'RS512',
+  'PS256',
+  'PS384',
+  'PS512',
+  'ES256',
+  'ES384',
+  'EdDSA',
+] as const;
+
+/** One segment of a `path`-injected secret; the proxy applies the same set (src/proxy/path.ts). */
+const PATH_SECRET_SEGMENT = /^[A-Za-z0-9\-._~!$&'()*+,=:@]+$/;
+
+/**
+ * Issuer hosts of public CI platforms. Every issuer on these hosts (including GitHub's
+ * enterprise-slug issuers) must use the matching profile: under `generic` neither the tenant
+ * claim rules (I-TEN-1) nor the event guard (I-AUTHZ-3) would apply. Duplicated from the
+ * profiles on purpose so that this check does not depend on profile data.
+ */
+const CI_ISSUER_HOSTS: ReadonlyMap<string, ProfileId> = new Map([
+  ['token.actions.githubusercontent.com', 'github-actions'],
+  ['gitlab.com', 'gitlab-ci'],
+]);
+
+/** Events whose workflows run with base-repository secrets on attacker-influenced input. */
+const PWN_REQUEST_EVENTS: readonly string[] = [
+  'workflow_run',
+  'issue_comment',
+  'pull_request_target',
+];
+
+/**
+ * GitLab pipeline sources that inherit another pipeline's trigger: a child of a (fork) merge
+ * request pipeline reports `parent_pipeline`. Merge request refs are never protected, so
+ * `ref_protected exact true` keeps those out.
+ * https://docs.gitlab.com/ci/pipelines/downstream_pipelines/
+ */
+const INHERITED_TRUST_EVENTS: readonly string[] = ['parent_pipeline', 'pipeline'];
+
+/**
+ * Claims an attacker with push access can often choose freely; wide globs on them are risky.
+ * docs/policies.md list plus the GitLab equivalents `ref_path` and `ci_config_ref_uri`.
+ */
+const WIDE_GLOB_CLAIMS: readonly string[] = [
+  'ref',
+  'ref_path',
+  'base_ref',
+  'environment',
+  'job_workflow_ref',
+  'workflow_ref',
+  'ci_config_ref_uri',
+];
+
+/** Claims naming a ref or environment, which writers can create unless refs are protected. */
+const REF_CLAIMS: readonly string[] = ['ref', 'ref_path', 'environment'];
+
+const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
+/** RFC 9110 §5.6.2 token characters, restricted to lower case. */
+const HEADER_NAME_RE = /^[a-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
+/** RFC 3986 unreserved characters: safe to compare and remove without decoding. */
+const QUERY_PARAM_RE = /^[A-Za-z0-9._~-]{1,64}$/;
+const PATH_PREFIX_RE = /^(\/[A-Za-z0-9._~-]+){1,8}$/;
+const ENCODED_PATH_DANGER = ['%2f', '%2e', '%5c', '%00', '%25'];
+
+type Result<T> = ({ ok: true } & T) | { ok: false; error: string };
+
+// ---------------------------------------------------------------------------------------------
+// Services
+
+/**
+ * Validates an upstream base URL (I-SSRF-1). Also called by the proxy at request time.
+ * `normalized` is origin + pathname without a trailing '/', the form stored and bound into the
+ * credential AAD.
+ */
+export function validateBaseUrl(
+  raw: string,
+  ctx: { publicHost: string | null; allowedUpstreamHosts: string[] | null },
+): Result<{ normalized: string }> {
+  const fail = (error: string) => ({ ok: false as const, error: `base URL ${error}` });
+  if (typeof raw !== 'string') return fail('is required');
+  const text = raw.trim();
+  if (text.length === 0) return fail('is required');
+  if (text.length > 2048) return fail('is longer than 2048 characters');
+  // The URL parser silently drops tabs/newlines and rewrites '\' to '/'; refuse such input.
+  if (!isVisibleAscii(text)) return fail('must be printable ASCII without spaces');
+  if (!text.toLowerCase().startsWith('https://')) return fail('must start with https://');
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return fail('is not a valid URL');
+  }
+  if (url.protocol !== 'https:') return fail('must use https');
+  if (url.username !== '' || url.password !== '') return fail('must not contain user:password@');
+  if (text.includes('?')) return fail('must not contain a query string');
+  if (text.includes('#')) return fail('must not contain a fragment');
+
+  const afterScheme = text.slice('https://'.length);
+  if (afterScheme.includes('\\')) return fail('must not contain "\\"');
+  if (afterScheme.includes('//')) return fail('path must not contain "//"');
+  const lowered = afterScheme.toLowerCase();
+  for (const encoded of ENCODED_PATH_DANGER) {
+    if (lowered.includes(encoded)) return fail(`path must not contain "${encoded}"`);
+  }
+  if (afterScheme.split('/').some((segment) => segment === '.' || segment === '..')) {
+    return fail('path must not contain "." or ".." segments');
+  }
+
+  const host = url.hostname;
+  if (host.startsWith('[') || /^[0-9.]+$/.test(host)) return fail('host must not be an IP address');
+  if (host.endsWith('.')) return fail('host must not end with "."');
+  if (host === 'localhost' || host.endsWith('.localhost'))
+    return fail('host must not be localhost');
+  if (!host.includes('.')) return fail('host must be a fully qualified domain name');
+  if (host === 'workers.dev' || host.endsWith('.workers.dev')) {
+    return fail('host must not be a workers.dev Worker');
+  }
+  const publicHost = ctx.publicHost?.toLowerCase().replace(/:\d+$/, '') ?? null;
+  if (publicHost !== null && host === publicHost) return fail('must not point at this gateway');
+  if (!upstreamHostAllowed(host, ctx.allowedUpstreamHosts)) {
+    return fail(`host ${host} is not listed in ALLOWED_UPSTREAM_HOSTS`);
+  }
+
+  const path = url.pathname.endsWith('/') ? url.pathname.slice(0, -1) : url.pathname;
+  return { ok: true, normalized: url.origin + path };
+}
+
+/**
+ * Validates an injection scheme and returns it with only the meaningful fields, plus its
+ * canonical JSON (the exact text stored and bound into the credential AAD, I-CRED-2).
+ */
+export function normalizeInjection(raw: unknown): Result<{ injection: Injection; json: string }> {
+  const fail = (error: string) => ({ ok: false as const, error: `injection: ${error}` });
+  if (!isRecord(raw)) return fail('must be an object');
+  let injection: Injection;
+  switch (raw.kind) {
+    case 'bearer':
+      injection = { kind: 'bearer' };
+      break;
+    case 'header': {
+      const { name, prefix } = raw;
+      if (typeof name !== 'string' || !HEADER_NAME_RE.test(name)) {
+        return fail('header name must be a lower-case HTTP token (max 64 characters)');
+      }
+      if (headerListed(NEVER_FORWARD, name)) return fail(`header name "${name}" is reserved`);
+      const prefixError = optionalTextError(prefix, 64);
+      if (prefixError !== null) return fail(`header prefix ${prefixError}`);
+      injection = { kind: 'header', name };
+      if (typeof prefix === 'string' && prefix !== '') injection.prefix = prefix;
+      break;
+    }
+    case 'basic': {
+      const { username } = raw;
+      const usernameError = optionalTextError(username, 256);
+      if (usernameError !== null) return fail(`username ${usernameError}`);
+      // RFC 7617 §2: the user-id cannot contain a colon.
+      if (typeof username === 'string' && username.includes(':')) {
+        return fail('username must not contain ":"');
+      }
+      injection = { kind: 'basic' };
+      if (typeof username === 'string' && username !== '') injection.username = username;
+      break;
+    }
+    case 'query': {
+      const { param } = raw;
+      if (typeof param !== 'string' || !QUERY_PARAM_RE.test(param)) {
+        return fail('query parameter must be 1-64 characters of A-Z a-z 0-9 . _ ~ -');
+      }
+      injection = { kind: 'query', param };
+      break;
+    }
+    case 'path': {
+      const { prefix } = raw;
+      if (prefix !== undefined && prefix !== '') {
+        if (
+          typeof prefix !== 'string' ||
+          !PATH_PREFIX_RE.test(prefix) ||
+          prefix.split('/').some((segment) => segment === '.' || segment === '..')
+        ) {
+          return fail(
+            'path prefix must look like "/segment" (A-Z a-z 0-9 . _ ~ -, no dot segments)',
+          );
+        }
+      }
+      injection = { kind: 'path' };
+      if (typeof prefix === 'string' && prefix !== '') injection.prefix = prefix;
+      break;
+    }
+    default:
+      return fail('kind must be one of bearer, header, basic, query, path');
+  }
+  return { ok: true, injection, json: canonicalJson(injection) };
+}
+
+/** Name of the request header the injection writes, if any. */
+function injectedHeaderName(injection: Injection): string | null {
+  if (injection.kind === 'bearer' || injection.kind === 'basic') return 'authorization';
+  if (injection.kind === 'header') return injection.name.toLowerCase();
+  return null;
+}
+
+/** Extra caller headers a service forwards. Never reserved headers or the injected header. */
+export function validateForwardHeaders(list: string[], injection: Injection): ValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  if (!Array.isArray(list)) return { errors: ['forward headers must be a list'], warnings };
+  if (list.length > 32) errors.push('at most 32 forward headers');
+  const injected = injectedHeaderName(injection);
+  const seen = new Set<string>();
+  for (const name of list) {
+    if (typeof name !== 'string' || !HEADER_NAME_RE.test(name)) {
+      errors.push(`forward header ${JSON.stringify(name)} must be a lower-case HTTP token`);
+      continue;
+    }
+    if (seen.has(name)) errors.push(`forward header "${name}" is listed twice`);
+    seen.add(name);
+    if (headerListed(NEVER_FORWARD, name)) {
+      errors.push(`forward header "${name}" is never forwarded`);
+    } else if (name === injected) {
+      errors.push(`forward header "${name}" carries the injected credential`);
+    } else if (REQUEST_ALLOWLIST.includes(name)) {
+      warnings.push(`forward header "${name}" is already forwarded by default`);
+    }
+  }
+  return { errors, warnings };
+}
+
+/**
+ * Credential input hygiene (docs/concepts.md): trims, then requires printable ASCII without whitespace.
+ * The hint shows the last 4 characters only when the secret has at least 20, plus its length.
+ */
+export function normalizeCredential(
+  raw: string,
+  injection: Injection,
+): Result<{ value: string; hint: string | null }> {
+  const fail = (error: string) => ({ ok: false as const, error: `credential ${error}` });
+  if (typeof raw !== 'string') return fail('is required');
+  const value = raw.trim();
+  if (value.length === 0) return fail('is empty');
+  if (value.length > 8192) return fail('is longer than 8192 characters');
+  if (!isVisibleAscii(value)) {
+    return fail('must be printable ASCII without spaces, line breaks or control characters');
+  }
+
+  let secretPart = value;
+  if (injection.kind === 'path') {
+    // The secret becomes URL path segments (Slack webhooks: "T0/B0/XYZ"). Same character set as
+    // the proxy's check in src/proxy/path.ts, so a saved credential can always be used.
+    const segments = value.split('/');
+    if (!segments.every((s) => PATH_SECRET_SEGMENT.test(s) && s !== '.' && s !== '..')) {
+      return fail(
+        'for path injection must be one or more "/"-separated segments of A-Z a-z 0-9 - . _ ~ ! $ & \' ( ) * + , = : @ (no empty or dot segments)',
+      );
+    }
+  }
+  if (injection.kind === 'basic' && injection.username === undefined) {
+    const colon = value.indexOf(':');
+    if (colon <= 0) return fail('without a configured username must be "username:password"');
+    const password = value.slice(colon + 1);
+    // Some APIs (e.g. Stripe) put the secret in the user part and leave the password empty.
+    secretPart = password !== '' ? password : value.slice(0, colon);
+  }
+
+  const length = secretPart.length;
+  const hint = length >= 20 ? `…${secretPart.slice(-4)} (${length} chars)` : `${length} chars`;
+  return { ok: true, value, hint };
+}
+
+export interface ServiceFieldsInput {
+  slug: string;
+  name: string;
+  timeout_ms: number;
+  forward_headers: string[];
+  injection: Injection;
+  verify: VerifyCheck | null;
+}
+
+/** Non-credential service fields. base_url is checked by validateBaseUrl. */
+export function validateServiceFields(input: ServiceFieldsInput): ValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  if (typeof input.slug !== 'string' || !SLUG_RE.test(input.slug)) {
+    errors.push(
+      'slug must be 1-63 characters of a-z, 0-9 and "-", starting with a letter or digit',
+    );
+  }
+  const nameError = requiredTextError(input.name, 100);
+  if (nameError !== null) errors.push(`name ${nameError}`);
+  if (
+    !Number.isInteger(input.timeout_ms) ||
+    input.timeout_ms < 1000 ||
+    input.timeout_ms > 900_000
+  ) {
+    errors.push('timeout must be an integer between 1000 and 900000 ms');
+  }
+
+  const injection = normalizeInjection(input.injection);
+  if (!injection.ok) {
+    errors.push(injection.error);
+  } else {
+    const headers = validateForwardHeaders(input.forward_headers, injection.injection);
+    errors.push(...headers.errors);
+    warnings.push(...headers.warnings);
+    if (injection.injection.kind === 'query') {
+      warnings.push(
+        'query injection puts the credential in the URL; upstreams may echo URLs in errors or logs',
+      );
+    }
+  }
+
+  if (input.verify !== null && input.verify !== undefined) {
+    errors.push(...verifyCheckErrors(input.verify));
+  }
+  return { errors, warnings };
+}
+
+function verifyCheckErrors(verify: unknown): string[] {
+  if (!isRecord(verify)) return ['verify check must be an object'];
+  const errors: string[] = [];
+  if (verify.method !== 'GET' && verify.method !== 'POST') {
+    errors.push('verify method must be GET or POST');
+  }
+  const path = verify.path;
+  if (
+    typeof path !== 'string' ||
+    !path.startsWith('/') ||
+    path.length > 512 ||
+    !isVisibleAscii(path) ||
+    path.includes('//') ||
+    path.includes('\\') ||
+    path.includes('?') ||
+    path.includes('#') ||
+    path.split('/').some((segment) => segment === '.' || segment === '..') ||
+    ENCODED_PATH_DANGER.some((encoded) => path.toLowerCase().includes(encoded))
+  ) {
+    errors.push(
+      'verify path must start with "/" and be a plain path (no query, no dot segments, no encoded "/", "." or "\\")',
+    );
+  }
+  const status = verify.expect_status;
+  if (typeof status !== 'number' || !Number.isInteger(status) || status < 100 || status > 599) {
+    errors.push('verify expected status must be an HTTP status code');
+  }
+  if (verify.expect_ok_field !== undefined && typeof verify.expect_ok_field !== 'boolean') {
+    errors.push('verify expect_ok_field must be true or false');
+  }
+  return errors;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Caller providers
+
+export interface CallerProviderInput {
+  name: string;
+  profile: ProfileId;
+  issuer: string;
+  jwks_uri: string;
+  audience: string;
+  allowed_algs: string[];
+  max_token_age_seconds: number;
+  tenant_pin: Condition[];
+  anchor_claims: string[];
+}
+
+/**
+ * Validates a caller provider against its profile. `existing` is the stored row on update
+ * (the profile cannot change after creation).
+ */
+export function validateCallerProvider(
+  input: CallerProviderInput,
+  profile: IssuerProfile,
+  existing: CallerProvider | null,
+): ValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  const nameError = requiredTextError(input.name, 100);
+  if (nameError !== null) errors.push(`name ${nameError}`);
+  if (input.profile !== profile.id) errors.push('profile does not match the selected profile');
+  if (existing !== null && existing.profile !== input.profile) {
+    errors.push('profile cannot be changed after the caller provider is created');
+  }
+
+  // OpenID Connect Discovery 1.0 §3: issuer is https with no query or fragment.
+  // https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderMetadata
+  const issuerError = httpsUrlError(input.issuer);
+  if (issuerError !== null) errors.push(`issuer ${issuerError}`);
+  const jwksError = httpsUrlError(input.jwks_uri);
+  if (jwksError !== null) errors.push(`JWKS URI ${jwksError}`);
+
+  const issuerHost = issuerError === null ? new URL(input.issuer).hostname : null;
+  const requiredProfile = issuerHost === null ? undefined : CI_ISSUER_HOSTS.get(issuerHost);
+  if (requiredProfile !== undefined && requiredProfile !== profile.id) {
+    errors.push(`issuers on ${issuerHost} must use the ${requiredProfile} profile`);
+  }
+
+  if (!Array.isArray(input.allowed_algs) || input.allowed_algs.length === 0) {
+    errors.push('at least one signing algorithm is required');
+  } else {
+    for (const alg of input.allowed_algs) {
+      if (!(ALLOWED_ALGS as readonly string[]).includes(alg)) {
+        errors.push(`signing algorithm ${JSON.stringify(alg)} is not allowed`);
+      }
+    }
+    if (new Set(input.allowed_algs).size !== input.allowed_algs.length) {
+      errors.push('signing algorithms are listed twice');
+    }
+  }
+
+  errors.push(...audienceErrors(input.audience));
+
+  const pin = Array.isArray(input.tenant_pin) ? input.tenant_pin : null;
+  if (pin === null) {
+    errors.push('tenant pin must be a list of conditions');
+  } else {
+    for (const condition of pin) {
+      const shapeError = conditionShapeError(condition);
+      if (shapeError !== null) {
+        errors.push(`tenant pin: ${shapeError}`);
+        continue;
+      }
+      if (condition.match !== 'exact' || condition.negate === true) {
+        errors.push(`tenant pin: ${condition.claim} must be an exact, non-negated condition`);
+      }
+      if (profile.tenantClaims.length > 0 && !profile.tenantClaims.includes(condition.claim)) {
+        errors.push(
+          `tenant pin: claim ${condition.claim} is not allowed; use ${profile.tenantClaims.join(' or ')}`,
+        );
+      }
+    }
+    const issuerKey = typeof input.issuer === 'string' ? input.issuer.replace(/\/$/, '') : '';
+    const shared = profile.sharedIssuers.some((issuer) => issuer.replace(/\/$/, '') === issuerKey);
+    if (shared && pin.length === 0) {
+      errors.push('a tenant pin is required: this issuer signs tokens for every tenant (I-TEN-1)');
+    } else if (profile.id === 'generic' && pin.length === 0) {
+      warnings.push(
+        'no tenant pin: every token this issuer signs for this audience reaches grant evaluation',
+      );
+    }
+  }
+
+  if (!Array.isArray(input.anchor_claims)) {
+    errors.push('anchor claims must be a list');
+  } else if (profile.id === 'generic') {
+    if (input.anchor_claims.length === 0 || input.anchor_claims.length > 8) {
+      errors.push('generic caller providers need 1-8 anchor claims (immutable identity claims)');
+    }
+    for (const claim of input.anchor_claims) {
+      const claimError = requiredTextError(claim, CLAIM_NAME_MAX_LENGTH);
+      if (claimError !== null) errors.push(`anchor claim ${claimError}`);
+    }
+    if (new Set(input.anchor_claims).size !== input.anchor_claims.length) {
+      errors.push('anchor claims are listed twice');
+    }
+  } else if (input.anchor_claims.length > 0) {
+    errors.push(`anchor claims are defined by the ${profile.id} profile and cannot be set`);
+  }
+
+  const maxAge = input.max_token_age_seconds;
+  const maxAgeLimit = profile.defaults.maxTokenAgeLimitSeconds;
+  if (!Number.isInteger(maxAge) || maxAge < 60 || maxAge > maxAgeLimit) {
+    errors.push(`maximum token age must be an integer between 60 and ${maxAgeLimit} seconds`);
+  }
+
+  return { errors, warnings };
+}
+
+/**
+ * The audience must be unique to this gateway so tokens minted for other relying parties
+ * (cloud providers, GitHub's default owner-URL audience) cannot be replayed here.
+ */
+function audienceErrors(audience: unknown): string[] {
+  if (typeof audience !== 'string' || audience.trim() === '') return ['audience is required'];
+  if (audience !== audience.trim() || !isVisibleAscii(audience)) {
+    return ['audience must be printable ASCII without spaces'];
+  }
+  if (audience.length < 16) return ['audience must be at least 16 characters'];
+  const lower = audience.toLowerCase();
+  // GitHub's default audience is the owner URL.
+  // https://docs.github.com/en/actions/reference/security/oidc
+  if (lower.startsWith('https://github.com/')) {
+    return ['audience must not be a GitHub owner URL (the default audience of every workflow)'];
+  }
+  if (
+    lower === 'sts.amazonaws.com' ||
+    lower === 'api://azureadtokenexchange' ||
+    lower.startsWith('https://iam.googleapis.com/') ||
+    lower.startsWith('//iam.googleapis.com/')
+  ) {
+    return ['audience must not be a cloud provider audience'];
+  }
+  return [];
+}
+
+// ---------------------------------------------------------------------------------------------
+// Grants
+
+export interface GrantInput {
+  conditions: Condition[];
+  rules: Rule[];
+}
+
+/**
+ * Validates grant conditions and rules: shapes, anchor rules (I-AUTHZ-2), containment in the
+ * caller provider's tenant pin, and warnings for risky patterns (docs/policies.md). `service`, when given,
+ * adds warnings that depend on how the grant's service injects its credential.
+ */
+export function validateGrant(
+  input: GrantInput,
+  profile: IssuerProfile,
+  provider: CallerProvider,
+  service: Pick<Service, 'injection'> | null = null,
+): ValidationResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  if (profile.id !== provider.profile) {
+    errors.push(`profile ${profile.id} does not match the caller provider (${provider.profile})`);
+  }
+
+  const conditions: Condition[] = [];
+  if (!Array.isArray(input.conditions) || input.conditions.length === 0) {
+    errors.push('at least one condition is required');
+  } else if (input.conditions.length > 32) {
+    errors.push('at most 32 conditions');
+  } else {
+    for (const [index, condition] of input.conditions.entries()) {
+      const shapeError = conditionShapeError(condition);
+      if (shapeError === null) conditions.push(condition);
+      else errors.push(`condition ${index + 1}: ${shapeError}`);
+    }
+  }
+
+  if (!Array.isArray(input.rules) || input.rules.length === 0) {
+    errors.push('at least one rule is required');
+  } else if (input.rules.length > 50) {
+    errors.push('at most 50 rules');
+  } else {
+    for (const [index, rule] of input.rules.entries()) {
+      const ruleError = ruleShapeError(rule);
+      if (ruleError !== null) errors.push(`rule ${index + 1}: ${ruleError}`);
+    }
+  }
+
+  const pinned = conditions.filter((c) => c.match === 'exact' && c.negate !== true);
+
+  const anchorRules = profile.anchorRules(provider);
+  if (!satisfiesAnchorRule(conditions, anchorRules)) {
+    const options = anchorRules.map((rule) => rule.join(' + ')).join('; or ');
+    errors.push(
+      options === ''
+        ? 'the caller provider defines no anchor claims, so no grant can be anchored'
+        : `the grant must have exact, non-negated conditions on ${options} (I-AUTHZ-2)`,
+    );
+  }
+
+  // Values outside the tenant pin can never match; refusing them avoids grants that look
+  // broader than they are and catches owner IDs from the wrong organization.
+  for (const claim of new Set(provider.tenant_pin.map((c) => c.claim))) {
+    const allowed = tenantPinValues(provider.tenant_pin, claim);
+    for (const condition of pinned.filter((c) => c.claim === claim)) {
+      const outside = condition.values.filter((value) => !allowed.has(value));
+      if (outside.length > 0) {
+        errors.push(
+          `${claim} values ${JSON.stringify(outside)} are outside the caller provider's tenant pin`,
+        );
+      }
+    }
+  }
+
+  warnings.push(...grantWarnings(conditions, profile));
+  if (service?.injection.kind === 'path' && Array.isArray(input.rules)) {
+    warnings.push(...pathInjectionRuleWarnings(input.rules));
+  }
+  return { errors, warnings };
+}
+
+/** Values every pin condition on `claim` accepts (pin conditions are ANDed). */
+function tenantPinValues(pin: Condition[], claim: string): Set<string> {
+  const onClaim = pin.filter((condition) => condition.claim === claim);
+  const [first, ...rest] = onClaim;
+  if (first === undefined) return new Set();
+  return new Set(first.values.filter((value) => rest.every((c) => c.values.includes(value))));
+}
+
+function grantWarnings(conditions: Condition[], profile: IssuerProfile): string[] {
+  const warnings: string[] = [];
+
+  for (const c of conditions) {
+    if (c.match !== 'glob' || c.negate === true || !WIDE_GLOB_CLAIMS.includes(c.claim)) continue;
+    const wide = c.values.filter((v) => v.startsWith('*') || v.includes('**'));
+    if (wide.length > 0) {
+      warnings.push(
+        `${c.claim} glob ${JSON.stringify(wide)} is broad; anyone who can push a branch, tag, environment or workflow with a matching name is admitted`,
+      );
+    }
+  }
+
+  const requiresProtected = conditions.some(
+    (c) =>
+      c.claim === 'ref_protected' &&
+      c.match === 'exact' &&
+      c.negate !== true &&
+      c.values.every((v) => v === 'true'),
+  );
+  if (profile.id === 'github-actions' || profile.id === 'gitlab-ci') {
+    const usesRefOrEnvironment = conditions.some(
+      (c) => REF_CLAIMS.includes(c.claim) && c.negate !== true,
+    );
+    if (usesRefOrEnvironment && !requiresProtected) {
+      warnings.push(
+        'the grant matches on ref or environment without "ref_protected exact true"; repository writers can create matching refs',
+      );
+    }
+  }
+
+  const eventClaim = profile.eventClaim;
+  if (eventClaim !== undefined) {
+    for (const c of conditions) {
+      if (c.claim !== eventClaim) continue;
+      if (c.match === 'glob') {
+        warnings.push(
+          `${eventClaim} uses a glob; globs never allow untrusted events, list events with exact match (I-AUTHZ-3)`,
+        );
+        continue;
+      }
+      if (c.negate === true) continue;
+      for (const event of c.values) {
+        if (profile.trustedEvents.includes(event)) continue;
+        if (PWN_REQUEST_EVENTS.includes(event)) {
+          warnings.push(
+            `${eventClaim} "${event}" runs with base-repository privileges on input from outside contributors ("pwn request"); see https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/`,
+          );
+        } else if (
+          profile.id === 'gitlab-ci' &&
+          INHERITED_TRUST_EVENTS.includes(event) &&
+          !requiresProtected
+        ) {
+          warnings.push(
+            `${eventClaim} "${event}" pipelines can be started by merge request pipelines, including fork merge requests; add "ref_protected exact true" to keep them out (I-AUTHZ-3)`,
+          );
+        } else {
+          warnings.push(
+            `${eventClaim} "${event}" is not a trusted event; this grant opts in to it`,
+          );
+        }
+      }
+    }
+  }
+  return warnings;
+}
+
+/**
+ * With `path` injection the credential is part of the URL, and webhook APIs answer methods other
+ * than POST on that URL with the webhook object, credential included (Discord GET/PATCH
+ * /webhooks/{id}/{token} return `token`:
+ * https://discord.com/developers/docs/resources/webhook#get-webhook-with-token). Upstream
+ * response bodies are not redacted, so every other method is flagged.
+ */
+function pathInjectionRuleWarnings(rules: unknown[]): string[] {
+  const methods = new Set<string>();
+  for (const rule of rules) {
+    if (!isRecord(rule) || !Array.isArray(rule.methods)) continue;
+    for (const method of rule.methods) {
+      if (typeof method === 'string' && method !== 'POST') methods.add(method);
+    }
+  }
+  if (methods.size === 0) return [];
+  return [
+    `the service injects the credential into the URL path and this grant allows ${[...methods].join(', ')}; webhook APIs such as Discord return the credential in the response body for GET and PATCH on the webhook URL, and response bodies are not redacted; allow only POST`,
+  ];
+}
+
+function ruleShapeError(rule: unknown): string | null {
+  if (!isRecord(rule)) return 'rule must be an object';
+  const { methods, path } = rule;
+  if (!Array.isArray(methods) || methods.length === 0) return 'at least one method is required';
+  for (const method of methods) {
+    if (method !== '*' && !(PROXY_METHODS as readonly unknown[]).includes(method)) {
+      return `method ${JSON.stringify(method)} is not one of ${PROXY_METHODS.join(', ')} or *`;
+    }
+  }
+  if (typeof path !== 'string' || !path.startsWith('/')) return 'path must start with "/"';
+  if (!isVisibleAscii(path)) return 'path must be printable ASCII without spaces';
+  const error = globError(path);
+  return error === null ? null : `path ${error}`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Helpers
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Characters 0x21-0x7e only: no whitespace, control or non-ASCII characters. */
+function isVisibleAscii(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x21 || code > 0x7e) return false;
+  }
+  return true;
+}
+
+/** https URL with no user info, query or fragment; checked on the raw text too. */
+function httpsUrlError(raw: unknown): string | null {
+  if (typeof raw !== 'string' || raw === '') return 'is required';
+  if (!isVisibleAscii(raw)) return 'must be printable ASCII without spaces';
+  if (!raw.startsWith('https://')) return 'must start with https://';
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return 'is not a valid URL';
+  }
+  if (url.username !== '' || url.password !== '') return 'must not contain user:password@';
+  if (raw.includes('?')) return 'must not contain a query string';
+  if (raw.includes('#')) return 'must not contain a fragment';
+  return null;
+}
+
+function requiredTextError(value: unknown, max: number): string | null {
+  if (typeof value !== 'string' || value.trim() === '') return 'is required';
+  if (value.length > max) return `must be at most ${max} characters`;
+  if (hasControlChars(value)) return 'must not contain control characters';
+  return null;
+}
+
+/** Optional string field: absent or a string of printable ASCII (spaces allowed) up to `max`. */
+function optionalTextError(value: unknown, max: number): string | null {
+  if (value === undefined || value === '') return null;
+  if (typeof value !== 'string') return 'must be text';
+  if (value.length > max) return `must be at most ${max} characters`;
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code > 0x7e) return 'must be printable ASCII';
+  }
+  return null;
+}
+
+function hasControlChars(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}

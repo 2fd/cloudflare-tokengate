@@ -1,0 +1,128 @@
+# Troubleshooting
+
+This page maps common symptoms to their cause and fix. It is for platform engineers and admins who
+support workflow authors. Error codes are described in full in [errors.md](../errors.md).
+
+## Start with the response headers
+
+Every response the gateway produces on `/proxy/` has `x-tokengate-request-id` and
+`x-tokengate-source`:
+
+| `x-tokengate-source` | Who answered | Next step |
+|---|---|---|
+| `gateway` | The gateway refused or failed. The body and `x-tokengate-error` carry the code | Find the code below or in [errors.md](../errors.md) |
+| `upstream` | The upstream API answered; status and body are its own | [The upstream answered with an error](#the-upstream-answered-with-an-error) |
+| (missing) | Not the proxy | [The response has no `x-tokengate-request-id`](#the-response-has-no-x-tokengate-request-id) |
+
+To see what the gateway recorded, open `<gateway>/admin/requests/<request-id>`. The page shows the
+outcome, the reason, a "Next step" hint, the stored claims and, for denials, the policy trace. Records
+can be missing: allowed requests may be sampled, and pre-trust failures are capped at 10 per minute
+per isolate ([observability](../observability.md#request-log)).
+
+To see the headers in a workflow, run `curl` with `-i` or `-D -`.
+
+## The response has no `x-tokengate-request-id`
+
+The Cloudflare edge answered before the Worker ran, or the request did not reach `/proxy/`.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| HTML challenge page, or 403 with a Cloudflare error page | Bot Fight Mode, Super Bot Fight Mode or a WAF rule | Security > Analytics > Events shows the rule. See [zone settings](cloudflare-zone-settings.md#bot-fight-mode) |
+| 429 with a Cloudflare page | A zone rate limiting rule | Raise its threshold ([zone settings](cloudflare-zone-settings.md#rate-limiting)) |
+| Redirect to `<team>.cloudflareaccess.com` | An Access application covers `/proxy/` | Limit the application to `/admin` and `/auth` ([zone settings](cloudflare-zone-settings.md#cloudflare-access)) |
+| 1xxx error page, DNS or TLS error | The hostname is not routed to the Worker | Check Workers & Pages > tokengate > Settings > Domains & Routes |
+| `404 Not Found` as plain text on `/admin` or `/auth` | `PUBLIC_URL` pins the admin UI to another origin, or `PUBLIC_URL` is malformed and closes it everywhere ([I-DEPLOY-1](../threat-model.md#i-deploy-1)) | Use the `PUBLIC_URL` origin. If it is malformed, fix the variable in the dashboard |
+
+## Caller errors
+
+| Code | Usual cause | Fix |
+|---|---|---|
+| [`token_missing`](../errors.md#token_missing) | The call sent no token in `x-tokengate-token`, in `Authorization` (`Bearer` or `token` scheme) or, for `header` Injection, in the service's injection header | Pass the token from [`actions/get-token`](../../actions/get-token/README.md) ([GitHub Actions](../callers/github-actions.md)) |
+| [`token_ambiguous`](../errors.md#token_ambiguous) | Two different tokens, for example an SDK set `Authorization` and the workflow set `x-tokengate-token` | Send one token |
+| [`issuer_unknown`](../errors.md#issuer_unknown) | No enabled caller provider has the token's issuer, or it is disabled | Check caller providers; enable it or add one |
+| [`audience_mismatch`](../errors.md#audience_mismatch) | The token was minted for another audience | Use the audience shown on the caller provider page |
+| [`token_expired`](../errors.md#token_expired), [`token_too_old`](../errors.md#token_too_old) | The token was minted at the start of a long job | Mint a fresh token right before each call with `$(tokengate-token)` from the get-token action ([long jobs](../callers/github-actions.md#long-jobs)) |
+| [`signature_invalid`](../errors.md#signature_invalid) | Wrong issuer or JWKS URL, or a token from another instance | Check the caller provider's issuer and JWKS URL |
+| [`jwks_unavailable`](../errors.md#jwks_unavailable) | The issuer's JWKS could not be fetched. After a failure, each isolate retries at most once per 30 s ([I-JWT-2](../threat-model.md#i-jwt-2)) | Retry; if it persists, check the JWKS URL |
+| [`tenant_mismatch`](../errors.md#tenant_mismatch) | The token is from another organization or namespace than the tenant pin | Check the caller provider's tenant pin and the owner ID ([I-TEN-1](../threat-model.md#i-ten-1)) |
+| [`service_not_found`](../errors.md#service_not_found) | Wrong slug, or the service is disabled (reason `service_disabled`) | Check the slug in the URL; enable the service |
+| [`path_invalid`](../errors.md#path_invalid) | Empty or dot segments, bad escapes; reason `query_invalid` for a refused query, such as a method-override parameter | Fix the URL in the caller |
+| [`no_matching_grant`](../errors.md#no_matching_grant) | No grant matches the caller's claims, method and path | Read the policy trace on the request page; an admin can select "Create grant from this request" ([policies](../policies.md)) |
+| [`event_not_trusted`](../errors.md#event_not_trusted) | The event (for example `pull_request_target`) is outside the trusted events | Add an exact opt-in to the grant only if the risk is acceptable ([policies](../policies.md)) |
+| [`rate_limited`](../errors.md#rate_limited) | The grant reached the `PROXY_RATE_LIMITER` limit | Wait `retry-after` seconds, or raise the limit ([configuration](../configuration.md#proxy_rate_limiter)) |
+
+## Gateway-side errors
+
+| Code and reason | Cause | Fix |
+|---|---|---|
+| `credential_unavailable`, `credential_missing` | The service has no credential | Set it on the service page. If the service had one, check the base URL and injection out of band first ([why](incident-response.md#a-service-destination-was-changed-outside-the-admin-ui)) |
+| `credential_unavailable`, `keyring_missing_key` | The credential was sealed with a key id that is no longer in the keyring | Add the key back ([key rotation](key-rotation.md#remove-the-old-key)) |
+| `credential_unavailable`, `credential_binding_mismatch` | The key behind the key id changed, or the service row was edited in D1 ([I-CRED-2](../threat-model.md#i-cred-2)) | If the dashboard shows the changed-key banner: [recover the key](key-rotation.md#recover-from-a-replaced-key). Else treat it as tampering: [check the destination out of band](incident-response.md#a-service-destination-was-changed-outside-the-admin-ui) before you enter the credential again |
+| `credential_unavailable`, `sealed_malformed`, `injection_invalid`, `credential_invalid` | Stored data is damaged or invalid, possibly by an edit in D1 | Check the base URL and injection against an out-of-band source, then enter the credential again under "Change credential or destination" ([why](incident-response.md#a-service-destination-was-changed-outside-the-admin-ui)) |
+| `not_configured`, `keyring_absent`, `keyring_malformed`, `active_kid_missing`, `key_not_32_bytes`, `both_kek_and_keyring_set` | The keyring secret is missing or invalid | Settings > Encryption keys names the problem ([key rotation](key-rotation.md)) |
+| `not_configured`, `base_url_invalid` | The stored base URL no longer passes the checks, usually after `ALLOWED_UPSTREAM_HOSTS` changed ([I-SSRF-1](../threat-model.md#i-ssrf-1)) | Add the host to `ALLOWED_UPSTREAM_HOSTS`, or change the service's destination |
+| `not_configured`, `profile_unknown` | The caller provider's profile is not known to this code version, for example after a rollback | Deploy the version that added the profile |
+| `internal_error` | Unexpected failure, often D1 unavailable | Check `proxy.internal_error` log lines and `/readyz` |
+| `upstream_timeout` | No response headers within the service timeout | Check the upstream; raise "Timeout (milliseconds)" on the service |
+| `upstream_unreachable` | DNS, TLS or connection failure | Check the upstream status and the base URL |
+| `upstream_unreachable`, `upstream_invalid_status` | The upstream answered with a status below 200 or above 599 after it received the request | The upstream may have processed the request: check its state before a retry. Check the upstream and the base URL |
+
+## The upstream answered with an error
+
+`x-tokengate-source: upstream` means the gateway forwarded the request with the credential, and the
+status and body come from the upstream.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| 401 or 403 on every call; dashboard banner "Upstream rejected the credential" | The credential was revoked, expired or lacks a scope | [Rotate the credential](credential-rotation.md) |
+| 404 from the upstream | Wrong path under the base URL, or the token lacks access to the resource | Compare the path with the upstream API docs; the gateway appends the path to the base URL |
+| `x-tokengate-redirect-blocked: 1` | The upstream redirected outside the base URL; the gateway dropped the `Location` ([I-REDIR-1](../threat-model.md#i-redir-1)) | Call the final URL directly, if a service covers it |
+| A header is missing; `x-tokengate-redacted` lists it | The header contained the credential and was dropped ([I-RESP-1](../threat-model.md#i-resp-1)) | Expected |
+
+## Admin UI and maintenance
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Sign-in page says "This account has not been invited." | No user with that email is invited, and bootstrap is done or the email is not in `BOOTSTRAP_OWNER_EMAILS` | An owner invites the email in Users. If no owner can sign in: [break-glass](break-glass.md) |
+| "This account is disabled or must be re-invited by an owner." | The login identity is linked to a user that is not active, usually a disabled user | An owner selects "Enable" in Users. "Reset login" instead removes the linked login identities and invites the user again |
+| "This sign-in attempt expired or was started in another browser." | The 10-minute OAuth state cookie expired or is missing, or more than 3 sign-ins were started in this browser at once ([I-OAUTH-1](../threat-model.md#i-oauth-1)) | Start again from the sign-in page, in one browser |
+| "Your GitHub account is not an active member of an allowed organization." | `AUTH_GITHUB_ALLOWED_ORGS` excludes the user, or the organization restricts OAuth App access and has not approved the app | Approve the OAuth App in the organization settings, or fix the variable |
+| "This account has no verified email address in an allowed domain." | `AUTH_OIDC_ALLOWED_DOMAINS` excludes every verified email | Fix the variable or the account's email |
+| Login provider shows a redirect URI error | The callback URL registered at the login provider differs | Register `<PUBLIC_URL>/auth/github/callback` or `<PUBLIC_URL>/auth/oidc/callback` (Google uses the `oidc` path) |
+| Sign-in page has no login button; Settings shows "none configured: nobody can sign in" | No login variables, or a malformed pair | Settings > System status > "Configuration problems" names the variable ([configuration](../configuration.md)) |
+| "Cloudflare Access did not present a valid user identity for this request." | The request reached the Worker without passing Access, or `AUTH_ACCESS_AUD` is wrong | [Zone settings: Access](cloudflare-zone-settings.md#cloudflare-access) |
+| Signed out on every page with Access login | The Access application does not cover `/admin` | Add the `admin` path to the application |
+| "The form was not accepted (it expired or came from another site)." | CSRF check failed: stale page or cross-site submit ([I-CSRF-1](../threat-model.md#i-csrf-1)) | Reload the page and submit again |
+| "Request body too large (limit 65536 bytes)." (413) | The form exceeds 64 KiB | Shorten the input, for example split a grant's rules |
+| "Your role does not allow this action." | The role lacks the permission ([I-RBAC-1](../threat-model.md#i-rbac-1)) | Ask an owner |
+| "nothing was saved: your session ended or your role changed while the request ran; sign in again" (409) | While the request ran, your sessions were ended, your user was disabled or its login reset, or your role lost the permission ([I-SESS-1](../threat-model.md#i-sess-1)) | Sign in again. If your role changed, ask an owner |
+| Owner cannot be disabled or demoted | Last active owner ([I-OWNER-1](../threat-model.md#i-owner-1)) | Invite and activate a second owner first |
+| Dashboard: "Database ... is missing migration" | Code deployed without `pnpm run deploy` | `pnpm wrangler d1 migrations apply DB --remote` and `pnpm wrangler d1 migrations apply TELEMETRY_DB --remote` ([upgrades](upgrades.md)) |
+| Dashboard: "The hourly maintenance job has not run yet." | First hour after deploy | Wait for the run at 7 minutes past the hour |
+| Dashboard: "The hourly maintenance job failed at ...: `<step>`: ..." | A step (`rollup`, `purge`, `credential_expiry`, `heartbeat`) threw | Read the message and the `cron.failed` log line; `/readyz` reports `cron: false` |
+| Dashboard: last success more than 2 hours ago | The cron trigger was removed, or every run fails before it records an error | Check that `triggers.crons` in `wrangler.jsonc` is `["7 * * * *"]`, run `pnpm run deploy`, and read the `cron.failed` log lines |
+| Dashboard totals too low after a `TELEMETRY_DB` outage, missed cron runs or a dead-letter queue replay | The rollup catch-up is still running (at most 24 hours per run), or "Maximum request log rows" or retention deleted rows before they were rolled up | Wait for the next runs, or [recompute rollups manually](../observability.md#recompute-rollups-manually). Purged rows cannot be counted again |
+| Settings: "Key ... is not the key that encrypted its credentials" | The key behind a key id changed | [Recover a replaced key](key-rotation.md#recover-from-a-replaced-key) |
+| Saving a credential fails with a credential check error | The check request failed with the new credential | Fix the credential, or select "Save the credential even though the check failed" |
+
+## The request log is missing records
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Allowed calls are missing | "Share of allowed requests to record" is below 1 | Expected; dashboard counts are scaled up |
+| Anonymous or pre-trust failures are missing | Pre-trust budget of 10 per minute per isolate; `telemetry.pretrust_records_dropped` in the logs | Expected ([observability](../observability.md#pre-trust-records)) |
+| Records appear up to 30 seconds late | `REQUEST_LOG_QUEUE` batches records before writing them | Expected |
+| No records at all; `telemetry.sink_failed` with `request_log_insert_failed` | `TELEMETRY_DB` is unavailable, full or missing its migration | `pnpm wrangler d1 info tokengate-telemetry`; apply migrations; lower retention or "Maximum request log rows" |
+| Queue bound but records never arrive | The `queues.consumers` entry is missing, or batches fail (`telemetry.queue_batch_failed`) | Check `wrangler.jsonc` and the dead-letter queue ([observability](../observability.md#optional-request-log-queue)) |
+| Older records are gone | Retention or "Maximum request log rows" removed them | Expected; use the [R2 archive](../observability.md#optional-r2-archive) for long history |
+| R2 archive has fewer records than the request log | The stream dropped records that do not match the schema | Check `pipelinesUserErrorsAdaptiveGroups` ([observability](../observability.md#dropped-records)) |
+
+## Collect this before you ask for help
+
+- The request id and the full response headers.
+- The record from `/admin/requests/<request-id>`, including the policy trace. It holds only allowlisted
+  claims, never tokens or credentials ([I-LOG-1](../threat-model.md#i-log-1)).
+- `/readyz` output and the dashboard banners.
+- The code version: `git describe --tags` in your clone.
+
+Report suspected vulnerabilities privately ([SECURITY.md](../../SECURITY.md)), not in a public issue.
