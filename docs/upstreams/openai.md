@@ -15,9 +15,9 @@ In the admin UI, open **Services**, select **Add a service** and choose the **Op
 | Timeout (milliseconds) | `600000` |
 | Credential check | `GET /models`, expect `200` |
 | Suggested grant rules | `POST /responses`, `POST /chat/completions`, `GET /models` |
-| Host for `ALLOWED_UPSTREAM_HOSTS` | `api.openai.com` |
+| Host for the upstream host allowlist | `api.openai.com` |
 
-If `ALLOWED_UPSTREAM_HOSTS` is set, add the host to it before you create the service ([configuration](../configuration.md#allowed_upstream_hosts)). Otherwise saving the service fails.
+If the upstream host allowlist in Settings is set, add the host to it before you create the service ([configuration](../configuration.md#upstream-host-allowlist)). Otherwise saving the service fails.
 
 Use a project API key (`sk-proj-REDACTED`). Reference: <https://platform.openai.com/docs/api-reference/authentication>.
 

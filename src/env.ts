@@ -11,7 +11,6 @@ export interface AppEnv {
 
   PUBLIC_URL?: string;
   BOOTSTRAP_OWNER_EMAILS?: string;
-  ALLOWED_UPSTREAM_HOSTS?: string;
 
   TOKENGATE_KEK?: string;
   TOKENGATE_KEYRING?: string;

@@ -143,7 +143,7 @@ export function validateBaseUrl(
   const publicHost = ctx.publicHost?.toLowerCase().replace(/:\d+$/, '') ?? null;
   if (publicHost !== null && host === publicHost) return fail('must not point at this gateway');
   if (!upstreamHostAllowed(host, ctx.allowedUpstreamHosts)) {
-    return fail(`host ${host} is not listed in ALLOWED_UPSTREAM_HOSTS`);
+    return fail(`host ${host} is not in the upstream host allowlist (Settings)`);
   }
 
   const path = url.pathname.endsWith('/') ? url.pathname.slice(0, -1) : url.pathname;

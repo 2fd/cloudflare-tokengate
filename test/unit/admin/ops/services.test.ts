@@ -12,6 +12,7 @@ import { credentialAad, openCredential, sealedKid } from '../../../../src/crypto
 import { loadKeyring } from '../../../../src/crypto/keyring';
 import { getService } from '../../../../src/db/services';
 import type { AppEnv } from '../../../../src/env';
+import { setUpstreamHosts } from '../../../helpers/app';
 import {
   ACTOR,
   auditCount,
@@ -127,12 +128,14 @@ describe('createService', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('enforces ALLOWED_UPSTREAM_HOSTS', async () => {
-    const deps = opsDeps({ env: { ALLOWED_UPSTREAM_HOSTS: '*.slack.com' } });
+  it('enforces the upstream host allowlist setting', async () => {
+    const deps = opsDeps();
+    await setUpstreamHosts(['*.slack.com']);
     const result = await createService(deps, ACTOR, serviceInput(), CONTEXT);
+    await setUpstreamHosts(null);
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.errors.join()).toMatch(/ALLOWED_UPSTREAM_HOSTS/);
+    expect(result.errors.join()).toMatch(/not in the upstream host allowlist/);
   });
 
   it('maps a duplicate slug to a conflict without an audit row', async () => {

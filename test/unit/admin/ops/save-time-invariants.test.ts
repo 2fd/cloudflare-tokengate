@@ -1,7 +1,7 @@
 // Save-time enforcement of threat-model invariants by the admin ops (docs/threat-model.md): invalid trust
 // configuration is refused before any write, any network call and any use of the credential.
 import { env } from 'cloudflare:workers';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import {
   type CallerProviderCreateInput,
   createCallerProvider,
@@ -11,6 +11,7 @@ import { createGrant, setGrantEnabled, updateGrant } from '../../../../src/admin
 import { createService, setServiceCredential } from '../../../../src/admin/ops/services';
 import { getGrant } from '../../../../src/db/grants';
 import type { Condition } from '../../../../src/policy/types';
+import { setUpstreamHosts } from '../../../helpers/app';
 import {
   ACTOR,
   anchoredConditions,
@@ -231,10 +232,12 @@ describe('I-SSRF-1: base URLs are validated before the credential is used or sto
     );
   });
 
-  it('enforces ALLOWED_UPSTREAM_HOSTS on credential changes', async () => {
+  it('enforces the upstream host allowlist on credential changes', async () => {
     const network = fakeNetwork();
-    const deps = opsDeps({ fetch: network.fetch, env: { ALLOWED_UPSTREAM_HOSTS: '*.github.com' } });
+    const deps = opsDeps({ fetch: network.fetch });
     const id = await seedService(deps, { verify: VERIFY });
+    await setUpstreamHosts(['*.github.com']);
+    onTestFinished(() => setUpstreamHosts(null));
     await expectRefusedQuietly(network, () =>
       setServiceCredential(
         deps,

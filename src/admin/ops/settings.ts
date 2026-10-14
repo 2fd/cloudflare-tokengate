@@ -1,7 +1,15 @@
 // Runtime settings changes (owner only, enforced by RBAC): retention, sampling and row cap.
 // Values are checked against SETTING_BOUNDS (floors also re-applied at use time); the changed keys
 // and one audit row are written in one db.batch (I-AUDIT-1).
-import { getSettings, putSettingStatement, SETTING_BOUNDS, type Settings } from '../../db/settings';
+import { isUpstreamHostEntry } from '../../config';
+import {
+  getAllowedUpstreamHosts,
+  getSettings,
+  putSettingStatement,
+  SETTING_BOUNDS,
+  type Settings,
+  UPSTREAM_HOSTS_KEY,
+} from '../../db/settings';
 import type { Actor } from '../../db/types';
 import type { Deps } from '../../deps';
 import { commitOrConstraintFailure, type OpFailure, opFailure, pick } from './shared';
@@ -77,4 +85,66 @@ export async function updateSettings(
     return opFailure('conflict', ['the settings were not saved; reload and retry']);
   }
   return { ok: true, settings: after, changed };
+}
+
+/**
+ * Parses the allowlist textarea: entries separated by commas, spaces or new lines, lowercased and
+ * deduplicated. Empty input means "any public https host" (null).
+ */
+export function parseUpstreamHostInput(
+  raw: unknown,
+): { ok: true; hosts: string[] | null } | { ok: false; error: string } {
+  if (typeof raw !== 'string') return { ok: true, hosts: null };
+  const entries = [
+    ...new Set(
+      raw
+        .split(/[\s,]+/)
+        .map((entry) => entry.trim().toLowerCase())
+        .filter((entry) => entry !== ''),
+    ),
+  ];
+  if (entries.length === 0) return { ok: true, hosts: null };
+  const invalid = entries.filter((entry) => !isUpstreamHostEntry(entry));
+  if (invalid.length > 0) {
+    return {
+      ok: false,
+      error: `Not a hostname or "*.<domain>" with at least two labels: ${invalid.slice(0, 5).join(', ')}`,
+    };
+  }
+  return { ok: true, hosts: entries };
+}
+
+/** Sets the upstream host allowlist (I-SSRF-1); one audit row in the same batch (I-AUDIT-1). */
+export async function updateUpstreamHosts(
+  deps: Deps,
+  actor: Actor,
+  raw: unknown,
+): Promise<{ ok: true; hosts: string[] | null; changed: boolean } | OpFailure> {
+  const parsed = parseUpstreamHostInput(raw);
+  if (!parsed.ok) return opFailure('invalid', [parsed.error]);
+  const db = deps.env.DB;
+  const before = await getAllowedUpstreamHosts(db);
+  if (JSON.stringify(before) === JSON.stringify(parsed.hosts)) {
+    return { ok: true, hosts: before, changed: false };
+  }
+  const outcome = await commitOrConstraintFailure(
+    deps,
+    actor,
+    {
+      action: 'settings.upstream_hosts',
+      targetType: 'settings',
+      targetId: null,
+      summary:
+        parsed.hosts === null
+          ? 'Services may use any public https host'
+          : `Upstream host allowlist set (${parsed.hosts.length} entries)`,
+      diff: { before, after: parsed.hosts },
+    },
+    null,
+    [putSettingStatement(db, UPSTREAM_HOSTS_KEY, parsed.hosts, deps.now(), actor.id)],
+  );
+  if (!outcome.ok) return outcome;
+  if (!outcome.committed)
+    return opFailure('conflict', ['the allowlist was not saved; reload and retry']);
+  return { ok: true, hosts: parsed.hosts, changed: true };
 }

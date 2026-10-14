@@ -442,4 +442,4 @@ project_id exact 0189f3c2-6a4e-4b8e-9d0a-3f1c2b7e5a10
 - [concepts.md](concepts.md): glossary.
 - [errors.md](errors.md): what callers see when a check fails.
 - [threat-model.md](threat-model.md): invariants and known limitations.
-- [configuration.md](configuration.md): `ALLOWED_UPSTREAM_HOSTS` and other deployment settings.
+- [configuration.md](configuration.md): the upstream host allowlist and other deployment settings.

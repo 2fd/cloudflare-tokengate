@@ -234,7 +234,7 @@ async function runPipeline(
   const keyring = await loadKeyring(deps.env);
   if (!keyring.ok) return fail('not_configured', { reason: keyring.error });
   const requestUrl = new URL(request.url);
-  if (!storedBaseUrlValid(service.base_url, deps, requestUrl)) {
+  if (!storedBaseUrlValid(service.base_url, deps, requestUrl, context.allowedUpstreamHosts)) {
     return fail('not_configured', { reason: 'base_url_invalid' });
   }
   const normalized = normalizeInjection(service.injection);
@@ -352,13 +352,18 @@ async function runPipeline(
  * normalized form those rules produce. The gateway's own host is excluded both as configured
  * (PUBLIC_URL) and as reached by this request, when they differ.
  */
-function storedBaseUrlValid(baseUrl: string, deps: Deps, requestUrl: URL): boolean {
+function storedBaseUrlValid(
+  baseUrl: string,
+  deps: Deps,
+  requestUrl: URL,
+  allowedUpstreamHosts: string[] | null,
+): boolean {
   const config = parseConfig(deps.env);
   const ownHosts = new Set([config.publicUrl?.host ?? requestUrl.host, requestUrl.host]);
   return [...ownHosts].every((publicHost) => {
     const checked = validateBaseUrl(baseUrl, {
       publicHost,
-      allowedUpstreamHosts: config.allowedUpstreamHosts,
+      allowedUpstreamHosts,
     });
     return checked.ok && checked.normalized === baseUrl;
   });

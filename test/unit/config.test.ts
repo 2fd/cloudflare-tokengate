@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { parseUpstreamHostInput } from '../../src/admin/ops/settings';
 import {
   adminOriginAllowed,
   type Config,
@@ -8,6 +9,7 @@ import {
   splitList,
   upstreamHostAllowed,
 } from '../../src/config';
+import { upstreamHostsFromValue } from '../../src/db/settings';
 import type { AppEnv } from '../../src/env';
 
 const SECRET = 'sekrit-value-that-must-never-leak';
@@ -29,7 +31,6 @@ describe('parseConfig: empty environment', () => {
       errors: [],
       login: { access: null, dev: null },
       bootstrapOwnerEmails: [],
-      allowedUpstreamHosts: null,
     });
   });
 
@@ -40,12 +41,10 @@ describe('parseConfig: empty environment', () => {
         AUTH_ACCESS_TEAM_DOMAIN: '  ',
         AUTH_ACCESS_AUD: ' ',
         AUTH_DEV_EMAIL: '',
-        ALLOWED_UPSTREAM_HOSTS: '',
       }),
     );
     expect(config.errors).toEqual([]);
     expect(config.login).toEqual({ access: null, dev: null });
-    expect(config.allowedUpstreamHosts).toBeNull();
   });
 });
 
@@ -359,17 +358,14 @@ describe('I-CFG-1: malformed config disables the affected feature; never runs ha
         PUBLIC_URL: 'https://gw.example.com',
         ...access,
         AUTH_DEV_EMAIL: 'dev@example.com',
-        ALLOWED_UPSTREAM_HOSTS: 'api.slack.com',
       }),
     );
     expect(config.login.access).not.toBeNull();
     expect(config.login.dev).toBeNull();
-    expect(config.allowedUpstreamHosts).toEqual(['api.slack.com']);
     expect(config.errors.map((e) => e.feature)).toEqual(['login.dev']);
   });
 
   it.each([
-    ',',
     'api.slack.com,https://api.openai.com',
     'api.slack.com:443',
     '*.com',
@@ -378,27 +374,31 @@ describe('I-CFG-1: malformed config disables the affected feature; never runs ha
     'api.*.com',
     'api..slack.com',
     '-bad.example.com',
-  ])('malformed ALLOWED_UPSTREAM_HOSTS %j denies every host', (raw) => {
-    const config = parseConfig(envWith({ ALLOWED_UPSTREAM_HOSTS: raw }));
-    expect(config.allowedUpstreamHosts).toEqual([]);
-    expect(errorsFor(config, 'upstream_hosts')).toEqual([
-      {
-        feature: 'upstream_hosts',
-        variable: 'ALLOWED_UPSTREAM_HOSTS',
-        message: expect.any(String),
-      },
-    ]);
-    expect(upstreamHostAllowed('api.slack.com', config.allowedUpstreamHosts)).toBe(false);
+  ])('rejects the allowlist input %j', (raw) => {
+    expect(parseUpstreamHostInput(raw)).toEqual({ ok: false, error: expect.any(String) });
+  });
+
+  it.each([
+    ['"not-a-list"', []],
+    ['[]', []],
+    ['["https://x"]', []],
+    ['[1]', []],
+    ['{', []],
+    ['null', null],
+    [undefined, null],
+    ['["api.slack.com","*.openai.com"]', ['api.slack.com', '*.openai.com']],
+  ])('stored allowlist %j reads as %j (malformed denies every host)', (raw, expected) => {
+    expect(upstreamHostsFromValue(raw)).toEqual(expected);
   });
 });
 
-describe('ALLOWED_UPSTREAM_HOSTS', () => {
-  it('parses exact hosts and wildcard suffixes, lowercased', () => {
-    const config = parseConfig(
-      envWith({ ALLOWED_UPSTREAM_HOSTS: ' API.Slack.com, ,*.OpenAI.com ,' }),
-    );
-    expect(config.errors).toEqual([]);
-    expect(config.allowedUpstreamHosts).toEqual(['api.slack.com', '*.openai.com']);
+describe('upstream host allowlist', () => {
+  it('parses exact hosts and wildcard suffixes, lowercased and deduplicated', () => {
+    expect(parseUpstreamHostInput(' API.Slack.com, ,*.OpenAI.com ,\napi.slack.com')).toEqual({
+      ok: true,
+      hosts: ['api.slack.com', '*.openai.com'],
+    });
+    expect(parseUpstreamHostInput(' \n ')).toEqual({ ok: true, hosts: null });
   });
 
   it.each([
@@ -431,7 +431,6 @@ describe('I-CFG-1: hostile values never throw and never appear in errors', () =>
   const variables = [
     'PUBLIC_URL',
     'BOOTSTRAP_OWNER_EMAILS',
-    'ALLOWED_UPSTREAM_HOSTS',
     'AUTH_ACCESS_TEAM_DOMAIN',
     'AUTH_ACCESS_AUD',
     'AUTH_DEV_EMAIL',
@@ -451,7 +450,6 @@ describe('I-CFG-1: hostile values never throw and never appear in errors', () =>
     expect(JSON.stringify(config.errors)).not.toContain(MARK);
     expect(config.login.access).toBeNull();
     expect(config.login.dev).toBeNull();
-    expect(config.allowedUpstreamHosts).not.toBeNull();
   });
 });
 

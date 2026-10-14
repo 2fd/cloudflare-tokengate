@@ -121,8 +121,8 @@ What a rollback does not undo:
 What a rollback does bring back:
 
 - **Variables.** A version includes its variables. A rollback restores the values that version had.
-  After a rollback, check `PUBLIC_URL` and `ALLOWED_UPSTREAM_HOSTS` in Settings > System status
-  ([configuration](../configuration.md#variables)).
+  After a rollback, check `PUBLIC_URL` in Settings > System status. The upstream host allowlist is in D1
+  and does not change ([configuration](../configuration.md#variables)).
 - **Secrets.** A version includes its secrets. If they changed since that version, wrangler lists them
   and asks for confirmation. Do not confirm a rollback that restores an old `TOKENGATE_KEK` or
   `TOKENGATE_KEYRING` after a [key rotation](key-rotation.md#rollbacks-and-secrets): Credentials sealed

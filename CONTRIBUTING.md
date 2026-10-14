@@ -26,33 +26,35 @@ Steps:
    pnpm install
    ```
 
-2. Copy the local secrets file. `.dev.vars` is git-ignored.
+2. Create the local configuration and the local databases:
 
    ```sh
-   cp .dev.vars.example .dev.vars
+   pnpm run setup
    ```
 
-3. Generate a local key-encryption key and put it in `.dev.vars` as `TOKENGATE_KEK`:
+   It creates `.dev.vars` from `.dev.vars.example` (git-ignored, mode 600) with a new local
+   `TOKENGATE_KEK`, `PUBLIC_URL=http://localhost:8787` and `AUTH_DEV_EMAIL` set to your
+   `git config user.email` (override with `DEV_EMAIL=you@example.com pnpm run setup`). Then it applies
+   both migrations to the local databases. An existing `.dev.vars` is never overwritten; to skip the
+   migrations, run `pnpm run setup -- --no-migrate`. Write `pnpm run setup`: `pnpm setup` is a
+   built-in pnpm command.
 
-   ```sh
-   pnpm keyring generate
-   ```
-
-   The key is printed on stdout and its key check value (KCV) on stderr.
-
-4. In `.dev.vars`, uncomment `PUBLIC_URL=http://localhost:8787` and `AUTH_DEV_EMAIL`, and set your email. On an empty local database, the first sign-in becomes the owner. To try another user, change `AUTH_DEV_EMAIL` and restart: that email joins with the join defaults from Users > "New users".
-5. `AUTH_DEV_EMAIL` is the local development login: every admin request is signed in as that email, without Cloudflare Access. The gateway accepts it only while `PUBLIC_URL` is on `localhost`, `127.0.0.1` or `[::1]`. To test the real Access login, run the Worker behind a hostname that an Access application protects. All variables are in [docs/configuration.md](docs/configuration.md).
-6. Apply both migrations to the local databases:
-
-   ```sh
-   pnpm db:migrate:local
-   ```
-
-7. Start the Worker and open `http://localhost:8787/admin`:
+3. Start the Worker and open `http://localhost:8787/admin`:
 
    ```sh
    pnpm dev
    ```
+
+`AUTH_DEV_EMAIL` is the local development login: every admin request is signed in as that email,
+without Cloudflare Access. The gateway accepts it only while `PUBLIC_URL` is on `localhost`,
+`127.0.0.1` or `[::1]`. On an empty local database, the first sign-in becomes the owner. To try
+another user, change `AUTH_DEV_EMAIL` in `.dev.vars` and restart: that email joins with the join
+defaults from Users > "New users". To test the real Access login, run the Worker behind a hostname
+that an Access application protects. All variables are in [docs/configuration.md](docs/configuration.md).
+
+Manual alternative to step 2: `cp .dev.vars.example .dev.vars`, put the output of
+`pnpm keyring generate` in `TOKENGATE_KEK`, uncomment `PUBLIC_URL` and `AUTH_DEV_EMAIL`, then run
+`pnpm db:migrate:local`.
 
 You do not need a Cloudflare account or Cloudflare Access to run the tests: they sign Access tokens with a fake team key (`test/helpers/login-providers.ts`).
 
@@ -68,6 +70,7 @@ You do not need a Cloudflare account or Cloudflare Access to run the tests: they
 | `pnpm test` | Vitest inside workerd (`@cloudflare/vitest-plugin`) with local D1 databases. |
 | `pnpm test:watch` | Vitest in watch mode. |
 | `pnpm test:scripts` | Shell checks: `scripts/check-config.sh`, `scripts/check-threat-ids.sh`, `test/security/check-config-test.sh`, `test/security/get-token-action.sh`, `scripts/check-links.mjs`. |
+| `pnpm run setup` | Creates `.dev.vars` for local development (never overwrites it) and applies the local migrations. `-- --no-migrate` skips the migrations. |
 | `pnpm dev` | `wrangler dev` with `.dev.vars`. |
 | `pnpm db:migrate:local` | Applies `migrations/` to `DB` and `migrations-telemetry/` to `TELEMETRY_DB`, locally. |
 | `pnpm keyring generate` / `pnpm keyring check` | Generates a key, or validates a `TOKENGATE_KEK` or `TOKENGATE_KEYRING` value read from stdin. See [docs/operations/key-rotation.md](docs/operations/key-rotation.md). |

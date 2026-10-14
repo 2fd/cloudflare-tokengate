@@ -2,15 +2,26 @@
 // system status, and the configuration export download (POST /admin/export). System status shows
 // names, counts and the PUBLIC_URL origin, never configured values that could be secret (I-CFG-1).
 import type { App } from '../../app';
-import { type Config, parseConfig } from '../../config';
+import { type Config, parseConfig, upstreamHostAllowed } from '../../config';
 import { type SchemaState, schemaStatusByDatabase } from '../../db/migrations';
-import { getSettings, SETTING_BOUNDS, type Settings } from '../../db/settings';
+import { listServices } from '../../db/services';
+import {
+  getAllowedUpstreamHosts,
+  getSettings,
+  SETTING_BOUNDS,
+  type Settings,
+} from '../../db/settings';
 import { countActiveOwners } from '../../db/users';
 import { cronHealth, keyringHealth } from '../../health';
 import { can } from '../auth/rbac';
 import { exportConfiguration } from '../ops/export';
 import { KEYRING_ERROR_TEXT, keyringStatus, rewrapCredentials } from '../ops/keyring';
-import { EDITABLE_SETTINGS, SETTING_LABELS, updateSettings } from '../ops/settings';
+import {
+  EDITABLE_SETTINGS,
+  SETTING_LABELS,
+  updateSettings,
+  updateUpstreamHosts,
+} from '../ops/settings';
 import type { OpFailure } from '../ops/shared';
 import {
   type AdminContext,
@@ -32,6 +43,9 @@ const NOTICES = {
   rewrapped_partial:
     'Credentials re-encrypted with the active key, except some that were changed while this ran. Run it again to finish.',
   rewrap_none: 'Nothing to re-encrypt: every credential already uses the active key.',
+  hosts_saved:
+    'Upstream host allowlist saved. It applies to service saves and to every proxied request.',
+  hosts_unchanged: 'Nothing changed: that is the current upstream host allowlist.',
   key_confirmed:
     'New key confirmed: every credential opens with it. Credentials under older keys, if any, were re-encrypted with the active key.',
 } as const;
@@ -79,6 +93,17 @@ export function registerSettingsRoutes(app: App): void {
     return redirectWithNotice(c, SECTION, result.changed.length > 0 ? 'saved' : 'unchanged');
   });
 
+  app.post(`${SECTION}/upstream-hosts`, async (c) => {
+    const form = await formData(c);
+    const raw = text(form, 'allowed_upstream_hosts') ?? '';
+    const result = await updateUpstreamHosts(c.get('deps'), adminActor(c), raw);
+    if (!result.ok) {
+      const status = result.reason === 'conflict' ? 409 : 400;
+      return settingsPage(c, { errors: result.errors, submittedHosts: raw, status });
+    }
+    return redirectWithNotice(c, SECTION, result.changed ? 'hosts_saved' : 'hosts_unchanged');
+  });
+
   app.post(`${SECTION}/rewrap`, async (c) => {
     const result = await rewrapCredentials(c.get('deps'), adminActor(c));
     if (!result.ok) return failurePage(c, result);
@@ -116,6 +141,7 @@ async function settingsPage(
     notice?: NoticeKey | null;
     errors?: string[];
     submitted?: SettingValues;
+    submittedHosts?: string;
     status?: 400 | 409;
   },
 ) {
@@ -123,14 +149,20 @@ async function settingsPage(
   const viewer = c.get('viewer');
   const role = viewer.user.role;
   const config = parseConfig(deps.env);
-  const [settings, keyring, health, cron, schema, activeOwners] = await Promise.all([
-    getSettings(deps.env.DB),
-    keyringStatus(deps),
-    keyringHealth(deps),
-    cronHealth(deps),
-    schemaStatusByDatabase(deps),
-    countActiveOwners(deps.env.DB),
-  ]);
+  const [settings, keyring, health, cron, schema, activeOwners, upstreamHosts, services] =
+    await Promise.all([
+      getSettings(deps.env.DB),
+      keyringStatus(deps),
+      keyringHealth(deps),
+      cronHealth(deps),
+      schemaStatusByDatabase(deps),
+      countActiveOwners(deps.env.DB),
+      getAllowedUpstreamHosts(deps.env.DB),
+      listServices(deps.env.DB),
+    ]);
+  const outsideAllowlist = services.filter(
+    (service) => !upstreamHostAllowed(new URL(service.base_url).hostname, upstreamHosts),
+  );
 
   return renderPage(
     c,
@@ -153,6 +185,49 @@ async function settingsPage(
           />
           <p class="muted">Only owners can change these settings.</p>
         </>
+      )}
+
+      <h2>Upstream hosts</h2>
+      <p>
+        Services can send their credential to any public https host by default. To restrict that,
+        list the allowed hosts. The list applies when a service is saved and on every proxied
+        request.
+      </p>
+      {outsideAllowlist.length > 0 ? (
+        <p class="banner warning" role="status">
+          These services point outside the allowlist, so their requests are refused:{' '}
+          {outsideAllowlist.map((service) => service.slug).join(', ')}.
+        </p>
+      ) : null}
+      {can(role, 'settings:write') ? (
+        <form method="post" action={`${SECTION}/upstream-hosts`} class="stack">
+          <Csrf token={viewer.csrfToken} />
+          <label class="field">
+            <span>Allowed upstream hosts</span>
+            <textarea
+              name="allowed_upstream_hosts"
+              rows={4}
+              placeholder={'api.github.com\n*.slack.com'}
+            >
+              {options.submittedHosts ?? (upstreamHosts ?? []).join('\n')}
+            </textarea>
+            <small>
+              One per line (or separated by commas): an exact hostname such as api.github.com, or
+              *.example.com for every host below example.com. Leave it empty to allow any public
+              https host.
+            </small>
+          </label>
+          <div class="actions">
+            <button type="submit">Save allowlist</button>
+          </div>
+        </form>
+      ) : (
+        <p class="muted">
+          {upstreamHosts === null
+            ? 'Any public https host is allowed.'
+            : `Allowed: ${upstreamHosts.join(', ')}.`}{' '}
+          Only owners can change this.
+        </p>
       )}
 
       <h2>Encryption keys</h2>
@@ -185,10 +260,10 @@ async function settingsPage(
           ],
           ['Login providers', loginStatusText(config)],
           [
-            'Upstream host allowlist (ALLOWED_UPSTREAM_HOSTS)',
-            config.allowedUpstreamHosts === null
+            'Upstream host allowlist',
+            upstreamHosts === null
               ? 'not set: services may use any public https host'
-              : `set (${config.allowedUpstreamHosts.length} entries)`,
+              : `set (${upstreamHosts.length} entries)`,
           ],
           [
             'Request log queue (REQUEST_LOG_QUEUE)',

@@ -38,12 +38,12 @@
     // Hourly: rollups, retention, expiry notices. See src/telemetry/cron.ts.
     "crons": ["7 * * * *"]
   },
-  // Operator vars (PUBLIC_URL, ALLOWED_UPSTREAM_HOSTS, BOOTSTRAP_OWNER_EMAILS, AUTH_*; full list in
+  // Operator vars (PUBLIC_URL, BOOTSTRAP_OWNER_EMAILS, AUTH_*; full list in
   // docs/configuration.md) are set in the dashboard (Worker > Settings > Variables and Secrets).
   // keep_vars makes deploys leave them alone. Any name added under "vars" here is re-uploaded on every
   // deploy and overwrites the dashboard value, so set each var in one place only and never commit ""
-  // placeholders: an emptied PUBLIC_URL / ALLOWED_UPSTREAM_HOSTS silently turns off host pinning and
-  // the upstream allowlist (I-DEPLOY-1, I-SSRF-1). scripts/check-config.sh enforces this.
+  // placeholders: an emptied PUBLIC_URL silently turns off host pinning (I-DEPLOY-1).
+  // scripts/check-config.sh enforces this.
   "keep_vars": true
 
   // --- Optional: batch request-log writes through a queue (Workers Paid). See docs/observability.md.

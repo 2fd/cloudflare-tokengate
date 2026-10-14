@@ -18,9 +18,9 @@ In the admin UI, open **Services**, select **Add a service** and choose a templa
 | Timeout (milliseconds) | `30000` | `30000` |
 | Credential check | none | none |
 | Suggested grant rule | `POST /` | `POST /` |
-| Host for `ALLOWED_UPSTREAM_HOSTS` | `hooks.slack.com` | `discord.com` |
+| Host for the upstream host allowlist | `hooks.slack.com` | `discord.com` |
 
-If `ALLOWED_UPSTREAM_HOSTS` is set, add the host to it before you create the service ([configuration](../configuration.md#allowed_upstream_hosts)). Otherwise saving the service fails.
+If the upstream host allowlist in Settings is set, add the host to it before you create the service ([configuration](../configuration.md#upstream-host-allowlist)). Otherwise saving the service fails.
 
 ### Credential value
 

@@ -16,9 +16,9 @@ In the admin UI, open **Services**, select **Add a service** and choose the **Sl
 | Timeout (milliseconds) | `30000` |
 | Credential check | `POST /auth.test`, expect `200` and `"ok": true` |
 | Suggested grant rule | `POST /chat.postMessage` |
-| Host for `ALLOWED_UPSTREAM_HOSTS` | `slack.com` (`*.slack.com` does not match it) |
+| Host for the upstream host allowlist | `slack.com` (`*.slack.com` does not match it) |
 
-If `ALLOWED_UPSTREAM_HOSTS` is set, add the host to it before you create the service ([configuration](../configuration.md#allowed_upstream_hosts)). Otherwise saving the service fails.
+If the upstream host allowlist in Settings is set, add the host to it before you create the service ([configuration](../configuration.md#upstream-host-allowlist)). Otherwise saving the service fails.
 
 Use a bot token (`xoxb-REDACTED`). The credential check calls `auth.test`, because Slack answers a bad token with HTTP 200 and `"ok": false`.
 

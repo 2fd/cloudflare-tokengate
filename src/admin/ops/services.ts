@@ -24,7 +24,7 @@ import {
   updateServiceCredentialStatement,
   updateServiceFieldsStatement,
 } from '../../db/services';
-import { getState, recordKeyCheckValueStatement } from '../../db/settings';
+import { getAllowedUpstreamHosts, getState, recordKeyCheckValueStatement } from '../../db/settings';
 import type { Actor, Service } from '../../db/types';
 import type { Deps } from '../../deps';
 import type { AppEnv } from '../../env';
@@ -109,7 +109,7 @@ export async function createService(
   const errors: string[] = [];
   const base = validateBaseUrl(input.base_url, {
     publicHost: context.publicHost,
-    allowedUpstreamHosts: parseConfig(deps.env).allowedUpstreamHosts,
+    allowedUpstreamHosts: await getAllowedUpstreamHosts(deps.env.DB),
   });
   if (!base.ok) errors.push(base.error);
   const injection = normalizeInjection(input.injection);
@@ -405,7 +405,7 @@ export async function setServiceCredential(
   const errors: string[] = [];
   const base = validateBaseUrl(input.base_url, {
     publicHost: context.publicHost,
-    allowedUpstreamHosts: parseConfig(deps.env).allowedUpstreamHosts,
+    allowedUpstreamHosts: await getAllowedUpstreamHosts(deps.env.DB),
   });
   if (!base.ok) errors.push(base.error);
   const injection = normalizeInjection(input.injection);
@@ -546,7 +546,7 @@ export async function testServiceCredential(
   // Same use-time checks as the proxy: the stored row is not trusted (I-SSRF-1, I-CRED-2).
   const base = validateBaseUrl(service.base_url, {
     publicHost: context.publicHost,
-    allowedUpstreamHosts: parseConfig(deps.env).allowedUpstreamHosts,
+    allowedUpstreamHosts: await getAllowedUpstreamHosts(deps.env.DB),
   });
   if (!base.ok) return opFailure('unavailable', [`stored ${base.error}`]);
   const injection = normalizeInjection(service.injection);

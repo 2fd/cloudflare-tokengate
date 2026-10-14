@@ -111,7 +111,7 @@ and wait for an admin to enter the credential again.
 4. Treat it as a [compromised Cloudflare account](#the-cloudflare-account-is-compromised): find out who
    can write to D1, and compare the rest of the configuration with a known-good copy.
 
-Set `ALLOWED_UPSTREAM_HOSTS` ([configuration](../configuration.md#allowed_upstream_hosts)). With it, a
+Set the upstream host allowlist in Settings ([configuration](../configuration.md#upstream-host-allowlist)). With it, a
 changed base URL can point only at a listed host, and the proxy refuses any other host with
 `base_url_invalid`.
 

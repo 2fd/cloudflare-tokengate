@@ -192,7 +192,7 @@ Banners are sorted by severity. The texts below are abbreviated.
 | info | There is only one active owner | Invite a second owner ([break-glass](operations/break-glass.md)) |
 
 Settings > System status shows the database schema state, the hourly job, `PUBLIC_URL`, Login
-providers, `ALLOWED_UPSTREAM_HOSTS`, each optional binding and `BOOTSTRAP_OWNER_EMAILS`, plus any
+providers, the upstream host allowlist, each optional binding and `BOOTSTRAP_OWNER_EMAILS`, plus any
 configuration problems by variable name.
 
 ## Health endpoints
@@ -236,7 +236,7 @@ or user id). Retention is "Audit log retention (days)": default 365, never less 
 | Services | `service.create`, `.update`, `.enable`, `.disable`, `.delete`, `service.credential.set`, `service.credential.test` |
 | Grants | `grant.create`, `.duplicate`, `.update`, `.enable`, `.disable`, `.delete` |
 | Users | `user.invite`, `.resend_invite`, `.update` (also approve and reject), `.reset_login`, `.link`, `.bootstrap`, `.join`, `.join_defaults` |
-| System | `settings.update`, `keyring.rewrap`, `config.export`, `credential.expiring` (hourly job, actor `system`) |
+| System | `settings.update`, `settings.upstream_hosts`, `keyring.rewrap`, `config.export`, `credential.expiring` (hourly job, actor `system`) |
 
 Changes made directly in D1 (`wrangler d1 execute`) are not audited.
 

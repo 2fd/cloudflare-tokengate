@@ -17,6 +17,11 @@ Some variables are security controls:
 
 When unset, each control is off. `src/config.ts` reads an empty or whitespace-only value as unset.
 
+> Note (2026-10-14): `ALLOWED_UPSTREAM_HOSTS` is no longer a variable. The upstream host allowlist is
+> now a D1 setting that owners edit in Settings ([configuration](../configuration.md#upstream-host-allowlist)).
+> `PUBLIC_URL` is the remaining security control among the variables. `/auth` no longer exists
+> ([0015](0015-cloudflare-access-only-admin-login.md)).
+
 By default, `wrangler deploy` replaces all variables with the ones in `wrangler.jsonc`. An early version of the config committed `""` placeholders under `vars`. Every deploy then silently erased the values operators had set in the dashboard, and both controls turned off.
 
 Separately, version preview URLs would run old code against production data and secrets.

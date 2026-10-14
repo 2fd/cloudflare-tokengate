@@ -1,5 +1,6 @@
 // The D1 `settings` table: admin-editable runtime settings and internal state keys, JSON values.
 // Defaults and bounds live here so every reader agrees; bounds are re-applied on read, not only on save.
+import { isUpstreamHostEntry } from '../config';
 
 export interface Settings {
   request_log_retention_days: number;
@@ -69,6 +70,36 @@ function parseJsonOrNull(raw: string): unknown {
   }
 }
 
+/**
+ * Upstream host allowlist (I-SSRF-1), edited in Settings by owners. Stored as a JSON array of
+ * lowercased entries (exact host or `*.<domain>`), or null for "any public https host".
+ */
+export const UPSTREAM_HOSTS_KEY = 'allowed_upstream_hosts';
+
+/** null = unrestricted. A stored value that is not a valid list denies every host (fail closed). */
+export function upstreamHostsFromValue(raw: string | null | undefined): string[] | null {
+  if (raw === null || raw === undefined) return null;
+  const value = parseJsonOrNull(raw);
+  if (value === null) return raw.trim() === 'null' ? null : [];
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    !value.every((entry) => typeof entry === 'string' && isUpstreamHostEntry(entry))
+  ) {
+    return [];
+  }
+  return value as string[];
+}
+
+export function upstreamHostsStatement(db: D1Database): D1PreparedStatement {
+  return db.prepare('SELECT value FROM settings WHERE key = ?').bind(UPSTREAM_HOSTS_KEY);
+}
+
+export async function getAllowedUpstreamHosts(db: D1Database): Promise<string[] | null> {
+  const row = await upstreamHostsStatement(db).first<{ value: string }>();
+  return upstreamHostsFromValue(row?.value);
+}
+
 /** Internal bookkeeping keys, not editable in the UI. */
 export type StateKey =
   | 'bootstrap_completed_at'
@@ -119,7 +150,7 @@ export async function getSettings(db: D1Database): Promise<Settings> {
 
 export function putSettingStatement(
   db: D1Database,
-  key: keyof Settings | StateKey | JoinKey,
+  key: keyof Settings | StateKey | JoinKey | typeof UPSTREAM_HOSTS_KEY,
   value: unknown,
   now: number,
   updatedBy: string | null,

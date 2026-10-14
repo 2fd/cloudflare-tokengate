@@ -1,7 +1,13 @@
 // Everything the proxy needs from the control plane, read in one D1 batch per request (no caching,
 // so disabling a grant, service or caller provider takes effect on the next request; I-AUTHZ-1).
 import { callerProviderFromRow, grantFromRow, serviceFromRow } from './rows';
-import { type Settings, settingsFromRows, settingsStatement } from './settings';
+import {
+  type Settings,
+  settingsFromRows,
+  settingsStatement,
+  upstreamHostsFromValue,
+  upstreamHostsStatement,
+} from './settings';
 import type { CallerProvider, Grant, Service } from './types';
 
 export interface ProxyContext {
@@ -17,6 +23,8 @@ export interface ProxyContext {
    */
   grants: Grant[];
   settings: Settings;
+  /** Upstream host allowlist (I-SSRF-1); null = any public https host. */
+  allowedUpstreamHosts: string[] | null;
 }
 
 type Row = Record<string, unknown>;
@@ -27,7 +35,7 @@ export async function loadProxyContext(
   now: number,
 ): Promise<ProxyContext> {
   // `enabled = 1` is written literally so the partial index grants_lookup (WHERE enabled = 1) applies.
-  const [services, providers, grants, settings] = await db.batch<Row>([
+  const [services, providers, grants, settings, upstreamHosts] = await db.batch<Row>([
     db.prepare('SELECT * FROM services WHERE slug = ?1').bind(slug),
     db.prepare('SELECT * FROM caller_providers WHERE enabled = 1 ORDER BY created_at, id'),
     db
@@ -41,6 +49,7 @@ export async function loadProxyContext(
       )
       .bind(slug, now),
     settingsStatement(db),
+    upstreamHostsStatement(db),
   ]);
 
   const serviceRow = services?.results[0];
@@ -57,5 +66,8 @@ export async function loadProxyContext(
           .filter((grant) => grant.enabled && grant.service_id === service.id)
       : [],
     settings: settingsFromRows((settings?.results ?? []) as Array<{ key: string; value: string }>),
+    allowedUpstreamHosts: upstreamHostsFromValue(
+      upstreamHosts?.results[0]?.value as string | undefined,
+    ),
   };
 }

@@ -138,7 +138,6 @@ Set operator variables in the Cloudflare dashboard, not in `wrangler.jsonc`. `wr
    | `PUBLIC_URL` | `<gateway>`, for example `https://tokengate.example.com` | `/admin` answers only on this origin. Access login requires it. |
    | `AUTH_ACCESS_TEAM_DOMAIN` | Your team name from step 8 | The gateway checks the Access token against this team's keys. |
    | `AUTH_ACCESS_AUD` | The AUD tag from step 8 | The Access token must be for this application. |
-   | `ALLOWED_UPSTREAM_HOSTS` | `api.github.com` | Services can only point at these hosts ([I-SSRF-1](threat-model.md#i-ssrf-1)). Add the exact host of each service you add, for example `slack.com` for the Slack Web API and `api.openai.com` for OpenAI. `*.slack.com` does not match `slack.com`. |
 
 3. Save and deploy the change.
 
@@ -296,7 +295,7 @@ The steps above already put the admin UI on a custom domain. Before real use:
    Details are in [operations/cloudflare-zone-settings.md](operations/cloudflare-zone-settings.md).
 2. If CI jobs still use the workers.dev URL, change `TOKENGATE_URL` in your CI variables to `<gateway>`.
 3. Optional: turn off the workers.dev hostname. Set `"workers_dev": false` in your clone's `wrangler.jsonc` and run `pnpm run deploy`.
-4. Keep `ALLOWED_UPSTREAM_HOSTS` set to the exact hosts your services use.
+4. Optional: in Settings > "Upstream hosts", list the exact hosts your services use. Empty allows any public https host ([configuration](configuration.md#upstream-host-allowlist)).
 5. Pin `actions/get-token` to a commit SHA in every workflow.
 6. Monitor `<gateway>/readyz` and read [observability.md](observability.md). Optional bindings (request log queue, R2 archive, rate limiter) are in [configuration.md](configuration.md).
 7. Plan backups and key custody: [operations/backup-restore.md](operations/backup-restore.md) and [operations/key-rotation.md](operations/key-rotation.md).

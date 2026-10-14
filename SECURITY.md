@@ -94,8 +94,8 @@ steps.
    loses every stored credential ([key rotation](docs/operations/key-rotation.md)).
 2. Serve the gateway on a custom domain and set `PUBLIC_URL`. With it, `/admin` answers only on
    that origin ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)) ([configuration](docs/configuration.md)).
-3. Set `ALLOWED_UPSTREAM_HOSTS` to the upstream hosts you use ([I-SSRF-1](docs/threat-model.md#i-ssrf-1))
-   ([configuration](docs/configuration.md)).
+3. In Settings > "Upstream hosts", list the upstream hosts you use. Empty allows any public https
+   host ([I-SSRF-1](docs/threat-model.md#i-ssrf-1)) ([configuration](docs/configuration.md#upstream-host-allowlist)).
 4. Set operator variables in the Cloudflare dashboard, not as `""` placeholders in `wrangler.jsonc`.
    If you edit `wrangler.jsonc`, run `bash scripts/check-config.sh` before you deploy
    ([configuration](docs/configuration.md)).

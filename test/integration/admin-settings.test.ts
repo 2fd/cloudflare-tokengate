@@ -3,7 +3,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { setServiceCredential } from '../../src/admin/ops/services';
 import { registerSettingsRoutes } from '../../src/admin/routes/settings';
 import { loadKeyring } from '../../src/crypto/keyring';
-import { getSettings, putSettingStatement, SETTING_DEFAULTS } from '../../src/db/settings';
+import {
+  getAllowedUpstreamHosts,
+  getSettings,
+  putSettingStatement,
+  SETTING_DEFAULTS,
+} from '../../src/db/settings';
 import type { Role } from '../../src/db/types';
 import { toBase64 } from '../../src/lib/encoding';
 import {
@@ -377,5 +382,55 @@ describe('review: keyring section', () => {
     const html = await (await adminGet(missing, session, '/admin/settings')).text();
     expect(html).toContain('is not in the keyring');
     expect(html).not.toContain('action="/admin/settings/rewrap"');
+  });
+});
+
+describe('I-SSRF-1: upstream host allowlist in Settings', () => {
+  it('defaults to any host and shows owners an empty allowlist form', async () => {
+    const html = await (await adminGet(app, await sessionFor('owner'), '/admin/settings')).text();
+    expect(html).toContain('action="/admin/settings/upstream-hosts"');
+    expect(html).toContain('not set: services may use any public https host');
+  });
+
+  it('owners save, normalize and clear the list, each with one audit row', async () => {
+    const owner = await sessionFor('owner');
+    const save = await adminPost(app, owner, '/admin/settings/upstream-hosts', {
+      allowed_upstream_hosts: 'API.GitHub.com\n*.slack.com, api.github.com',
+    });
+    expect(save.headers.get('location')).toBe('/admin/settings?notice=hosts_saved');
+    expect(await getAllowedUpstreamHosts(env.DB)).toEqual(['api.github.com', '*.slack.com']);
+    const clear = await adminPost(app, owner, '/admin/settings/upstream-hosts', {
+      allowed_upstream_hosts: '  ',
+    });
+    expect(clear.headers.get('location')).toBe('/admin/settings?notice=hosts_saved');
+    expect(await getAllowedUpstreamHosts(env.DB)).toBeNull();
+    expect(await auditActions()).toEqual(['settings.upstream_hosts', 'settings.upstream_hosts']);
+  });
+
+  it('rejects malformed entries and keeps the previous list', async () => {
+    const res = await adminPost(app, await sessionFor('owner'), '/admin/settings/upstream-hosts', {
+      allowed_upstream_hosts: 'api.github.com\nhttps://evil.example',
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain('https://evil.example');
+    expect(await getAllowedUpstreamHosts(env.DB)).toBeNull();
+  });
+
+  it('warns about services that point outside the list', async () => {
+    const owner = await sessionFor('owner');
+    await seedService(opsDeps(), { slug: 'gh', secret: 'ghp_0123456789abcdefghij' });
+    await adminPost(app, owner, '/admin/settings/upstream-hosts', {
+      allowed_upstream_hosts: 'only.example.com',
+    });
+    const html = await (await adminGet(app, owner, '/admin/settings')).text();
+    expect(html).toContain('These services point outside the allowlist');
+  });
+
+  it('is forbidden for admins', async () => {
+    const res = await adminPost(app, await sessionFor('admin'), '/admin/settings/upstream-hosts', {
+      allowed_upstream_hosts: 'api.github.com',
+    });
+    expect(res.status).toBe(403);
+    expect(await getAllowedUpstreamHosts(env.DB)).toBeNull();
   });
 });

@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { canonicalJson } from '../../src/lib/json';
+import { setUpstreamHosts } from '../helpers/app';
 import { sealFor, setupProxy, TEST_BASE_URL, TEST_SECRET } from '../helpers/proxy-fixtures';
 
 /**
@@ -54,14 +55,27 @@ describe('I-SSRF-1: base_url is re-validated at proxy time and fails closed with
     expect(fx.upstreamCalls).toHaveLength(0);
   });
 
-  it('ALLOWED_UPSTREAM_HOSTS is enforced at proxy time', async () => {
-    const denied = await setupProxy({ env: { ALLOWED_UPSTREAM_HOSTS: 'api.example.com' } });
-    const response = await denied.call('/a');
+  it('the upstream host allowlist setting is enforced at proxy time, on the next request', async () => {
+    onTestFinished(() => setUpstreamHosts(null));
+    const fx = await setupProxy();
+    await setUpstreamHosts(['api.example.com']);
+    const response = await fx.call('/a');
     expect(response.status).toBe(503);
-    expect(denied.upstreamCalls).toHaveLength(0);
+    expect(fx.upstreamCalls).toHaveLength(0);
 
-    const allowed = await setupProxy({ env: { ALLOWED_UPSTREAM_HOSTS: '*.upstream.test' } });
-    expect((await allowed.call('/a')).status).toBe(200);
+    await setUpstreamHosts(['*.upstream.test']);
+    expect((await fx.call('/a')).status).toBe(200);
+  });
+
+  it('a malformed stored allowlist denies every host', async () => {
+    onTestFinished(() => setUpstreamHosts(null));
+    const fx = await setupProxy();
+    await setUpstreamHosts(['*.upstream.test']);
+    await env.DB.prepare(
+      "UPDATE settings SET value = '[\"https://x\"]' WHERE key = 'allowed_upstream_hosts'",
+    ).run();
+    expect((await fx.call('/a')).status).toBe(503);
+    expect(fx.upstreamCalls).toHaveLength(0);
   });
 });
 

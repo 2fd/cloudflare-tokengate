@@ -13,28 +13,27 @@ settings live in `src/db/settings.ts`.
 | Operator variable (`PUBLIC_URL`, `AUTH_*`, ...) | Cloudflare dashboard: Workers & Pages > tokengate > Settings > Variables and Secrets | Yes (`keep_vars: true`) |
 | Secret (`TOKENGATE_KEK`, `TOKENGATE_KEYRING`) | `pnpm wrangler secret put <NAME>` | Yes, always |
 | Binding (D1, queue, pipeline, rate limiter) | `wrangler.jsonc` | Part of the deploy |
-| Runtime setting (retention, sampling) | Admin UI: Settings > Data retention and sampling | Stored in D1 |
+| Runtime setting (retention, sampling, upstream host allowlist) | Admin UI: Settings | Stored in D1 |
 
 `wrangler.jsonc` sets `"keep_vars": true` and declares no `vars`. So `pnpm run deploy` and Workers Builds
 keep the values you set in the dashboard. Set each variable in one place only.
 
 If you prefer to keep configuration in git, add the variable with a non-empty value under `"vars"` in
 your clone's `wrangler.jsonc`. Every deploy then overwrites the dashboard value. Never commit `""`
-placeholders. An empty `PUBLIC_URL` turns off admin host pinning, and an empty `ALLOWED_UPSTREAM_HOSTS`
-allows any public https upstream ([I-DEPLOY-1](threat-model.md#i-deploy-1), [I-SSRF-1](threat-model.md#i-ssrf-1)). Whitespace-only values count as
-empty. `scripts/check-config.sh` rejects them, in top-level `vars` and in `env.<name>.vars` blocks.
+placeholders. An empty `PUBLIC_URL` turns off admin host pinning
+([I-DEPLOY-1](threat-model.md#i-deploy-1)). Whitespace-only values count as empty. `scripts/check-config.sh` rejects them, in top-level `vars` and in `env.<name>.vars` blocks.
 
 Rolling back to an earlier Worker version (`pnpm wrangler rollback` or the dashboard) restores that
-version's variables. After a rollback, check `PUBLIC_URL` and `ALLOWED_UPSTREAM_HOSTS` under Settings >
-System status.
+version's variables. After a rollback, check `PUBLIC_URL` under Settings > System status. The upstream
+host allowlist is stored in D1, so a rollback does not change it.
 
-For local development (`pnpm dev`), put all variables and secrets in `.dev.vars`. Copy
-`.dev.vars.example`. It lists every variable and secret with a comment, except `TOKENGATE_KEYRING`,
-which it only mentions.
+For local development (`pnpm dev`), put all variables and secrets in `.dev.vars`. `pnpm run setup`
+creates it from `.dev.vars.example` ([CONTRIBUTING.md](../CONTRIBUTING.md#set-up)). The example lists
+every variable and secret with a comment, except `TOKENGATE_KEYRING`, which it only mentions.
 
 ## How invalid configuration fails
 
-Configuration is parsed per feature: `public_url`, `login.access`, `login.dev` and `upstream_hosts` ([I-CFG-1](threat-model.md#i-cfg-1)). A malformed feature is turned off; it never runs half
+Configuration is parsed per feature: `public_url`, `login.access` and `login.dev` ([I-CFG-1](threat-model.md#i-cfg-1)). A malformed feature is turned off; it never runs half
 configured. Errors name the variable and never echo its value. They appear in two places:
 
 - Settings > System status > "Configuration problems".
@@ -48,7 +47,6 @@ entries are trimmed and empty entries are dropped.
 | Name | Kind | Required | Format |
 |---|---|---|---|
 | `PUBLIC_URL` | var | Recommended; required for Access login | `https://host[:port]` origin |
-| `ALLOWED_UPSTREAM_HOSTS` | var | Recommended | Comma list of hostnames, exact or `*.suffix` |
 | `BOOTSTRAP_OWNER_EMAILS` | var | Optional, until the first owner signs in | Comma list of emails |
 | `TOKENGATE_KEK` | secret | One of `TOKENGATE_KEK` / `TOKENGATE_KEYRING` | Standard base64 of 32 bytes |
 | `TOKENGATE_KEYRING` | secret | One of `TOKENGATE_KEK` / `TOKENGATE_KEYRING` | JSON keyring |
@@ -76,36 +74,6 @@ The canonical origin of the gateway, for example `https://tokengate.example.com`
 - `/proxy/*`, `/healthz` and `/readyz` are never pinned. They answer on every hostname.
 - A service base URL can never point at this host or at the host the request arrived on
   ([I-SSRF-1](threat-model.md#i-ssrf-1)).
-
-### `ALLOWED_UPSTREAM_HOSTS`
-
-Upstream hosts that service base URLs may use, for example `api.github.com,slack.com,api.openai.com`.
-
-Hosts of the service templates (`src/admin/service-templates.ts`):
-
-| Template | Host to list |
-|---|---|
-| Slack Web API | `slack.com` |
-| Slack incoming webhook | `hooks.slack.com` |
-| Discord webhook | `discord.com` |
-| OpenAI API | `api.openai.com` |
-| Anthropic API | `api.anthropic.com` |
-| GitHub REST API | `api.github.com` |
-| GitHub release asset uploads | `uploads.github.com` |
-
-To add a host, edit the variable in Workers & Pages > tokengate > Settings > Variables and Secrets
-and deploy. Then create the service. Saving a service whose host is not listed fails with
-"host ... is not listed in ALLOWED_UPSTREAM_HOSTS".
-
-- `api.example.com` matches that host only. `*.example.com` matches any host below it
-  (`a.example.com`, `a.b.example.com`) but not `example.com` itself. Matching is case-insensitive.
-- A wildcard needs at least two labels after `*.`: `*.com` is invalid.
-- **When unset:** any public https host is allowed. IP literals, `localhost`, `*.workers.dev` and the
-  gateway's own host are always refused.
-- **When malformed:** every host is denied. Saving a service fails. Existing services with a
-  credential answer `503 not_configured` (reason `base_url_invalid`).
-- The list is checked when a service is saved and again on every proxied request
-  ([I-SSRF-1](threat-model.md#i-ssrf-1)). Removing a host stops its services on the next request.
 
 ### `BOOTSTRAP_OWNER_EMAILS`
 
@@ -185,6 +153,39 @@ only with `pnpm dev`.
 - The same rules apply: the first sign-in becomes owner (unless `BOOTSTRAP_OWNER_EMAILS` lists other
   emails), later ones join with the join defaults.
 - Errors: an invalid email; `PUBLIC_URL` missing or not on a loopback host.
+
+
+## Upstream host allowlist
+
+The hosts that service base URLs may use. It is a setting in the admin UI, not a variable: Settings >
+"Upstream hosts". Only owners can change it (permission `settings:write`). Admins cannot widen it.
+Each change writes a `settings.upstream_hosts` audit event.
+
+- **Empty (the default):** any public https host is allowed. You can load a credential for any
+  upstream. IP literals, `localhost`, `*.workers.dev` and the gateway's own host are always refused
+  ([I-SSRF-1](threat-model.md#i-ssrf-1)).
+- **Entries:** one per line, or separated by commas or spaces. `api.example.com` matches that host
+  only. `*.example.com` matches any host below it (`a.example.com`, `a.b.example.com`) but not
+  `example.com` itself. A wildcard needs at least two labels after `*.`: `*.com` is invalid. Entries
+  are lowercased and duplicates removed. An invalid entry refuses the whole save and names the entry.
+- **Where it applies:** when a service is saved, with the error "host ... is not in the upstream host
+  allowlist (Settings)", and on every proxied request. The proxy reads the list in its per-request D1
+  batch, so a change applies to the next request. A service outside the list answers
+  `503 not_configured` (reason `base_url_invalid`). Settings names the services that point outside it.
+- **Stored value:** key `allowed_upstream_hosts` in the `settings` table, a JSON array or `null`. A
+  stored value that is not a valid list denies every host (fail closed).
+
+Hosts of the service templates (`src/admin/service-templates.ts`):
+
+| Template | Host to list |
+|---|---|
+| Slack Web API | `slack.com` |
+| Slack incoming webhook | `hooks.slack.com` |
+| Discord webhook | `discord.com` |
+| OpenAI API | `api.openai.com` |
+| Anthropic API | `api.anthropic.com` |
+| GitHub REST API | `api.github.com` |
+| GitHub release asset uploads | `uploads.github.com` |
 
 ## Bindings
 

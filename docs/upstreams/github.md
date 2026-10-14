@@ -17,9 +17,9 @@ In the admin UI, open **Services**, select **Add a service** and choose a templa
 | Timeout (milliseconds) | `60000` | `600000` |
 | Credential check | `GET /rate_limit`, expect `200` | none |
 | Suggested grant rule | `GET /repos/OWNER/REPO/**` | `POST /repos/OWNER/REPO/releases/*/assets` |
-| Host for `ALLOWED_UPSTREAM_HOSTS` | `api.github.com` | `uploads.github.com` |
+| Host for the upstream host allowlist | `api.github.com` | `uploads.github.com` |
 
-If `ALLOWED_UPSTREAM_HOSTS` is set, add the host to it before you create the service ([configuration](../configuration.md#allowed_upstream_hosts)). Otherwise saving the service fails.
+If the upstream host allowlist in Settings is set, add the host to it before you create the service ([configuration](../configuration.md#upstream-host-allowlist)). Otherwise saving the service fails.
 
 - Prefer a fine-grained personal access token limited to the repositories and permissions the jobs need (`github_pat_REDACTED`).
 - Release asset uploads use a separate host, so they need the second service. Store the same token in both.

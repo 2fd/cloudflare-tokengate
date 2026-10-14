@@ -3,7 +3,7 @@
 // admin host pinning (I-DEPLOY-1). Error messages name variables only and never echo values.
 import type { AppEnv } from './env';
 
-export type ConfigFeature = 'public_url' | 'login.access' | 'login.dev' | 'upstream_hosts';
+export type ConfigFeature = 'public_url' | 'login.access' | 'login.dev';
 
 export interface ConfigError {
   feature: ConfigFeature;
@@ -30,8 +30,6 @@ export interface Config {
   login: { access: AccessLogin | null; dev: DevLogin | null };
   /** Lowercased, trimmed. */
   bootstrapOwnerEmails: string[];
-  /** null = unrestricted. Malformed configuration yields [] (deny every host). */
-  allowedUpstreamHosts: string[] | null;
 }
 
 export const LOCAL_DEV_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -52,7 +50,6 @@ export function parseConfig(env: AppEnv): Config {
       dev: parseDevLogin(env, publicUrl, errors),
     },
     bootstrapOwnerEmails: splitList(env.BOOTSTRAP_OWNER_EMAILS).map((email) => email.toLowerCase()),
-    allowedUpstreamHosts: parseUpstreamHosts(env.ALLOWED_UPSTREAM_HOSTS, errors),
   };
 }
 
@@ -225,25 +222,14 @@ export function normalizeAccessTeamDomain(raw: string): string | null {
   return `https://${team}${ACCESS_TEAM_SUFFIX}`;
 }
 
-function parseUpstreamHosts(raw: string | undefined, errors: ConfigError[]): string[] | null {
-  if (readVar(raw) === null) return null;
-  const entries = splitList(raw).map((entry) => entry.toLowerCase());
-  const fail = (message: string): string[] => {
-    errors.push({ feature: 'upstream_hosts', variable: 'ALLOWED_UPSTREAM_HOSTS', message });
-    return [];
-  };
-  if (entries.length === 0) return fail('ALLOWED_UPSTREAM_HOSTS is set but lists no hosts.');
-  for (const entry of entries) {
-    const valid = entry.startsWith('*.')
-      ? isDomainName(entry.slice(2)) && entry.slice(2).includes('.')
-      : isDomainName(entry);
-    if (!valid) {
-      return fail(
-        'ALLOWED_UPSTREAM_HOSTS entries must be hostnames or "*.<domain>" with at least two labels.',
-      );
-    }
-  }
-  return entries;
+/**
+ * An upstream host allowlist entry: an exact hostname, or `*.<domain>` with at least two labels.
+ * Pass it lowercased.
+ */
+export function isUpstreamHostEntry(entry: string): boolean {
+  return entry.startsWith('*.')
+    ? isDomainName(entry.slice(2)) && entry.slice(2).includes('.')
+    : isDomainName(entry);
 }
 
 function isDomainName(name: string): boolean {

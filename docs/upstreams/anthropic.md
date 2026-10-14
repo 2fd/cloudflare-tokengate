@@ -15,9 +15,9 @@ In the admin UI, open **Services**, select **Add a service** and choose the **An
 | Timeout (milliseconds) | `600000` |
 | Credential check | none (the API requires an `anthropic-version` header, which a check cannot send) |
 | Suggested grant rule | `POST /v1/messages` |
-| Host for `ALLOWED_UPSTREAM_HOSTS` | `api.anthropic.com` |
+| Host for the upstream host allowlist | `api.anthropic.com` |
 
-If `ALLOWED_UPSTREAM_HOSTS` is set, add the host to it before you create the service ([configuration](../configuration.md#allowed_upstream_hosts)). Otherwise saving the service fails.
+If the upstream host allowlist in Settings is set, add the host to it before you create the service ([configuration](../configuration.md#upstream-host-allowlist)). Otherwise saving the service fails.
 
 Reference: <https://docs.anthropic.com/en/api/overview>.
 

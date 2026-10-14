@@ -25,6 +25,8 @@ First public release (0.1.0).
 - **Optional per-Grant rate limit** through the `PROXY_RATE_LIMITER` binding.
 - **Composite GitHub Action** `actions/get-token` that mints the OIDC token and installs the `tokengate-token` helper. See [actions/get-token/README.md](actions/get-token/README.md).
 - **Deploy to Cloudflare** support: binding descriptions in `package.json`, `.dev.vars.example`, and `pnpm run deploy`, which applies both migrations before it deploys.
+- **Upstream host allowlist in Settings.** Owners list the hosts that services may use ("Upstream hosts", audit action `settings.upstream_hosts`). Empty, the default, allows any public https host. See [docs/configuration.md](docs/configuration.md#upstream-host-allowlist).
+- **`pnpm run setup`** creates `.dev.vars` for local development (local `TOKENGATE_KEK`, `PUBLIC_URL`, `AUTH_DEV_EMAIL`) and applies the local migrations. See [CONTRIBUTING.md](CONTRIBUTING.md#set-up).
 
 ### Security
 
@@ -42,7 +44,7 @@ Each item links to its invariant in [docs/threat-model.md](docs/threat-model.md)
 - Credentials are bound by AAD to the service ID, base URL and injection. They never appear in responses, logs, audit rows or the export ([I-CRED-1](docs/threat-model.md#i-cred-1), [I-CRED-2](docs/threat-model.md#i-cred-2)).
 - Redirects are returned, never followed. A `Location` under the base URL is rewritten to the gateway, one on another origin passes through, and any other is dropped. `Link` keeps only the values that rewrite to the gateway ([I-REDIR-1](docs/threat-model.md#i-redir-1)).
 - Upstream response headers are filtered. A header that echoes the credential is dropped and named in `x-tokengate-redacted` ([I-RESP-1](docs/threat-model.md#i-resp-1)). Response bodies pass through unchanged.
-- Base URLs are https only, checked against `ALLOWED_UPSTREAM_HOSTS` (when set) when a service is saved and on every request. `global_fetch_strictly_public` is enabled ([I-SSRF-1](docs/threat-model.md#i-ssrf-1)).
+- Base URLs are https only, checked against the upstream host allowlist (when set) when a service is saved and on every request. The allowlist is a setting that owners edit in Settings > "Upstream hosts"; empty allows any public https host, and a malformed stored value denies every host. `global_fetch_strictly_public` is enabled ([I-SSRF-1](docs/threat-model.md#i-ssrf-1)).
 - Request records keep only claims on the profile's allowlist ([I-LOG-1](docs/threat-model.md#i-log-1)). Unverified claims are never stored ([I-LOG-2](docs/threat-model.md#i-log-2)). `tokengate-token` masks every token it prints ([I-LOG-1](docs/threat-model.md#i-log-1)).
 - Every admin request is authenticated by its own Cloudflare Access JWT (team certs, exact issuer, application AUD). A suspension, role change or login reset applies to the user's next request, and admin writes re-check the acting identity and role when they commit ([I-SESS-1](docs/threat-model.md#i-sess-1)).
 - Unsafe admin requests need `Sec-Fetch-Site` `same-origin` or `none` (without that header, an exact `Origin`) and a `_csrf` field equal to the `__Host-tokengate_csrf` cookie (double submit). Admin form bodies are capped at 64 KiB ([I-CSRF-1](docs/threat-model.md#i-csrf-1)).

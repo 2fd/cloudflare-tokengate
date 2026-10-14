@@ -338,6 +338,12 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
     };
   },
 
+  'POST /admin/settings/upstream-hosts': async () => ({
+    path: '/admin/settings/upstream-hosts',
+    action: 'settings.upstream_hosts',
+    fields: { allowed_upstream_hosts: `${unique('host')}.example.com` },
+  }),
+
   'POST /admin/export': async () => ({
     path: '/admin/export',
     action: 'config.export',

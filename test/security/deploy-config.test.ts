@@ -14,12 +14,11 @@ function parseJsonc(text: string): Record<string, unknown> {
   return JSON.parse(lines.join('\n'));
 }
 
-// config.ts reads a blank value as unset, which fails open for PUBLIC_URL and ALLOWED_UPSTREAM_HOSTS.
+// config.ts reads a blank value as unset, which fails open for PUBLIC_URL (no host pinning).
 const isBlank = (value: unknown): boolean => typeof value === 'string' && value.trim() === '';
 
 const OPERATOR_VARS = [
   'PUBLIC_URL',
-  'ALLOWED_UPSTREAM_HOSTS',
   'BOOTSTRAP_OWNER_EMAILS',
   'AUTH_ACCESS_TEAM_DOMAIN',
   'AUTH_ACCESS_AUD',

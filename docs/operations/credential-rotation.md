@@ -75,7 +75,7 @@ For a GitHub token with a credential check, the gateway reads the expiry from th
 The sealed credential is bound to the service id, base URL and injection
 ([I-CRED-2](../threat-model.md#i-cred-2)). To change the base URL or "How the credential is sent",
 use the same "Change credential or destination" form and enter the credential again in the same save.
-The new base URL must pass `ALLOWED_UPSTREAM_HOSTS` when that variable is set
+The new base URL must pass the upstream host allowlist (Settings) when it is set
 ([I-SSRF-1](../threat-model.md#i-ssrf-1)).
 
 ## Upstreams with special rules

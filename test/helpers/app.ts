@@ -73,3 +73,13 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
     },
   };
 }
+
+/** Sets the upstream host allowlist setting (null = any public https host). */
+export async function setUpstreamHosts(hosts: string[] | null): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('allowed_upstream_hosts', ?, 0, NULL)
+     ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+  )
+    .bind(JSON.stringify(hosts))
+    .run();
+}
