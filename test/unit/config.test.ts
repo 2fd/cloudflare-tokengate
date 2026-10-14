@@ -30,7 +30,6 @@ describe('parseConfig: empty environment', () => {
       publicUrl: null,
       errors: [],
       login: { access: null, dev: null },
-      bootstrapOwnerEmails: [],
     });
   });
 
@@ -430,7 +429,6 @@ describe('I-CFG-1: hostile values never throw and never appear in errors', () =>
   const MARK = 'leakmarker';
   const variables = [
     'PUBLIC_URL',
-    'BOOTSTRAP_OWNER_EMAILS',
     'AUTH_ACCESS_TEAM_DOMAIN',
     'AUTH_ACCESS_AUD',
     'AUTH_DEV_EMAIL',
@@ -450,15 +448,6 @@ describe('I-CFG-1: hostile values never throw and never appear in errors', () =>
     expect(JSON.stringify(config.errors)).not.toContain(MARK);
     expect(config.login.access).toBeNull();
     expect(config.login.dev).toBeNull();
-  });
-});
-
-describe('BOOTSTRAP_OWNER_EMAILS', () => {
-  it('trims, lowercases and drops empty entries', () => {
-    const config = parseConfig(
-      envWith({ BOOTSTRAP_OWNER_EMAILS: ' Alice@Example.com,, bob@example.org ,' }),
-    );
-    expect(config.bootstrapOwnerEmails).toEqual(['alice@example.com', 'bob@example.org']);
   });
 });
 

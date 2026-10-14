@@ -8,8 +8,8 @@ export function SetupInstructions(props: { origin: string }) {
         Sign-in to the admin console goes through Cloudflare Access, and no Access login is
         configured. Set the variables below in the dashboard (Workers & Pages &gt; tokengate &gt;
         Settings &gt; Variables and Secrets), redeploy, and reload this page. The first person to
-        sign in becomes the owner; everyone after that joins as a viewer. To choose who can become
-        the first owner, set <code>BOOTSTRAP_OWNER_EMAILS</code>. See{' '}
+        sign in becomes the owner, so keep the Access policy limited to yourself until you have
+        signed in. Everyone after that joins with the defaults an owner sets on the Users page. See{' '}
         <code>docs/getting-started.md</code>.
       </p>
       <h2>Cloudflare Access</h2>

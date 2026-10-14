@@ -10,7 +10,6 @@ export interface AppEnv {
   ASSETS?: Fetcher;
 
   PUBLIC_URL?: string;
-  BOOTSTRAP_OWNER_EMAILS?: string;
 
   TOKENGATE_KEK?: string;
   TOKENGATE_KEYRING?: string;

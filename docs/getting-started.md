@@ -141,8 +141,6 @@ Set operator variables in the Cloudflare dashboard, not in `wrangler.jsonc`. `wr
 
 3. Save and deploy the change.
 
-Optional: if your Access policy already lets in other people, also set `BOOTSTRAP_OWNER_EMAILS` to your email address, so only you can become the first owner. It must match the email address that Access reports for you ([configuration.md](configuration.md#bootstrap_owner_emails)).
-
 From now on, `/admin` answers `404` on every other hostname, including workers.dev.
 
 If a variable is half-configured or malformed, Access login stays off. `/admin` then shows the setup page, which names the variable ([I-CFG-1](threat-model.md#i-cfg-1)). Every variable, its format and its failure behavior are in [configuration.md](configuration.md).
@@ -150,7 +148,7 @@ If a variable is half-configured or malformed, Access login stays off. `/admin` 
 ## 10. Sign in as the first owner
 
 1. Open `<gateway>/admin`. Access asks you to sign in.
-2. Sign in. With `BOOTSTRAP_OWNER_EMAILS` set, use a listed email address.
+2. Sign in. The Access policy from step 8 lets in only you, so you are the first person to sign in.
 3. The gateway creates your user with the role `owner` and opens the Dashboard.
 
 The bootstrap creates at most one owner, once ([I-BOOT-1](threat-model.md#i-boot-1)). The Audit log shows a `user.bootstrap` event.
@@ -159,7 +157,7 @@ The gateway keeps no session of its own. "Sign out" ends the Access session for 
 
 ## 11. Open the admin UI to your team and add a second owner
 
-1. If you set `BOOTSTRAP_OWNER_EMAILS`, delete it in Workers & Pages > tokengate > Settings > Variables and Secrets. Settings > System status shows "done: an owner exists".
+1. Settings > System status shows "First owner: done: an owner exists".
 2. Optional: in Users > "New users", choose the role (viewer or admin) and status (active, pending or suspended) that people get on their first sign-in. With "Pending", each new person waits in "Waiting for approval" until you click "Approve" or "Reject".
 3. Widen the Access policy to the people who may reach the admin UI.
 4. Ask a second person to open `<gateway>/admin`. They join as an active viewer (or as pending, then you approve them). In Users > "All users", set their role to "Owner" and click "Save". If the only owner loses access, recovery needs a manual database edit ([operations/break-glass.md](operations/break-glass.md)).

@@ -192,7 +192,7 @@ Banners are sorted by severity. The texts below are abbreviated.
 | info | There is only one active owner | Invite a second owner ([break-glass](operations/break-glass.md)) |
 
 Settings > System status shows the database schema state, the hourly job, `PUBLIC_URL`, Login
-providers, the upstream host allowlist, each optional binding and `BOOTSTRAP_OWNER_EMAILS`, plus any
+providers, the upstream host allowlist, each optional binding and whether the first owner exists, plus any
 configuration problems by variable name.
 
 ## Health endpoints

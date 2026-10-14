@@ -67,7 +67,7 @@ describe('setup page', () => {
 describe('Cloudflare Access login', () => {
   function accessApp(extraEnv: Record<string, string> = {}) {
     return createAdminTestApp({
-      env: { BOOTSTRAP_OWNER_EMAILS: 'ops@acme.com', ...extraEnv },
+      env: extraEnv,
       routes: stubAdminPages,
     });
   }
@@ -91,7 +91,7 @@ describe('Cloudflare Access login', () => {
 
   it('everyone after the first owner joins as a viewer the owner can promote', async () => {
     const access = await testAccess();
-    const app = accessApp({ BOOTSTRAP_OWNER_EMAILS: '' });
+    const app = accessApp();
     const as = async (sub: string, email: string) =>
       (
         await app.request('/admin', {
@@ -110,7 +110,7 @@ describe('Cloudflare Access login', () => {
     ['active', 200, 'ok admin'],
   ] as const)('with join status %s, a new admin-role user gets %i', async (status, code, text) => {
     const access = await testAccess();
-    const app = accessApp({ BOOTSTRAP_OWNER_EMAILS: '' });
+    const app = accessApp();
     await createUser({ email: 'owner@acme.com', role: 'owner' });
     await env.DB.batch([
       putSettingStatement(env.DB, 'join_role', 'admin', Date.now(), null),
@@ -131,7 +131,7 @@ describe('Cloudflare Access login', () => {
 
   it('ignores join defaults for the first owner', async () => {
     const access = await testAccess();
-    const app = accessApp({ BOOTSTRAP_OWNER_EMAILS: '' });
+    const app = accessApp();
     await env.DB.batch([putSettingStatement(env.DB, 'join_status', 'pending', Date.now(), null)]);
     const jwt = await access.sign({ sub: 'first', email: 'first@acme.com' });
     const res = await app.request('/admin', { headers: { [ACCESS_JWT_HEADER]: jwt } });
@@ -235,7 +235,6 @@ describe('dev login', () => {
     ...NO_ACCESS,
     PUBLIC_URL: DEV_ORIGIN,
     AUTH_DEV_EMAIL: 'dev@example.com',
-    BOOTSTRAP_OWNER_EMAILS: 'dev@example.com',
   };
 
   it('signs every request in as AUTH_DEV_EMAIL on a loopback PUBLIC_URL', async () => {
@@ -271,7 +270,6 @@ describe('dev login', () => {
       env: {
         PUBLIC_URL: 'https://localhost',
         AUTH_DEV_EMAIL: 'dev@example.com',
-        BOOTSTRAP_OWNER_EMAILS: 'dev@example.com',
       },
       routes: stubAdminPages,
     });

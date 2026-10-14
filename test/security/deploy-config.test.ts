@@ -2,6 +2,7 @@
 // Behaviour of the get-token action itself is covered by test/security/get-token-action.sh.
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
+import devVarsExample from '../../.dev.vars.example?raw';
 import actionYml from '../../actions/get-token/action.yml?raw';
 import wranglerJsonc from '../../wrangler.jsonc?raw';
 
@@ -19,7 +20,6 @@ const isBlank = (value: unknown): boolean => typeof value === 'string' && value.
 
 const OPERATOR_VARS = [
   'PUBLIC_URL',
-  'BOOTSTRAP_OWNER_EMAILS',
   'AUTH_ACCESS_TEAM_DOMAIN',
   'AUTH_ACCESS_AUD',
   'AUTH_DEV_EMAIL',
@@ -41,6 +41,13 @@ describe('I-DEPLOY-1 / I-SSRF-1: deploys do not wipe operator vars set in the da
     // The test env is built from wrangler.jsonc, so a committed "" shows up here.
     const vars = env as unknown as Record<string, unknown>;
     expect(OPERATOR_VARS.filter((name) => isBlank(vars[name]))).toEqual([]);
+  });
+});
+
+describe('I-DEPLOY-1: the Deploy button asks only for TOKENGATE_KEK, with no default', () => {
+  it('.dev.vars.example sets no value and leaves every operator variable commented', () => {
+    const assignments = devVarsExample.split('\n').filter((line) => /^[A-Z][A-Z0-9_]*=/.test(line));
+    expect(assignments).toEqual(['TOKENGATE_KEK=']);
   });
 });
 

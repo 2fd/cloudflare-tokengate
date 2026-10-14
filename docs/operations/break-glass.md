@@ -18,9 +18,9 @@ Each procedure below therefore adds an audit row by hand.
 
 ## Why bootstrap does not help
 
-`BOOTSTRAP_OWNER_EMAILS` creates an owner only while no owner exists and only once: the first
-bootstrap records `bootstrap_completed_at` in `settings` ([I-BOOT-1](../threat-model.md#i-boot-1)).
-Setting the variable again has no effect.
+The first sign-in creates an owner only while no owner exists and only once: the first bootstrap
+records `bootstrap_completed_at` in `settings` ([I-BOOT-1](../threat-model.md#i-boot-1)). A later
+sign-in never becomes owner on its own, even when no active owner is left.
 
 ## Regain owner access
 
@@ -141,5 +141,5 @@ This does not affect callers on `/proxy/`: they use workload identity tokens, no
 
 - [incident-response.md](incident-response.md): compromised admin accounts.
 - [troubleshooting.md](troubleshooting.md#admin-ui-and-maintenance): sign-in messages.
-- [configuration.md](../configuration.md): Access login variables and `BOOTSTRAP_OWNER_EMAILS`.
+- [configuration.md](../configuration.md): Access login variables and the first owner.
 - [cloudflare-zone-settings.md](cloudflare-zone-settings.md#cloudflare-access): the Access application.

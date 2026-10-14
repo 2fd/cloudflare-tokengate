@@ -47,7 +47,6 @@ entries are trimmed and empty entries are dropped.
 | Name | Kind | Required | Format |
 |---|---|---|---|
 | `PUBLIC_URL` | var | Recommended; required for Access login | `https://host[:port]` origin |
-| `BOOTSTRAP_OWNER_EMAILS` | var | Optional, until the first owner signs in | Comma list of emails |
 | `TOKENGATE_KEK` | secret | One of `TOKENGATE_KEK` / `TOKENGATE_KEYRING` | Standard base64 of 32 bytes |
 | `TOKENGATE_KEYRING` | secret | One of `TOKENGATE_KEK` / `TOKENGATE_KEYRING` | JSON keyring |
 | `AUTH_ACCESS_TEAM_DOMAIN` | var | For the admin UI | `<team>`, `<team>.cloudflareaccess.com` or `https://<team>.cloudflareaccess.com` |
@@ -75,20 +74,14 @@ The canonical origin of the gateway, for example `https://tokengate.example.com`
 - A service base URL can never point at this host or at the host the request arrived on
   ([I-SSRF-1](threat-model.md#i-ssrf-1)).
 
-### `BOOTSTRAP_OWNER_EMAILS`
+### First owner
 
-Optional. Emails that may become the first owner, for example `alice@example.com`. Comparison is
-case-insensitive.
-
-- Without this variable, the first person to sign in becomes owner. With it, only a listed email can
-  become the first owner; an unlisted person who signs in first joins with the join defaults.
-- The bootstrap happens only while no owner exists and only once per deployment
-  ([I-BOOT-1](threat-model.md#i-boot-1)). It is recorded in settings; it does not run again even if every
-  owner is later removed. Recover with [operations/break-glass.md](operations/break-glass.md).
-- The email must be the email of a valid Access token ([I-LINK-1](threat-model.md#i-link-1)). The bootstrap
-  happens on the person's first request to `/admin`.
-- Set it when your Access policy lets in more people than you before your first sign-in. After the first
-  owner exists it has no effect; Settings > System status reminds you to remove it.
+There is no variable for it. While no owner exists, the first person to sign in becomes an active
+owner, once per deployment ([I-BOOT-1](threat-model.md#i-boot-1)). Keep the Access policy limited to
+your own email until you have signed in, then widen it. Everyone after joins with the join defaults
+and is managed by owners on the Users page. The bootstrap is recorded in settings and does not run
+again, even if every owner is later removed: recover with
+[operations/break-glass.md](operations/break-glass.md).
 
 ### Keyring: `TOKENGATE_KEK` or `TOKENGATE_KEYRING`
 
@@ -150,8 +143,7 @@ only with `pnpm dev`.
 - It is accepted only when `PUBLIC_URL` is on `localhost`, `127.0.0.1` or `[::1]`. Host pinning then
   refuses every admin request to another origin, so the edge can never reach it.
 - When Access is also configured, Access is the only accepted proof and `AUTH_DEV_EMAIL` is ignored.
-- The same rules apply: the first sign-in becomes owner (unless `BOOTSTRAP_OWNER_EMAILS` lists other
-  emails), later ones join with the join defaults.
+- The same rules apply: the first sign-in becomes owner, later ones join with the join defaults.
 - Errors: an invalid email; `PUBLIC_URL` missing or not on a loopback host.
 
 

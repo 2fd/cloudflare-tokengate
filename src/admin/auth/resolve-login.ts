@@ -1,7 +1,6 @@
 // Maps a verified login (provider, stable subject, authoritative emails) to a user. Only invited
 // users are linked by email (I-LINK-1); the first owner is bootstrapped at most once (I-BOOT-1);
 // anyone else that Access lets through joins with the owner-configured role and status.
-import { parseConfig } from '../../config';
 import { buildAuditEvent, emitAuditLine } from '../../db/audit';
 import { getJoinDefaults } from '../../db/settings';
 import type { Actor, User } from '../../db/types';
@@ -48,8 +47,7 @@ const NAME_MAX = 200;
 /**
  * 1) Known identity: its user, if active.
  * 2) Else an invited, unexpired user matching an authoritative email is linked and activated.
- * 3) Else, while no owner exists and bootstrap has never run, the first owner is created. When
- * BOOTSTRAP_OWNER_EMAILS is set, only an email it lists can become that owner.
+ * 3) Else, while no owner exists and bootstrap has never run, this person becomes the first owner.
  * 4) Else a user is created for the first authoritative email with the join defaults (role
  * viewer or admin; status active, pending or suspended; set by owners on the users page).
  * 5) Else (that email already belongs to another user, e.g. an expired invitation) `email_taken`.
@@ -94,11 +92,7 @@ export async function resolveLogin(
     }
   }
 
-  const bootstrapEmails = parseConfig(deps.env).bootstrapOwnerEmails;
-  const email =
-    bootstrapEmails.length === 0
-      ? input.emails[0]
-      : input.emails.find((candidate) => bootstrapEmails.includes(candidate));
+  const email = input.emails[0];
   if (email !== undefined) {
     const now = deps.now();
     const userId = newId('usr', now, deps.random);

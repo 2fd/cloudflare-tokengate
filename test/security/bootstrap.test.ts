@@ -6,10 +6,8 @@ import { createAdminTestApp, createUser, resetControlPlane } from '../helpers/ad
 
 beforeEach(resetControlPlane);
 
-const BOOTSTRAP = 'first@acme.com, second@acme.com';
-
-function deps(bootstrapEmails = BOOTSTRAP) {
-  return createAdminTestApp({ env: { BOOTSTRAP_OWNER_EMAILS: bootstrapEmails } }).deps;
+function deps() {
+  return createAdminTestApp().deps;
 }
 
 async function auditActions(): Promise<string[]> {
@@ -115,34 +113,15 @@ describe('I-BOOT-1: bootstrap creates at most one owner, once', () => {
     expect(await owners()).toEqual([]);
   });
 
-  it('with BOOTSTRAP_OWNER_EMAILS set, an unlisted first person joins as viewer', async () => {
-    const result = await resolveLogin(deps(), {
-      loginProvider: 'access',
-      subject: '1',
-      emails: ['someone@acme.com'],
-      name: null,
-    });
-    expect(result).toMatchObject({ ok: true, via: 'join', user: { role: 'viewer' } });
-    expect(await owners()).toEqual([]);
-    // A listed person can still become the first owner afterwards.
-    const listed = await resolveLogin(deps(), {
-      loginProvider: 'access',
-      subject: '2',
-      emails: ['second@acme.com'],
-      name: null,
-    });
-    expect(listed).toMatchObject({ ok: true, via: 'bootstrap' });
-  });
-
-  it('without BOOTSTRAP_OWNER_EMAILS, the first person to sign in becomes owner', async () => {
-    const first = await resolveLogin(deps(''), {
+  it('the first person to sign in becomes owner, whatever their email', async () => {
+    const first = await resolveLogin(deps(), {
       loginProvider: 'access',
       subject: '1',
       emails: ['anyone@acme.com'],
       name: null,
     });
     expect(first).toMatchObject({ ok: true, via: 'bootstrap', user: { role: 'owner' } });
-    const second = await resolveLogin(deps(''), {
+    const second = await resolveLogin(deps(), {
       loginProvider: 'access',
       subject: '2',
       emails: ['next@acme.com'],
@@ -154,7 +133,7 @@ describe('I-BOOT-1: bootstrap creates at most one owner, once', () => {
 
   it('never bootstraps over an existing user with the same email', async () => {
     await createUser({ email: 'first@acme.com', role: 'viewer', status: 'suspended' });
-    const result = await resolveLogin(deps(''), {
+    const result = await resolveLogin(deps(), {
       loginProvider: 'access',
       subject: '1',
       emails: ['first@acme.com'],

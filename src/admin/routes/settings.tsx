@@ -281,14 +281,10 @@ async function settingsPage(
             bindingText(deps.env.PROXY_RATE_LIMITER !== undefined, 'no per-grant request cap'),
           ],
           [
-            'First-owner bootstrap (BOOTSTRAP_OWNER_EMAILS)',
+            'First owner',
             activeOwners > 0
-              ? config.bootstrapOwnerEmails.length === 0
-                ? 'done: an owner exists'
-                : 'done: an owner exists, so it is no longer used. Remove it from the Worker variables.'
-              : config.bootstrapOwnerEmails.length === 0
-                ? 'not set: the first person to sign in becomes owner'
-                : 'set: the first listed person to sign in becomes owner',
+              ? 'done: an owner exists'
+              : 'not yet: the first person to sign in becomes owner',
           ],
         ]}
       />

@@ -28,8 +28,6 @@ export interface Config {
   publicUrl: URL | null;
   errors: ConfigError[];
   login: { access: AccessLogin | null; dev: DevLogin | null };
-  /** Lowercased, trimmed. */
-  bootstrapOwnerEmails: string[];
 }
 
 export const LOCAL_DEV_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -49,7 +47,6 @@ export function parseConfig(env: AppEnv): Config {
       access: parseAccessLogin(env, publicUrl, errors),
       dev: parseDevLogin(env, publicUrl, errors),
     },
-    bootstrapOwnerEmails: splitList(env.BOOTSTRAP_OWNER_EMAILS).map((email) => email.toLowerCase()),
   };
 }
 

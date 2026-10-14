@@ -100,7 +100,7 @@ steps.
    If you edit `wrangler.jsonc`, run `bash scripts/check-config.sh` before you deploy
    ([configuration](docs/configuration.md)).
 5. Until the first owner signs in, the first person through Access becomes owner: limit the Access
-   policy to yourself or set `BOOTSTRAP_OWNER_EMAILS` until then. Everyone the policy lets in later
+   policy to yourself until then. Everyone the policy lets in later
    joins with the join defaults (by default an active viewer); set them to "Pending" in Users to
    approve each new person yourself ([getting started](docs/getting-started.md)).
 6. Keep at least two owners, so one lost login does not lock you out. Keep the
