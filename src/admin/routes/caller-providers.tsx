@@ -68,9 +68,9 @@ const PROFILE_INTRO: Record<ProfileId, string> = {
 
 const FIND_GITHUB_IDS = "gh api repos/OWNER/REPO --jq '{owner_id: .owner.id, repository_id: .id}'";
 
-// biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expression syntax
+// GitHub Actions expression syntax, not a template literal.
 const GHA_PROXY_BASE = '${{ steps.tokengate.outputs.proxy-base }}';
-// biome-ignore lint/suspicious/noTemplateCurlyInString: GitHub Actions expression syntax
+// GitHub Actions expression syntax, not a template literal.
 const GHA_TOKEN = '${{ steps.tokengate.outputs.token }}';
 
 export function registerCallerProvidersRoutes(app: App): void {

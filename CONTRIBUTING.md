@@ -63,8 +63,8 @@ You do not need a Cloudflare account or Cloudflare Access to run the tests: they
 | Command | What it does |
 | --- | --- |
 | `pnpm check` | Everything CI runs on the code: `lint`, `typecheck`, `test`, `test:scripts`. Run it before you push. |
-| `pnpm lint` | `biome check .`: lint, format check and import order. |
-| `pnpm format` | `biome format --write .` |
+| `pnpm lint` | `oxlint` (type-aware), then `oxfmt --check .` (format and import order). |
+| `pnpm format` | `oxfmt .` |
 | `pnpm typecheck` | `wrangler types --check`, then `tsc --noEmit` for `src/` and `test/`, then for `scripts/`. |
 | `pnpm types` | Regenerates `worker-configuration.d.ts`. Run it after you change bindings in `wrangler.jsonc`. |
 | `pnpm test` | Vitest inside workerd (`@cloudflare/vitest-plugin`) with local D1 databases. |
@@ -109,11 +109,11 @@ Conventions:
 
 ## Code style
 
-Biome formats and lints (`biome.json`): 2-space indent, single quotes, semicolons, trailing commas, 100 columns. Lint rules to know:
+Oxfmt formats (`.oxfmtrc.json`): 2-space indent, single quotes, semicolons, trailing commas (none in JSON), 100 columns, sorted imports. Oxlint lints (`.oxlintrc.json`) with type information (`oxlint-tsgolint`). Lint rules to know:
 
-- `noConsole`: only `console.error`, `console.warn` and `console.info` are allowed. Never log credentials, caller tokens or claim values outside the log allowlist ([I-LOG-1](docs/threat-model.md#i-log-1)).
-- `noFloatingPromises`: background work goes through `deps.waitUntil`.
-- `noDangerouslySetInnerHtml`: the admin UI renders server-side with `hono/jsx` and has no client-side JavaScript. The CSP (`src/http/security.ts`) sets `default-src 'none'` and no `script-src`, so the browser runs no script.
+- `no-console`: only `console.error`, `console.warn` and `console.info` are allowed. Never log credentials, caller tokens or claim values outside the log allowlist ([I-LOG-1](docs/threat-model.md#i-log-1)).
+- `no-floating-promises`: background work goes through `deps.waitUntil`.
+- `react/no-danger`: the admin UI renders server-side with `hono/jsx` and has no client-side JavaScript. The CSP (`src/http/security.ts`) sets `default-src 'none'` and no `script-src`, so the browser runs no script.
 
 TypeScript is `strict` with `noUncheckedIndexedAccess`.
 

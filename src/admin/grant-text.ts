@@ -117,7 +117,7 @@ function needsQuotes(text: string): boolean {
     text !== text.trim() ||
     text.startsWith('"') ||
     text.startsWith('#') ||
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters must be escaped
+    // oxlint-disable-next-line eslint/no-control-regex -- control characters must be escaped
     /[\u0000-\u001f\u007f]/.test(text)
   );
 }

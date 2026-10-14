@@ -1,0 +1,33 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "react"],
+  "categories": {
+    "correctness": "error"
+  },
+  "options": {
+    "typeAware": true,
+    "reportUnusedDisableDirectives": "error"
+  },
+  "ignorePatterns": ["worker-configuration.d.ts", "public/static/**"],
+  "rules": {
+    "typescript/no-floating-promises": "error",
+    "react/no-danger": "error",
+    "react/jsx-key": "off",
+    "eslint/no-console": ["error", { "allow": ["error", "warn", "info"] }]
+  },
+  "overrides": [
+    {
+      "files": ["scripts/**"],
+      "rules": { "eslint/no-console": "off" }
+    },
+    {
+      "files": ["test/**"],
+      "rules": {
+        "typescript/unbound-method": "off",
+        "typescript/no-base-to-string": "off",
+        "typescript/no-misused-spread": "off",
+        "typescript/require-array-sort-compare": "off"
+      }
+    }
+  ]
+}

@@ -141,7 +141,7 @@ function pairNames(pair: string): string[] | null {
   const names: string[] = [];
   for (const part of pair.split(';')) {
     const name = decodeComponent(queryName(part));
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are the target
+    // oxlint-disable-next-line eslint/no-control-regex -- control characters are the target
     if (name === null || /[\u0000-\u001f\u007f]/.test(name)) return null;
     names.push(name.toLowerCase());
   }

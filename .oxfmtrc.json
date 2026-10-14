@@ -1,0 +1,30 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 100,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": true,
+  "singleQuote": true,
+  "trailingComma": "all",
+  "sortImports": {
+    "newlinesBetween": false
+  },
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    "worker-configuration.d.ts",
+    "public/static/**",
+    "docs/diagrams/*.svg",
+    "**/*.md",
+    "**/*.yml",
+    "**/*.yaml",
+    "pnpm-lock.yaml"
+  ],
+  "overrides": [
+    {
+      "files": ["*.json", "*.jsonc"],
+      "options": {
+        "trailingComma": "none"
+      }
+    }
+  ]
+}

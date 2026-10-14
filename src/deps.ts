@@ -7,11 +7,11 @@ export interface Deps {
   /** Outbound fetch for upstream APIs, JWKS, discovery and login providers. */
   fetch: typeof fetch;
   /** Milliseconds since the Unix epoch. */
-  now(): number;
+  now: () => number;
   /** Cryptographically secure random bytes. */
-  random(length: number): Uint8Array;
+  random: (length: number) => Uint8Array;
   /** Keeps the invocation alive for background work (telemetry). Never awaited by callers. */
-  waitUntil(promise: Promise<unknown>): void;
+  waitUntil: (promise: Promise<unknown>) => void;
 }
 
 export function productionDeps(env: AppEnv, ctx: Pick<ExecutionContext, 'waitUntil'>): Deps {

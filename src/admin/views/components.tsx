@@ -1,5 +1,5 @@
 // Presentational building blocks shared by admin pages. Hono JSX escapes all interpolated text;
-// dangerouslySetInnerHTML is a lint error (biome security/noDangerouslySetInnerHtml).
+// dangerouslySetInnerHTML is a lint error (oxlint react/no-danger).
 import type { Child } from 'hono/jsx';
 import { CSRF_FIELD } from '../auth/csrf';
 

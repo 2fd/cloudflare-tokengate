@@ -7,6 +7,8 @@ import type { CallerProvider, Grant, Role, Service, User, UserStatus } from './t
 
 type Row = Record<string, unknown>;
 
+// D1 cells are strings, numbers or null; String() of a number is the intended text.
+// oxlint-disable-next-line typescript/no-base-to-string
 const str = (value: unknown): string => (typeof value === 'string' ? value : String(value ?? ''));
 const strOrNull = (value: unknown): string | null => (typeof value === 'string' ? value : null);
 const num = (value: unknown): number => (typeof value === 'number' ? value : Number(value ?? 0));

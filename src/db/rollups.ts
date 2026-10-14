@@ -134,7 +134,9 @@ export function purgeRollupsStatement(db: D1Database, beforeHour: number): D1Pre
 export function rollupFromRow(row: Record<string, unknown>): RollupRow {
   return {
     hour: Number(row.hour),
+    // oxlint-disable-next-line typescript/no-base-to-string -- D1 TEXT or NULL
     service_id: String(row.service_id ?? ''),
+    // oxlint-disable-next-line typescript/no-base-to-string -- D1 TEXT or NULL
     grant_id: String(row.grant_id ?? ''),
     outcome: row.outcome as Outcome,
     status_class: Number(row.status_class),

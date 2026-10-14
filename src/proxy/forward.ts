@@ -166,6 +166,7 @@ export function filterResponseHeaders(upstream: Headers, ctx: ResponseContext): 
     filtered.set(name, value);
   }
 
+  // oxlint-disable-next-line unicorn/no-useless-spread -- snapshot: deleting while iterating Headers skips entries.
   for (const [name, value] of [...filtered]) {
     if (holdsSecret(value)) {
       filtered.delete(name);
