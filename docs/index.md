@@ -68,5 +68,6 @@ For contributors who change the code or the docs.
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Setup, `pnpm check`, tests, comment style, security-sensitive paths, releases |
 | [architecture.md](architecture.md) | Components, module map and the invariants each module enforces |
 | [adr/](adr/) | Why the design is the way it is; new decisions need an ADR |
+| [diagrams/](diagrams/README.md) | Diagram sources and how to change a diagram |
 | [roadmap.md](roadmap.md) | Non-goals and future work |
 | [../CHANGELOG.md](../CHANGELOG.md) | Changes and upgrade notes per release |

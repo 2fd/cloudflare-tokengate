@@ -49,14 +49,9 @@ module that enforces it and the tests whose `describe()` name starts with it.
 
 ## Trust boundaries
 
-```mermaid
-flowchart LR
-  caller["CI job<br/>(caller token)"] -->|"1 caller → proxy"| gw["tokengate Worker"]
-  browser["Admin browser"] -->|"3 browser → admin"| gw
-  gw -->|"2 proxy → upstream<br/>(Credential injected)"| up["Upstream API"]
-  gw -->|"4 Worker → D1"| d1[("DB / TELEMETRY_DB")]
-  gw -->|"5 Worker → IdP / JWKS"| idp["Caller provider JWKS,<br/>Login provider"]
-```
+![Trust boundaries: (1) CI job to the tokengate Worker with a caller token, (2) Worker to the upstream API with the credential, (3) admin browser to the Worker with session and CSRF token, (4) Worker to D1 through its binding, inside your Cloudflare account, (5) Worker to identity providers and JWKS.](diagrams/trust-boundaries.svg)
+
+<sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
 1. **Caller → proxy.** Untrusted input: headers, path, query, body. The token is verified before
    any claim is trusted (I-TOK-2, I-JWT-1). The tenant pin runs before the caller learns whether the

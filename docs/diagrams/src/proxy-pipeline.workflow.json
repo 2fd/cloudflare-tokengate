@@ -1,0 +1,265 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Proxy pipeline (src/proxy/handler.ts)",
+    "quality_profile": "showcase",
+    "legend": {
+      "entries": {
+        "backend": {
+          "label": "Gateway step"
+        },
+        "security": {
+          "label": "Check or denial"
+        },
+        "database": {
+          "label": "D1 read"
+        },
+        "external": {
+          "label": "Outside the gateway"
+        }
+      }
+    }
+  },
+  "lanes": [
+    {
+      "id": "authn",
+      "label": "Authenticate caller"
+    },
+    {
+      "id": "authz",
+      "label": "Authorize request"
+    },
+    {
+      "id": "forward",
+      "label": "Forward"
+    },
+    {
+      "id": "errors",
+      "label": "Gateway error to caller",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": ["request", "context", "verify", "pin", "service", "grant", "credential", "upstream"],
+  "nodes": [
+    {
+      "id": "request",
+      "lane": "authn",
+      "col": 0,
+      "type": "external",
+      "label": "Caller request",
+      "sublabel": "/proxy/<slug>/<path>",
+      "width": 150
+    },
+    {
+      "id": "context",
+      "lane": "authn",
+      "col": 1,
+      "type": "database",
+      "label": "Load context",
+      "sublabel": "one D1 batch",
+      "width": 150
+    },
+    {
+      "id": "verify",
+      "lane": "authn",
+      "col": 2,
+      "type": "security",
+      "label": "Verify token",
+      "sublabel": "alg, iss, aud, age",
+      "width": 150
+    },
+    {
+      "id": "pin",
+      "lane": "authn",
+      "col": 3,
+      "type": "security",
+      "label": "Tenant pin",
+      "sublabel": "e.g. org ID",
+      "width": 150
+    },
+    {
+      "id": "service",
+      "lane": "authz",
+      "col": 3,
+      "type": "backend",
+      "label": "Service + path",
+      "sublabel": "canonical path",
+      "width": 150
+    },
+    {
+      "id": "grant",
+      "lane": "authz",
+      "col": 4,
+      "type": "security",
+      "label": "Grant match",
+      "sublabel": "deny by default",
+      "width": 150
+    },
+    {
+      "id": "denied",
+      "lane": "authz",
+      "col": 5,
+      "type": "security",
+      "label": "403 / 429",
+      "sublabel": "no grant, rate limit",
+      "width": 150
+    },
+    {
+      "id": "credential",
+      "lane": "forward",
+      "col": 4,
+      "type": "security",
+      "label": "Open credential",
+      "sublabel": "AAD-bound unseal",
+      "width": 150
+    },
+    {
+      "id": "upstream",
+      "lane": "forward",
+      "col": 5,
+      "type": "external",
+      "label": "Upstream API",
+      "sublabel": "redirect: manual",
+      "width": 150
+    },
+    {
+      "id": "e401",
+      "lane": "errors",
+      "col": 2,
+      "type": "security",
+      "label": "400 / 401",
+      "sublabel": "token or tenant",
+      "width": 150
+    },
+    {
+      "id": "e404",
+      "lane": "errors",
+      "col": 3,
+      "type": "security",
+      "label": "400 / 404",
+      "sublabel": "service or path",
+      "width": 150
+    },
+    {
+      "id": "e5xx",
+      "lane": "errors",
+      "col": 5,
+      "type": "security",
+      "label": "502 / 503 / 504",
+      "sublabel": "credential or upstream",
+      "width": 150
+    }
+  ],
+  "edges": [
+    {
+      "id": "request-context",
+      "from": "request",
+      "to": "context",
+      "variant": "emphasis"
+    },
+    {
+      "id": "context-verify",
+      "from": "context",
+      "to": "verify",
+      "label": "unverified iss",
+      "variant": "emphasis"
+    },
+    {
+      "id": "verify-pin",
+      "from": "verify",
+      "to": "pin",
+      "variant": "emphasis"
+    },
+    {
+      "id": "pin-service",
+      "from": "pin",
+      "to": "service",
+      "label": "verified",
+      "variant": "emphasis"
+    },
+    {
+      "id": "service-grant",
+      "from": "service",
+      "to": "grant",
+      "variant": "emphasis"
+    },
+    {
+      "id": "grant-credential",
+      "from": "grant",
+      "to": "credential",
+      "label": "allowed",
+      "variant": "emphasis"
+    },
+    {
+      "id": "credential-upstream",
+      "from": "credential",
+      "to": "upstream",
+      "label": "injected",
+      "variant": "emphasis"
+    },
+    {
+      "id": "grant-denied",
+      "from": "grant",
+      "to": "denied",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "verify-error",
+      "from": "verify",
+      "to": "e401",
+      "label": "rejected",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "service-error",
+      "from": "service",
+      "to": "e404",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "upstream-error",
+      "from": "upstream",
+      "to": "e5xx",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "credential-error",
+      "from": "credential",
+      "to": "e5xx",
+      "label": "unavailable",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Order matters",
+      "items": [
+        "Service existence is revealed only after the tenant pin",
+        "Unverified claims are never stored"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Every failure",
+      "items": [
+        "Answers with x-tokengate-error and a request id",
+        "Makes no upstream call before the grant matches"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Response",
+      "items": [
+        "Headers filtered, Location/Link rewritten",
+        "Body streamed unchanged; record written later"
+      ]
+    }
+  ]
+}

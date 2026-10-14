@@ -4,16 +4,13 @@ This page explains what the gateway records and how to watch it: the request log
 banners, health endpoints, the audit log, log lines for a SIEM and the optional R2 archive. It is for
 platform engineers who operate a deployment.
 
-```mermaid
-flowchart LR
-  P["/proxy request"] -->|"waitUntil: one Request record"| S{sinks}
-  S -->|"REQUEST_LOG_QUEUE bound"| Q[Queue] --> C[queue consumer] --> T[(TELEMETRY_DB<br/>request_log)]
-  S -->|"no queue, or send failed"| T
-  S -->|"REQUEST_ARCHIVE bound"| B[Basin Pipelines stream] --> R[(R2 Parquet)]
-  K["hourly cron 7 * * * *"] -->|rollups, retention| T
-  A[admin change] -->|same D1 batch| L[(DB<br/>audit_log)]
-  A -->|"audit.event line"| W[Workers Logs] --> O[OTel destination / SIEM]
-```
+![Request records: each proxy request writes one record, either directly to request_log in TELEMETRY_DB or through the optional REQUEST_LOG_QUEUE (batched insert); optionally the record also goes to a Pipelines stream that writes Parquet files to an R2 archive for DuckDB or Basin SQL. An hourly cron turns request_log into hourly rollups, which feed the dashboard.](diagrams/telemetry.svg)
+
+<sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
+
+![Audit trail: every admin change writes its audit_log row in the same D1 batch, and after commit emits an audit.event log line to Workers Logs, which an OTel export can forward to a SIEM.](diagrams/audit-trail.svg)
+
+<sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
 ## Request log
 

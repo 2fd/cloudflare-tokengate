@@ -1,0 +1,182 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Request records",
+    "quality_profile": "showcase",
+    "viewBox": [1068, 560]
+  },
+  "stages": [
+    {
+      "label": "Sources"
+    },
+    {
+      "label": "Transit"
+    },
+    {
+      "label": "Storage"
+    },
+    {
+      "label": "Aggregates"
+    },
+    {
+      "label": "Consumers"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "proxy",
+      "type": "backend",
+      "label": "Proxy request",
+      "sublabel": "waitUntil",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "queue",
+      "type": "messagebus",
+      "label": "REQUEST_LOG_QUEUE",
+      "sublabel": "optional",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "stream",
+      "type": "messagebus",
+      "label": "Pipelines stream",
+      "sublabel": "REQUEST_ARCHIVE",
+      "stage": 1,
+      "row": 2,
+      "tag": "optional"
+    },
+    {
+      "id": "reqlog",
+      "type": "database",
+      "label": "request_log",
+      "sublabel": "TELEMETRY_DB",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "r2",
+      "type": "cloud",
+      "label": "R2 archive",
+      "sublabel": "Parquet, lifecycle rule",
+      "stage": 2,
+      "row": 2
+    },
+    {
+      "id": "rollups",
+      "type": "database",
+      "label": "Hourly rollups",
+      "sublabel": "request_rollup_hourly",
+      "stage": 3,
+      "row": 0
+    },
+    {
+      "id": "dashboard",
+      "type": "frontend",
+      "label": "Dashboard",
+      "sublabel": "24 h, p50 / p95",
+      "stage": 4,
+      "row": 0
+    },
+    {
+      "id": "query",
+      "type": "external",
+      "label": "DuckDB / Basin SQL",
+      "sublabel": "long-term queries",
+      "stage": 4,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "id": "direct",
+      "from": "proxy",
+      "to": "reqlog",
+      "label": "insert",
+      "classification": "no queue, or send failed",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "left",
+      "via": [[100, 157]]
+    },
+    {
+      "id": "enqueue",
+      "from": "proxy",
+      "to": "queue",
+      "label": "send record",
+      "classification": "if bound",
+      "variant": "dashed",
+      "route": "straight"
+    },
+    {
+      "id": "consume",
+      "from": "queue",
+      "to": "reqlog",
+      "label": "batched insert",
+      "classification": "INSERT OR IGNORE",
+      "fromSide": "right",
+      "toSide": "bottom",
+      "via": [[530, 271]]
+    },
+    {
+      "id": "archive",
+      "from": "proxy",
+      "to": "stream",
+      "label": "archive record",
+      "classification": "if bound",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "left",
+      "via": [[100, 385]]
+    },
+    {
+      "id": "sink",
+      "from": "stream",
+      "to": "r2",
+      "label": "Parquet files",
+      "classification": "by day"
+    },
+    {
+      "id": "rollup",
+      "from": "reqlog",
+      "to": "rollups",
+      "label": "hourly cron",
+      "classification": "weights, histograms",
+      "variant": "emphasis"
+    },
+    {
+      "id": "read",
+      "from": "rollups",
+      "to": "dashboard",
+      "label": "metrics",
+      "classification": "+ live hour"
+    },
+    {
+      "id": "analyze",
+      "from": "r2",
+      "to": "query",
+      "label": "analysis",
+      "classification": "unsampled"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "Retention",
+      "items": ["Hourly purge by age and row cap", "R2 retention set by a lifecycle rule"]
+    },
+    {
+      "dot": "emerald",
+      "title": "Never in a record",
+      "items": ["Caller tokens and credentials", "Claims outside the profile allowlist"]
+    },
+    {
+      "dot": "slate",
+      "title": "Optional parts",
+      "items": ["Queue: batching for higher traffic", "Pipelines: unsampled long-term archive"]
+    }
+  ]
+}

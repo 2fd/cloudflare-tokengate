@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Audit trail",
+    "quality_profile": "showcase",
+    "viewBox": [900, 420]
+  },
+  "stages": [
+    {
+      "label": "Source"
+    },
+    {
+      "label": "Transit"
+    },
+    {
+      "label": "Destination"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "admin",
+      "type": "frontend",
+      "label": "Admin change",
+      "sublabel": "any mutation",
+      "stage": 0,
+      "row": 0
+    },
+    {
+      "id": "auditlog",
+      "type": "database",
+      "label": "audit_log",
+      "sublabel": "D1: DB",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "logs",
+      "type": "cloud",
+      "label": "Workers Logs",
+      "sublabel": "audit.event line",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "siem",
+      "type": "external",
+      "label": "SIEM",
+      "sublabel": "OTel destination",
+      "stage": 2,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "id": "audit",
+      "from": "admin",
+      "to": "auditlog",
+      "label": "same D1 batch",
+      "classification": "never sampled",
+      "variant": "security",
+      "route": "straight"
+    },
+    {
+      "id": "line",
+      "from": "admin",
+      "to": "logs",
+      "label": "log line",
+      "classification": "after commit",
+      "variant": "dashed"
+    },
+    {
+      "id": "export",
+      "from": "logs",
+      "to": "siem",
+      "label": "OTel export",
+      "classification": "operator config",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Atomic",
+      "items": ["A change and its audit row commit together", "Secrets are redacted from diffs"]
+    },
+    {
+      "dot": "amber",
+      "title": "Off-D1 copy",
+      "items": ["Only if Workers Logs export to a SIEM", "Keep head_sampling_rate at 1"]
+    }
+  ]
+}

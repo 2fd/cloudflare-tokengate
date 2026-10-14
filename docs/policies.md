@@ -26,14 +26,9 @@ service or caller provider takes effect on the next request.
 
 A grant matches when all of these hold:
 
-```mermaid
-flowchart LR
-  A[Grant enabled<br/>and not expired] --> B[Anchor rule<br/>satisfied]
-  B --> C[Every condition<br/>holds]
-  C --> D[Event guard<br/>passes]
-  D --> E[Some rule matches<br/>method and path]
-  E --> F[Allowed]
-```
+![Grant evaluation: for each candidate grant (enabled, not expired, in created_at order) check the anchor rule, all conditions, the event guard and that some rule matches the method and path; the first grant that passes every check allows the request. Any failed check moves to the next grant; when no grant is left the answer is 403.](diagrams/grant-evaluation.svg)
+
+<sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
 If a grant fails only on the event guard, the caller gets `403 event_not_trusted`. Otherwise a denied
 request gets `403 no_matching_grant`. The request log stores a trace with one line per grant: `matched`,

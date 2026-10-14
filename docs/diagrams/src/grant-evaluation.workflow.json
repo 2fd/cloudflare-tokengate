@@ -1,0 +1,205 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "How a grant is evaluated (src/policy/evaluate.ts)",
+    "quality_profile": "showcase",
+    "legend": {
+      "entries": {
+        "backend": {
+          "label": "Result"
+        },
+        "security": {
+          "label": "Check or denial"
+        },
+        "database": {
+          "label": "Grant set"
+        },
+        "messagebus": {
+          "label": "Loop"
+        }
+      }
+    }
+  },
+  "lanes": [
+    {
+      "id": "checks",
+      "label": "Each grant, in created_at order"
+    },
+    {
+      "id": "miss",
+      "label": "Grant does not match",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": ["grants", "anchor", "conditions", "event", "rule", "allow"],
+  "nodes": [
+    {
+      "id": "grants",
+      "lane": "checks",
+      "col": 0,
+      "type": "database",
+      "label": "Candidate grants",
+      "sublabel": "enabled, not expired",
+      "width": 150
+    },
+    {
+      "id": "anchor",
+      "lane": "checks",
+      "col": 1,
+      "type": "security",
+      "label": "Anchor rule",
+      "sublabel": "immutable IDs pinned",
+      "width": 150
+    },
+    {
+      "id": "conditions",
+      "lane": "checks",
+      "col": 2,
+      "type": "security",
+      "label": "All conditions",
+      "sublabel": "fail closed",
+      "width": 150
+    },
+    {
+      "id": "event",
+      "lane": "checks",
+      "col": 3,
+      "type": "security",
+      "label": "Event guard",
+      "sublabel": "untrusted = exact opt-in",
+      "width": 150
+    },
+    {
+      "id": "rule",
+      "lane": "checks",
+      "col": 4,
+      "type": "security",
+      "label": "Some rule",
+      "sublabel": "method + path glob",
+      "width": 150
+    },
+    {
+      "id": "allow",
+      "lane": "checks",
+      "col": 5,
+      "type": "backend",
+      "label": "Allowed",
+      "sublabel": "first match wins",
+      "width": 150
+    },
+    {
+      "id": "next",
+      "lane": "miss",
+      "col": 2,
+      "type": "messagebus",
+      "label": "Next grant",
+      "sublabel": "trace records why",
+      "width": 150
+    },
+    {
+      "id": "deny",
+      "lane": "miss",
+      "col": 0,
+      "type": "security",
+      "label": "403",
+      "sublabel": "no grant left",
+      "width": 150
+    }
+  ],
+  "edges": [
+    {
+      "id": "grants-anchor",
+      "from": "grants",
+      "to": "anchor",
+      "variant": "emphasis"
+    },
+    {
+      "id": "anchor-conditions",
+      "from": "anchor",
+      "to": "conditions",
+      "variant": "emphasis"
+    },
+    {
+      "id": "conditions-event",
+      "from": "conditions",
+      "to": "event",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "id": "event-rule",
+      "from": "event",
+      "to": "rule",
+      "variant": "emphasis"
+    },
+    {
+      "id": "rule-allow",
+      "from": "rule",
+      "to": "allow",
+      "variant": "emphasis"
+    },
+    {
+      "id": "conditions-next",
+      "from": "conditions",
+      "to": "next",
+      "variant": "security",
+      "role": "error",
+      "route": "drop"
+    },
+    {
+      "id": "next-deny",
+      "from": "next",
+      "to": "deny",
+      "label": "none left",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "anchor-next",
+      "from": "anchor",
+      "to": "next",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "event-next",
+      "from": "event",
+      "to": "next",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "rule-next",
+      "from": "rule",
+      "to": "next",
+      "variant": "security",
+      "role": "error"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Any failed check",
+      "items": [
+        "Each failed check moves to the next grant",
+        "Unanchored grants are skipped as invalid_grant"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Deny codes",
+      "items": [
+        "event_not_trusted: only the event guard blocked",
+        "no_matching_grant: everything else"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Paths",
+      "items": ["/x/* never authorizes /x/", "%2F must match as data and as a separator"]
+    }
+  ]
+}

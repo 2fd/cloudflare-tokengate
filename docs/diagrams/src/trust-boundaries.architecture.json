@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Trust boundaries",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "caller",
+      "type": "external",
+      "label": "CI job",
+      "sublabel": "untrusted input",
+      "pos": [40, 80],
+      "size": [170, 64]
+    },
+    {
+      "id": "browser",
+      "type": "frontend",
+      "label": "Admin browser",
+      "sublabel": "session cookie",
+      "pos": [40, 320],
+      "size": [170, 64]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "tokengate Worker",
+      "sublabel": "proxy + admin",
+      "pos": [480, 200],
+      "size": [180, 64]
+    },
+    {
+      "id": "upstream",
+      "type": "external",
+      "label": "Upstream API",
+      "sublabel": "gets the credential",
+      "pos": [920, 80],
+      "size": [170, 64]
+    },
+    {
+      "id": "idp",
+      "type": "security",
+      "label": "IdPs and JWKS",
+      "sublabel": "caller + login",
+      "pos": [920, 320],
+      "size": [170, 64]
+    },
+    {
+      "id": "d1",
+      "type": "database",
+      "label": "D1",
+      "sublabel": "DB + TELEMETRY_DB",
+      "pos": [480, 420],
+      "size": [180, 64]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "security-group",
+      "label": "Your Cloudflare account",
+      "wraps": ["worker", "d1"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "b1",
+      "from": "caller",
+      "to": "worker",
+      "label": "1 caller token",
+      "variant": "emphasis"
+    },
+    {
+      "id": "b2",
+      "from": "worker",
+      "to": "upstream",
+      "label": "2 credential",
+      "variant": "emphasis"
+    },
+    {
+      "id": "b3",
+      "from": "browser",
+      "to": "worker",
+      "label": "3 session + CSRF",
+      "variant": "security"
+    },
+    {
+      "id": "b4",
+      "from": "worker",
+      "to": "d1",
+      "label": "4 binding",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [570, 342]
+    },
+    {
+      "id": "b5",
+      "from": "worker",
+      "to": "idp",
+      "label": "5 JWKS, OAuth",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Crossing in",
+      "items": [
+        "1: token verified before any claim is trusted",
+        "3: no client JS, CSRF token, RBAC per route"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Crossing out",
+      "items": ["2: allowlisted headers, no redirects followed", "5: JWKS fetch gated per URI"]
+    },
+    {
+      "dot": "emerald",
+      "title": "Source of truth",
+      "items": ["4: read on every request, no policy cache", "Integrity rules enforced in SQL"]
+    }
+  ]
+}

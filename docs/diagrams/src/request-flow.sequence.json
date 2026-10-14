@@ -1,0 +1,210 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "A proxied call, end to end",
+    "quality_profile": "showcase",
+    "viewBox": [1040, 640],
+    "column_fit": "spread"
+  },
+  "participants": [
+    {
+      "id": "job",
+      "type": "external",
+      "label": "CI job",
+      "sublabel": "caller"
+    },
+    {
+      "id": "issuer",
+      "type": "security",
+      "label": "OIDC issuer",
+      "sublabel": "e.g. GitHub Actions"
+    },
+    {
+      "id": "gateway",
+      "type": "backend",
+      "label": "tokengate",
+      "sublabel": "your Worker"
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "D1: DB",
+      "sublabel": "control plane"
+    },
+    {
+      "id": "upstream",
+      "type": "external",
+      "label": "Upstream API",
+      "sublabel": "Slack, OpenAI…"
+    },
+    {
+      "id": "telemetry",
+      "type": "database",
+      "label": "TELEMETRY_DB",
+      "sublabel": "request log"
+    }
+  ],
+  "segments": [
+    {
+      "from": 160,
+      "to": 224,
+      "label": "Mint token"
+    },
+    {
+      "from": 234,
+      "to": 408,
+      "label": "Authorize"
+    },
+    {
+      "from": 416,
+      "to": 510,
+      "label": "Forward"
+    },
+    {
+      "from": 520,
+      "to": 556,
+      "label": "Record"
+    }
+  ],
+  "messages": [
+    {
+      "id": "mint",
+      "from": "job",
+      "to": "issuer",
+      "y": 180,
+      "label": "request token, aud = gateway audience",
+      "variant": "security"
+    },
+    {
+      "id": "jwt",
+      "from": "issuer",
+      "to": "job",
+      "y": 212,
+      "label": "signed JWT, valid ~5 min",
+      "variant": "return"
+    },
+    {
+      "id": "call",
+      "from": "job",
+      "to": "gateway",
+      "y": 255,
+      "label": "/proxy/<slug>/<path> + x-tokengate-token",
+      "variant": "emphasis"
+    },
+    {
+      "id": "context",
+      "from": "gateway",
+      "to": "db",
+      "y": 292,
+      "label": "one batch: service, grants, settings",
+      "variant": "default"
+    },
+    {
+      "id": "rows",
+      "from": "db",
+      "to": "gateway",
+      "y": 322,
+      "label": "rows (no cache)",
+      "variant": "return"
+    },
+    {
+      "id": "jwks",
+      "from": "gateway",
+      "to": "issuer",
+      "y": 360,
+      "label": "JWKS, cached per isolate",
+      "variant": "security"
+    },
+    {
+      "id": "keys",
+      "from": "issuer",
+      "to": "gateway",
+      "y": 390,
+      "label": "signing keys",
+      "variant": "return"
+    },
+    {
+      "id": "forward",
+      "from": "gateway",
+      "to": "upstream",
+      "y": 432,
+      "label": "same call + credential, caller token removed",
+      "variant": "emphasis",
+      "note": "after token, tenant pin and grant checks pass"
+    },
+    {
+      "id": "response",
+      "from": "upstream",
+      "to": "gateway",
+      "y": 464,
+      "label": "response",
+      "variant": "return"
+    },
+    {
+      "id": "reply",
+      "from": "gateway",
+      "to": "job",
+      "y": 496,
+      "label": "filtered headers, original body",
+      "variant": "return"
+    },
+    {
+      "id": "record",
+      "from": "gateway",
+      "to": "telemetry",
+      "y": 536,
+      "label": "request record (waitUntil)",
+      "variant": "dashed"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "gateway",
+      "from": 255,
+      "to": 540,
+      "type": "backend"
+    },
+    {
+      "participant": "issuer",
+      "from": 175,
+      "to": 217,
+      "type": "security"
+    },
+    {
+      "participant": "db",
+      "from": 287,
+      "to": 327,
+      "type": "database"
+    },
+    {
+      "participant": "upstream",
+      "from": 427,
+      "to": 469,
+      "type": "external"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Caller never holds the credential",
+      "items": ["Callers send a short-lived OIDC token", "The gateway strips it before forwarding"]
+    },
+    {
+      "dot": "emerald",
+      "title": "Deny by default",
+      "items": [
+        "Any failed check answers 4xx with x-tokengate-error",
+        "No upstream call happens on denial"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Off the hot path",
+      "items": [
+        "The request record is written after the response",
+        "Revocation applies on the next request"
+      ]
+    }
+  ]
+}

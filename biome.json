@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!worker-configuration.d.ts", "!public/static"]
+    "includes": ["**", "!worker-configuration.d.ts", "!public/static", "!docs/diagrams/*.svg"]
   },
   "formatter": {
     "enabled": true,

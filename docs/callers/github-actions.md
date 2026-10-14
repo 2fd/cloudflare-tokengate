@@ -6,20 +6,9 @@ A job mints a GitHub OIDC token (the caller token) and sends it with each reques
 The gateway verifies the token, evaluates the grants, removes the caller token and adds the service credential.
 The job never sees the credential.
 
-```mermaid
-sequenceDiagram
-  participant J as Workflow job
-  participant G as GitHub OIDC issuer
-  participant T as Gateway
-  participant U as Upstream API
-  J->>G: request token (audience = caller provider audience)
-  G-->>J: signed JWT (about 5 min)
-  J->>T: /proxy/slack/chat.postMessage + x-tokengate-token
-  T->>T: verify token, tenant pin, grants
-  T->>U: same request + service credential
-  U-->>T: response
-  T-->>J: response (credential never included)
-```
+![Sequence: the workflow job requests an OIDC token for the caller provider audience, sends it to the gateway in x-tokengate-token, the gateway verifies it, checks the tenant pin and grants, forwards the same request with the service credential, and returns the upstream response without the credential.](../diagrams/request-flow.svg)
+
+<sub>Diagram source: [`../diagrams/src/`](../diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
 ## 1. Set up the caller provider (admin)
 

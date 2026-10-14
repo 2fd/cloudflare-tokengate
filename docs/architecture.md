@@ -8,24 +8,9 @@ The code is the reference. Each section names the files that implement it. Invar
 
 tokengate is one Cloudflare Worker with two D1 databases. Each company deploys its own copy in its own Cloudflare account.
 
-```mermaid
-flowchart LR
-  CI["CI job (caller)"] -->|"/proxy/&lt;slug&gt;/... + workload identity token"| W
-  Browser["Admin browser"] -->|"/admin, /auth"| W
-  subgraph W["Worker (src/index.ts)"]
-    P["Proxy pipeline"]
-    A["Admin UI + login"]
-    C["Hourly cron"]
-    Q["Queue consumer (optional)"]
-  end
-  P -->|"credential injected"| U["Upstream API"]
-  P -->|"JWKS"| I["Caller provider issuer"]
-  A -->|"OAuth / OIDC / Access"| L["Login provider"]
-  W --> DB[("D1: DB<br/>control plane")]
-  W --> TDB[("D1: TELEMETRY_DB<br/>request log")]
-  P -.-> RQ["REQUEST_LOG_QUEUE (optional)"]
-  P -.-> PL["REQUEST_ARCHIVE pipeline (optional) → R2"]
-```
+![Components: a CI job calls the proxy pipeline with a caller token; the proxy reads one batch from D1 DB, fetches the caller provider issuer JWKS (cached), forwards to the upstream API with the credential injected, and writes request records to TELEMETRY_DB. The admin browser uses the admin UI, which signs in through a login provider and writes changes with their audit rows to DB. An hourly cron computes rollups and applies retention in TELEMETRY_DB.](diagrams/components.svg)
+
+<sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
 | Component | Binding or route | Role |
 |---|---|---|
@@ -88,23 +73,9 @@ An unexpected exception (for example, D1 unavailable) returns 500 `internal_erro
 
 Every proxy response carries `x-tokengate-request-id`, `x-tokengate-source` (`gateway` or `upstream`) and `cache-control: no-store`.
 
-```mermaid
-sequenceDiagram
-  participant C as Caller
-  participant G as Worker
-  participant D as D1 (DB)
-  participant I as Issuer JWKS
-  participant U as Upstream
-  participant T as D1 (TELEMETRY_DB)
-  C->>G: request + caller token
-  G->>D: one batch: service, caller providers, grants, settings
-  G->>I: JWKS (cached per isolate, refetch gated)
-  G->>G: verify, tenant pin, path, grants, open credential
-  G->>U: request + credential (caller token removed)
-  U-->>G: response
-  G-->>C: filtered headers + original body
-  G-)T: request record (waitUntil)
-```
+![Proxy pipeline: caller request, load context (one D1 batch), verify token, tenant pin, service and path, grant match, open credential, upstream API. A rejected token or tenant answers 400/401, an unknown service or invalid path 400/404, no grant or rate limit 403/429, and an unavailable credential or failing upstream 502/503/504.](diagrams/proxy-pipeline.svg)
+
+<sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
 ### Request records
 

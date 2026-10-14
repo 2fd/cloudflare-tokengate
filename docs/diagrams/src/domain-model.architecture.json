@@ -1,0 +1,192 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Core concepts and where they live",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "record",
+      "type": "database",
+      "label": "Request record",
+      "sublabel": "one per proxied call",
+      "pos": [600, 40],
+      "size": [170, 64]
+    },
+    {
+      "id": "profile",
+      "type": "backend",
+      "label": "Profile",
+      "sublabel": "anchor claims, trusted events",
+      "tag": "code",
+      "pos": [40, 220],
+      "size": [190, 64]
+    },
+    {
+      "id": "cp",
+      "type": "security",
+      "label": "Caller provider",
+      "sublabel": "issuer, audience, pin",
+      "pos": [320, 220],
+      "size": [170, 64]
+    },
+    {
+      "id": "grant",
+      "type": "security",
+      "label": "Grant",
+      "sublabel": "conditions + rules",
+      "pos": [600, 220],
+      "size": [170, 64]
+    },
+    {
+      "id": "service",
+      "type": "backend",
+      "label": "Service",
+      "sublabel": "base URL, injection",
+      "pos": [880, 220],
+      "size": [170, 64]
+    },
+    {
+      "id": "login",
+      "type": "security",
+      "label": "Login provider",
+      "sublabel": "GitHub, OIDC, Access",
+      "tag": "Worker vars",
+      "pos": [40, 380],
+      "size": [190, 64]
+    },
+    {
+      "id": "user",
+      "type": "frontend",
+      "label": "User",
+      "sublabel": "owner / admin / viewer",
+      "pos": [320, 380],
+      "size": [170, 64]
+    },
+    {
+      "id": "audit",
+      "type": "database",
+      "label": "Audit event",
+      "sublabel": "one per change",
+      "pos": [600, 380],
+      "size": [170, 64]
+    },
+    {
+      "id": "credential",
+      "type": "security",
+      "label": "Credential",
+      "sublabel": "sealed, write-only",
+      "pos": [880, 380],
+      "size": [170, 64]
+    },
+    {
+      "id": "keyring",
+      "type": "security",
+      "label": "Keyring",
+      "sublabel": "TOKENGATE_KEK",
+      "tag": "Worker secret",
+      "pos": [880, 560],
+      "size": [170, 64]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "D1: DB (control plane)",
+      "wraps": ["cp", "grant", "service", "user", "audit", "credential"]
+    },
+    {
+      "kind": "region",
+      "label": "D1: TELEMETRY_DB",
+      "wraps": ["record"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "profile-cp",
+      "from": "profile",
+      "to": "cp",
+      "label": "rules for"
+    },
+    {
+      "id": "cp-grant",
+      "from": "cp",
+      "to": "grant",
+      "label": "1 : many",
+      "variant": "emphasis"
+    },
+    {
+      "id": "grant-service",
+      "from": "grant",
+      "to": "service",
+      "label": "many : 1",
+      "variant": "emphasis"
+    },
+    {
+      "id": "service-credential",
+      "from": "service",
+      "to": "credential",
+      "label": "0 or 1",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [965, 332]
+    },
+    {
+      "id": "keyring-credential",
+      "from": "keyring",
+      "to": "credential",
+      "label": "encrypts",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "login-user",
+      "from": "login",
+      "to": "user",
+      "label": "signs in"
+    },
+    {
+      "id": "user-audit",
+      "from": "user",
+      "to": "audit",
+      "label": "each change"
+    },
+    {
+      "id": "grant-record",
+      "from": "grant",
+      "to": "record",
+      "label": "decision",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "violet",
+      "title": "Code",
+      "items": [
+        "Profiles: github-actions, gitlab-ci, generic",
+        "What the gateway trusts about each issuer type"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Data",
+      "items": [
+        "Config and audit share one D1 database",
+        "Request records live in a separate database"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Secrets",
+      "items": [
+        "Keyring and login secrets are Worker secrets",
+        "Credentials are bound to service, URL, injection"
+      ]
+    }
+  ]
+}

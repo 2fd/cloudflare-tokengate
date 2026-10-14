@@ -239,6 +239,7 @@ Documentation is reviewed like code, and a passing test suite does not replace i
 
 - A change to behavior, configuration, an error code, a UI label or an invariant updates the docs in the same PR.
 - Every fact in the docs must be true of the current code. Write short sentences in the active voice, use the glossary terms in [docs/concepts.md](docs/concepts.md) exactly, and link every security claim to its invariant ID in [docs/threat-model.md](docs/threat-model.md).
+- A change to something a diagram shows updates its specification in [docs/diagrams/src/](docs/diagrams/src/) and the rendered SVG ([docs/diagrams/README.md](docs/diagrams/README.md)).
 - `pnpm` and `pnpm wrangler` only in examples. Placeholders for secrets (`<your-kek>`, `xoxb-REDACTED`), never real values.
 
 ## Dependencies

@@ -4,19 +4,9 @@ A self-hosted credential broker on Cloudflare Workers: CI jobs prove who they ar
 
 This page is for anyone who evaluates, deploys or audits tokengate. Full documentation starts at [docs/index.md](docs/index.md).
 
-```mermaid
-flowchart LR
-  job["CI job<br/>(GitHub Actions, GitLab CI, any OIDC issuer)"]
-  idp["CI OIDC issuer"]
-  gw["tokengate<br/>(your Worker)"]
-  api["Upstream API<br/>(Slack, OpenAI, GitHub, ...)"]
-  job -- "1. request token for the gateway audience" --> idp
-  idp -- "2. signed JWT, valid for minutes" --> job
-  job -- "3. /proxy/SERVICE/PATH<br/>x-tokengate-token: JWT" --> gw
-  gw -- "4. verify token, tenant pin, grant<br/>5. strip JWT, add credential" --> api
-  api -- "6. response" --> gw
-  gw -- "7. response" --> job
-```
+![Sequence: the CI job gets a short-lived OIDC token from its issuer, calls tokengate at /proxy/<slug>/<path>; tokengate reads the service and grants from D1 in one batch, verifies the token against the issuer JWKS, forwards the call to the upstream API with the credential injected and the caller token removed, returns the filtered response, and writes a request record to TELEMETRY_DB after responding.](docs/diagrams/request-flow.svg)
+
+<sub>Diagram source: [`docs/diagrams/src/`](docs/diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
 ## What it is
 

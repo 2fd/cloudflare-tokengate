@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "tokengate components",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "issuer",
+      "type": "security",
+      "label": "Caller provider issuer",
+      "sublabel": "OIDC JWKS",
+      "pos": [880, 60],
+      "size": [170, 64]
+    },
+    {
+      "id": "ci",
+      "type": "external",
+      "label": "CI job",
+      "sublabel": "caller",
+      "pos": [40, 220],
+      "size": [160, 64]
+    },
+    {
+      "id": "proxy",
+      "type": "backend",
+      "label": "Proxy pipeline",
+      "sublabel": "/proxy/<slug>/…",
+      "pos": [320, 220],
+      "size": [170, 64]
+    },
+    {
+      "id": "upstream",
+      "type": "external",
+      "label": "Upstream API",
+      "sublabel": "Slack, OpenAI, GitHub…",
+      "pos": [880, 220],
+      "size": [170, 64]
+    },
+    {
+      "id": "db",
+      "type": "database",
+      "label": "D1: DB",
+      "sublabel": "control plane + audit",
+      "pos": [320, 380],
+      "size": [170, 64]
+    },
+    {
+      "id": "tdb",
+      "type": "database",
+      "label": "D1: TELEMETRY_DB",
+      "sublabel": "request log + rollups",
+      "pos": [600, 380],
+      "size": [170, 64]
+    },
+    {
+      "id": "cron",
+      "type": "backend",
+      "label": "Hourly cron",
+      "sublabel": "scheduled()",
+      "pos": [880, 380],
+      "size": [170, 64]
+    },
+    {
+      "id": "browser",
+      "type": "frontend",
+      "label": "Admin browser",
+      "sublabel": "owner / admin / viewer",
+      "pos": [40, 540],
+      "size": [160, 64]
+    },
+    {
+      "id": "admin",
+      "type": "frontend",
+      "label": "Admin UI + login",
+      "sublabel": "/admin, /auth",
+      "pos": [320, 540],
+      "size": [170, 64]
+    },
+    {
+      "id": "login",
+      "type": "security",
+      "label": "Login provider",
+      "sublabel": "GitHub, OIDC, Access",
+      "pos": [880, 540],
+      "size": [170, 64]
+    }
+  ],
+  "connections": [
+    {
+      "id": "ci-proxy",
+      "from": "ci",
+      "to": "proxy",
+      "label": "caller token",
+      "variant": "emphasis"
+    },
+    {
+      "id": "proxy-upstream",
+      "from": "proxy",
+      "to": "upstream",
+      "label": "credential injected",
+      "variant": "emphasis"
+    },
+    {
+      "id": "proxy-issuer",
+      "from": "proxy",
+      "to": "issuer",
+      "label": "JWKS, cached",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "proxy-db",
+      "from": "proxy",
+      "to": "db",
+      "label": "one batch read",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [405, 332]
+    },
+    {
+      "id": "proxy-tdb",
+      "from": "proxy",
+      "to": "tdb",
+      "label": "request record",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "top"
+    },
+    {
+      "id": "cron-tdb",
+      "from": "cron",
+      "to": "tdb",
+      "label": "rollups, retention"
+    },
+    {
+      "id": "browser-admin",
+      "from": "browser",
+      "to": "admin",
+      "label": "session"
+    },
+    {
+      "id": "admin-db",
+      "from": "admin",
+      "to": "db",
+      "label": "change + audit row",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "admin-login",
+      "from": "admin",
+      "to": "login",
+      "label": "OAuth / OIDC / Access",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "One Worker",
+      "items": [
+        "fetch(): proxy, admin UI, /healthz, /readyz",
+        "scheduled(): hourly rollups and retention",
+        "queue(): optional request-log consumer"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Storage",
+      "items": [
+        "DB holds config, users, sessions, audit log",
+        "TELEMETRY_DB holds request records only",
+        "Optional: queue batching, R2 archive"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Trust",
+      "items": [
+        "Caller tokens verified against issuer JWKS",
+        "Credentials sealed with the keyring secret"
+      ]
+    }
+  ]
+}

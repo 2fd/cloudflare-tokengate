@@ -4,34 +4,9 @@ This page defines the terms that the code, the admin UI and the documentation us
 
 ## How the terms relate
 
-```mermaid
-flowchart LR
-  subgraph code["Code (src/identity/profiles/)"]
-    profile["Profile<br/>anchor claims, trusted events"]
-  end
-  subgraph db["Control plane (DB)"]
-    cp["Caller provider<br/>issuer, audience, tenant pin"]
-    grant["Grant<br/>conditions + rules"]
-    svc["Service<br/>base URL, injection"]
-    cred["Credential<br/>sealed"]
-    user["User<br/>owner / admin / viewer"]
-    audit["Audit event"]
-  end
-  subgraph tel["Telemetry (TELEMETRY_DB)"]
-    rec["Request record"]
-  end
-  keyring["Keyring<br/>(Worker secret)"]
-  login["Login provider<br/>(Worker variables)"]
+![Concepts: a profile (code) defines the rules for a caller provider; a caller provider has many grants; each grant targets one service; a service has zero or one credential, encrypted by the keyring (Worker secret); a login provider signs in users; each user change writes an audit event; grant decisions are recorded as request records in TELEMETRY_DB. Caller providers, grants, services, credentials, users and audit events live in the D1 control-plane database.](diagrams/domain-model.svg)
 
-  profile -- "defines the rules for" --> cp
-  cp -- "1 to many" --> grant
-  grant -- "many to 1" --> svc
-  svc -- "has 0 or 1" --> cred
-  keyring -- "encrypts" --> cred
-  login -- "authenticates" --> user
-  user -- "each change writes" --> audit
-  grant -. "decision recorded in" .-> rec
-```
+<sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
 A request flows through these terms in a fixed order. The full pipeline is in [architecture.md](architecture.md).
 
