@@ -27,6 +27,48 @@ export const SETTING_BOUNDS: Record<keyof Settings, { min: number; max: number }
   request_log_max_rows: { min: 10_000, max: 50_000_000 },
 };
 
+/** Role and status of a user created by their first sign-in (not the first owner). */
+export const JOIN_ROLES = ['viewer', 'admin'] as const;
+export const JOIN_STATUSES = ['active', 'pending', 'suspended'] as const;
+export type JoinRole = (typeof JOIN_ROLES)[number];
+export type JoinStatus = (typeof JOIN_STATUSES)[number];
+
+export interface JoinDefaults {
+  role: JoinRole;
+  status: JoinStatus;
+}
+
+export const JOIN_DEFAULTS: JoinDefaults = { role: 'viewer', status: 'active' };
+
+/** Settings keys of the join defaults, edited on the users page (owners only). */
+export type JoinKey = 'join_role' | 'join_status';
+
+/** Stored join defaults; a missing or unknown stored value reads as its default. */
+export async function getJoinDefaults(db: D1Database): Promise<JoinDefaults> {
+  const { results } = await db
+    .prepare("SELECT key, value FROM settings WHERE key IN ('join_role', 'join_status')")
+    .all<{ key: string; value: string }>();
+  const stored = new Map(results.map((row) => [row.key, parseJsonOrNull(row.value)]));
+  const role = stored.get('join_role');
+  const status = stored.get('join_status');
+  return {
+    role: (JOIN_ROLES as readonly unknown[]).includes(role)
+      ? (role as JoinRole)
+      : JOIN_DEFAULTS.role,
+    status: (JOIN_STATUSES as readonly unknown[]).includes(status)
+      ? (status as JoinStatus)
+      : JOIN_DEFAULTS.status,
+  };
+}
+
+function parseJsonOrNull(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 /** Internal bookkeeping keys, not editable in the UI. */
 export type StateKey =
   | 'bootstrap_completed_at'
@@ -77,7 +119,7 @@ export async function getSettings(db: D1Database): Promise<Settings> {
 
 export function putSettingStatement(
   db: D1Database,
-  key: keyof Settings | StateKey,
+  key: keyof Settings | StateKey | JoinKey,
   value: unknown,
   now: number,
   updatedBy: string | null,

@@ -1,13 +1,22 @@
-// Admin pages: users. Everyone can see who has access; only owners invite people, change roles or
-// statuses and reset logins (I-RBAC-1). Mutations go through ops/users.ts, which keeps an active
+// Admin pages: users. Everyone can see who has access; only owners invite people, approve or reject
+// pending sign-ins, change roles or statuses, reset logins and set the join defaults (I-RBAC-1). Mutations go through ops/users.ts, which keeps an active
 // owner (I-OWNER-1); every admin request re-reads the user, so changes apply at once (I-SESS-1).
 import type { App } from '../../app';
 import { type Config, canonicalOrigin, parseConfig } from '../../config';
+import { getJoinDefaults, JOIN_ROLES, JOIN_STATUSES, type JoinDefaults } from '../../db/settings';
 import type { Role, User } from '../../db/types';
 import { INVITE_TTL_MS, listUsers, type UserListEntry } from '../../db/users';
 import { can } from '../auth/rbac';
 import type { OpFailure } from '../ops/shared';
-import { inviteUser, resendInvite, resetLogin, updateUser } from '../ops/users';
+import {
+  decidePending,
+  inviteUser,
+  resendInvite,
+  resetLogin,
+  type SettableStatus,
+  updateJoinDefaults,
+  updateUser,
+} from '../ops/users';
 import {
   type AdminContext,
   adminActor,
@@ -31,6 +40,11 @@ const NOTICES = {
   reset: (providers: string) =>
     `Login reset. Their sign-in accounts were unlinked. They can sign in again with ${providers} using their email address within ${INVITE_DAYS} days.`,
   resent: () => `Invitation renewed for another ${INVITE_DAYS} days.`,
+  approved: () => 'User approved. They can use the admin console from their next request.',
+  rejected: () => 'User rejected and suspended. Reactivate them in the list if needed.',
+  defaults_saved: () =>
+    'Saved. People who sign in for the first time from now on get these values.',
+  defaults_unchanged: () => 'Nothing changed: those are the current values for new users.',
 } as const;
 type NoticeKey = keyof typeof NOTICES;
 
@@ -41,6 +55,12 @@ const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
 ];
 
 const ROLE_NAMES: Record<Role, string> = { viewer: 'Viewer', admin: 'Admin', owner: 'Owner' };
+
+const STATUS_LABELS: Record<JoinDefaults['status'], string> = {
+  active: 'Active: they can use the console right away',
+  pending: 'Pending: an owner must approve them first',
+  suspended: 'Suspended: no access until an owner activates them',
+};
 
 interface InviteValues {
   email: string;
@@ -64,17 +84,36 @@ export function registerUsersRoutes(app: App): void {
     return redirectWithNotice(c, SECTION, 'invited');
   });
 
+  // Registered before /admin/users/:id, which would otherwise match "defaults" as an id.
+  app.post('/admin/users/defaults', async (c) => {
+    const form = await formData(c);
+    const result = await updateJoinDefaults(c.get('deps'), adminActor(c), {
+      role: text(form, 'role'),
+      status: text(form, 'status'),
+    });
+    if (!result.ok) return failurePage(c, result);
+    return redirectWithNotice(c, SECTION, result.changed ? 'defaults_saved' : 'defaults_unchanged');
+  });
+
   app.post('/admin/users/:id', async (c) => {
     const form = await formData(c);
     const role = text(form, 'role');
     const status = text(form, 'status');
     const result = await updateUser(c.get('deps'), adminActor(c), c.req.param('id'), {
       ...(role === undefined ? {} : { role: role as Role }),
-      ...(status === undefined ? {} : { status: status as 'active' | 'disabled' }),
+      ...(status === undefined ? {} : { status: status as SettableStatus }),
     });
     if (!result.ok) return failurePage(c, result);
     return redirectWithNotice(c, SECTION, result.changed ? 'updated' : 'unchanged');
   });
+
+  for (const decision of ['approve', 'reject'] as const) {
+    app.post(`/admin/users/:id/${decision}`, async (c) => {
+      const result = await decidePending(c.get('deps'), adminActor(c), c.req.param('id'), decision);
+      if (!result.ok) return failurePage(c, result);
+      return redirectWithNotice(c, SECTION, decision === 'approve' ? 'approved' : 'rejected');
+    });
+  }
 
   app.post('/admin/users/:id/reset-login', async (c) => {
     const result = await resetLogin(c.get('deps'), adminActor(c), c.req.param('id'));
@@ -106,7 +145,12 @@ async function usersPage(
   const deps = c.get('deps');
   const viewer = c.get('viewer');
   const config = parseConfig(deps.env);
-  const users = await listUsers(deps.env.DB);
+  const [users, joinDefaults] = await Promise.all([
+    listUsers(deps.env.DB),
+    getJoinDefaults(deps.env.DB),
+  ]);
+  const pending = users.filter((u) => u.status === 'pending');
+  const listed = users.filter((u) => u.status !== 'pending');
   const now = deps.now();
   const providers = loginProviderNames(config);
   const providerText = providers.length > 0 ? joinOr(providers) : 'a configured login provider';
@@ -136,12 +180,22 @@ async function usersPage(
         authorized by <a href="/admin/grants">grants</a>.
       </p>
       <p class="muted">
-        Anyone your Cloudflare Access policy lets in joins as a viewer on their first sign-in.
-        Invite people to give them another role from the start.
+        Anyone your Cloudflare Access policy lets in joins on their first sign-in as{' '}
+        <strong>
+          {joinDefaults.status} {joinDefaults.role}
+        </strong>
+        . Invite people to give them another role from the start.
       </p>
       <Messages errors={options.errors} />
+      <h2>Waiting for approval</h2>
+      {pending.length === 0 ? (
+        <p class="empty">Nobody is waiting for approval.</p>
+      ) : (
+        <PendingTable users={pending} csrf={viewer.csrfToken} isOwner={isOwner} />
+      )}
+      <h2>All users</h2>
       <UsersTable
-        users={users}
+        users={listed}
         viewer={viewer.user}
         csrf={viewer.csrfToken}
         isOwner={isOwner}
@@ -154,6 +208,15 @@ async function usersPage(
         </p>
       ) : null}
       {isOwner ? <ActionsHelp /> : null}
+
+      <h2>New users</h2>
+      {isOwner ? (
+        <JoinDefaultsForm csrf={viewer.csrfToken} defaults={joinDefaults} />
+      ) : (
+        <p class="muted">
+          People join as {joinDefaults.status} {joinDefaults.role}. Only owners can change this.
+        </p>
+      )}
 
       <h2>Roles</h2>
       <dl class="details">
@@ -235,10 +298,60 @@ function UsersTable(props: {
   );
 }
 
+function PendingTable(props: { users: UserListEntry[]; csrf: string; isOwner: boolean }) {
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">User</th>
+          <th scope="col">Role after approval</th>
+          <th scope="col">Signed in first</th>
+          {props.isOwner ? <th scope="col">Decision</th> : null}
+        </tr>
+      </thead>
+      <tbody>
+        {props.users.map((user) => {
+          const base = `/admin/users/${encodeURIComponent(user.id)}`;
+          return (
+            <tr>
+              <td>
+                {user.email}
+                {user.name ? <div class="muted">{user.name}</div> : null}
+              </td>
+              <td>{ROLE_NAMES[user.role] ?? user.role}</td>
+              <td>{formatTime(user.created_at)}</td>
+              {props.isOwner ? (
+                <td>
+                  <div class="user-actions">
+                    <RowAction
+                      action={`${base}/approve`}
+                      csrf={props.csrf}
+                      label="Approve"
+                      email={user.email}
+                    />
+                    <RowAction
+                      action={`${base}/reject`}
+                      csrf={props.csrf}
+                      label="Reject"
+                      email={user.email}
+                      danger
+                    />
+                  </div>
+                </td>
+              ) : null}
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
 function StatusCell(props: { user: User; now: number }) {
   const { user } = props;
   if (user.status === 'active') return <Badge tone="ok">active</Badge>;
-  if (user.status === 'disabled') return <Badge tone="muted">disabled</Badge>;
+  if (user.status === 'suspended') return <Badge tone="muted">suspended</Badge>;
+  if (user.status === 'pending') return <Badge tone="warn">pending</Badge>;
   const expires = user.invite_expires_at;
   const expired = expires === null || expires <= props.now;
   return (
@@ -254,6 +367,8 @@ function StatusCell(props: { user: User; now: number }) {
 function UserActions(props: { user: UserListEntry; csrf: string }) {
   const { user, csrf } = props;
   const base = `/admin/users/${encodeURIComponent(user.id)}`;
+  // Only a user with a linked sign-in can be active (ops/users.ts updateUser).
+  const statusEditable = user.status !== 'invited' && user.identity_count > 0;
   return (
     <div class="user-actions">
       <form method="post" action={base} class="inline">
@@ -265,28 +380,40 @@ function UserActions(props: { user: UserListEntry; csrf: string }) {
             </option>
           ))}
         </select>{' '}
-        <button type="submit" class="secondary" aria-label={`Change role of ${user.email}`}>
-          Change role
+        {statusEditable ? (
+          <>
+            <select name="status" aria-label={`Status for ${user.email}`}>
+              <option value="active" selected={user.status === 'active'}>
+                Active
+              </option>
+              <option value="suspended" selected={user.status === 'suspended'}>
+                Suspended
+              </option>
+            </select>{' '}
+          </>
+        ) : null}
+        <button type="submit" class="secondary" aria-label={`Save ${user.email}`}>
+          Save
         </button>
       </form>
       {user.status === 'invited' ? (
-        <RowAction
-          action={`${base}/resend-invite`}
-          csrf={csrf}
-          label="Resend invitation"
-          email={user.email}
-        />
-      ) : null}
-      {user.status === 'disabled' && user.identity_count > 0 ? (
-        <RowAction
-          action={base}
-          csrf={csrf}
-          label="Enable"
-          email={user.email}
-          fields={{ status: 'active' }}
-        />
-      ) : null}
-      {user.status !== 'invited' ? (
+        <>
+          <RowAction
+            action={`${base}/resend-invite`}
+            csrf={csrf}
+            label="Resend invitation"
+            email={user.email}
+          />
+          <RowAction
+            action={base}
+            csrf={csrf}
+            label="Cancel invitation"
+            email={user.email}
+            fields={{ status: 'suspended' }}
+            danger
+          />
+        </>
+      ) : (
         <RowAction
           action={`${base}/reset-login`}
           csrf={csrf}
@@ -294,18 +421,38 @@ function UserActions(props: { user: UserListEntry; csrf: string }) {
           email={user.email}
           danger={user.identity_count > 0}
         />
-      ) : null}
-      {user.status !== 'disabled' ? (
-        <RowAction
-          action={base}
-          csrf={csrf}
-          label={user.status === 'invited' ? 'Cancel invitation' : 'Disable'}
-          email={user.email}
-          fields={{ status: 'disabled' }}
-          danger
-        />
-      ) : null}
+      )}
     </div>
+  );
+}
+
+function JoinDefaultsForm(props: { csrf: string; defaults: JoinDefaults }) {
+  return (
+    <form method="post" action={`${SECTION}/defaults`} class="stack">
+      <Csrf token={props.csrf} />
+      <p>
+        What people get on their first sign-in, when they were not invited. The first owner is
+        always created as an active owner.
+      </p>
+      <Select
+        label="Role"
+        name="role"
+        value={props.defaults.role}
+        options={JOIN_ROLES.map((role) => ({
+          value: role,
+          label: ROLE_OPTIONS.find((option) => option.value === role)?.label ?? role,
+        }))}
+      />
+      <Select
+        label="Status"
+        name="status"
+        value={props.defaults.status}
+        options={JOIN_STATUSES.map((status) => ({ value: status, label: STATUS_LABELS[status] }))}
+      />
+      <div class="actions">
+        <button type="submit">Save</button>
+      </div>
+    </form>
   );
 }
 
@@ -315,14 +462,19 @@ function ActionsHelp() {
     <>
       <h2>What the actions do</h2>
       <dl class="details">
-        <dt>Change role</dt>
-        <dd>Gives the user the selected role, from their next request on.</dd>
-        <dt>Disable or Cancel invitation</dt>
+        <dt>Approve or Reject</dt>
         <dd>
-          Blocks access from their next request on. Linked sign-in accounts are kept, so "Enable"
-          restores access later. To also end their Cloudflare Access session, revoke it in Zero
-          Trust.
+          Approve makes a pending user active. Reject suspends them, so they do not come back as
+          pending on their next sign-in.
         </dd>
+        <dt>Save (role and status)</dt>
+        <dd>
+          Applies the selected role and status from their next request on. Suspended users keep
+          their linked sign-in accounts, so making them active again restores access. To also end
+          their Cloudflare Access session, revoke it in Zero Trust.
+        </dd>
+        <dt>Cancel invitation</dt>
+        <dd>Suspends an invitation that nobody used yet. "Invite again" reopens it.</dd>
         <dt>Reset login</dt>
         <dd>
           Unlinks their sign-in accounts (for example after their identity provider account was

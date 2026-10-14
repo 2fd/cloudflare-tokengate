@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { registerUsersRoutes } from '../../src/admin/routes/users';
+import { getJoinDefaults } from '../../src/db/settings';
 import type { Role, User } from '../../src/db/types';
 import { getUser, INVITE_TTL_MS } from '../../src/db/users';
 import {
@@ -154,7 +155,7 @@ describe('POST /admin/users/:id and actions', () => {
 
   it('refuses changing your own account', async () => {
     const res = await adminPost(app, await sessionFor('owner'), `/admin/users/${owner.id}`, {
-      status: 'disabled',
+      status: 'suspended',
     });
     expect(res.status).toBe(400);
     expect(await res.text()).toContain('You cannot change your own account');
@@ -208,7 +209,7 @@ describe('review: CSRF, method safety and input handling', () => {
       app,
       session,
       `/admin/users/${admin.id}`,
-      { status: 'disabled' },
+      { status: 'suspended' },
       { csrf: null },
     );
     expect(noToken.status).toBe(403);
@@ -293,7 +294,7 @@ describe('review: operator feedback', () => {
   });
 
   it('points to the existing row when inviting an address that is already a user', async () => {
-    await createUser({ email: 'gone@example.com', role: 'viewer', status: 'disabled' }, T0);
+    await createUser({ email: 'gone@example.com', role: 'viewer', status: 'suspended' }, T0);
     const res = await adminPost(app, await sessionFor('owner'), '/admin/users', {
       email: 'gone@example.com',
       role: 'viewer',
@@ -314,5 +315,139 @@ describe('review: operator feedback', () => {
     const html = await (await adminGet(app, await sessionFor('owner'), '/admin/users')).text();
     expect(html).toContain('invitation expired');
     expect(html).toContain('aria-label="Resend invitation: late@example.com"');
+  });
+});
+
+describe('pending users', () => {
+  async function pendingUser(email = 'wait@example.com'): Promise<User> {
+    return createUser(
+      {
+        email,
+        role: 'viewer',
+        status: 'pending',
+        identity: { loginProvider: 'access', subject: `team|${email}` },
+      },
+      T0,
+    );
+  }
+
+  it('lists pending users in their own section with one-click Approve and Reject', async () => {
+    const pending = await pendingUser();
+    const html = await (await adminGet(app, await sessionFor('owner'), '/admin/users')).text();
+    const section = html.split('<h2>Waiting for approval</h2>')[1]?.split('<h2>All users</h2>')[0];
+    expect(section).toContain('wait@example.com');
+    expect(section).toContain(`action="/admin/users/${pending.id}/approve"`);
+    expect(section).toContain(`action="/admin/users/${pending.id}/reject"`);
+    const all = html.split('<h2>All users</h2>')[1]?.split('<h2>')[0];
+    expect(all).not.toContain('wait@example.com');
+  });
+
+  it('shows viewers the pending list without decision buttons', async () => {
+    await pendingUser();
+    const html = await (await adminGet(app, await sessionFor('viewer'), '/admin/users')).text();
+    expect(html).toContain('wait@example.com');
+    expect(html).not.toContain('/approve"');
+  });
+
+  it('approve activates and reject suspends, each with one audit row', async () => {
+    const owner = await sessionFor('owner');
+    const a = await pendingUser('a@example.com');
+    const b = await pendingUser('b@example.com');
+    const approve = await adminPost(app, owner, `/admin/users/${a.id}/approve`);
+    expect(approve.headers.get('location')).toBe('/admin/users?notice=approved');
+    const reject = await adminPost(app, owner, `/admin/users/${b.id}/reject`);
+    expect(reject.headers.get('location')).toBe('/admin/users?notice=rejected');
+    expect((await getUser(env.DB, a.id))?.status).toBe('active');
+    expect((await getUser(env.DB, b.id))?.status).toBe('suspended');
+    expect(await auditActions()).toEqual(['user.update', 'user.update']);
+  });
+
+  it('refuses to approve a user who is no longer pending', async () => {
+    const owner = await sessionFor('owner');
+    const suspended = await createUser(
+      {
+        email: 's@example.com',
+        status: 'suspended',
+        identity: { loginProvider: 'access', subject: 'team|s' },
+      },
+      T0,
+    );
+    const res = await adminPost(app, owner, `/admin/users/${suspended.id}/approve`);
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain('no longer waiting for approval');
+    expect((await getUser(env.DB, suspended.id))?.status).toBe('suspended');
+  });
+});
+
+describe('role and status in the user list', () => {
+  it('changes role and status in one save', async () => {
+    const owner = await sessionFor('owner');
+    const user = await createUser(
+      {
+        email: 'u@example.com',
+        role: 'viewer',
+        identity: { loginProvider: 'access', subject: 't|u' },
+      },
+      T0,
+    );
+    const html = await (await adminGet(app, owner, '/admin/users')).text();
+    expect(html).toContain('aria-label="Status for u@example.com"');
+    const res = await adminPost(app, owner, `/admin/users/${user.id}`, {
+      role: 'admin',
+      status: 'suspended',
+    });
+    expect(res.headers.get('location')).toBe('/admin/users?notice=updated');
+    expect(await getUser(env.DB, user.id)).toMatchObject({ role: 'admin', status: 'suspended' });
+    const back = await adminPost(app, owner, `/admin/users/${user.id}`, {
+      role: 'admin',
+      status: 'active',
+    });
+    expect(back.headers.get('location')).toBe('/admin/users?notice=updated');
+    expect((await getUser(env.DB, user.id))?.status).toBe('active');
+  });
+
+  it('refuses pending as a status set from the list', async () => {
+    const owner = await sessionFor('owner');
+    const user = await createUser(
+      { email: 'u@example.com', identity: { loginProvider: 'access', subject: 't|u' } },
+      T0,
+    );
+    const res = await adminPost(app, owner, `/admin/users/${user.id}`, { status: 'pending' });
+    expect(res.status).toBe(400);
+    expect((await getUser(env.DB, user.id))?.status).toBe('active');
+  });
+});
+
+describe('join defaults', () => {
+  it('starts as active viewer and is shown on the page', async () => {
+    const html = await (await adminGet(app, await sessionFor('owner'), '/admin/users')).text();
+    expect(html).toContain('<strong>active viewer</strong>');
+    expect(html).toContain('action="/admin/users/defaults"');
+  });
+
+  it('owners can change role and status for later sign-ins', async () => {
+    const owner = await sessionFor('owner');
+    const res = await adminPost(app, owner, '/admin/users/defaults', {
+      role: 'admin',
+      status: 'pending',
+    });
+    expect(res.headers.get('location')).toBe('/admin/users?notice=defaults_saved');
+    expect(await getJoinDefaults(env.DB)).toEqual({ role: 'admin', status: 'pending' });
+    expect(await auditActions()).toEqual(['user.join_defaults']);
+    const again = await adminPost(app, owner, '/admin/users/defaults', {
+      role: 'admin',
+      status: 'pending',
+    });
+    expect(again.headers.get('location')).toBe('/admin/users?notice=defaults_unchanged');
+  });
+
+  it.each([
+    [{ role: 'owner', status: 'active' }],
+    [{ role: 'viewer', status: 'invited' }],
+    [{ role: 'viewer' }],
+  ])('rejects %j', async (fields) => {
+    const res = await adminPost(app, await sessionFor('owner'), '/admin/users/defaults', fields);
+    expect(res.status).toBe(400);
+    expect(await getJoinDefaults(env.DB)).toEqual({ role: 'viewer', status: 'active' });
   });
 });

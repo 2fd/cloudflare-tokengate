@@ -118,11 +118,11 @@ The Access application puts the admin UI behind your Zero Trust login. It must c
 
 1. In Zero Trust, open Access controls > Applications and add a self-hosted application.
 2. Add two public hostnames on your custom domain: path `admin` and path `admin/*`. A path with `/*` does not cover its parent path, so you need both ([application paths](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/)).
-3. Add an Allow policy with only your own email address for now. The first person through Access becomes the owner, and everyone after joins as a viewer, so widen the policy (for example to your company's email domain) only after step 10.
+3. Add an Allow policy with only your own email address for now. The first person through Access becomes the owner, and everyone after joins as a viewer by default, so widen the policy (for example to your company's email domain) only after step 10.
 4. Save the application. Copy its "Application Audience (AUD) Tag".
 5. Note your team name: the `<team>` in `<team>.cloudflareaccess.com`, shown in the Zero Trust settings.
 
-The gateway does not trust Access blindly. It verifies the Access token on every `/admin` request, so a request that reaches the Worker without a valid token gets `401`. The Access policy decides who can see the admin UI: the first person to sign in becomes the owner (step 10), and everyone after that joins as a viewer. Viewers see every page, but no page shows a secret.
+The gateway does not trust Access blindly. It verifies the Access token on every `/admin` request, so a request that reaches the Worker without a valid token gets `401`. The Access policy decides who can see the admin UI: the first person to sign in becomes the owner (step 10), and everyone after that joins with the join defaults (by default an active viewer). Viewers see every page, but no page shows a secret.
 
 More about the zone and Access: [operations/cloudflare-zone-settings.md](operations/cloudflare-zone-settings.md).
 
@@ -161,8 +161,9 @@ The gateway keeps no session of its own. "Sign out" ends the Access session for 
 ## 11. Open the admin UI to your team and add a second owner
 
 1. If you set `BOOTSTRAP_OWNER_EMAILS`, delete it in Workers & Pages > tokengate > Settings > Variables and Secrets. Settings > System status shows "done: an owner exists".
-2. Widen the Access policy to the people who may see the admin UI.
-3. Ask a second person to open `<gateway>/admin`. They join as a viewer. Open Users, set their role to "Owner" and click "Change role". If the only owner loses access, recovery needs a manual database edit ([operations/break-glass.md](operations/break-glass.md)).
+2. Optional: in Users > "New users", choose the role (viewer or admin) and status (active, pending or suspended) that people get on their first sign-in. With "Pending", each new person waits in "Waiting for approval" until you click "Approve" or "Reject".
+3. Widen the Access policy to the people who may reach the admin UI.
+4. Ask a second person to open `<gateway>/admin`. They join as an active viewer (or as pending, then you approve them). In Users > "All users", set their role to "Owner" and click "Save". If the only owner loses access, recovery needs a manual database edit ([operations/break-glass.md](operations/break-glass.md)).
 
 To give someone a role before their first sign-in, open Users and use "Invite a user". The gateway sends no email: send `<gateway>/admin` to the person yourself. They must open it with the invited email address within 7 days. The gateway links a login to an invited user only through the email address in the Access token ([I-LINK-1](threat-model.md#i-link-1)).
 

@@ -13,7 +13,7 @@ Each procedure below therefore adds an audit row by hand.
 - Keep at least two active owners. The dashboard shows "There is only one active owner." until you do.
 - Make sure the Access policy allows more than one owner, through an identity provider that does not
   depend on one person's account.
-- The database refuses to demote, disable or delete the last active owner (trigger `last_owner`,
+- The database refuses to demote, suspend or delete the last active owner (trigger `last_owner`,
   [I-OWNER-1](../threat-model.md#i-owner-1)), so an owner cannot lock everyone out from the UI.
 
 ## Why bootstrap does not help
@@ -57,7 +57,7 @@ Steps:
 
 3. If a user has this email, unlink its login identities and give it a placeholder email, so the new
    user can take the email and your Access identity. This also covers the viewer that your earlier
-   sign-ins created. Active and disabled users are never linked by email, and emails are unique.
+   sign-ins created. Pending, active and suspended users are never linked by email, and emails are unique.
    Changing the email does not change role or status, so the `last_owner` trigger allows it:
 
    ```sh
@@ -88,8 +88,8 @@ Steps:
    gateway links the identity, makes the user active and writes a `user.link` audit event.
 
    A login identity that is already linked to a user always signs in as that user
-   (`src/admin/auth/resolve-login.ts`). If the page says "This account is disabled or must be
-   re-invited by an owner.", your identity is still linked to a user that is not active. Access
+   (`src/admin/auth/resolve-login.ts`). If the page says "This account is suspended." or "Your account is waiting for an owner to
+   approve it.", your identity is still linked to a user that is not active. Access
    identities have `login_provider = 'access'` and the subject
    `https://<team>.cloudflareaccess.com|<sub>`. List the identities of users that are not active,
    delete yours, and reload the page:
@@ -102,7 +102,7 @@ Steps:
    ```
 
 7. In users, find the old owner (now with the `locked-...@example.invalid` email, if you renamed it)
-   and select "Disable". With two active owners, the trigger allows it.
+   and set its status to "Suspended", then "Save". With two active owners, the trigger allows it.
 8. In Audit log, check the `user.break_glass` and `user.link` events.
 9. Invite a second owner in Users.
 
@@ -116,7 +116,7 @@ pnpm wrangler d1 execute DB --remote --command \
 
 ## Sign every admin out
 
-Use this when admin access may be stolen and you cannot wait to disable users one by one. The gateway
+Use this when admin access may be stolen and you cannot wait to suspend users one by one. The gateway
 keeps no admin sessions: every `/admin` request must carry a valid Access JWT
 ([I-SESS-1](../threat-model.md#i-sess-1)). Admin sessions are Access sessions, so you end them in
 Cloudflare One, not in D1.
@@ -126,8 +126,8 @@ Cloudflare One, not in D1.
    ([session management](https://developers.cloudflare.com/cloudflare-one/identity/users/session-management/)).
 2. If the attacker's identity can still pass the Access policy, change the policy or the identity
    provider account first. Otherwise they sign in again.
-3. Disable the affected users in Users. A disabled user is refused on the next request, even with a
-   valid Access session.
+3. Suspend the affected users in Users. A suspended user is refused on the next request, even with a
+   valid Access session. To keep newcomers out meanwhile, set Users > "New users" to "Pending".
 
 This does not affect callers on `/proxy/`: they use workload identity tokens, not Access.
 

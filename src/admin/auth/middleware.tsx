@@ -30,7 +30,8 @@ const MESSAGES = {
   certs_unavailable: 'Cloudflare Access could not be reached to check your identity. Try again.',
   email_taken:
     'Another user already has this email address (for example an expired invitation, or an account linked to another sign-in). Ask an owner to use "Resend invitation" or "Reset login", then reload this page.',
-  disabled: 'This account is disabled or must be re-invited by an owner.',
+  pending: 'Your account is waiting for an owner to approve it. Reload this page after they do.',
+  suspended: 'This account is suspended. Ask an owner to reactivate it.',
 } as const;
 type MessageKey = keyof typeof MESSAGES;
 

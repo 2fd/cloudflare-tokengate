@@ -290,11 +290,34 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
     const target = await createUser({ email: `${unique('target')}@example.com`, role: 'admin' });
     return { path: `/admin/users/${target.id}`, action: 'user.update', fields: { role: 'viewer' } };
   },
+  'POST /admin/users/defaults': async () => ({
+    path: '/admin/users/defaults',
+    action: 'user.join_defaults',
+    fields: { role: 'admin', status: 'pending' },
+  }),
+  'POST /admin/users/:id/approve': async () => {
+    const target = await createUser({
+      email: `${unique('pending')}@example.com`,
+      role: 'viewer',
+      status: 'pending',
+      identity: { loginProvider: 'access', subject: unique('subject') },
+    });
+    return { path: `/admin/users/${target.id}/approve`, action: 'user.update', fields: {} };
+  },
+  'POST /admin/users/:id/reject': async () => {
+    const target = await createUser({
+      email: `${unique('pending')}@example.com`,
+      role: 'viewer',
+      status: 'pending',
+      identity: { loginProvider: 'access', subject: unique('subject') },
+    });
+    return { path: `/admin/users/${target.id}/reject`, action: 'user.update', fields: {} };
+  },
   'POST /admin/users/:id/reset-login': async () => {
     const target = await createUser({
       email: `${unique('reset')}@example.com`,
       role: 'admin',
-      identity: { loginProvider: 'github', subject: unique('subject') },
+      identity: { loginProvider: 'access', subject: unique('subject') },
     });
     return {
       path: `/admin/users/${target.id}/reset-login`,

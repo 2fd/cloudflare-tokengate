@@ -3,6 +3,7 @@
 // instead of a second link or a second owner (I-LINK-1, I-BOOT-1).
 import { auditStatement } from './audit';
 import { userFromRow } from './rows';
+import type { JoinRole, JoinStatus } from './settings';
 import type { AuditEvent, Role, User, UserStatus } from './types';
 
 /** Boolean SQL expression plus its binds, ANDed into every WHERE clause (see admin/ops/shared). */
@@ -268,6 +269,8 @@ export function bootstrapOwnerStatements(
 
 export interface JoinInput {
   userId: string;
+  role: JoinRole;
+  status: JoinStatus;
   email: string;
   loginProvider: string;
   subject: string;
@@ -277,21 +280,30 @@ export interface JoinInput {
 }
 
 /**
- * Creates an active viewer for a first sign-in that matches no user (I-LINK-1: an existing user is
- * never linked by email outside an invitation). The user INSERT only happens while no user has this
+ * Creates the user for a first sign-in that matches no user, with the configured join role and
+ * status (I-LINK-1: an existing user is never linked by email outside an invitation). The user INSERT only happens while no user has this
  * email; identity and audit row are each conditioned on that new user row existing. The caller
  * checks `meta.changes === 1` on the first result.
  */
-export function joinAsViewerStatements(db: D1Database, input: JoinInput): D1PreparedStatement[] {
+export function joinStatements(db: D1Database, input: JoinInput): D1PreparedStatement[] {
   const created = 'EXISTS (SELECT 1 FROM users WHERE id = ?)';
   return [
     db
       .prepare(
         `INSERT INTO users (id, email, name, role, status, invite_expires_at, created_at, updated_at)
-         SELECT ?, ?, ?, 'viewer', 'active', NULL, ?, ?
+         SELECT ?, ?, ?, ?, ?, NULL, ?, ?
          WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = ?)`,
       )
-      .bind(input.userId, input.email, input.name, input.now, input.now, input.email),
+      .bind(
+        input.userId,
+        input.email,
+        input.name,
+        input.role,
+        input.status,
+        input.now,
+        input.now,
+        input.email,
+      ),
     db
       .prepare(
         `INSERT INTO user_identities (login_provider, subject, user_id, email, created_at, last_used_at)

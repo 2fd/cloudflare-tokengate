@@ -108,19 +108,26 @@ Events such as `pull_request_target`, `workflow_run` or GitLab `merge_request_ev
 
 ### User
 
-A user is a person who signs in to the admin UI. A user has a role and a status (`invited`, `active` or `disabled`):
+A user is a person who signs in to the admin UI. A user has a role and a status:
+
+| Status | Meaning |
+|---|---|
+| `invited` | An owner invited the email; nobody signed in with it yet. |
+| `pending` | The person signed in for the first time while new users join as pending. An owner must approve (→ `active`) or reject (→ `suspended`) them. |
+| `active` | Can use the admin UI with their role. |
+| `suspended` | Refused on every request. An owner can make them active again. |
 
 | Role | Can |
 |---|---|
 | `viewer` | Read every page. No page shows secret material. |
 | `admin` | Also create, change and delete caller providers, services and grants; download the configuration export. |
-| `owner` | Also invite users, change roles and statuses, reset logins, change settings, re-encrypt credentials. |
+| `owner` | Also invite, approve and reject users, change roles and statuses, reset logins, set the role and status of new users, change settings, re-encrypt credentials. |
 
 Every admin route has an entry in the permission table, and unknown routes are denied ([I-RBAC-1](threat-model.md#i-rbac-1)). The database refuses to remove the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). IDs start with `usr_`. Admin UI: Users. Code: `src/admin/auth/rbac.ts`.
 
 ### Login provider
 
-Users sign in through Cloudflare Access (login provider `access`), configured with Worker variables, not in the database ([configuration.md](configuration.md), [ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). The gateway keeps no session: it verifies the Access token on every admin request. The token proves a stable subject (`<team domain>|<sub>`) and an email address. On a new login, the gateway links an existing user only when that user is invited, the invitation is not expired, and the email in the token matches ([I-LINK-1](threat-model.md#i-link-1)). Otherwise the first person to sign in becomes the owner, at most once ([I-BOOT-1](threat-model.md#i-boot-1)); `BOOTSTRAP_OWNER_EMAILS` can limit who that is. Everyone after that joins as a `viewer`, so the Access policy decides who can see the admin UI. An email that already belongs to another user is refused. For local development only, `AUTH_DEV_EMAIL` (login provider `dev`) signs every request in as one email. Code: `src/admin/auth/`.
+Users sign in through Cloudflare Access (login provider `access`), configured with Worker variables, not in the database ([configuration.md](configuration.md), [ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). The gateway keeps no session: it verifies the Access token on every admin request. The token proves a stable subject (`<team domain>|<sub>`) and an email address. On a new login, the gateway links an existing user only when that user is invited, the invitation is not expired, and the email in the token matches ([I-LINK-1](threat-model.md#i-link-1)). Otherwise the first person to sign in becomes the owner, at most once ([I-BOOT-1](threat-model.md#i-boot-1)); `BOOTSTRAP_OWNER_EMAILS` can limit who that is. Everyone after that joins with the role and status that owners set for new users on the Users page: by default an active `viewer`; the role can be `admin`, and the status `pending` (wait for approval) or `suspended`. So the Access policy decides who can reach the admin UI, and the join status decides whether they get in at once. An email that already belongs to another user is refused. For local development only, `AUTH_DEV_EMAIL` (login provider `dev`) signs every request in as one email. Code: `src/admin/auth/`.
 
 ### Request record
 

@@ -142,20 +142,20 @@ describe('updateUser', () => {
 
   it('disables a user', async () => {
     const admin = await createUser({ email: 'admin@example.com', role: 'admin' }, T0);
-    const result = await updateUser(deps(), actorFor(owner), admin.id, { status: 'disabled' });
-    expect(result).toMatchObject({ ok: true, user: { status: 'disabled' } });
-    expect((await getUser(env.DB, admin.id))?.status).toBe('disabled');
+    const result = await updateUser(deps(), actorFor(owner), admin.id, { status: 'suspended' });
+    expect(result).toMatchObject({ ok: true, user: { status: 'suspended' } });
+    expect((await getUser(env.DB, admin.id))?.status).toBe('suspended');
   });
 
   it('refuses when the user changed between read and write, writing nothing', async () => {
     const admin = await createUser({ email: 'admin@example.com', role: 'admin' }, T0);
     const racing = racingDeps(
-      "UPDATE users SET status = 'disabled', updated_at = updated_at + 1 WHERE id = ?",
+      "UPDATE users SET status = 'suspended', updated_at = updated_at + 1 WHERE id = ?",
       admin.id,
     );
     const result = await updateUser(racing, actorFor(owner), admin.id, { role: 'viewer' });
     expect(result).toMatchObject({ ok: false, reason: 'conflict' });
-    expect(await getUser(env.DB, admin.id)).toMatchObject({ role: 'admin', status: 'disabled' });
+    expect(await getUser(env.DB, admin.id)).toMatchObject({ role: 'admin', status: 'suspended' });
     expect(await audits()).toEqual([]);
   });
 
@@ -174,29 +174,29 @@ describe('updateUser', () => {
     expect((await getUser(env.DB, invited.id))?.status).toBe('invited');
   });
 
-  it('allows cancelling an invitation (invited → disabled)', async () => {
+  it('allows cancelling an invitation (invited → suspended)', async () => {
     const invited = await createUser({ email: 'i@example.com', status: 'invited' }, T0);
-    const result = await updateUser(deps(), actorFor(owner), invited.id, { status: 'disabled' });
-    expect(result).toMatchObject({ ok: true, user: { status: 'disabled' } });
+    const result = await updateUser(deps(), actorFor(owner), invited.id, { status: 'suspended' });
+    expect(result).toMatchObject({ ok: true, user: { status: 'suspended' } });
   });
 
-  it('refuses invited → disabled → active: a user without a login identity cannot be active', async () => {
+  it('refuses invited → suspended → active: a user without a login identity cannot be active', async () => {
     const invited = await createUser({ email: 'i@example.com', status: 'invited' }, T0);
     expect(
-      await updateUser(deps(), actorFor(owner), invited.id, { status: 'disabled' }),
+      await updateUser(deps(), actorFor(owner), invited.id, { status: 'suspended' }),
     ).toMatchObject({ ok: true });
     const result = await updateUser(deps(), actorFor(owner), invited.id, { status: 'active' });
     expect(result).toMatchObject({ ok: false, reason: 'invalid' });
     if (!result.ok) expect(result.errors.join()).toMatch(/Invite again/);
-    expect((await getUser(env.DB, invited.id))?.status).toBe('disabled');
+    expect((await getUser(env.DB, invited.id))?.status).toBe('suspended');
     expect((await audits()).map((row) => row.action)).toEqual(['user.update']);
   });
 
-  it('re-enables a disabled user who has a login identity', async () => {
+  it('re-activates a suspended user who has a login identity', async () => {
     const user = await createUser(
       {
         email: 'u@example.com',
-        status: 'disabled',
+        status: 'suspended',
         identity: { loginProvider: 'access', subject: 'team|77' },
       },
       T0,
@@ -232,9 +232,9 @@ describe('updateUser', () => {
 
 describe('I-OWNER-1: the last active owner cannot be removed', () => {
   it('maps the last_owner trigger to a friendly error and rolls back the audit row', async () => {
-    // The actor is a disabled owner, so `owner` is the only active one.
-    const other = await createUser({ email: 'o2@example.com', role: 'owner', status: 'disabled' });
-    for (const input of [{ role: 'admin' as const }, { status: 'disabled' as const }]) {
+    // The actor is a suspended owner, so `owner` is the only active one.
+    const other = await createUser({ email: 'o2@example.com', role: 'owner', status: 'suspended' });
+    for (const input of [{ role: 'admin' as const }, { status: 'suspended' as const }]) {
       const result = await updateUser(deps(), actorFor(other), owner.id, input);
       expect(result).toEqual({
         ok: false,

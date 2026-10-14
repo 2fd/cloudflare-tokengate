@@ -1,15 +1,16 @@
 // Maps a verified login (provider, stable subject, authoritative emails) to a user. Only invited
 // users are linked by email (I-LINK-1); the first owner is bootstrapped at most once (I-BOOT-1);
-// anyone else that Access lets through joins as a viewer, so an owner can grant more.
+// anyone else that Access lets through joins with the owner-configured role and status.
 import { parseConfig } from '../../config';
 import { buildAuditEvent, emitAuditLine } from '../../db/audit';
+import { getJoinDefaults } from '../../db/settings';
 import type { Actor, User } from '../../db/types';
 import {
   bootstrapOwnerStatements,
   findRedeemableInvite,
   findUserByIdentity,
   getUser,
-  joinAsViewerStatements,
+  joinStatements,
   linkInvitedUserStatements,
 } from '../../db/users';
 import type { Deps } from '../../deps';
@@ -40,7 +41,7 @@ export type LoginResolution =
       user: User;
       via: 'identity' | 'invite' | 'bootstrap' | 'join';
     }
-  | { ok: false; reason: 'email_taken' | 'disabled' };
+  | { ok: false; reason: 'email_taken' | 'pending' | 'suspended' };
 
 const NAME_MAX = 200;
 
@@ -49,7 +50,8 @@ const NAME_MAX = 200;
  * 2) Else an invited, unexpired user matching an authoritative email is linked and activated.
  * 3) Else, while no owner exists and bootstrap has never run, the first owner is created. When
  * BOOTSTRAP_OWNER_EMAILS is set, only an email it lists can become that owner.
- * 4) Else a new active viewer is created for the first authoritative email.
+ * 4) Else a user is created for the first authoritative email with the join defaults (role
+ * viewer or admin; status active, pending or suspended; set by owners on the users page).
  * 5) Else (that email already belongs to another user, e.g. an expired invitation) `email_taken`.
  */
 export async function resolveLogin(
@@ -58,11 +60,7 @@ export async function resolveLogin(
 ): Promise<LoginResolution> {
   const db = deps.env.DB;
   const known = await findUserByIdentity(db, input.loginProvider, input.subject);
-  if (known) {
-    return known.status === 'active'
-      ? { ok: true, user: known, via: 'identity' }
-      : { ok: false, reason: 'disabled' };
-  }
+  if (known) return byStatus(known, 'identity');
 
   const name = input.name?.trim().slice(0, NAME_MAX) || null;
   const meta = input.meta ?? { ip: null, userAgent: null };
@@ -131,23 +129,27 @@ export async function resolveLogin(
 
   const joinEmail = input.emails[0];
   if (joinEmail !== undefined) {
+    const defaults = await getJoinDefaults(db);
     const now = deps.now();
     const userId = newId('usr', now, deps.random);
     const audit = buildAuditEvent(deps, actorFor(userId, joinEmail, meta), {
       action: 'user.join',
       targetType: 'user',
       targetId: userId,
-      summary: 'Joined as viewer on the first sign-in',
+      summary: `Joined as ${defaults.status} ${defaults.role} on the first sign-in`,
       diff: {
         login_provider: input.loginProvider,
         subject: input.subject,
         email: joinEmail,
-        role: 'viewer',
+        role: defaults.role,
+        status: defaults.status,
       },
     });
     const results = await db.batch(
-      joinAsViewerStatements(db, {
+      joinStatements(db, {
         userId,
+        role: defaults.role,
+        status: defaults.status,
         email: joinEmail,
         loginProvider: input.loginProvider,
         subject: input.subject,
@@ -159,14 +161,20 @@ export async function resolveLogin(
     if (results[0]?.meta.changes === 1) {
       emitAuditLine(audit);
       const user = await getUser(db, userId);
-      if (user) return { ok: true, user, via: 'join' };
+      if (user) return byStatus(user, 'join');
     }
     // A concurrent first request of the same identity may have created the user meanwhile.
     const raced = await findUserByIdentity(db, input.loginProvider, input.subject);
-    if (raced?.status === 'active') return { ok: true, user: raced, via: 'identity' };
+    if (raced) return byStatus(raced, 'identity');
   }
 
   return { ok: false, reason: 'email_taken' };
+}
+
+/** Only active users get in; a pending user waits for an owner, anyone else is suspended. */
+function byStatus(user: User, via: 'identity' | 'join'): LoginResolution {
+  if (user.status === 'active') return { ok: true, user, via };
+  return { ok: false, reason: user.status === 'pending' ? 'pending' : 'suspended' };
 }
 
 function actorFor(userId: string, email: string, meta: RequestMeta): Actor {

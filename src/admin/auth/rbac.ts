@@ -73,7 +73,10 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, RoutePermission>> = Obje
 
   'GET /admin/users': read,
   'POST /admin/users': usersWrite,
+  'POST /admin/users/defaults': usersWrite,
   'POST /admin/users/:id': usersWrite,
+  'POST /admin/users/:id/approve': usersWrite,
+  'POST /admin/users/:id/reject': usersWrite,
   'POST /admin/users/:id/reset-login': usersWrite,
   'POST /admin/users/:id/resend-invite': usersWrite,
 

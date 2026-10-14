@@ -1,6 +1,14 @@
 // User mutations (owner only, via RBAC), each with one audit row in the same batch (I-AUDIT-1).
 // Admin requests re-read the user on every request, so changes apply on the user's next request
 // (I-SESS-1); the last-owner trigger aborts a batch that would leave no active owner (I-OWNER-1).
+
+import {
+  getJoinDefaults,
+  JOIN_ROLES,
+  JOIN_STATUSES,
+  type JoinDefaults,
+  putSettingStatement,
+} from '../../db/settings';
 import type { Actor, Role, User, UserStatus } from '../../db/types';
 import {
   getUser,
@@ -25,8 +33,12 @@ import {
 } from './shared';
 
 export const ROLES: readonly Role[] = ['owner', 'admin', 'viewer'];
-/** Statuses an owner may set directly. `invited` is reached only by invite or login reset. */
-export const SETTABLE_STATUSES: readonly Exclude<UserStatus, 'invited'>[] = ['active', 'disabled'];
+/**
+ * Statuses an owner may set directly. `invited` is reached only by invite or login reset, `pending`
+ * only by a first sign-in while the join status is pending.
+ */
+export type SettableStatus = Exclude<UserStatus, 'invited' | 'pending'>;
+export const SETTABLE_STATUSES: readonly SettableStatus[] = ['active', 'suspended'];
 
 export const EMAIL_MAX_LENGTH = 254;
 
@@ -120,13 +132,13 @@ export async function updateUser(
   deps: Deps,
   actor: Actor,
   id: string,
-  input: { role?: Role; status?: Exclude<UserStatus, 'invited'> },
+  input: { role?: Role; status?: SettableStatus },
 ): Promise<{ ok: true; user: User; changed: boolean } | OpFailure> {
   const errors = [
     ...(input.role === undefined ? [] : roleErrors(input.role)),
     ...(input.status === undefined || SETTABLE_STATUSES.includes(input.status)
       ? []
-      : ['Status must be active or disabled.']),
+      : ['Status must be active or suspended.']),
   ];
   if (input.role === undefined && input.status === undefined) errors.push('Nothing to change.');
   if (errors.length > 0) return opFailure('invalid', errors);
@@ -142,7 +154,7 @@ export async function updateUser(
 
   const role = input.role ?? existing.role;
   const status = input.status ?? existing.status;
-  const changes: { role?: Role; status?: Exclude<UserStatus, 'invited'> } = {};
+  const changes: { role?: Role; status?: SettableStatus } = {};
   if (role !== existing.role) changes.role = role;
   if (input.status !== undefined && status !== existing.status) changes.status = input.status;
   if (Object.keys(changes).length === 0) return { ok: true, user: existing, changed: false };
@@ -307,4 +319,66 @@ async function commitUserChange(
     }
     throw error;
   }
+}
+
+/** Changes the role and status given to people on their first sign-in (not the first owner). */
+export async function updateJoinDefaults(
+  deps: Deps,
+  actor: Actor,
+  input: { role: unknown; status: unknown },
+): Promise<{ ok: true; defaults: JoinDefaults; changed: boolean } | OpFailure> {
+  const errors = [
+    ...((JOIN_ROLES as readonly unknown[]).includes(input.role)
+      ? []
+      : ['New users can get the role viewer or admin.']),
+    ...((JOIN_STATUSES as readonly unknown[]).includes(input.status)
+      ? []
+      : ['New users can start active, pending or suspended.']),
+  ];
+  if (errors.length > 0) return opFailure('invalid', errors);
+  const after = { role: input.role, status: input.status } as JoinDefaults;
+  const db = deps.env.DB;
+  const before = await getJoinDefaults(db);
+  if (before.role === after.role && before.status === after.status) {
+    return { ok: true, defaults: before, changed: false };
+  }
+  const now = deps.now();
+  const outcome = await commitUserChange(
+    deps,
+    actor,
+    {
+      action: 'user.join_defaults',
+      targetType: 'settings',
+      targetId: null,
+      summary: `New users now join as ${after.status} ${after.role}`,
+      diff: { before, after },
+    },
+    null,
+    [
+      putSettingStatement(db, 'join_role', after.role, now, actor.id),
+      putSettingStatement(db, 'join_status', after.status, now, actor.id),
+    ],
+  );
+  if (!outcome.ok) return outcome;
+  return { ok: true, defaults: after, changed: true };
+}
+
+/**
+ * Approves (→ active) or rejects (→ suspended) a user waiting for approval. Refused when the user is
+ * no longer pending, so a stale page cannot reactivate someone suspended meanwhile.
+ */
+export async function decidePending(
+  deps: Deps,
+  actor: Actor,
+  id: string,
+  decision: 'approve' | 'reject',
+): Promise<{ ok: true; user: User; changed: boolean } | OpFailure> {
+  const existing = await getUser(deps.env.DB, id);
+  if (!existing) return opFailure('not_found', ['User not found.']);
+  if (existing.status !== 'pending') {
+    return opFailure('conflict', [
+      `${existing.email} is no longer waiting for approval. Reload the page.`,
+    ]);
+  }
+  return updateUser(deps, actor, id, { status: decision === 'approve' ? 'active' : 'suspended' });
 }

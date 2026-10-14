@@ -95,7 +95,7 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
   });
 
   it.each([
-    ['disables the user', (id: string) => [`/admin/users/${id}`, { status: 'disabled' }] as const],
+    ['disables the user', (id: string) => [`/admin/users/${id}`, { status: 'suspended' }] as const],
     [
       'demotes the user to viewer',
       (id: string) => [`/admin/users/${id}`, { role: 'viewer' }] as const,
@@ -192,7 +192,7 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
       w.whileInFlight(async () => {
         auditedAtSend = await credentialTests(w.admin.id);
         const res = await adminPost(w.app, w.ownerSession, `/admin/users/${w.admin.id}`, {
-          status: 'disabled',
+          status: 'suspended',
         });
         disableStatus = res.status;
       }, 'api.github.com');

@@ -6,6 +6,7 @@ import { ACCESS_JWT_HEADER, resetAccessCertsCacheForTests } from '../../src/admi
 import { CSRF_COOKIE } from '../../src/admin/auth/csrf';
 import { SEEN_INTERVAL_MS } from '../../src/admin/auth/middleware';
 import { formData, renderPage } from '../../src/admin/render';
+import { putSettingStatement } from '../../src/db/settings';
 import {
   adminGet,
   adminPost,
@@ -101,6 +102,40 @@ describe('Cloudflare Access login', () => {
     expect(await as('second', 'second@acme.com')).toBe('ok viewer');
     expect(await as('second', 'second@acme.com')).toBe('ok viewer');
     expect(await auditActions()).toEqual(['user.bootstrap', 'user.join']);
+  });
+
+  it.each([
+    ['pending', 403, 'waiting for an owner to approve it'],
+    ['suspended', 403, 'This account is suspended'],
+    ['active', 200, 'ok admin'],
+  ] as const)('with join status %s, a new admin-role user gets %i', async (status, code, text) => {
+    const access = await testAccess();
+    const app = accessApp({ BOOTSTRAP_OWNER_EMAILS: '' });
+    await createUser({ email: 'owner@acme.com', role: 'owner' });
+    await env.DB.batch([
+      putSettingStatement(env.DB, 'join_role', 'admin', Date.now(), null),
+      putSettingStatement(env.DB, 'join_status', status, Date.now(), null),
+    ]);
+    const jwt = await access.sign({ sub: 'new', email: 'new@acme.com' });
+    const res = await app.request('/admin', { headers: { [ACCESS_JWT_HEADER]: jwt } });
+    expect(res.status).toBe(code);
+    expect(await res.text()).toContain(text);
+    const user = await env.DB.prepare(
+      "SELECT role, status FROM users WHERE email = 'new@acme.com'",
+    ).first();
+    expect(user).toEqual({ role: 'admin', status });
+    // The same person stays out until an owner decides, without creating a second user.
+    await app.request('/admin', { headers: { [ACCESS_JWT_HEADER]: jwt } });
+    expect(await env.DB.prepare('SELECT count(*) AS n FROM users').first('n')).toBe(2);
+  });
+
+  it('ignores join defaults for the first owner', async () => {
+    const access = await testAccess();
+    const app = accessApp({ BOOTSTRAP_OWNER_EMAILS: '' });
+    await env.DB.batch([putSettingStatement(env.DB, 'join_status', 'pending', Date.now(), null)]);
+    const jwt = await access.sign({ sub: 'first', email: 'first@acme.com' });
+    const res = await app.request('/admin', { headers: { [ACCESS_JWT_HEADER]: jwt } });
+    expect(await res.text()).toBe('ok owner');
   });
 
   it('keeps no session: each request is authorized by its own JWT', async () => {

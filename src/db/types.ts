@@ -4,7 +4,7 @@ import type { ProfileId } from '../identity/types';
 import type { Condition, Injection, Rule, VerifyCheck } from '../policy/types';
 
 export type Role = 'owner' | 'admin' | 'viewer';
-export type UserStatus = 'invited' | 'active' | 'disabled';
+export type UserStatus = 'invited' | 'pending' | 'active' | 'suspended';
 
 export interface User {
   id: string;

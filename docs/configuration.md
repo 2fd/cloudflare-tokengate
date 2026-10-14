@@ -113,7 +113,7 @@ Optional. Emails that may become the first owner, for example `alice@example.com
 case-insensitive.
 
 - Without this variable, the first person to sign in becomes owner. With it, only a listed email can
-  become the first owner; an unlisted person who signs in first joins as a viewer.
+  become the first owner; an unlisted person who signs in first joins with the join defaults.
 - The bootstrap happens only while no owner exists and only once per deployment
   ([I-BOOT-1](threat-model.md#i-boot-1)). It is recorded in settings; it does not run again even if every
   owner is later removed. Recover with [operations/break-glass.md](operations/break-glass.md).
@@ -160,10 +160,13 @@ one of the two.
   token gets `401`, also if it reaches the Worker around Access.
 - Service-token JWTs (no email) are refused.
 - Access decides who can authenticate and how long the Access session lasts. The Access policy is the
-  list of people who can see the admin UI: the first person becomes owner, and everyone else joins as
-  a viewer on their first request (audit action `user.join`). Viewers see every page, but no page shows
-  a secret. Tokengate decides the role: an owner promotes viewers, or invites an email with another
-  role from the start.
+  list of people who can reach the admin UI: the first person becomes owner, and everyone else joins
+  on their first request (audit action `user.join`) with the role and status for new users. These
+  join defaults are not variables: owners set them on the Users page ("New users"; by default an
+  active viewer; role `viewer` or `admin`; status `active`, `pending` or `suspended`). With
+  `pending`, nobody new gets in until an owner approves them. Viewers see every page, but no page
+  shows a secret. An owner can change roles later, or invite an email with another role from the
+  start.
 - "Sign out" in the admin UI opens `/cdn-cgi/access/logout`, which ends the Access session for the
   hostname. To end a user's sessions on every device, revoke them in Zero Trust.
 - Users are linked to `<team domain>|<sub>`. A different team is a different identity: after a team
@@ -180,7 +183,7 @@ only with `pnpm dev`.
   refuses every admin request to another origin, so the edge can never reach it.
 - When Access is also configured, Access is the only accepted proof and `AUTH_DEV_EMAIL` is ignored.
 - The same rules apply: the first sign-in becomes owner (unless `BOOTSTRAP_OWNER_EMAILS` lists other
-  emails), later ones join as viewers.
+  emails), later ones join with the join defaults.
 - Errors: an invalid email; `PUBLIC_URL` missing or not on a loopback host.
 
 ## Bindings

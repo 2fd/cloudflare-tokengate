@@ -40,7 +40,7 @@ Steps:
 
    The key is printed on stdout and its key check value (KCV) on stderr.
 
-4. In `.dev.vars`, uncomment `PUBLIC_URL=http://localhost:8787` and `AUTH_DEV_EMAIL`, and set your email. On an empty local database, the first sign-in becomes the owner. To try another user, change `AUTH_DEV_EMAIL` and restart: that email joins as a viewer.
+4. In `.dev.vars`, uncomment `PUBLIC_URL=http://localhost:8787` and `AUTH_DEV_EMAIL`, and set your email. On an empty local database, the first sign-in becomes the owner. To try another user, change `AUTH_DEV_EMAIL` and restart: that email joins with the join defaults from Users > "New users".
 5. `AUTH_DEV_EMAIL` is the local development login: every admin request is signed in as that email, without Cloudflare Access. The gateway accepts it only while `PUBLIC_URL` is on `localhost`, `127.0.0.1` or `[::1]`. To test the real Access login, run the Worker behind a hostname that an Access application protects. All variables are in [docs/configuration.md](docs/configuration.md).
 6. Apply both migrations to the local databases:
 

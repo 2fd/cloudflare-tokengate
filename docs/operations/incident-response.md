@@ -14,12 +14,13 @@ streaming keeps running until it ends ([known limitations](../threat-model.md#av
 | Disable a grant | Grants > the Grant > "Disable" | Callers that matched only this grant get `403 no_matching_grant` | One grant |
 | Disable a service | Services > the service > "Disable service" | Every caller gets `404 service_not_found` | All callers of one service |
 | Disable a caller provider | Caller providers > the caller provider > "Disable" | Every token from that issuer gets `401 issuer_unknown` | All callers of one issuer |
-| Disable a user | Users > "Disable" | Every admin request of the user is refused, even with a valid Access session | One admin user |
+| Suspend a user | Users > status "Suspended" > "Save" | Every admin request of the user is refused, even with a valid Access session | One admin user |
+| Hold new users | Users > "New users" > status "Pending" | People who sign in for the first time wait for approval instead of getting in | Every new user |
 | Revoke Access sessions | Cloudflare One > the Access application or the user | The user must sign in to Access again ([zone settings](cloudflare-zone-settings.md#cloudflare-access)) | One user, or every user of the application |
 
 Each action in the admin UI writes an audit event ([I-AUDIT-1](../threat-model.md#i-audit-1)). Access
-session revocation is logged by Cloudflare, not by the gateway. Disabling keeps the
-configuration, so "Enable" restores it. Deleting is not needed for containment and removes context
+session revocation is logged by Cloudflare, not by the gateway. Disabling or suspending
+keeps the configuration, so "Enable" or "Active" restores it. Deleting is not needed for containment and removes context
 you may need for the investigation.
 
 ## A repository or workflow is compromised
@@ -62,7 +63,7 @@ Examples: the key appears in a log, a paste or a commit; an upstream response re
 
 ## An admin account is compromised
 
-1. In Users, select "Disable" for the account. The gateway checks the Access JWT and re-reads the
+1. In Users, set the account's status to "Suspended" and click "Save". The gateway checks the Access JWT and re-reads the
    user on every admin request, so the next request of the account is refused
    ([I-SESS-1](../threat-model.md#i-sess-1)). If it is the last active owner, invite a second owner
    first, or use [break-glass](break-glass.md).
@@ -70,7 +71,7 @@ Examples: the key appears in a log, a paste or a commit; an upstream response re
 3. Undo unwanted changes: Grants, caller providers (a new issuer the attacker controls is the typical
    path), services and users.
    If you restore `DB` to undo the attacker's changes instead, the restore can undo step 1: the account
-   is active again. After the restore, disable the account again
+   is active again. After the restore, suspend the account again
    ([checks after a restore](backup-restore.md#checks-after-a-restore)).
 4. Look for `config.export` events: the export holds no credentials, but it maps your configuration.
 5. An admin can use credentials through grants but cannot extract them from the gateway

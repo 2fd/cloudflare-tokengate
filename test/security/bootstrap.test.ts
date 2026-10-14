@@ -153,7 +153,7 @@ describe('I-BOOT-1: bootstrap creates at most one owner, once', () => {
   });
 
   it('never bootstraps over an existing user with the same email', async () => {
-    await createUser({ email: 'first@acme.com', role: 'viewer', status: 'disabled' });
+    await createUser({ email: 'first@acme.com', role: 'viewer', status: 'suspended' });
     const result = await resolveLogin(deps(''), {
       loginProvider: 'access',
       subject: '1',

@@ -101,7 +101,8 @@ steps.
    ([configuration](docs/configuration.md)).
 5. Until the first owner signs in, the first person through Access becomes owner: limit the Access
    policy to yourself or set `BOOTSTRAP_OWNER_EMAILS` until then. Everyone the policy lets in later
-   joins as a viewer ([getting started](docs/getting-started.md)).
+   joins with the join defaults (by default an active viewer); set them to "Pending" in Users to
+   approve each new person yourself ([getting started](docs/getting-started.md)).
 6. Keep at least two owners, so one lost login does not lock you out. Keep the
    [break-glass](docs/operations/break-glass.md) procedure where your on-call team can find it.
 7. Restrict who can deploy the Worker, set its secrets or write to its D1 databases in your

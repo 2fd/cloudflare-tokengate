@@ -7,7 +7,7 @@ CREATE TABLE users (
   email TEXT NOT NULL UNIQUE COLLATE NOCASE,
   name TEXT,
   role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'viewer')),
-  status TEXT NOT NULL CHECK (status IN ('invited', 'active', 'disabled')),
+  status TEXT NOT NULL CHECK (status IN ('invited', 'pending', 'active', 'suspended')),
   invite_expires_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,

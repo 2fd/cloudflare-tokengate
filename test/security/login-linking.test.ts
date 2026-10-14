@@ -86,7 +86,7 @@ describe('I-LINK-1: email linking only for invited, unexpired users with an auth
 
   it('never links a disabled user by email', async () => {
     await createUser({ email: 'owner@acme.com', role: 'owner' }, T0);
-    await createUser({ email: 'dev@acme.com', status: 'disabled' }, T0);
+    await createUser({ email: 'dev@acme.com', status: 'suspended' }, T0);
     const res = await accessLogin({ email: 'dev@acme.com' });
     expect(res.status).toBe(403);
     expect(await count('SELECT count(*) AS n FROM user_identities')).toBe(0);
@@ -120,14 +120,14 @@ describe('I-LINK-1: email linking only for invited, unexpired users with an auth
     await createUser(
       {
         email: 'dev@acme.com',
-        status: 'disabled',
+        status: 'suspended',
         identity: { loginProvider: 'access', subject: await subjectOf('777') },
       },
       T0,
     );
     const res = await accessLogin({ email: 'dev@acme.com' });
     expect(res.status).toBe(403);
-    expect(await res.text()).toContain('disabled');
+    expect(await res.text()).toContain('suspended');
   });
 
   it('after "reset login" the user links a new identity through the invite path', async () => {

@@ -44,10 +44,10 @@ The restore overwrites the database in place. Every change after that time is lo
 
 - Grants, services and caller providers you disabled after that time come back enabled. Disable them
   again before you continue.
-- Users you disabled come back active, demoted users get their old role back, and identities you
+- Users you suspended come back active, users you approved or rejected come back pending, demoted users get their old role back, and identities you
   unlinked with "Reset login" are linked again. Anyone with such a user and a valid Access session
   has access again on their next request. The first [check after a restore](#checks-after-a-restore)
-  disables them again.
+  suspends them again.
 - Access sessions are not in D1, so a restore does not change them.
 - A restore to a time before a migration also removes that migration's changes and its row in
   `d1_migrations`. The schema state then shows "behind" until you apply the migrations again.
@@ -134,8 +134,8 @@ Use this when the Cloudflare account or both databases are lost.
 
 ## Checks after a restore
 
-1. In Users, disable again every user you had disabled after the restore point, and fix roles and
-   login resets made after it. Do this after every restore of `DB` (Time Travel or export): the
+1. In Users, suspend again every user you had suspended after the restore point, and fix roles, approvals,
+   login resets and the "New users" defaults changed after it. Do this after every restore of `DB` (Time Travel or export): the
    gateway re-reads the user on every admin request, so these changes apply at once. If a user may
    have taken part in an incident, also sign every admin out
    ([break-glass](break-glass.md#sign-every-admin-out)).
@@ -145,7 +145,7 @@ Use this when the Cloudflare account or both databases are lost.
 4. The dashboard shows no error banner. A keyring banner means a key id is missing or changed
    ([key rotation](key-rotation.md)).
 5. Settings > System status shows the database schema as "up to date".
-6. Users shows the owners you expect, and no user you had disabled is active.
+6. Users shows the owners you expect, and no user you had suspended is active.
 7. Grants, services and caller providers you disabled during an incident are still disabled.
 8. On a service with a credential check, "Test credential" passes.
 9. A workflow call succeeds ([GitHub Actions](../callers/github-actions.md)).

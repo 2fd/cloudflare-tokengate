@@ -68,10 +68,10 @@ describe('I-SESS-1: every admin request is authenticated by its own Access JWT',
     const user = await createUser({ email: 'a@example.com', role: 'admin' }, T0);
     const session = await loginAs(app, user);
     expect((await adminGet(app, session, '/admin')).status).toBe(200);
-    await env.DB.batch(updateUserStatements(env.DB, { id: user.id, now: T0, status: 'disabled' }));
+    await env.DB.batch(updateUserStatements(env.DB, { id: user.id, now: T0, status: 'suspended' }));
     const res = await adminGet(app, session, '/admin');
     expect(res.status).toBe(403);
-    expect(await res.text()).toContain('disabled');
+    expect(await res.text()).toContain('suspended');
   });
 
   it('applies a role change on the next request', async () => {
