@@ -1,10 +1,10 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { keyCheckValue } from '../../src/crypto/keyring';
+import { keyCheckValue, loadKeyring } from '../../src/crypto/keyring';
 import { resetSchemaStatusCacheForTests } from '../../src/db/migrations';
 import { putSettingStatement } from '../../src/db/settings';
 import { resetReadinessCacheForTests } from '../../src/health';
-import { fromBase64, toBase64 } from '../../src/lib/encoding';
+import { toBase64 } from '../../src/lib/encoding';
 import { createTestApp } from '../helpers/app';
 
 const NOW = Date.UTC(2026, 9, 13, 12, 30);
@@ -142,7 +142,9 @@ describe('/readyz keyring check', () => {
     expect((await readyz(app)).body.checks).toEqual({ ...ALL_OK, keyring: false });
 
     resetReadinessCacheForTests();
-    const kcv = await keyCheckValue(fromBase64(KEK));
+    const loaded = await loadKeyring(app.deps.env);
+    if (!loaded.ok) throw new Error(loaded.error);
+    const kcv = loaded.keyring.kcv.k1;
     await putSettingStatement(env.DB, 'keyring_kcv', { k1: kcv }, NOW, null).run();
     expect((await readyz(app)).body).toEqual({ ok: true, checks: ALL_OK });
   });

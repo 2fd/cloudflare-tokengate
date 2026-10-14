@@ -18,6 +18,7 @@ import {
   updateServiceCredentialStatement,
 } from '../../src/db/services';
 import type { Service } from '../../src/db/types';
+import { TEST_ACCESS_ENV } from '../helpers/app';
 import {
   ACTOR,
   CONTEXT,
@@ -33,7 +34,7 @@ const SECRET = 'repoint-secret-0123456789abcdef';
 const VERIFY = { method: 'GET' as const, path: '/rate_limit', expect_status: 200 };
 
 async function keyring() {
-  const loaded = await loadKeyring({ TOKENGATE_KEK: KEK_1 });
+  const loaded = await loadKeyring({ ...TEST_ACCESS_ENV, TOKENGATE_KEK: KEK_1 });
   if (!loaded.ok) throw new Error(loaded.error);
   return loaded.keyring;
 }

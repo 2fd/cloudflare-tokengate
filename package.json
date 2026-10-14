@@ -47,7 +47,10 @@
         "description": "Request log and hourly rollups, kept separate so telemetry volume cannot fill the control plane. Created for you; `pnpm run deploy` applies its migrations."
       },
       "TOKENGATE_KEK": {
-        "description": "**Required.** Key that encrypts stored upstream credentials: 32 random bytes, base64. Generate it outside Cloudflare with `openssl rand -base64 32` and keep a copy in your vault: losing it loses every stored credential. For rotation, see docs/operations/key-rotation.md in the repository."
+        "description": "**Required. Replace the default.** Key that encrypts stored upstream credentials: 32 random bytes, base64. The default from .dev.vars.example is public and the Worker refuses it outside local development. Generate your own outside Cloudflare with `openssl rand -base64 32` and keep a copy in your vault: losing it loses every stored credential. For rotation, see docs/operations/key-rotation.md in the repository."
+      },
+      "AUTH_ACCESS_DEVELOPMENT": {
+        "description": "**Local development only.** Signs every admin request to localhost in as this email, with no check. In production it signs nobody in, and together with AUTH_ACCESS_TEAM_DOMAIN and AUTH_ACCESS_AUD no login works: delete this secret and set the Access variables before you add services (stored credentials are bound to these variables)."
       }
     }
   }

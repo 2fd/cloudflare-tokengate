@@ -1,11 +1,11 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { keyCheckValue } from '../../../src/crypto/keyring';
+import { loadKeyring } from '../../../src/crypto/keyring';
 import { resetSchemaStatusCacheForTests } from '../../../src/db/migrations';
 import { HOUR_MS, type RollupRow } from '../../../src/db/rollups';
 import { putSettingStatement } from '../../../src/db/settings';
 import type { AppEnv } from '../../../src/env';
-import { fromBase64, toBase64 } from '../../../src/lib/encoding';
+import { toBase64 } from '../../../src/lib/encoding';
 import { newId } from '../../../src/lib/ids';
 import {
   dashboardBanners,
@@ -368,7 +368,9 @@ describe('loadDashboard: keyring key check values', () => {
 
   it('accepts the recorded key check value and ignores kids without credentials', async () => {
     await insertService('svc_A', 'alpha', sealed('k1'), null);
-    await recordKcv({ k1: await keyCheckValue(fromBase64(KEK)), retired: 'ffffffffffffffff' });
+    const loaded = await loadKeyring(deps().env);
+    if (!loaded.ok) throw new Error(loaded.error);
+    await recordKcv({ k1: loaded.keyring.kcv.k1 as string, retired: 'ffffffffffffffff' });
     const data = await loadDashboard(deps());
     expect(data.alerts.keyring).toMatchObject({ ok: true, changedKids: [], missingKids: [] });
   });

@@ -11,7 +11,7 @@ import {
 import { credentialAad, openCredential, sealedKid } from '../../../../src/crypto/envelope';
 import { loadKeyring } from '../../../../src/crypto/keyring';
 import { getService } from '../../../../src/db/services';
-import { setAdminHosts, setUpstreamHosts } from '../../../helpers/app';
+import { setAdminHosts, setUpstreamHosts, TEST_ACCESS_ENV } from '../../../helpers/app';
 import {
   ACTOR,
   auditCount,
@@ -32,7 +32,7 @@ const VERIFY = { method: 'GET' as const, path: '/rate_limit', expect_status: 200
 
 async function openStored(serviceId: string): Promise<string | null> {
   const service = await getService(env.DB, serviceId);
-  const keyring = await loadKeyring({ TOKENGATE_KEK: KEK_1 });
+  const keyring = await loadKeyring({ ...TEST_ACCESS_ENV, TOKENGATE_KEK: KEK_1 });
   if (!service?.credential_sealed || !keyring.ok) return null;
   const aad = credentialAad(service.id, service.base_url, service.injection_json);
   const opened = await openCredential(keyring.keyring, service.credential_sealed, aad);

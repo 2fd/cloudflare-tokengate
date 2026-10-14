@@ -16,21 +16,51 @@ The keyring comes from exactly one of two Worker secrets (`src/crypto/keyring.ts
 | `TOKENGATE_KEK` | Standard base64 of 32 random bytes | Always `k1` |
 | `TOKENGATE_KEYRING` | JSON `{"active":"k2","keys":{"k1":"<base64>","k2":"<base64>"}}` | Your choice; `active` seals new credentials |
 
-- Key ids match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. Every key is 32 bytes.
+- Key ids match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}# Key rotation
+
+This page explains how to rotate the key-encryption key (KEK) that protects stored credentials, and
+how to recover when a key is replaced or lost. It is for owners and platform engineers.
+
+## How the keyring works
+
+Each credential is sealed with a fresh data key, and that data key is wrapped with a KEK from the
+Keyring (`src/crypto/envelope.ts`). The sealed value records the key id (`kid`) that wrapped it. Both
+layers are bound to the service id, base URL and injection ([I-CRED-2](../threat-model.md#i-cred-2)).
+
+The keyring comes from exactly one of two Worker secrets (`src/crypto/keyring.ts`):
+
+| Secret | Format | Key ids |
+|---|---|---|
+| `TOKENGATE_KEK` | Standard base64 of 32 random bytes | Always `k1` |
+| `TOKENGATE_KEYRING` | JSON `{"active":"k2","keys":{"k1":"<base64>","k2":"<base64>"}}` | Your choice; `active` seals new credentials |
+
+. Every key is 32 bytes.
 - If both secrets are set, the keyring fails with `both_kek_and_keyring_set`. The proxy then answers
   `503 not_configured` for every service, and credential changes are refused.
+- The public development key from `.dev.vars.example` is refused in any key slot with
+  `dev_placeholder_key`, unless `AUTH_ACCESS_DEVELOPMENT` is set and no Access variable is set
+  ([development key](../configuration.md#development-key)). The result is the same `503 not_configured`.
+- Every key is bound to the login variables `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` and
+  `AUTH_ACCESS_DEVELOPMENT` ([I-CRED-3](../threat-model.md#i-cred-3)). The AES key is HKDF-SHA256 of
+  the secret key with these values. A change to any of them makes every stored credential impossible
+  to open ([recover](#recover-from-a-change-of-the-login-variables)). Rotation and re-encryption work
+  only under one set of login values: do not change them in the same step.
 - Cloudflare cannot return a secret's value. Keep every key in your own vault. If you lose a key,
   you lose every credential sealed with it ([known limitations](../threat-model.md#credentials-and-responses)).
 
 ### Key check values
 
 A key check value (KCV) identifies a key without revealing it: the first 8 bytes of
-HMAC-SHA256(key, `tokengate/v1/kek-check`), in hex.
+HMAC-SHA256(bound key, `tokengate/v1/kek-check`), in hex. The bound key depends on the login
+variables, so the same secret key has a different KCV under different `AUTH_ACCESS_*` values.
 
 - Settings > Encryption keys lists each loaded key id with its "Check value", whether it is
   "Used for new credentials", and how many "Credentials encrypted with it".
 - `pnpm -s keyring check` prints the same values for a secret read from stdin
-  (`scripts/keyring.ts`). It uses the Worker's parser, so it reports the same errors.
+  (`scripts/keyring.ts`). It uses the Worker's parser, so it reports the same errors. It reads
+  `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` and `AUTH_ACCESS_DEVELOPMENT` from the environment.
+  Set them to the Worker's exact values, else the printed KCVs do not match Settings.
+  `pnpm -s keyring generate` prints the KCV for the same environment.
 - The gateway records a KCV for each key id the first time a credential is sealed with it
   (`keyring_kcv` in `settings`). It never silently replaces that value while other credentials use
   the key id. If the key behind a key id changes, `/readyz` reports `keyring: false` and the
@@ -45,6 +75,12 @@ HMAC-SHA256(key, `tokengate/v1/kek-check`), in hex.
 - In the commands below, `vault-read <item>` and `vault-write <item>` stand for your vault's CLI (for
   example `op read op://<vault>/<item>/password`). Keys travel through pipes and environment
   variables only; they are never written to disk or passed as command arguments.
+- Export the Worker's login variables in the shell, with the exact values from the dashboard. The key
+  check values depend on them. Do not export a variable that the Worker does not set:
+
+  ```sh
+  export AUTH_ACCESS_TEAM_DOMAIN=<team> AUTH_ACCESS_AUD=<aud>
+  ```
 
 Each `wrangler secret` command deploys a new Worker version at once. New isolates use the new
 Keyring. A request that is already running finishes with the old one.
@@ -61,7 +97,8 @@ Use this the first time. The current `TOKENGATE_KEK` becomes key id `k1`; the ne
    vault-read tokengate-kek-k1 | pnpm -s keyring check
    ```
 
-   If the values differ, stop: the vault copy is not the deployed key. Find the right key first.
+   If the values differ, first check the exported `AUTH_ACCESS_*` values against the dashboard. If
+   they match, stop: the vault copy is not the deployed key. Find the right key first.
 3. Generate the new key and store it in the vault. The key goes to stdout, its KCV to stderr:
 
    ```sh
@@ -178,6 +215,21 @@ key id. Choose one recovery:
    alert clears; the notice says "New key confirmed: every credential opens with it." Otherwise
    nothing is written, and the page lists the services whose credential still needs the old key.
 
+## Recover from a change of the login variables
+
+Symptom: after a change of `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` or `AUTH_ACCESS_DEVELOPMENT`,
+every service with a credential answers `503 credential_unavailable` (reason
+`credential_binding_mismatch`), and Settings shows each key id that has credentials as changed. The secret keys did not
+change; the keys bound to the login variables did ([I-CRED-3](../threat-model.md#i-cred-3)). A change
+of form only, such as `acme` to `acme.cloudflareaccess.com` or another email case, has the same effect.
+
+**Option A: restore the earlier values** (preferred). Set each variable back to its exact earlier
+value, or delete it if it was not set. Then check that `pnpm -s keyring check`, with the earlier
+values exported, prints the check values that Settings shows.
+
+**Option B: keep the new values.** Enter every credential again, then select "Re-encrypt credentials
+with the active key", as in [Option B of a replaced key](#recover-from-a-replaced-key).
+
 ## If a key is lost
 
 Without the key, the credentials it sealed cannot be recovered, also not from D1 Time Travel or an
@@ -215,8 +267,9 @@ export, a Time Travel restore, D1 read access), it does.
 ## Rollbacks and secrets
 
 A Worker version includes its secrets. `wrangler rollback` to a version from before a key change
-restores that version's keyring; wrangler asks you to confirm when secrets differ. Do not confirm a
-rollback that brings back a removed or replaced key. See [upgrades](upgrades.md#roll-back).
+restores that version's keyring and variables; wrangler asks you to confirm when secrets differ. Do
+not confirm a rollback that brings back a removed or replaced key, or other `AUTH_ACCESS_*` values
+([I-CRED-3](../threat-model.md#i-cred-3)). See [upgrades](upgrades.md#roll-back).
 
 ## Related pages
 

@@ -91,39 +91,43 @@ Work through this list for every production deployment. Each item links to the p
 steps.
 
 1. Generate the keyring key outside Cloudflare and store a copy in your company vault. Losing it
-   loses every stored credential ([key rotation](docs/operations/key-rotation.md)).
-2. Serve the gateway on a custom domain and sign in there first. That hostname becomes the only admin
+   loses every stored credential ([key rotation](docs/operations/key-rotation.md)). Never use the
+   development key from `.dev.vars.example`.
+2. Set `AUTH_ACCESS_TEAM_DOMAIN` and `AUTH_ACCESS_AUD` before you add services, and keep their exact
+   values with the key. The key is bound to them: a later change makes every stored credential
+   impossible to decrypt ([I-CRED-3](docs/threat-model.md#i-cred-3)).
+3. Serve the gateway on a custom domain and sign in there first. That hostname becomes the only admin
    host: `/admin` then answers only on the hosts in Settings > "Admin hosts", and never on `workers.dev`
    ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)) ([configuration](docs/configuration.md#admin-hosts)).
-3. In Settings > "Upstream hosts", list the upstream hosts you use. Empty allows any public https
+4. In Settings > "Upstream hosts", list the upstream hosts you use. Empty allows any public https
    host ([I-SSRF-1](docs/threat-model.md#i-ssrf-1)) ([configuration](docs/configuration.md#upstream-host-allowlist)).
-4. Set operator variables in the Cloudflare dashboard, not as `""` placeholders in `wrangler.jsonc`.
+5. Set operator variables in the Cloudflare dashboard, not as `""` placeholders in `wrangler.jsonc`.
    If you edit `wrangler.jsonc`, run `bash scripts/check-config.sh` before you deploy
    ([configuration](docs/configuration.md)).
-5. Until the first owner signs in, the first person through Access becomes owner: limit the Access
+6. Until the first owner signs in, the first person through Access becomes owner: limit the Access
    policy to yourself until then. Everyone the policy lets in later
    joins with the join defaults (by default an active viewer); set them to "Pending" in Users to
    approve each new person yourself ([getting started](docs/getting-started.md)).
-6. Keep at least two owners, so one lost login does not lock you out. Keep the
+7. Keep at least two owners, so one lost login does not lock you out. Keep the
    [break-glass](docs/operations/break-glass.md) procedure where your on-call team can find it.
-7. Restrict who can deploy the Worker, set its secrets or write to its D1 databases in your
+8. Restrict who can deploy the Worker, set its secrets or write to its D1 databases in your
    Cloudflare account. These permissions bypass the admin UI and the audit log
    ([threat model](docs/threat-model.md#actors)).
-8. Put a Cloudflare WAF rate-limiting rule on `/admin/*` and `/proxy/*`. Bot Fight Mode can block CI
+9. Put a Cloudflare WAF rate-limiting rule on `/admin/*` and `/proxy/*`. Bot Fight Mode can block CI
    callers and cannot be skipped per path: disable it on the gateway zone, or use Super Bot Fight
    Mode with a skip rule for `/proxy/`. Protect `/admin` with a Cloudflare Access application,
-   which is the only admin login, and never set `AUTH_DEV_EMAIL` in production
+   which is the only admin login, and never set `AUTH_ACCESS_DEVELOPMENT` in production
    ([zone settings](docs/operations/cloudflare-zone-settings.md)).
-9. Give every caller provider a tenant pin. The gateway requires one on shared issuers, also for
-   the `generic` profile ([I-TEN-1](docs/threat-model.md#i-ten-1)) ([policies](docs/policies.md)).
-10. Write narrow grants: exact numeric IDs, `ref_protected exact true` on ref and environment
+10. Give every caller provider a tenant pin. The gateway requires one on shared issuers, also for
+    the `generic` profile ([I-TEN-1](docs/threat-model.md#i-ten-1)) ([policies](docs/policies.md)).
+11. Write narrow grants: exact numeric IDs, `ref_protected exact true` on ref and environment
     Conditions, no "pwn request" events, only `POST /` on webhook services with `path` Injection.
     Do not acknowledge a save-time warning you do not understand ([policies](docs/policies.md)).
-11. Never grant an endpoint that returns the credential in its response body. Response bodies are
+12. Never grant an endpoint that returns the credential in its response body. Response bodies are
     not redacted ([threat model](docs/threat-model.md#credentials-and-responses)).
-12. Send `audit.event` log lines to your SIEM and monitor `/readyz`
+13. Send `audit.event` log lines to your SIEM and monitor `/readyz`
     ([observability](docs/observability.md)).
-13. Rehearse [incident response](docs/operations/incident-response.md) and
+14. Rehearse [incident response](docs/operations/incident-response.md) and
     [credential rotation](docs/operations/credential-rotation.md) before you need them.
-14. Watch this repository's security advisories and apply releases promptly
+15. Watch this repository's security advisories and apply releases promptly
     ([upgrades](docs/operations/upgrades.md)).

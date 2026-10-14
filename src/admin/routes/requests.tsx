@@ -87,6 +87,8 @@ const NEXT_STEP: Readonly<Record<string, string>> = {
   active_kid_missing: 'Fix the TOKENGATE_KEYRING secret: its active key is missing. See Settings.',
   key_not_32_bytes: 'Fix the keyring secret: every key must be 32 bytes. See Settings.',
   both_kek_and_keyring_set: 'Remove one of TOKENGATE_KEK and TOKENGATE_KEYRING.',
+  dev_placeholder_key:
+    'Replace the development TOKENGATE_KEK from .dev.vars.example with a key of your own. See Settings.',
   credential_missing:
     'Set the credential on the service page. If the service had one, check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the credential again: the row may have been edited in D1.',
   credential_binding_mismatch:

@@ -5,7 +5,7 @@ import type { LoginProviderId } from './resolve-login';
 export interface EmailEvidence {
   /** `email` claim of a validated Cloudflare Access JWT. */
   access: { email: unknown };
-  /** AUTH_DEV_EMAIL, accepted only on loopback hosts (src/admin/auth/identity.ts). */
+  /** AUTH_ACCESS_DEVELOPMENT, accepted only on loopback hosts (src/admin/auth/identity.ts). */
   dev: { email: unknown };
 }
 
@@ -13,7 +13,7 @@ export interface EmailEvidence {
  * Lowercased emails this login proves control of:
  * - access: the email of the validated Access JWT. Access only issues it after the identity
  *   provider configured in Zero Trust authenticated the user.
- * - dev: the configured AUTH_DEV_EMAIL.
+ * - dev: the configured AUTH_ACCESS_DEVELOPMENT.
  */
 export function authoritativeEmails<P extends LoginProviderId>(
   loginProvider: P,

@@ -31,6 +31,8 @@ export const KEYRING_ERROR_TEXT: Readonly<Record<KeyringError, string>> = {
   key_not_32_bytes: 'A configured key is not exactly 32 bytes encoded as base64.',
   both_kek_and_keyring_set:
     'Both TOKENGATE_KEK and TOKENGATE_KEYRING are set. Keep only one of them.',
+  dev_placeholder_key:
+    'The keyring holds the development key from .dev.vars.example, which is public. It works only with AUTH_ACCESS_DEVELOPMENT and no Access variable. Generate a key of your own (openssl rand -base64 32) and set it as TOKENGATE_KEK.',
 };
 
 /** Why a stored credential could not be opened, completing "The stored credential …". */

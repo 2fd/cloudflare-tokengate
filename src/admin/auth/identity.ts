@@ -23,9 +23,9 @@ export function requestMeta(headers: Headers): RequestMeta {
 export type IdentityError = 'not_configured' | AccessVerifyError;
 
 /**
- * The verified login identity of a request. When Access is configured it is the only accepted
- * proof, even if AUTH_DEV_EMAIL is also set. The dev login also re-checks the request host itself,
- * independent of host pinning.
+ * The verified login identity of a request. parseConfig never enables both logins (setting
+ * AUTH_ACCESS_DEVELOPMENT with Access turns both off). The dev login also re-checks the request
+ * host itself, independent of host pinning.
  */
 export async function requestIdentity(
   request: Request,

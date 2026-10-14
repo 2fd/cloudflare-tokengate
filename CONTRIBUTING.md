@@ -33,8 +33,9 @@ Steps:
    ```
 
    It copies `.dev.vars.example` to `.dev.vars` (git-ignored). It overwrites an existing `.dev.vars`.
-   Write `pnpm run setup`: `pnpm setup` is a built-in pnpm command. In `.dev.vars`, put the output of
-   `pnpm keyring generate` in `TOKENGATE_KEK`, and uncomment `AUTH_DEV_EMAIL` with your email.
+   Write `pnpm run setup`: `pnpm setup` is a built-in pnpm command. The copy works as is: it sets
+   the public development key in `TOKENGATE_KEK` and `AUTH_ACCESS_DEVELOPMENT=dev@example.com`. You do
+   not need to edit it.
 
 3. Create the local databases:
 
@@ -48,13 +49,22 @@ Steps:
    pnpm dev
    ```
 
-`AUTH_DEV_EMAIL` is the local development login: every admin request is signed in as that email,
-without Cloudflare Access. The gateway accepts it only on requests to `localhost`, `127.0.0.1` or
-`[::1]`. On an empty local database, the first sign-in becomes the owner, and its hostname
+`AUTH_ACCESS_DEVELOPMENT` is the local development login: every admin request is signed in as that
+email, without Cloudflare Access. The gateway accepts it only on requests to `localhost`, `127.0.0.1`
+or `[::1]`. On an empty local database, the first sign-in becomes the owner, and its hostname
 (`localhost`) becomes the admin host in the local database. To try another user, change
-`AUTH_DEV_EMAIL` in `.dev.vars` and restart: that email joins with the join defaults from Users >
-"New users". To test the real Access login, run the Worker behind a hostname that an Access
-application protects. All variables are in [docs/configuration.md](docs/configuration.md).
+`AUTH_ACCESS_DEVELOPMENT` in `.dev.vars` and restart: that email joins with the join defaults from
+Users > "New users".
+
+The keyring is bound to the `AUTH_ACCESS_*` values
+([I-CRED-3](docs/threat-model.md#i-cred-3)). When you change `AUTH_ACCESS_DEVELOPMENT`, the
+credentials stored in the local database no longer open: enter them again, or change the value back.
+
+To test the real Access login, run the Worker behind a hostname that an Access application protects.
+Set `AUTH_ACCESS_TEAM_DOMAIN` and `AUTH_ACCESS_AUD`, delete `AUTH_ACCESS_DEVELOPMENT`, and replace
+`TOKENGATE_KEK` with a key from `pnpm keyring generate`. With an Access variable set, the gateway
+refuses the development key (`dev_placeholder_key`), and with both logins set, no login works. All
+variables are in [docs/configuration.md](docs/configuration.md).
 
 You do not need a Cloudflare account or Cloudflare Access to run the tests: they sign Access tokens with a fake team key (`test/helpers/login-providers.ts`).
 

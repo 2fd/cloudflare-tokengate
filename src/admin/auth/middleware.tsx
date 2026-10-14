@@ -177,16 +177,23 @@ function errorPage(c: AdminContext, key: MessageKey, status: ContentfulStatusCod
 /** Shown when no login is configured. Lists the variables to set, never their values. */
 function setupPage(c: AdminContext) {
   const config = parseConfig(c.get('deps').env);
-  const loginErrors = config.errors.filter((error) => error.feature.startsWith('login.'));
+  const host = new URL(c.req.url).hostname;
+  const texts = new Set(
+    config.errors
+      .filter((error) => error.feature.startsWith('login.'))
+      .map((error) => `${error.variable}: ${error.message}`),
+  );
+  if (config.login.dev) {
+    texts.add(
+      `AUTH_ACCESS_DEVELOPMENT is set, but it signs in only requests to localhost, 127.0.0.1 or [::1], not ${host}. In production, remove it and set the Access variables.`,
+    );
+  }
   return c.html(
     <Layout
       title="Set up sign-in"
-      banners={loginErrors.map((error) => ({
-        level: 'error' as const,
-        text: `${error.variable}: ${error.message}`,
-      }))}
+      banners={[...texts].map((text) => ({ level: 'error' as const, text }))}
     >
-      <SetupInstructions host={new URL(c.req.url).hostname} />
+      <SetupInstructions host={host} />
     </Layout>,
     503,
   );

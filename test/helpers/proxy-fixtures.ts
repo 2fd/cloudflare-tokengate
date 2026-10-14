@@ -3,7 +3,7 @@
 // received. No network: issuer JWKS and upstream are served through the injected fetch.
 import { env } from 'cloudflare:workers';
 import { credentialAad, sealCredential } from '../../src/crypto/envelope';
-import { loadKeyring } from '../../src/crypto/keyring';
+import { type KeyringEnv, loadKeyring } from '../../src/crypto/keyring';
 import { listRequests } from '../../src/db/requests';
 import type { AppEnv } from '../../src/env';
 import { resetJwksCacheForTests } from '../../src/identity/jwt';
@@ -267,7 +267,7 @@ export async function setupProxy(options: ProxyFixtureOptions = {}): Promise<Pro
 
 /** Seals `secret` for a service row exactly like the admin credential operation does. */
 export async function sealFor(
-  appEnv: Pick<AppEnv, 'TOKENGATE_KEK' | 'TOKENGATE_KEYRING'>,
+  appEnv: KeyringEnv,
   serviceId: string,
   baseUrl: string,
   injectionJson: string,

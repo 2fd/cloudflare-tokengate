@@ -29,6 +29,7 @@ const REASON_TEXT: Readonly<Record<string, string>> = {
   active_kid_missing: 'the keyring has no active key',
   key_not_32_bytes: 'a keyring key is not 32 bytes',
   both_kek_and_keyring_set: 'both TOKENGATE_KEK and TOKENGATE_KEYRING are set',
+  dev_placeholder_key: 'the keyring holds the development key from .dev.vars.example',
 };
 
 /** Plain-language meaning of a recorded reason, or null for unknown codes. */

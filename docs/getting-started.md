@@ -138,7 +138,10 @@ Set operator variables in the Cloudflare dashboard, not in `wrangler.jsonc`. `wr
    | `AUTH_ACCESS_TEAM_DOMAIN` | Your team name from step 8 | The gateway checks the Access token against this team's keys. |
    | `AUTH_ACCESS_AUD` | The AUD tag from step 8 | The Access token must be for this application. |
 
-3. Save and deploy the change.
+3. If `AUTH_ACCESS_DEVELOPMENT` is listed (the Deploy button sets it), delete it. With it and the Access variables both set, no login works.
+4. Save and deploy the change.
+
+> **Warning:** Set these variables before you add services (step 13), and store their exact values in your vault next to the KEK. The KEK is bound to `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` and `AUTH_ACCESS_DEVELOPMENT` ([I-CRED-3](threat-model.md#i-cred-3)). A later change to any of them, even from `acme` to `acme.cloudflareaccess.com`, makes every stored credential impossible to decrypt ([configuration](configuration.md#login-binding)).
 
 If a variable is half-configured or malformed, Access login stays off. `/admin` then shows the setup page, which names the variable ([I-CFG-1](threat-model.md#i-cfg-1)). Every variable, its format and its failure behavior are in [configuration.md](configuration.md).
 
@@ -301,9 +304,13 @@ The steps above already put the admin UI on a custom domain. Before real use:
 
 1. Generate the KEK and store it in your vault first (step 6, items 1 and 2).
 2. Click the button. Cloudflare copies this repository into a new repository in your GitHub or GitLab account, creates the two D1 databases and sets up Workers Builds.
-3. The form asks for the secret listed in `.dev.vars.example`: `TOKENGATE_KEK`. Paste the KEK.
+3. The form asks for the two secrets that `.dev.vars.example` sets:
+   - `TOKENGATE_KEK`: paste your KEK. Do not use the development key from `.dev.vars.example`: it is public.
+   - `AUTH_ACCESS_DEVELOPMENT`: the local development login. It signs in no request to your Worker. Enter any email address; you delete this secret in [step 9](#9-set-the-operator-variables).
 4. Check that the Workers Builds deploy command runs the `deploy` script: `pnpm run deploy`. Cloudflare pre-fills it from `package.json`. If the field shows a plain `wrangler deploy`, change it: that command does not apply the database migrations.
-5. After the first deploy, continue at [step 7](#7-attach-a-custom-domain). The variables are not part of the button form: `wrangler.jsonc` declares none.
+5. After the first deploy, continue at [step 7](#7-attach-a-custom-domain). The Access variables are not part of the button form: `wrangler.jsonc` declares none.
+
+A deploy that keeps the `.dev.vars.example` values fails closed ([I-DEPLOY-1](threat-model.md#i-deploy-1)). The development login signs in only requests to `localhost`, so `/admin` shows the setup page and nobody can sign in. When you set the Access variables, the Worker refuses the development key (`dev_placeholder_key`), and the setup page stays until you delete `AUTH_ACCESS_DEVELOPMENT`.
 
 Caveats:
 

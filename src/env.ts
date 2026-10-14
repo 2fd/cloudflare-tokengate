@@ -14,7 +14,7 @@ export interface AppEnv {
 
   AUTH_ACCESS_TEAM_DOMAIN?: string;
   AUTH_ACCESS_AUD?: string;
-  AUTH_DEV_EMAIL?: string;
+  AUTH_ACCESS_DEVELOPMENT?: string;
 
   REQUEST_LOG_QUEUE?: Queue<RequestRecord>;
   REQUEST_ARCHIVE?: Pipeline<ArchiveRecord>;

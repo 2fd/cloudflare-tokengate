@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { type KeyringError, keyCheckValue, loadKeyring } from '../../../src/crypto/keyring';
+import devVarsExample from '../../../.dev.vars.example?raw';
+import {
+  boundKey,
+  DEV_PLACEHOLDER_KEK,
+  type KeyringEnv,
+  type KeyringError,
+  kekBindingInfo,
+  keyCheckValue,
+  loadKeyring,
+} from '../../../src/crypto/keyring';
 import { toBase64 } from '../../../src/lib/encoding';
 import vectors from '../../vectors/sealed.json';
 
@@ -186,10 +195,81 @@ describe('loadKeyring success', () => {
   });
 });
 
+describe('I-CRED-3: keys are bound to the login variables', () => {
+  const access = { AUTH_ACCESS_TEAM_DOMAIN: 'acme', AUTH_ACCESS_AUD: 'a'.repeat(64) };
+  const kcvOf = async (env: KeyringEnv) => {
+    const result = await loadKeyring({ TOKENGATE_KEK: K1, ...env });
+    if (!result.ok) throw new Error(result.error);
+    return result.keyring.kcv.k1;
+  };
+
+  it('every change to AUTH_ACCESS_* yields a different key', async () => {
+    const variants: KeyringEnv[] = [
+      {},
+      access,
+      { ...access, AUTH_ACCESS_AUD: 'b'.repeat(64) },
+      { ...access, AUTH_ACCESS_TEAM_DOMAIN: 'https://acme.cloudflareaccess.com' },
+      { AUTH_ACCESS_DEVELOPMENT: 'dev@example.com' },
+      { AUTH_ACCESS_DEVELOPMENT: 'Dev@example.com' },
+      { ...access, AUTH_ACCESS_DEVELOPMENT: 'dev@example.com' },
+    ];
+    const kcvs = await Promise.all(variants.map(kcvOf));
+    expect(new Set(kcvs).size).toBe(variants.length);
+  });
+
+  it('ignores surrounding whitespace and treats blank as unset', async () => {
+    expect(
+      await kcvOf({ AUTH_ACCESS_TEAM_DOMAIN: ' acme\n', AUTH_ACCESS_AUD: ` ${'a'.repeat(64)}` }),
+    ).toBe(await kcvOf(access));
+    expect(await kcvOf({ AUTH_ACCESS_DEVELOPMENT: '  ' })).toBe(await kcvOf({}));
+  });
+
+  it('binds with HKDF-SHA256 over kekBindingInfo', async () => {
+    const raw = Uint8Array.from(atob(K1), (c) => c.charCodeAt(0));
+    const bound = await boundKey(raw, kekBindingInfo(access));
+    expect(await keyCheckValue(bound)).toBe(await kcvOf(access));
+  });
+});
+
+describe('the development placeholder key', () => {
+  it('is the TOKENGATE_KEK in .dev.vars.example', () => {
+    expect(devVarsExample).toContain(`\nTOKENGATE_KEK=${DEV_PLACEHOLDER_KEK}\n`);
+  });
+
+  it.each<[string, KeyringEnv]>([
+    ['no login variable', {}],
+    ['Access', { AUTH_ACCESS_TEAM_DOMAIN: 'acme', AUTH_ACCESS_AUD: 'a'.repeat(64) }],
+    ['Access team domain only', { AUTH_ACCESS_TEAM_DOMAIN: 'acme' }],
+    [
+      'development and Access',
+      { AUTH_ACCESS_DEVELOPMENT: 'dev@example.com', AUTH_ACCESS_AUD: 'x' },
+    ],
+  ])('is refused with %s', async (_, env) => {
+    expect(await loadKeyring({ TOKENGATE_KEK: DEV_PLACEHOLDER_KEK, ...env })).toEqual({
+      ok: false,
+      error: 'dev_placeholder_key',
+    });
+    expect(
+      await loadKeyring({
+        TOKENGATE_KEYRING: ring({ active: 'k1', keys: { k1: K1, dev: DEV_PLACEHOLDER_KEK } }),
+        ...env,
+      }),
+    ).toEqual({ ok: false, error: 'dev_placeholder_key' });
+  });
+
+  it('is accepted in development mode only', async () => {
+    const result = await loadKeyring({
+      TOKENGATE_KEK: DEV_PLACEHOLDER_KEK,
+      AUTH_ACCESS_DEVELOPMENT: 'dev@example.com',
+    });
+    expect(result.ok).toBe(true);
+  });
+});
+
 describe('keyCheckValue', () => {
-  it.each(vectors.kcv)('KCV of $key_b64 is $kcv', async ({ key_b64, kcv }) => {
+  it.each(vectors.kcv)('KCV of $key_b64 is $kcv', async ({ key_b64, binding_info, kcv }) => {
     const raw = Uint8Array.from(atob(key_b64), (c) => c.charCodeAt(0));
-    expect(await keyCheckValue(raw)).toBe(kcv);
+    expect(await keyCheckValue(await boundKey(raw, binding_info))).toBe(kcv);
   });
 
   it('is 16 lowercase hex characters and differs per key', async () => {

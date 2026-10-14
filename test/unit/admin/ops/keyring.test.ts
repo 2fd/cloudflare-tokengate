@@ -5,6 +5,7 @@ import { openStoredCredential } from '../../../../src/admin/ops/services';
 import { sealedKid } from '../../../../src/crypto/envelope';
 import { loadKeyring } from '../../../../src/crypto/keyring';
 import { getService } from '../../../../src/db/services';
+import { TEST_ACCESS_ENV } from '../../../helpers/app';
 import {
   ACTOR,
   auditCount,
@@ -31,7 +32,7 @@ describe('keyringStatus', () => {
     await seedService(old, { slug: 'a', secret: 'secret-a-0123456789' });
     await seedService(old, { slug: 'b', secret: 'secret-b-0123456789' });
     await seedService(old, { slug: 'c' });
-    const keyring = await loadKeyring({ TOKENGATE_KEYRING: KEYRING_1_2 });
+    const keyring = await loadKeyring({ ...TEST_ACCESS_ENV, TOKENGATE_KEYRING: KEYRING_1_2 });
     if (!keyring.ok) throw new Error(keyring.error);
 
     const status = await keyringStatus(rotated());
@@ -99,6 +100,7 @@ describe('rewrapCredentials', () => {
 
     // The rewrapped credential opens with k2 alone, with the unchanged AAD.
     const k2Only = await loadKeyring({
+      ...TEST_ACCESS_ENV,
       TOKENGATE_KEYRING: JSON.stringify({ active: 'k2', keys: { k2: KEK_2 } }),
     });
     if (!k2Only.ok) throw new Error(k2Only.error);

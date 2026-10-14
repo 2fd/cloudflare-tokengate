@@ -1,7 +1,14 @@
 // Generates and checks TOKENGATE_KEK / TOKENGATE_KEYRING values outside Cloudflare, using the
 // same parser as the Worker. Runs on Node 22.18+ (type stripping): `node scripts/keyring.ts check`.
-// Secrets are read from stdin only, never from argv, so they stay out of shell history.
-import { keyCheckValue, loadKeyring } from '../src/crypto/keyring.ts';
+// Secrets are read from stdin only, never from argv, so they stay out of shell history. Key check
+// values depend on the login variables (I-CRED-3), read from the environment like the Worker does.
+import {
+  boundKey,
+  kekBindingInfo,
+  type KeyringEnv,
+  keyCheckValue,
+  loadKeyring,
+} from '../src/crypto/keyring.ts';
 
 const USAGE = `usage:
   node scripts/keyring.ts generate
@@ -10,21 +17,34 @@ const USAGE = `usage:
   node scripts/keyring.ts check < secret
       Reads a TOKENGATE_KEK value (bare base64) or a TOKENGATE_KEYRING value (JSON) from stdin,
       validates it like the Worker does and prints the active kid and each kid's KCV.
+
+Key check values depend on AUTH_ACCESS_TEAM_DOMAIN, AUTH_ACCESS_AUD and AUTH_ACCESS_DEVELOPMENT.
+Set them in the environment to the Worker's values to compare with Settings.
 `;
+
+function loginEnv(): KeyringEnv {
+  return {
+    AUTH_ACCESS_TEAM_DOMAIN: process.env.AUTH_ACCESS_TEAM_DOMAIN,
+    AUTH_ACCESS_AUD: process.env.AUTH_ACCESS_AUD,
+    AUTH_ACCESS_DEVELOPMENT: process.env.AUTH_ACCESS_DEVELOPMENT,
+  };
+}
 
 async function generate(): Promise<number> {
   const raw = crypto.getRandomValues(new Uint8Array(32));
   process.stdout.write(`${Buffer.from(raw).toString('base64')}\n`);
-  process.stderr.write(`kcv ${await keyCheckValue(raw)}\n`);
+  const bound = await boundKey(raw, kekBindingInfo(loginEnv()));
+  process.stderr.write(`kcv ${await keyCheckValue(bound)}\n`);
   return 0;
 }
 
 async function check(): Promise<number> {
   const input = (await readStdin()).trim();
   const isJson = input.startsWith('{');
-  const result = await loadKeyring(
-    isJson ? { TOKENGATE_KEYRING: input } : { TOKENGATE_KEK: input },
-  );
+  const result = await loadKeyring({
+    ...loginEnv(),
+    ...(isJson ? { TOKENGATE_KEYRING: input } : { TOKENGATE_KEK: input }),
+  });
   if (!result.ok) {
     process.stderr.write(
       `invalid ${isJson ? 'TOKENGATE_KEYRING' : 'TOKENGATE_KEK'}: ${result.error}\n`,

@@ -9,6 +9,7 @@ import type { Actor, AuditEvent, CallerProvider, Grant } from '../../../../src/d
 import type { Deps } from '../../../../src/deps';
 import type { AppEnv } from '../../../../src/env';
 import { toBase64 } from '../../../../src/lib/encoding';
+import { TEST_ACCESS_ENV } from '../../../helpers/app';
 
 export const GITHUB_ISSUER = 'https://token.actions.githubusercontent.com';
 export const GITHUB_JWKS = 'https://token.actions.githubusercontent.com/.well-known/jwks';
@@ -65,7 +66,13 @@ export function opsDeps(
   options: { fetch?: typeof fetch; env?: Partial<AppEnv>; now?: () => number } = {},
 ): Deps {
   return {
-    env: { ...(env as unknown as AppEnv), TOKENGATE_KEK: KEK_1, ...options.env },
+    // Same login variables as the test apps: keys are bound to them (I-CRED-3).
+    env: {
+      ...(env as unknown as AppEnv),
+      ...TEST_ACCESS_ENV,
+      TOKENGATE_KEK: KEK_1,
+      ...options.env,
+    },
     fetch: options.fetch ?? fakeNetwork().fetch,
     now: options.now ?? (() => Date.now()),
     random: (length) => crypto.getRandomValues(new Uint8Array(length)),

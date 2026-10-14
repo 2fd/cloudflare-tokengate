@@ -49,6 +49,7 @@ const DOCUMENTED_ADMIN_ROUTES = [
   'POST /admin/settings',
   'POST /admin/settings/rewrap',
   'POST /admin/settings/upstream-hosts',
+  'POST /admin/settings/admin-hosts',
   'POST /admin/export',
 ];
 

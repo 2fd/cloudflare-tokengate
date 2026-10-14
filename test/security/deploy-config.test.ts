@@ -4,6 +4,7 @@ import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import devVarsExample from '../../.dev.vars.example?raw';
 import actionYml from '../../actions/get-token/action.yml?raw';
+import { DEV_PLACEHOLDER_KEK, loadKeyring } from '../../src/crypto/keyring';
 import wranglerJsonc from '../../wrangler.jsonc?raw';
 
 // Same comment stripping as scripts/check-config.sh: drop comment-only lines and trailing comments.
@@ -18,7 +19,7 @@ function parseJsonc(text: string): Record<string, unknown> {
 // config.ts reads a blank value as unset, which turns admin sign-in off for AUTH_ACCESS_*.
 const isBlank = (value: unknown): boolean => typeof value === 'string' && value.trim() === '';
 
-const OPERATOR_VARS = ['AUTH_ACCESS_TEAM_DOMAIN', 'AUTH_ACCESS_AUD', 'AUTH_DEV_EMAIL'];
+const OPERATOR_VARS = ['AUTH_ACCESS_TEAM_DOMAIN', 'AUTH_ACCESS_AUD', 'AUTH_ACCESS_DEVELOPMENT'];
 
 describe('I-DEPLOY-1 / I-SSRF-1: deploys do not wipe operator vars set in the dashboard', () => {
   const config = parseJsonc(wranglerJsonc);
@@ -39,10 +40,22 @@ describe('I-DEPLOY-1 / I-SSRF-1: deploys do not wipe operator vars set in the da
   });
 });
 
-describe('I-DEPLOY-1: the Deploy button asks only for TOKENGATE_KEK, with no default', () => {
-  it('.dev.vars.example sets no value and leaves every operator variable commented', () => {
+describe('I-DEPLOY-1: .dev.vars.example works locally and its defaults fail closed in production', () => {
+  it('sets only the development key and the development login; Access stays commented', () => {
     const assignments = devVarsExample.split('\n').filter((line) => /^[A-Z][A-Z0-9_]*=/.test(line));
-    expect(assignments).toEqual(['TOKENGATE_KEK=']);
+    expect(assignments).toEqual([
+      `TOKENGATE_KEK=${DEV_PLACEHOLDER_KEK}`,
+      'AUTH_ACCESS_DEVELOPMENT=dev@example.com',
+    ]);
+  });
+
+  it('its key is refused once an Access variable is set', async () => {
+    const env = { TOKENGATE_KEK: DEV_PLACEHOLDER_KEK, AUTH_ACCESS_DEVELOPMENT: 'dev@example.com' };
+    expect((await loadKeyring(env)).ok).toBe(true);
+    expect(await loadKeyring({ ...env, AUTH_ACCESS_AUD: 'a'.repeat(64) })).toEqual({
+      ok: false,
+      error: 'dev_placeholder_key',
+    });
   });
 });
 

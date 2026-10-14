@@ -44,9 +44,9 @@ The steps below are a summary. [docs/getting-started.md](docs/getting-started.md
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/2fd/cloudflare-tokengate)
 
 1. Before you click, generate the key-encryption key outside Cloudflare and store it in your company vault: `openssl rand -base64 32`.
-2. Click the button. Paste the key when the form asks for `TOKENGATE_KEK`.
+2. Click the button. Paste the key when the form asks for `TOKENGATE_KEK`. The form also asks for `AUTH_ACCESS_DEVELOPMENT`, a local-only login: enter any email and delete it when you set the Access variables. Defaults kept from `.dev.vars.example` fail closed.
 3. In the build settings, check that the deploy command runs the `deploy` script: `pnpm run deploy`. Cloudflare pre-fills it from `package.json`. This script applies the database migrations before it deploys.
-4. After the first deploy, continue with [getting-started.md, step 7](docs/getting-started.md#7-attach-a-custom-domain).
+4. After the first deploy, continue with [getting-started.md, step 7](docs/getting-started.md#7-attach-a-custom-domain). Set the Access variables before you add services: stored credentials are bound to them ([I-CRED-3](docs/threat-model.md#i-cred-3)).
 
 The button copies this repository into a new repository in your account. It is not a fork, so you pull updates yourself ([docs/operations/upgrades.md](docs/operations/upgrades.md)).
 
@@ -72,10 +72,9 @@ Then attach a custom domain, put `/admin` behind a Cloudflare Access application
 
 ```sh
 pnpm install
-pnpm run setup          # copies .dev.vars.example to .dev.vars
-# in .dev.vars: set TOKENGATE_KEK (pnpm keyring generate) and uncomment AUTH_DEV_EMAIL
+pnpm run setup          # copies .dev.vars.example to .dev.vars; works as is
 pnpm db:migrate:local   # creates the local databases
-pnpm dev                # http://localhost:8787/admin, signed in as AUTH_DEV_EMAIL
+pnpm dev                # http://localhost:8787/admin, signed in as AUTH_ACCESS_DEVELOPMENT
 ```
 
 Details: [CONTRIBUTING.md](CONTRIBUTING.md#set-up).

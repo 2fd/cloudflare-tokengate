@@ -272,14 +272,18 @@ does not opt in to it ([I-AUTHZ-3](threat-model.md#i-authz-3)).
   - `credential_missing`: the service has no credential yet.
   - `keyring_missing_key`: the credential was sealed with a key id that is no longer in the keyring.
   - `credential_binding_mismatch`: the credential does not open. Its base URL or injection was changed
-    outside the admin UI, or the key behind its key id was replaced ([I-CRED-2](threat-model.md#i-cred-2)).
+    outside the admin UI, or the key behind its key id was replaced ([I-CRED-2](threat-model.md#i-cred-2)),
+    or `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` or `AUTH_ACCESS_DEVELOPMENT` changed
+    ([I-CRED-3](threat-model.md#i-cred-3)).
   - `sealed_malformed`: the stored value is damaged.
   - `injection_invalid`: the stored injection settings are invalid.
   - `credential_invalid`: the credential cannot be placed in the upstream request.
 - **Caller:** contact the admins with the request ID.
 - **Admin:** record with outcome `error`. Restore a missing or replaced key if that is the cause
   ([operations/key-rotation.md](operations/key-rotation.md)); the dashboard shows a banner for keyring
-  problems. Otherwise treat `credential_binding_mismatch`, `sealed_malformed` and
+  problems. If every credential fails after a change of the `AUTH_ACCESS_*` variables, restore their
+  earlier values or enter every credential again
+  ([configuration.md](configuration.md#login-binding)). Otherwise treat `credential_binding_mismatch`, `sealed_malformed` and
   `keyring_missing_key` as possible tampering: the service row may have been changed in D1 to send the
   next credential you enter to another host. The service page shows an error banner, marks the stored
   base URL and injection "not confirmed", does not prefill them, and saves only after you type the
@@ -297,6 +301,9 @@ does not opt in to it ([I-AUTHZ-3](threat-model.md#i-authz-3)).
 - **Causes** (the record has the exact reason):
   - `keyring_absent`, `keyring_malformed`, `active_kid_missing`, `key_not_32_bytes`,
     `both_kek_and_keyring_set`: the `TOKENGATE_KEK` or `TOKENGATE_KEYRING` secret is missing or invalid.
+  - `dev_placeholder_key`: the keyring holds the public development key from `.dev.vars.example`,
+    and the Worker is not in development mode (`AUTH_ACCESS_DEVELOPMENT` set, no Access variable).
+    Set a key of your own ([configuration.md](configuration.md#development-key)).
   - `base_url_invalid`: the service's base URL is no longer allowed, for example after a change to
     the upstream host allowlist or the admin hosts (Settings) ([I-SSRF-1](threat-model.md#i-ssrf-1)).
   - `profile_unknown`: the caller provider names a profile this version does not know. This check
@@ -372,6 +379,7 @@ The reason is the gateway error code, or a finer reason for some codes:
 | `active_kid_missing` | `not_configured` | The keyring has no active key |
 | `key_not_32_bytes` | `not_configured` | A keyring key is not 32 bytes |
 | `both_kek_and_keyring_set` | `not_configured` | Both `TOKENGATE_KEK` and `TOKENGATE_KEYRING` are set |
+| `dev_placeholder_key` | `not_configured` | The keyring holds the development key from `.dev.vars.example` |
 | `base_url_invalid` | `not_configured` | The service's base URL is no longer allowed |
 | `profile_unknown` | `not_configured` | The caller provider uses an unknown profile |
 | `internal_error` | `internal_error` | The gateway failed to process the request |

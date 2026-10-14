@@ -1,13 +1,25 @@
 // Parses TOKENGATE_KEK / TOKENGATE_KEYRING into non-extractable AES-256-GCM key-encryption keys,
-// failing closed with a named error. Has no value imports so scripts/keyring.ts can load this file
-// under Node type stripping and validate a keyring exactly like the Worker does.
+// failing closed with a named error. Each key is bound to the login variables (I-CRED-3): the AES
+// key is HKDF-SHA256 of the secret with the AUTH_ACCESS_* values as info, so changing any of them
+// makes every stored credential impossible to open. Has no value imports so scripts/keyring.ts can
+// load this file under Node type stripping and validate a keyring exactly like the Worker does.
 
 export type KeyringError =
   | 'keyring_absent'
   | 'keyring_malformed'
   | 'active_kid_missing'
   | 'key_not_32_bytes'
-  | 'both_kek_and_keyring_set';
+  | 'both_kek_and_keyring_set'
+  | 'dev_placeholder_key';
+
+/** The variables a keyring reads: the secrets and the login variables its keys are bound to. */
+export interface KeyringEnv {
+  TOKENGATE_KEK?: string;
+  TOKENGATE_KEYRING?: string;
+  AUTH_ACCESS_TEAM_DOMAIN?: string;
+  AUTH_ACCESS_AUD?: string;
+  AUTH_ACCESS_DEVELOPMENT?: string;
+}
 
 export interface Keyring {
   /** Key id used for new seals. */
@@ -30,32 +42,78 @@ export const KID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const KEY_BYTES = 32;
 const KCV_LABEL = 'tokengate/v1/kek-check';
+const BINDING_LABEL = 'tokengate/v1/kek-binding';
 const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
-let cache: { kek: string; keyring: string; result: Promise<LoadKeyringResult> } | null = null;
+/**
+ * TOKENGATE_KEK in .dev.vars.example: base64 of "DEV-ONLY-KEY-NOT-FOR-PRODUCTION!". Accepted only
+ * in development mode (AUTH_ACCESS_DEVELOPMENT set, no Access variable), in any keyring slot.
+ */
+export const DEV_PLACEHOLDER_KEK = 'REVWLU9OTFktS0VZLU5PVC1GT1ItUFJPRFVDVElPTiE=';
+
+let cache: { id: string; result: Promise<LoadKeyringResult> } | null = null;
 
 /**
  * Loads the keyring from the Worker secrets. Exactly one of TOKENGATE_KEK (standard base64 of
  * 32 bytes, kid "k1") or TOKENGATE_KEYRING (JSON `{"active":"k2","keys":{"k1":"<b64>","k2":"<b64>"}}`)
  * must be set; empty or whitespace-only values count as absent.
- * Check order: presence, JSON shape and kid syntax, active kid present, each key 32 bytes.
- * The last result is cached per isolate, keyed by the raw secret strings.
+ * Check order: presence, JSON shape and kid syntax, active kid present, each key 32 bytes, no
+ * development placeholder outside development mode. Every key is then bound to the login
+ * variables (`kekBindingInfo`). The last result is cached per isolate, keyed by all inputs.
  */
-export function loadKeyring(env: {
-  TOKENGATE_KEK?: string;
-  TOKENGATE_KEYRING?: string;
-}): Promise<LoadKeyringResult> {
+export function loadKeyring(env: KeyringEnv): Promise<LoadKeyringResult> {
   const kek = env.TOKENGATE_KEK ?? '';
   const keyring = env.TOKENGATE_KEYRING ?? '';
-  if (cache && cache.kek === kek && cache.keyring === keyring) return cache.result;
-  const result = parseAndImport(kek, keyring);
-  cache = { kek, keyring, result };
+  const info = kekBindingInfo(env);
+  const id = JSON.stringify([kek, keyring, info]);
+  if (cache && cache.id === id) return cache.result;
+  const result = parseAndImport(kek, keyring, info, developmentMode(env));
+  cache = { id, result };
   return result;
 }
 
 /**
- * Hex of the first 8 bytes of HMAC-SHA256(rawKey, "tokengate/v1/kek-check"). Identifies a key
- * without revealing it.
+ * HKDF info binding the keys to the login variables (I-CRED-3). Values are trimmed, nothing
+ * else: any other change to AUTH_ACCESS_TEAM_DOMAIN, AUTH_ACCESS_AUD or AUTH_ACCESS_DEVELOPMENT
+ * (setting, removing or rewriting one) yields different keys.
+ */
+export function kekBindingInfo(env: KeyringEnv): string {
+  const values = [env.AUTH_ACCESS_TEAM_DOMAIN, env.AUTH_ACCESS_AUD, env.AUTH_ACCESS_DEVELOPMENT];
+  return `${BINDING_LABEL}\n${JSON.stringify(values.map((value) => value?.trim() ?? ''))}`;
+}
+
+/** AUTH_ACCESS_DEVELOPMENT set and no Access variable (config.ts turns off any other mix). */
+function developmentMode(env: KeyringEnv): boolean {
+  const set = (value: string | undefined) => (value?.trim() ?? '') !== '';
+  return (
+    set(env.AUTH_ACCESS_DEVELOPMENT) &&
+    !set(env.AUTH_ACCESS_TEAM_DOMAIN) &&
+    !set(env.AUTH_ACCESS_AUD)
+  );
+}
+
+/** The 32-byte AES key for a secret key under a binding: HKDF-SHA256, empty salt. */
+export async function boundKey(rawKey: Uint8Array, info: string): Promise<Uint8Array<ArrayBuffer>> {
+  const ikm = await crypto.subtle.importKey('raw', new Uint8Array(rawKey), 'HKDF', false, [
+    'deriveBits',
+  ]);
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: 'HKDF',
+      hash: 'SHA-256',
+      salt: new Uint8Array(0),
+      info: new TextEncoder().encode(info),
+    },
+    ikm,
+    KEY_BYTES * 8,
+  );
+  return new Uint8Array(bits);
+}
+
+/**
+ * Hex of the first 8 bytes of HMAC-SHA256(key, "tokengate/v1/kek-check"). Identifies a key
+ * without revealing it. The keyring passes the bound key, so a change of the login variables
+ * shows as a changed key check value.
  */
 export async function keyCheckValue(rawKey: Uint8Array): Promise<string> {
   const hmacKey = await crypto.subtle.importKey(
@@ -76,20 +134,30 @@ export async function keyCheckValue(rawKey: Uint8Array): Promise<string> {
 async function parseAndImport(
   kekSecret: string,
   keyringSecret: string,
+  bindingInfo: string,
+  development: boolean,
 ): Promise<LoadKeyringResult> {
   const parsed = parseSecrets(kekSecret.trim(), keyringSecret.trim());
   if (!parsed.ok) return parsed;
+  if (!development) {
+    const placeholder = decodeKey(DEV_PLACEHOLDER_KEK) as Uint8Array;
+    for (const raw of parsed.rawKeys.values()) {
+      if (raw.every((byte, i) => byte === placeholder[i])) {
+        return { ok: false, error: 'dev_placeholder_key' };
+      }
+    }
+  }
 
   const kids = [...parsed.rawKeys.keys()].sort();
   const keys = new Map<string, CryptoKey>();
   // Null prototype: `kcv["constructor"]` must be undefined, like any other unknown kid.
   const kcv: Record<string, string> = Object.create(null);
   for (const kid of kids) {
-    const raw = parsed.rawKeys.get(kid) as Uint8Array<ArrayBuffer>;
-    kcv[kid] = await keyCheckValue(raw);
+    const bound = await boundKey(parsed.rawKeys.get(kid) as Uint8Array, bindingInfo);
+    kcv[kid] = await keyCheckValue(bound);
     keys.set(
       kid,
-      await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']),
+      await crypto.subtle.importKey('raw', bound, 'AES-GCM', false, ['encrypt', 'decrypt']),
     );
   }
   const keyring: Keyring = {

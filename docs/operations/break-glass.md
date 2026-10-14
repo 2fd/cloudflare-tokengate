@@ -39,6 +39,10 @@ Before you start:
   variables first ([zone settings](cloudflare-zone-settings.md#cloudflare-access),
   [configuration](../configuration.md)). If it answers `404 Not Found`, restore the admin hosts first
   ([lost admin host](#lost-admin-host)).
+- Do not change the `AUTH_ACCESS_*` values unless they are wrong, and do not set
+  `AUTH_ACCESS_DEVELOPMENT` to get in. The development login signs in no request through Cloudflare,
+  it turns off the Access login, and any change of these variables makes every stored credential
+  impossible to decrypt ([I-CRED-3](../threat-model.md#i-cred-3)).
 - The Access policy allows you, and you know the email address that Access reports for you: the
   email of your account at the identity provider that Access uses.
 

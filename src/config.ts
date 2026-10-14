@@ -38,6 +38,19 @@ const DEV_EMAIL_RE = /^[^\s@,;<>"]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 
 export function parseConfig(env: AppEnv): Config {
   const errors: ConfigError[] = [];
+  const accessSet =
+    readVar(env.AUTH_ACCESS_TEAM_DOMAIN) !== null || readVar(env.AUTH_ACCESS_AUD) !== null;
+  const devSet = readVar(env.AUTH_ACCESS_DEVELOPMENT) !== null;
+  // A production login and the proof-less development login never run together: both turn off.
+  if (accessSet && devSet) {
+    const message =
+      'AUTH_ACCESS_DEVELOPMENT cannot be set together with AUTH_ACCESS_TEAM_DOMAIN or AUTH_ACCESS_AUD. Remove AUTH_ACCESS_DEVELOPMENT in production.';
+    errors.push(
+      { feature: 'login.access', variable: 'AUTH_ACCESS_DEVELOPMENT', message },
+      { feature: 'login.dev', variable: 'AUTH_ACCESS_DEVELOPMENT', message },
+    );
+    return { errors, login: { access: null, dev: null } };
+  }
   return {
     errors,
     login: {
@@ -130,12 +143,12 @@ function parseAccessLogin(env: AppEnv, errors: ConfigError[]): AccessLogin | nul
 }
 
 /**
- * AUTH_DEV_EMAIL signs admin requests in as that email, with no proof at all. `requestIdentity`
+ * AUTH_ACCESS_DEVELOPMENT signs admin requests in as that email, with no proof at all. `requestIdentity`
  * accepts it only on a request to localhost, 127.0.0.1 or [::1], which no request through
  * Cloudflare's edge can be.
  */
 function parseDevLogin(env: AppEnv, errors: ConfigError[]): DevLogin | null {
-  const raw = readVar(env.AUTH_DEV_EMAIL);
+  const raw = readVar(env.AUTH_ACCESS_DEVELOPMENT);
   if (raw === null) return null;
   const fail = (variable: string, message: string): null => {
     errors.push({ feature: 'login.dev', variable, message });
@@ -143,7 +156,7 @@ function parseDevLogin(env: AppEnv, errors: ConfigError[]): DevLogin | null {
   };
   const email = raw.toLowerCase();
   if (!DEV_EMAIL_RE.test(email)) {
-    return fail('AUTH_DEV_EMAIL', 'AUTH_DEV_EMAIL is not a valid email address.');
+    return fail('AUTH_ACCESS_DEVELOPMENT', 'AUTH_ACCESS_DEVELOPMENT is not a valid email address.');
   }
   return { email };
 }

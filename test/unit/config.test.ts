@@ -37,7 +37,7 @@ describe('parseConfig: empty environment', () => {
       envWith({
         AUTH_ACCESS_TEAM_DOMAIN: '  ',
         AUTH_ACCESS_AUD: ' ',
-        AUTH_DEV_EMAIL: '',
+        AUTH_ACCESS_DEVELOPMENT: '',
       }),
     );
     expect(config.errors).toEqual([]);
@@ -194,22 +194,25 @@ describe('Access login', () => {
 });
 
 describe('dev login', () => {
-  it('enables AUTH_DEV_EMAIL, lowercased (requestIdentity limits it to loopback hosts)', () => {
-    const config = parseConfig(envWith({ AUTH_DEV_EMAIL: ' Dev@Example.com ' }));
+  it('enables AUTH_ACCESS_DEVELOPMENT, lowercased (requestIdentity limits it to loopback hosts)', () => {
+    const config = parseConfig(envWith({ AUTH_ACCESS_DEVELOPMENT: ' Dev@Example.com ' }));
     expect(config.errors).toEqual([]);
     expect(config.login.dev).toEqual({ email: 'dev@example.com' });
   });
 
-  it('Access stays enabled next to a dev login it overrides', () => {
-    const config = parseConfig(
-      envWith({
-        AUTH_ACCESS_TEAM_DOMAIN: 'acme',
-        AUTH_ACCESS_AUD: AUD,
-        AUTH_DEV_EMAIL: 'dev@example.com',
-      }),
-    );
-    expect(config.login.access).not.toBeNull();
-    expect(config.login.dev).not.toBeNull();
+  it.each([
+    { AUTH_ACCESS_TEAM_DOMAIN: 'acme', AUTH_ACCESS_AUD: AUD },
+    { AUTH_ACCESS_TEAM_DOMAIN: 'acme' },
+    { AUTH_ACCESS_AUD: AUD },
+  ])('with any Access variable (%j), turns both logins off', (access) => {
+    const config = parseConfig(envWith({ ...access, AUTH_ACCESS_DEVELOPMENT: 'dev@example.com' }));
+    expect(config.login).toEqual({ access: null, dev: null });
+    expect(config.errors.map((e) => [e.feature, e.variable])).toEqual([
+      ['login.access', 'AUTH_ACCESS_DEVELOPMENT'],
+      ['login.dev', 'AUTH_ACCESS_DEVELOPMENT'],
+    ]);
+    expect(JSON.stringify(config.errors)).not.toContain(AUD);
+    expect(JSON.stringify(config.errors)).not.toContain('dev@example.com');
   });
 });
 
@@ -253,9 +256,9 @@ describe('I-CFG-1: malformed config disables the affected feature; never runs ha
     },
     {
       name: 'dev login with an invalid email',
-      env: { AUTH_DEV_EMAIL: 'dev' },
+      env: { AUTH_ACCESS_DEVELOPMENT: 'dev' },
       feature: 'login.dev',
-      variable: 'AUTH_DEV_EMAIL',
+      variable: 'AUTH_ACCESS_DEVELOPMENT',
       disabled: (c) => c.login.dev,
     },
   ];
@@ -267,11 +270,13 @@ describe('I-CFG-1: malformed config disables the affected feature; never runs ha
     expect(JSON.stringify(config.errors)).not.toContain(AUD);
   });
 
-  it('a broken feature does not disable unrelated features', () => {
-    const config = parseConfig(envWith({ ...access, AUTH_DEV_EMAIL: 'dev' }));
-    expect(config.login.access).not.toBeNull();
-    expect(config.login.dev).toBeNull();
-    expect(config.errors.map((e) => e.feature)).toEqual(['login.dev']);
+  it('a broken login reports only its own feature', () => {
+    expect(
+      parseConfig(envWith({ ...access, AUTH_ACCESS_AUD: 'abc def' })).errors.map((e) => e.feature),
+    ).toEqual(['login.access']);
+    expect(
+      parseConfig(envWith({ AUTH_ACCESS_DEVELOPMENT: 'dev' })).errors.map((e) => e.feature),
+    ).toEqual(['login.dev']);
   });
 
   it.each([
@@ -337,7 +342,11 @@ describe('upstream host allowlist', () => {
 
 describe('I-CFG-1: hostile values never throw and never appear in errors', () => {
   const MARK = 'leakmarker';
-  const variables = ['AUTH_ACCESS_TEAM_DOMAIN', 'AUTH_ACCESS_AUD', 'AUTH_DEV_EMAIL'] as const;
+  const variables = [
+    'AUTH_ACCESS_TEAM_DOMAIN',
+    'AUTH_ACCESS_AUD',
+    'AUTH_ACCESS_DEVELOPMENT',
+  ] as const;
   const hostile = [
     `https://${MARK}:${MARK}@x.example.com/${MARK}?${MARK}#${MARK}`,
     `${MARK}\u0000\n,${MARK}`,

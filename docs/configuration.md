@@ -29,7 +29,17 @@ does not change them.
 
 For local development (`pnpm dev`), put all variables and secrets in `.dev.vars`. `pnpm run setup`
 creates it from `.dev.vars.example` ([CONTRIBUTING.md](../CONTRIBUTING.md#set-up)). The example lists
-every variable and secret with a comment, except `TOKENGATE_KEYRING`, which it only mentions.
+every variable and secret with a comment, except `TOKENGATE_KEYRING`, which it only mentions. It
+works with `pnpm dev` as is:
+
+- `TOKENGATE_KEK` is the public [development key](#development-key) (base64 of
+  `DEV-ONLY-KEY-NOT-FOR-PRODUCTION!`).
+- `AUTH_ACCESS_DEVELOPMENT=dev@example.com` turns on the [development login](#local-development-login-auth_access_development).
+- `AUTH_ACCESS_TEAM_DOMAIN` and `AUTH_ACCESS_AUD` are commented out.
+
+These defaults fail closed in production ([I-DEPLOY-1](threat-model.md#i-deploy-1)). The development
+login signs in no request through Cloudflare's edge, and the Worker refuses the development key as soon
+as an Access variable is set.
 
 ## How invalid configuration fails
 
@@ -50,11 +60,13 @@ entries are trimmed and empty entries are dropped.
 | `TOKENGATE_KEYRING` | secret | One of `TOKENGATE_KEK` / `TOKENGATE_KEYRING` | JSON keyring |
 | `AUTH_ACCESS_TEAM_DOMAIN` | var | For the admin UI | `<team>`, `<team>.cloudflareaccess.com` or `https://<team>.cloudflareaccess.com` |
 | `AUTH_ACCESS_AUD` | var | For the admin UI | Access application audience (AUD) tag |
-| `AUTH_DEV_EMAIL` | var | Local development only | Email address |
+| `AUTH_ACCESS_DEVELOPMENT` | var | Local development only; never together with Access | Email address |
 
 Sign-in to the admin UI goes through Cloudflare Access only
 ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). Without a working Access login, `/admin`
-shows a setup page (`503`) that lists the variables to set. `AUTH_DEV_EMAIL` is for `pnpm dev` only.
+shows a setup page (`503`) that lists the variables to set. `AUTH_ACCESS_DEVELOPMENT` is for `pnpm dev`
+only. The keyring is [bound to the three `AUTH_ACCESS_*` variables](#login-binding): set them before
+you add services, and do not change them after.
 
 ### First owner
 
@@ -69,7 +81,7 @@ again, even if every owner is later removed: recover with
 ### Keyring: `TOKENGATE_KEK` or `TOKENGATE_KEYRING`
 
 The key-encryption key that seals stored upstream credentials ([I-CRED-2](threat-model.md#i-cred-2)). Set exactly
-one of the two.
+one of the two. Each key is [bound to the login variables](#login-binding).
 
 - `TOKENGATE_KEK`: standard base64 (padding optional) of exactly 32 bytes. Its key id is `k1`.
 - `TOKENGATE_KEYRING`: JSON with exactly the keys `active` and `keys`, for example
@@ -87,9 +99,41 @@ one of the two.
 
 - **When absent or invalid:** admin sign-in still works. Proxied requests to a service with a credential
   answer `503 not_configured` with reason `keyring_absent`, `keyring_malformed`, `active_kid_missing`,
-  `key_not_32_bytes` or `both_kek_and_keyring_set`. Credential changes are refused. The dashboard shows a
+  `key_not_32_bytes`, `both_kek_and_keyring_set` or `dev_placeholder_key`. Credential changes are refused. The dashboard shows a
   banner and `/readyz` reports `keyring: false`.
 - Rotation: [operations/key-rotation.md](operations/key-rotation.md).
+
+#### Login binding
+
+Every key is bound to `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` and `AUTH_ACCESS_DEVELOPMENT`
+([I-CRED-3](threat-model.md#i-cred-3), [ADR 0017](adr/0017-kek-bound-to-login-variables.md)). The
+AES-256-GCM key that seals credentials is HKDF-SHA256 of the secret key, with an empty salt and info
+`tokengate/v1/kek-binding`, a newline and the JSON array of the three trimmed values (`""` when unset).
+
+- **Set the login variables before you add services.** Treat them as part of the key and keep their
+  exact values in your vault next to it.
+- **A change makes every stored credential impossible to decrypt.** This includes setting, removing
+  or rewriting any of the three, for example `acme` to `acme.cloudflareaccess.com` or a change of
+  email case. Proxied requests then answer `503 credential_unavailable`, and Settings shows the key
+  check values as changed.
+- **Recovery:** restore the earlier values, or enter every credential again.
+- **Key check values depend on the login variables.** To compare with Settings, run `pnpm keyring`
+  with the Worker's `AUTH_ACCESS_*` values in the environment. The secret still comes from stdin:
+
+  ```sh
+  vault-read tokengate-kek-k1 | AUTH_ACCESS_TEAM_DOMAIN=acme AUTH_ACCESS_AUD=<aud> pnpm -s keyring check
+  ```
+
+- Rotation and rewrap work as before, under one set of login values. The sealed format stays v1.
+
+#### Development key
+
+`.dev.vars.example` sets `TOKENGATE_KEK=REVWLU9OTFktS0VZLU5PVC1GT1ItUFJPRFVDVElPTiE=`, the base64 of
+`DEV-ONLY-KEY-NOT-FOR-PRODUCTION!`. This key is public. The Worker accepts it only in development
+mode: `AUTH_ACCESS_DEVELOPMENT` set and neither Access variable set. In any other configuration, and in
+any key slot of `TOKENGATE_KEYRING`, the keyring fails with `dev_placeholder_key`: proxied requests
+answer `503 not_configured` and Settings shows the error. Replace it with a key of your own
+(`pnpm -s keyring generate`).
 
 ### Cloudflare Access login: `AUTH_ACCESS_*`
 
@@ -98,7 +142,12 @@ one of the two.
 2. In Zero Trust, create a self-hosted Access application for that hostname, limited to the `/admin`
    path. Do not put `/proxy` behind Access: CI jobs call it without an Access session. See
    [operations/cloudflare-zone-settings.md](operations/cloudflare-zone-settings.md).
-3. Set `AUTH_ACCESS_TEAM_DOMAIN` and `AUTH_ACCESS_AUD` (the application's AUD tag).
+3. Set `AUTH_ACCESS_TEAM_DOMAIN` and `AUTH_ACCESS_AUD` (the application's AUD tag). Delete
+   `AUTH_ACCESS_DEVELOPMENT` if it is set: with both, no login works.
+
+> **Warning:** Set these variables before you add services, and keep their exact values. The keyring
+> is bound to them ([login binding](#login-binding)). A later change, also from `acme` to
+> `acme.cloudflareaccess.com`, makes every stored credential impossible to decrypt.
 
 - The gateway keeps no session of its own. On every `/admin` request it verifies the
   `Cf-Access-Jwt-Assertion` header against the team's keys, issuer and AUD. A request without a valid
@@ -115,17 +164,24 @@ one of the two.
 - "Sign out" in the admin UI opens `/cdn-cgi/access/logout`, which ends the Access session for the
   hostname. To end a user's sessions on every device, revoke them in Zero Trust.
 - Users are linked to `<team domain>|<sub>`. A different team is a different identity: after a team
-  change, each user needs "Reset login" and a new sign-in.
-- Errors: only one of the pair set; an invalid team domain or AUD.
+  change, each user needs "Reset login" and a new sign-in. Every credential must also be entered again
+  ([login binding](#login-binding)).
+- Errors: only one of the pair set; an invalid team domain or AUD; `AUTH_ACCESS_DEVELOPMENT` also set.
 
-### Local development login: `AUTH_DEV_EMAIL`
+### Local development login: `AUTH_ACCESS_DEVELOPMENT`
 
-With `AUTH_DEV_EMAIL` set, every admin request is signed in as that email, without any check. Use it
-only with `pnpm dev`.
+With `AUTH_ACCESS_DEVELOPMENT` set, every admin request is signed in as that email, without any check.
+Use it only with `pnpm dev`. `.dev.vars.example` sets it to `dev@example.com`. The login provider id
+is `dev` and the configuration feature is `login.dev`.
 
 - It applies only to requests whose hostname is `localhost`, `127.0.0.1` or `[::1]`. The gateway
-  checks this on every request. No request through Cloudflare's edge has such a hostname.
-- When Access is also configured, Access is the only accepted proof and `AUTH_DEV_EMAIL` is ignored.
+  checks this on every request. No request through Cloudflare's edge has such a hostname. On any other
+  hostname, `/admin` shows the setup page with a banner that tells you to remove it in production.
+- It never works together with Access. If `AUTH_ACCESS_TEAM_DOMAIN` or `AUTH_ACCESS_AUD` is also set,
+  both logins are turned off (fail closed). The error names `AUTH_ACCESS_DEVELOPMENT` on the features
+  `login.access` and `login.dev`, and `/admin` shows it on the setup page (`503`).
+- It is part of the [login binding](#login-binding): adding, removing or changing it, also only the case
+  of the email, makes every stored credential impossible to decrypt.
 - The same rules apply: the first sign-in becomes owner, later ones join with the join defaults. The
   first sign-in on `http://localhost:8787/admin` stores `localhost` as the admin host in the local D1.
 - Errors: an invalid email.

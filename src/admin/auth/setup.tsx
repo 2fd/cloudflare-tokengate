@@ -26,16 +26,22 @@ export function SetupInstructions(props: { host: string }) {
         </li>
         <li>
           <code>AUTH_ACCESS_TEAM_DOMAIN</code> (your team name) and <code>AUTH_ACCESS_AUD</code>{' '}
-          (the application's audience tag)
+          (the application's audience tag). Remove <code>AUTH_ACCESS_DEVELOPMENT</code>: with both
+          set, no login works.
+        </li>
+        <li>
+          Set these variables before you add services. Stored credentials are bound to them:
+          changing, adding or removing any of them later makes every stored credential impossible to
+          decrypt.
         </li>
       </ul>
       <h2>Local development</h2>
       <ul>
         <li>
-          Set <code>AUTH_DEV_EMAIL</code> in <code>.dev.vars</code> and open{' '}
-          <code>http://localhost:8787/admin</code>. Every admin request to localhost, 127.0.0.1 or
-          [::1] is then signed in as that email, without any check. It is refused on any other
-          hostname.
+          Run <code>pnpm run setup</code>: it copies a working <code>.dev.vars</code> that sets{' '}
+          <code>AUTH_ACCESS_DEVELOPMENT</code>. Then open <code>http://localhost:8787/admin</code>.
+          Every admin request to localhost, 127.0.0.1 or [::1] is then signed in as that email,
+          without any check. It is refused on any other hostname.
         </li>
       </ul>
     </>

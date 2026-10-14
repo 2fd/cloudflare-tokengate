@@ -15,7 +15,7 @@ describe('I-LINK-1: authoritativeEmails', () => {
   });
 
   describe('dev', () => {
-    it('uses the configured AUTH_DEV_EMAIL', () => {
+    it('uses the configured AUTH_ACCESS_DEVELOPMENT', () => {
       expect(authoritativeEmails('dev', { email: 'Dev@Example.com' })).toEqual(['dev@example.com']);
     });
   });

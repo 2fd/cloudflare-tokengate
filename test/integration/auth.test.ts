@@ -42,8 +42,8 @@ describe('setup page', () => {
     const html = await res.text();
     expect(html).toContain('Set up sign-in');
     expect(html).toContain('AUTH_ACCESS_TEAM_DOMAIN');
-    expect(html).toContain('AUTH_DEV_EMAIL');
-    expect(html).toContain('https://gw.test');
+    expect(html).toContain('AUTH_ACCESS_DEVELOPMENT');
+    expect(html).toContain('<code>gw.test</code>');
   });
 
   it('names misconfigured variables but never echoes values', async () => {
@@ -233,10 +233,10 @@ describe('dev login', () => {
   const DEV_ORIGIN = 'http://localhost:8787';
   const DEV_ENV = {
     ...NO_ACCESS,
-    AUTH_DEV_EMAIL: 'dev@example.com',
+    AUTH_ACCESS_DEVELOPMENT: 'dev@example.com',
   };
 
-  it('signs every request to localhost in as AUTH_DEV_EMAIL and pins admin to localhost', async () => {
+  it('signs every request to localhost in as AUTH_ACCESS_DEVELOPMENT and pins admin to localhost', async () => {
     const app = createAdminTestApp({ env: DEV_ENV, routes: stubAdminPages });
     const res = await app.request('/admin', { origin: DEV_ORIGIN });
     expect(res.status).toBe(200);
@@ -257,13 +257,23 @@ describe('dev login', () => {
     expect(await env.DB.prepare('SELECT count(*) AS n FROM users').first('n')).toBe(0);
   });
 
-  it('is ignored when Access is configured', async () => {
+  it('together with Access, turns every login off and says why', async () => {
     const app = createAdminTestApp({
-      env: { AUTH_DEV_EMAIL: 'dev@example.com' },
+      env: { AUTH_ACCESS_DEVELOPMENT: 'dev@example.com' },
       routes: stubAdminPages,
     });
-    const res = await app.request('/admin', { origin: 'https://localhost' });
-    expect(res.status).toBe(401);
+    for (const origin of ['http://localhost:8787', 'https://gw.test']) {
+      const res = await app.request('/admin', { origin });
+      expect(res.status).toBe(503);
+      expect(await res.text()).toContain('cannot be set together with AUTH_ACCESS_TEAM_DOMAIN');
+    }
+    expect(await env.DB.prepare('SELECT count(*) AS n FROM users').first('n')).toBe(0);
+  });
+
+  it('on a public host, the setup page says it only works on loopback', async () => {
+    const app = createAdminTestApp({ env: DEV_ENV, routes: stubAdminPages });
+    const res = await app.request('/admin', { origin: 'https://gw.test' });
+    expect(await res.text()).toContain('signs in only requests to localhost');
   });
 });
 

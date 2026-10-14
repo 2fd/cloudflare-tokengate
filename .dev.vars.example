@@ -1,21 +1,24 @@
-# Local development secrets. Copy to .dev.vars (git-ignored). In production use `wrangler secret put <NAME>`.
+# Local development values. `pnpm run setup` copies this file to .dev.vars (git-ignored).
+# Everything below works with `pnpm dev` as is. In production, set your own values in the dashboard
+# (Worker > Settings > Variables and Secrets) or with `wrangler secret put <NAME>`.
 
-# Key-encryption key for stored credentials: 32 random bytes, base64.
-# Generate OUTSIDE Cloudflare and keep a copy in your company vault: `openssl rand -base64 32`.
-# Losing it means losing every stored credential. For rotation use TOKENGATE_KEYRING instead (docs/operations/key-rotation.md).
-TOKENGATE_KEK=
+# Key-encryption key for stored credentials: 32 bytes, base64.
+# DEVELOPMENT ONLY: this value is public (base64 of "DEV-ONLY-KEY-NOT-FOR-PRODUCTION!"). The Worker
+# refuses it unless AUTH_ACCESS_DEVELOPMENT is set and no Access variable is set.
+# Production: generate your own OUTSIDE Cloudflare (`openssl rand -base64 32`) and keep a copy in
+# your company vault. Losing it means losing every stored credential. Rotation: TOKENGATE_KEYRING
+# (docs/operations/key-rotation.md).
+TOKENGATE_KEK=REVWLU9OTFktS0VZLU5PVC1GT1ItUFJPRFVDVElPTiE=
 
-# --- Local development only: operator variables ---
-# In production these are plain variables set in the dashboard (Worker > Settings > Variables and
-# Secrets); wrangler.jsonc declares none of them (keep_vars, I-DEPLOY-1). For `wrangler dev`, uncomment
-# the ones you need in .dev.vars. They are commented here so the Deploy button does not ask for them
-# as secrets. Full list and formats: docs/configuration.md.
+# Development login: every admin request to localhost, 127.0.0.1 or [::1] is signed in as this
+# email, with no check at all. Never set it in production. It cannot be combined with the Access
+# variables below: if both are set, no login works.
+AUTH_ACCESS_DEVELOPMENT=dev@example.com
 
-# Local development login: every admin request is signed in as this email, with no check at all.
-# Applies only to requests to localhost, 127.0.0.1 or [::1]. Never set it in production.
-# AUTH_DEV_EMAIL=you@example.com
-
-# Cloudflare Access login: "<team>" or "https://<team>.cloudflareaccess.com", and the application AUD.
-# Needs a custom domain: /admin never answers on workers.dev. Production uses only this login.
+# Production login (Cloudflare Access): "<team>" or "https://<team>.cloudflareaccess.com", and the
+# application AUD. Remove AUTH_ACCESS_DEVELOPMENT when you set them.
 # AUTH_ACCESS_TEAM_DOMAIN=
 # AUTH_ACCESS_AUD=
+
+# Stored credentials are bound to the three AUTH_ACCESS_* values: changing, adding or removing any of
+# them makes every stored credential impossible to decrypt. Set them once, before you add services.

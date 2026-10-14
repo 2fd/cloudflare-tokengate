@@ -8,15 +8,16 @@ configuration export, and the secrets that no backup holds. It is for platform e
 | State | Where | Backed up by |
 |---|---|---|
 | Keyring (`TOKENGATE_KEK` or `TOKENGATE_KEYRING`) | Worker secret | Only your vault. Cloudflare cannot return a secret's value |
-| Variables (`AUTH_*`) | Worker settings | Keep a copy in your runbook ([configuration](../configuration.md#variables)) |
+| Variables (`AUTH_*`) | Worker settings | Keep the exact values in your vault with the keyring: the keys are bound to them ([configuration](../configuration.md#login-binding)) |
 | Users, login identities, caller providers, services, sealed credentials, grants, settings (including the upstream host allowlist and the admin hosts), audit log | `DB` (`tokengate`) | Time Travel, `d1 export` |
 | Access application and policy (who can reach `/admin`) | Cloudflare One | Keep a copy in your runbook ([zone settings](cloudflare-zone-settings.md#cloudflare-access)) |
 | Request log and rollups | `TELEMETRY_DB` (`tokengate-telemetry`) | Time Travel, `d1 export`; optional R2 archive |
 | Code and `wrangler.jsonc` | Your clone of the repository | Git |
 
 The sealed credentials in `DB` open only with the key id they were sealed with, and only for the
-same service id, base URL and injection ([I-CRED-2](../threat-model.md#i-cred-2)). A database backup
-without the matching keyring restores everything except usable credentials.
+same service id, base URL and injection ([I-CRED-2](../threat-model.md#i-cred-2)), and only with the
+same `AUTH_ACCESS_*` values ([I-CRED-3](../threat-model.md#i-cred-3)). A database backup without the
+matching keyring and login variables restores everything except usable credentials.
 
 ## D1 Time Travel
 

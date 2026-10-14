@@ -22,6 +22,7 @@ import {
   loginAs,
   resetControlPlane,
 } from '../helpers/admin-auth';
+import { TEST_ACCESS_ENV } from '../helpers/app';
 import {
   ACTOR,
   CONTEXT,
@@ -62,7 +63,7 @@ describe('GET /admin/settings', () => {
     expect(html).toContain('Only owners can change these settings.');
     expect(html).not.toContain('name="request_log_retention_days"');
     expect(html).not.toContain('action="/admin/export"');
-    const keyring = await loadKeyring({ TOKENGATE_KEK: KEK });
+    const keyring = await loadKeyring({ ...TEST_ACCESS_ENV, TOKENGATE_KEK: KEK });
     if (!keyring.ok) throw new Error(keyring.error);
     expect(html).toContain(keyring.keyring.kcv.k1);
     expect(html).toContain('<dt>Login providers</dt><dd>Cloudflare Access</dd>');

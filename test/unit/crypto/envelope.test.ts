@@ -5,7 +5,7 @@ import {
   sealCredential,
   sealedKid,
 } from '../../../src/crypto/envelope';
-import { type Keyring, loadKeyring } from '../../../src/crypto/keyring';
+import { type Keyring, type KeyringEnv, loadKeyring } from '../../../src/crypto/keyring';
 import { fromBase64Url, fromUtf8, toBase64, toBase64Url } from '../../../src/lib/encoding';
 import vectors from '../../vectors/sealed.json';
 
@@ -26,10 +26,7 @@ function scriptedRandom(outputs: Uint8Array[]) {
   return { random, requested, remaining: () => queue.length };
 }
 
-async function keyringOf(env: {
-  TOKENGATE_KEK?: string;
-  TOKENGATE_KEYRING?: string;
-}): Promise<Keyring> {
+async function keyringOf(env: KeyringEnv): Promise<Keyring> {
   const result = await loadKeyring(env);
   if (!result.ok) throw new Error(result.error);
   return result.keyring;
@@ -151,6 +148,39 @@ describe('sealCredential', () => {
     await expect(sealCredential(keyring, 'v', aadOf(SLACK), secureRandom)).rejects.toThrow(
       /invalid active kid/,
     );
+  });
+});
+
+describe('I-CRED-3: a change of the login variables makes stored credentials undecryptable', () => {
+  const access = { AUTH_ACCESS_TEAM_DOMAIN: 'acme', AUTH_ACCESS_AUD: 'a'.repeat(64) };
+  const others: Array<[string, KeyringEnv]> = [
+    ['no login variable', {}],
+    ['another AUD', { ...access, AUTH_ACCESS_AUD: 'b'.repeat(64) }],
+    ['another team domain', { ...access, AUTH_ACCESS_TEAM_DOMAIN: 'other' }],
+    [
+      'the team domain written differently',
+      { ...access, AUTH_ACCESS_TEAM_DOMAIN: 'acme.cloudflareaccess.com' },
+    ],
+    ['a development login', { AUTH_ACCESS_DEVELOPMENT: 'dev@example.com' }],
+    ['Access plus a development login', { ...access, AUTH_ACCESS_DEVELOPMENT: 'dev@example.com' }],
+  ];
+
+  it.each(others)('sealed under Access, opened with %s', async (_, env) => {
+    const sealed = await sealCredential(
+      await keyringOf({ TOKENGATE_KEK: K1, ...access }),
+      'xoxb-secret',
+      aadOf(SLACK),
+      secureRandom,
+    );
+    expect(
+      await openCredential(await keyringOf({ TOKENGATE_KEK: K1, ...env }), sealed, aadOf(SLACK)),
+    ).toEqual({
+      ok: false,
+      error: 'credential_binding_mismatch',
+    });
+    expect(
+      await openCredential(await keyringOf({ TOKENGATE_KEK: K1, ...access }), sealed, aadOf(SLACK)),
+    ).toEqual({ ok: true, plaintext: 'xoxb-secret' });
   });
 });
 

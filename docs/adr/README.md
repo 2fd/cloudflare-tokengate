@@ -22,6 +22,7 @@ Each ADR uses the format from [0001](0001-record-architecture-decisions.md): Sta
 | [0014](0014-integrity-rules-in-sql.md) | Integrity rules and audit rows enforced in SQL | Accepted |
 | [0015](0015-cloudflare-access-only-admin-login.md) | Cloudflare Access as the only admin login, without gateway sessions | Accepted |
 | [0016](0016-admin-hosts-in-settings.md) | Admin hosts in Settings instead of `PUBLIC_URL` | Accepted |
+| [0017](0017-kek-bound-to-login-variables.md) | Key-encryption keys bound to the login variables | Accepted |
 
 ## Adding an ADR
 
