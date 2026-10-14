@@ -12,7 +12,7 @@ Read [docs/architecture.md](docs/architecture.md) for the module map and [docs/t
 
 Prerequisites:
 
-- Node.js 22 or later. `pnpm keyring` needs Node 22.18 or later (TypeScript type stripping). CI uses Node 24.
+- Node.js 22.18 or later (`engines` in `package.json`; `pnpm keyring` needs its TypeScript type stripping). CI uses Node 24.
 - pnpm, at the version in `packageManager` (`package.json`). On Node 22 and 24, `corepack enable` installs it. Other options: [pnpm installation](https://pnpm.io/installation).
 - `bash` and `jq`, for `pnpm test:scripts`.
 
@@ -67,7 +67,7 @@ You do not need a Cloudflare account or Cloudflare Access to run the tests: they
 | `pnpm types` | Regenerates `worker-configuration.d.ts`. Run it after you change bindings in `wrangler.jsonc`. |
 | `pnpm test` | Vitest inside workerd (`@cloudflare/vitest-plugin`) with local D1 databases. |
 | `pnpm test:watch` | Vitest in watch mode. |
-| `pnpm test:scripts` | Shell checks: `scripts/check-config.sh`, `scripts/check-threat-ids.sh`, `test/security/check-config-test.sh`, `test/security/get-token-action.sh`. |
+| `pnpm test:scripts` | Shell checks: `scripts/check-config.sh`, `scripts/check-threat-ids.sh`, `test/security/check-config-test.sh`, `test/security/get-token-action.sh`, `scripts/check-links.mjs`. |
 | `pnpm dev` | `wrangler dev` with `.dev.vars`. |
 | `pnpm db:migrate:local` | Applies `migrations/` to `DB` and `migrations-telemetry/` to `TELEMETRY_DB`, locally. |
 | `pnpm keyring generate` / `pnpm keyring check` | Generates a key, or validates a `TOKENGATE_KEK` or `TOKENGATE_KEYRING` value read from stdin. See [docs/operations/key-rotation.md](docs/operations/key-rotation.md). |
