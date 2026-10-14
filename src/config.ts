@@ -1,9 +1,10 @@
 // Parses and validates environment configuration per feature (docs/configuration.md). A malformed feature is
 // disabled and reported by variable name; it never runs half-configured (I-CFG-1). Also decides
-// admin host pinning (I-DEPLOY-1). Error messages name variables only and never echo values.
+// admin host pinning against the admin hosts stored in Settings (I-DEPLOY-1). Error messages name
+// variables only and never echo values.
 import type { AppEnv } from './env';
 
-export type ConfigFeature = 'public_url' | 'login.access' | 'login.dev';
+export type ConfigFeature = 'login.access' | 'login.dev';
 
 export interface ConfigError {
   feature: ConfigFeature;
@@ -17,15 +18,13 @@ export interface AccessLogin {
   aud: string;
 }
 
-/** Local development login: every admin request is this user. Only on a loopback PUBLIC_URL. */
+/** Local development login: every admin request to a loopback host is this user. */
 export interface DevLogin {
   /** Lowercased. */
   email: string;
 }
 
 export interface Config {
-  /** Canonical origin; null when unset or malformed (malformed also adds a `public_url` error). */
-  publicUrl: URL | null;
   errors: ConfigError[];
   login: { access: AccessLogin | null; dev: DevLogin | null };
 }
@@ -39,49 +38,48 @@ const DEV_EMAIL_RE = /^[^\s@,;<>"]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 
 export function parseConfig(env: AppEnv): Config {
   const errors: ConfigError[] = [];
-  const publicUrl = parsePublicUrl(env, errors);
   return {
-    publicUrl,
     errors,
     login: {
-      access: parseAccessLogin(env, publicUrl, errors),
-      dev: parseDevLogin(env, publicUrl, errors),
+      access: parseAccessLogin(env, errors),
+      dev: parseDevLogin(env, errors),
     },
   };
 }
 
 /**
- * PUBLIC_URL origin when configured, otherwise the origin of the current request.
- * A malformed PUBLIC_URL also falls back to the request origin, so admin routes must be
- * gated by `adminOriginAllowed` first.
+ * Host pinning for /admin (I-DEPLOY-1), against the admin hosts stored in Settings
+ * (`adminHostsFromValue`). `null` (no owner has signed in yet) serves any hostname except
+ * workers.dev. Otherwise only a listed hostname is served, over https unless it is a loopback
+ * host; the port is ignored. An empty list (a stored value that is not valid) denies every host.
  */
-export function canonicalOrigin(config: Config, requestUrl: URL): string {
-  return config.publicUrl?.origin ?? requestUrl.origin;
-}
-
-/**
- * Host pinning for /admin (I-DEPLOY-1). With PUBLIC_URL set, only its exact origin
- * (scheme, host and port) is served. A malformed PUBLIC_URL denies every request: the operator
- * asked for pinning, so a typo must not turn it off.
- */
-export function adminOriginAllowed(config: Config, requestUrl: URL): boolean {
-  if (config.errors.some((error) => error.feature === 'public_url')) return false;
-  return config.publicUrl === null || config.publicUrl.origin === requestUrl.origin;
+export function adminHostAllowed(adminHosts: string[] | null, requestUrl: URL): boolean {
+  const host = requestUrl.hostname;
+  if (isWorkersDev(host)) return false;
+  if (adminHosts === null) return true;
+  if (requestUrl.protocol !== 'https:' && !LOCAL_DEV_HOSTS.has(host)) return false;
+  return hostListed(host, adminHosts);
 }
 
 /**
  * Exact hostname match, or `*.suffix` matching any hostname strictly below the suffix
  * (`*.example.com` matches `a.example.com` and `a.b.example.com`, not `example.com`).
- * `null` means no restriction. Pass `URL.hostname`: a host with a port, a trailing dot or an empty
- * label never matches. Entries must be lowercase, as produced by `parseConfig`.
+ * Entries must be lowercase. Pass `URL.hostname`.
+ */
+export function hostListed(host: string, entries: readonly string[]): boolean {
+  const candidate = host.toLowerCase();
+  return entries.some((entry) =>
+    entry.startsWith('*.') ? candidate.endsWith(entry.slice(1)) : candidate === entry,
+  );
+}
+
+/**
+ * `hostListed` for the upstream host allowlist; `null` means no restriction. A host with a port,
+ * a trailing dot or an empty label never matches.
  */
 export function upstreamHostAllowed(host: string, allowed: string[] | null): boolean {
   if (allowed === null) return true;
-  const candidate = host.toLowerCase();
-  if (!isDomainName(candidate)) return false;
-  return allowed.some((entry) =>
-    entry.startsWith('*.') ? candidate.endsWith(entry.slice(1)) : candidate === entry,
-  );
+  return isDomainName(host.toLowerCase()) && hostListed(host, allowed);
 }
 
 /** Splits a comma-separated variable, trimming entries and dropping empty ones. */
@@ -98,44 +96,7 @@ function readVar(raw: string | undefined): string | null {
   return trimmed === '' ? null : trimmed;
 }
 
-function parsePublicUrl(env: AppEnv, errors: ConfigError[]): URL | null {
-  const raw = readVar(env.PUBLIC_URL);
-  if (raw === null) return null;
-  const fail = (message: string): null => {
-    errors.push({ feature: 'public_url', variable: 'PUBLIC_URL', message });
-    return null;
-  };
-  if (!URL.canParse(raw)) return fail('PUBLIC_URL is not a valid absolute URL.');
-  const url = new URL(raw);
-  if (
-    url.protocol !== 'https:' &&
-    !(url.protocol === 'http:' && LOCAL_DEV_HOSTS.has(url.hostname))
-  ) {
-    return fail(
-      'PUBLIC_URL must use https (http is accepted only for localhost, 127.0.0.1, [::1]).',
-    );
-  }
-  if (url.username !== '' || url.password !== '') {
-    return fail('PUBLIC_URL must not contain credentials.');
-  }
-  if (
-    url.pathname !== '/' ||
-    url.search !== '' ||
-    url.hash !== '' ||
-    raw.includes('?') ||
-    raw.includes('#')
-  ) {
-    return fail('PUBLIC_URL must be an origin only (no path, query or fragment).');
-  }
-  if (url.hostname.endsWith('.')) return fail('PUBLIC_URL host must not end with a dot.');
-  return new URL(url.origin);
-}
-
-function parseAccessLogin(
-  env: AppEnv,
-  publicUrl: URL | null,
-  errors: ConfigError[],
-): AccessLogin | null {
+function parseAccessLogin(env: AppEnv, errors: ConfigError[]): AccessLogin | null {
   const fail = (variable: string, message: string): null => {
     errors.push({ feature: 'login.access', variable, message });
     return null;
@@ -165,29 +126,15 @@ function parseAccessLogin(
       'AUTH_ACCESS_AUD is not a valid Access application audience tag.',
     );
   }
-  // docs/configuration.md: Access login is sound only when admin traffic is pinned to a custom hostname that
-  // the operator places behind an Access application.
-  if (publicUrl === null) {
-    return fail('PUBLIC_URL', 'Access login requires a valid PUBLIC_URL.');
-  }
-  if (publicUrl.protocol !== 'https:') {
-    return fail('PUBLIC_URL', 'Access login requires PUBLIC_URL to use https.');
-  }
-  if (isWorkersDev(publicUrl.hostname)) {
-    return fail(
-      'PUBLIC_URL',
-      'Access login requires PUBLIC_URL on a custom domain, not workers.dev.',
-    );
-  }
   return { teamDomain, aud };
 }
 
 /**
- * AUTH_DEV_EMAIL signs every admin request in as that email, with no proof at all. It is accepted
- * only when PUBLIC_URL is a loopback origin: host pinning (I-DEPLOY-1) then refuses every admin
- * request whose URL is not that origin, which no request through Cloudflare's edge can have.
+ * AUTH_DEV_EMAIL signs admin requests in as that email, with no proof at all. `requestIdentity`
+ * accepts it only on a request to localhost, 127.0.0.1 or [::1], which no request through
+ * Cloudflare's edge can be.
  */
-function parseDevLogin(env: AppEnv, publicUrl: URL | null, errors: ConfigError[]): DevLogin | null {
+function parseDevLogin(env: AppEnv, errors: ConfigError[]): DevLogin | null {
   const raw = readVar(env.AUTH_DEV_EMAIL);
   if (raw === null) return null;
   const fail = (variable: string, message: string): null => {
@@ -197,12 +144,6 @@ function parseDevLogin(env: AppEnv, publicUrl: URL | null, errors: ConfigError[]
   const email = raw.toLowerCase();
   if (!DEV_EMAIL_RE.test(email)) {
     return fail('AUTH_DEV_EMAIL', 'AUTH_DEV_EMAIL is not a valid email address.');
-  }
-  if (publicUrl === null || !LOCAL_DEV_HOSTS.has(publicUrl.hostname)) {
-    return fail(
-      'PUBLIC_URL',
-      'AUTH_DEV_EMAIL requires PUBLIC_URL on localhost, 127.0.0.1 or [::1]. Never set it in production.',
-    );
   }
   return { email };
 }
@@ -232,6 +173,17 @@ export function isUpstreamHostEntry(entry: string): boolean {
 function isDomainName(name: string): boolean {
   if (name.length === 0 || name.length > 253) return false;
   return name.split('.').every((label) => DNS_LABEL_RE.test(label));
+}
+
+/**
+ * An admin host entry: an upstream-style entry (exact hostname or `*.<domain>`) or a loopback
+ * host, never on workers.dev (admin is not served there, see `adminHostAllowed`). Lowercase.
+ */
+export function isAdminHostEntry(entry: string): boolean {
+  if (LOCAL_DEV_HOSTS.has(entry)) return true;
+  // `*.<domain>` needs two labels, so `*.dev` is already refused here.
+  if (!isUpstreamHostEntry(entry)) return false;
+  return !isWorkersDev(entry.startsWith('*.') ? entry.slice(2) : entry);
 }
 
 function isWorkersDev(hostname: string): boolean {

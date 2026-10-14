@@ -1,8 +1,10 @@
-// Runtime settings changes (owner only, enforced by RBAC): retention, sampling and row cap.
-// Values are checked against SETTING_BOUNDS (floors also re-applied at use time); the changed keys
-// and one audit row are written in one db.batch (I-AUDIT-1).
-import { isUpstreamHostEntry } from '../../config';
+// Runtime settings changes (owner only, enforced by RBAC): retention, sampling, row cap, and the
+// upstream and admin host allowlists. Values are checked against SETTING_BOUNDS (floors also
+// re-applied at use time); the changed keys and one audit row are written in one db.batch (I-AUDIT-1).
+import { hostListed, isAdminHostEntry, isUpstreamHostEntry } from '../../config';
 import {
+  ADMIN_HOSTS_KEY,
+  getAdminHosts,
   getAllowedUpstreamHosts,
   getSettings,
   putSettingStatement,
@@ -94,15 +96,7 @@ export async function updateSettings(
 export function parseUpstreamHostInput(
   raw: unknown,
 ): { ok: true; hosts: string[] | null } | { ok: false; error: string } {
-  if (typeof raw !== 'string') return { ok: true, hosts: null };
-  const entries = [
-    ...new Set(
-      raw
-        .split(/[\s,]+/)
-        .map((entry) => entry.trim().toLowerCase())
-        .filter((entry) => entry !== ''),
-    ),
-  ];
+  const entries = hostListEntries(raw);
   if (entries.length === 0) return { ok: true, hosts: null };
   const invalid = entries.filter((entry) => !isUpstreamHostEntry(entry));
   if (invalid.length > 0) {
@@ -146,5 +140,79 @@ export async function updateUpstreamHosts(
   if (!outcome.ok) return outcome;
   if (!outcome.committed)
     return opFailure('conflict', ['the allowlist was not saved; reload and retry']);
+  return { ok: true, hosts: parsed.hosts, changed: true };
+}
+
+/** Entries separated by commas, spaces or new lines, lowercased and deduplicated. */
+function hostListEntries(raw: unknown): string[] {
+  if (typeof raw !== 'string') return [];
+  return [
+    ...new Set(
+      raw
+        .split(/[\s,]+/)
+        .map((entry) => entry.trim().toLowerCase())
+        .filter((entry) => entry !== ''),
+    ),
+  ];
+}
+
+/**
+ * Parses the admin hosts textarea. The list may not be empty, and must keep `currentHost` (the
+ * hostname of the request saving it) so an owner cannot lock themselves out (I-DEPLOY-1).
+ */
+export function parseAdminHostInput(
+  raw: unknown,
+  currentHost: string,
+): { ok: true; hosts: string[] } | { ok: false; error: string } {
+  const entries = hostListEntries(raw);
+  if (entries.length === 0) {
+    return { ok: false, error: 'List at least one host: the admin console answers only on these.' };
+  }
+  const invalid = entries.filter((entry) => !isAdminHostEntry(entry));
+  if (invalid.length > 0) {
+    return {
+      ok: false,
+      error: `Not a hostname or "*.<domain>" with at least two labels, or on workers.dev: ${invalid.slice(0, 5).join(', ')}`,
+    };
+  }
+  if (!hostListed(currentHost, entries)) {
+    return {
+      ok: false,
+      error: `Keep ${currentHost} in the list: it is the host you are using now, and without it this page stops answering.`,
+    };
+  }
+  return { ok: true, hosts: entries };
+}
+
+/** Sets the admin host allowlist (I-DEPLOY-1); one audit row in the same batch (I-AUDIT-1). */
+export async function updateAdminHosts(
+  deps: Deps,
+  actor: Actor,
+  raw: unknown,
+  currentHost: string,
+): Promise<{ ok: true; hosts: string[]; changed: boolean } | OpFailure> {
+  const parsed = parseAdminHostInput(raw, currentHost);
+  if (!parsed.ok) return opFailure('invalid', [parsed.error]);
+  const db = deps.env.DB;
+  const before = await getAdminHosts(db);
+  if (JSON.stringify(before) === JSON.stringify(parsed.hosts)) {
+    return { ok: true, hosts: parsed.hosts, changed: false };
+  }
+  const outcome = await commitOrConstraintFailure(
+    deps,
+    actor,
+    {
+      action: 'settings.admin_hosts',
+      targetType: 'settings',
+      targetId: null,
+      summary: `Admin hosts set (${parsed.hosts.length} entries)`,
+      diff: { before, after: parsed.hosts },
+    },
+    null,
+    [putSettingStatement(db, ADMIN_HOSTS_KEY, parsed.hosts, deps.now(), actor.id)],
+  );
+  if (!outcome.ok) return outcome;
+  if (!outcome.committed)
+    return opFailure('conflict', ['the admin hosts were not saved; reload and retry']);
   return { ok: true, hosts: parsed.hosts, changed: true };
 }

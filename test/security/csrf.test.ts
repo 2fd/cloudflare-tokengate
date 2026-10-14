@@ -142,8 +142,8 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double
     expect(cross.status).toBe(403);
   });
 
-  it('compares Origin with PUBLIC_URL when it is set', async () => {
-    const { app, session } = await setup({ PUBLIC_URL: 'https://admin.example.com' });
+  it('compares Origin with the request origin', async () => {
+    const { app, session } = await setup();
     const post = (origin: string) =>
       app.request('/admin/services', {
         method: 'POST',

@@ -84,6 +84,7 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, RoutePermission>> = Obje
   'POST /admin/settings': { permission: 'settings:write', mutates: true },
   'POST /admin/settings/rewrap': { permission: 'keyring:rewrap', mutates: true },
   'POST /admin/settings/upstream-hosts': { permission: 'settings:write', mutates: true },
+  'POST /admin/settings/admin-hosts': { permission: 'settings:write', mutates: true },
   // No secrets (I-CRED-1), but every user's email and the full policy: admins and owners only.
   // POST (I-CSRF-1) because it writes an audit row (I-AUDIT-1); a GET could be forged cross-site.
   'POST /admin/export': configWrite,

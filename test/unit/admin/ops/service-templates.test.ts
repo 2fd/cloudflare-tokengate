@@ -26,7 +26,7 @@ describe('SERVICE_TEMPLATES', () => {
     '%s passes service validation',
     (_, t) => {
       const base = validateBaseUrl(t.base_url, {
-        publicHost: 'gw.example.com',
+        gatewayHosts: ['gw.example.com'],
         allowedUpstreamHosts: null,
       });
       expect(base).toEqual({ ok: true, normalized: t.base_url });

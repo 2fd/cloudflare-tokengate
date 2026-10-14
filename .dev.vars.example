@@ -11,14 +11,11 @@ TOKENGATE_KEK=
 # the ones you need in .dev.vars. They are commented here so the Deploy button does not ask for them
 # as secrets. Full list and formats: docs/configuration.md.
 
-# Origin the admin console is pinned to. http is accepted only for localhost.
-# PUBLIC_URL=http://localhost:8787
-
 # Local development login: every admin request is signed in as this email, with no check at all.
-# Accepted only when PUBLIC_URL is on localhost, 127.0.0.1 or [::1]. Never set it in production.
+# Applies only to requests to localhost, 127.0.0.1 or [::1]. Never set it in production.
 # AUTH_DEV_EMAIL=you@example.com
 
 # Cloudflare Access login: "<team>" or "https://<team>.cloudflareaccess.com", and the application AUD.
-# Requires PUBLIC_URL on a custom domain (not workers.dev). Production uses only this login.
+# Needs a custom domain: /admin never answers on workers.dev. Production uses only this login.
 # AUTH_ACCESS_TEAM_DOMAIN=
 # AUTH_ACCESS_AUD=

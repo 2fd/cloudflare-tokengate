@@ -10,22 +10,22 @@ settings live in `src/db/settings.ts`.
 
 | Kind | Where you set it | Survives `pnpm run deploy` |
 |---|---|---|
-| Operator variable (`PUBLIC_URL`, `AUTH_*`, ...) | Cloudflare dashboard: Workers & Pages > tokengate > Settings > Variables and Secrets | Yes (`keep_vars: true`) |
+| Operator variable (`AUTH_*`) | Cloudflare dashboard: Workers & Pages > tokengate > Settings > Variables and Secrets | Yes (`keep_vars: true`) |
 | Secret (`TOKENGATE_KEK`, `TOKENGATE_KEYRING`) | `pnpm wrangler secret put <NAME>` | Yes, always |
 | Binding (D1, queue, pipeline, rate limiter) | `wrangler.jsonc` | Part of the deploy |
-| Runtime setting (retention, sampling, upstream host allowlist) | Admin UI: Settings | Stored in D1 |
+| Runtime setting (retention, sampling, upstream host allowlist, admin hosts) | Admin UI: Settings | Stored in D1 |
 
 `wrangler.jsonc` sets `"keep_vars": true` and declares no `vars`. So `pnpm run deploy` and Workers Builds
 keep the values you set in the dashboard. Set each variable in one place only.
 
 If you prefer to keep configuration in git, add the variable with a non-empty value under `"vars"` in
 your clone's `wrangler.jsonc`. Every deploy then overwrites the dashboard value. Never commit `""`
-placeholders. An empty `PUBLIC_URL` turns off admin host pinning
+placeholders. An empty `AUTH_ACCESS_AUD` turns off admin sign-in
 ([I-DEPLOY-1](threat-model.md#i-deploy-1)). Whitespace-only values count as empty. `scripts/check-config.sh` rejects them, in top-level `vars` and in `env.<name>.vars` blocks.
 
 Rolling back to an earlier Worker version (`pnpm wrangler rollback` or the dashboard) restores that
-version's variables. After a rollback, check `PUBLIC_URL` under Settings > System status. The upstream
-host allowlist is stored in D1, so a rollback does not change it.
+version's variables. The upstream host allowlist and the admin hosts are stored in D1, so a rollback
+does not change them.
 
 For local development (`pnpm dev`), put all variables and secrets in `.dev.vars`. `pnpm run setup`
 creates it from `.dev.vars.example` ([CONTRIBUTING.md](../CONTRIBUTING.md#set-up)). The example lists
@@ -33,7 +33,7 @@ every variable and secret with a comment, except `TOKENGATE_KEYRING`, which it o
 
 ## How invalid configuration fails
 
-Configuration is parsed per feature: `public_url`, `login.access` and `login.dev` ([I-CFG-1](threat-model.md#i-cfg-1)). A malformed feature is turned off; it never runs half
+Configuration is parsed per feature: `login.access` and `login.dev` ([I-CFG-1](threat-model.md#i-cfg-1)). A malformed feature is turned off; it never runs half
 configured. Errors name the variable and never echo its value. They appear in two places:
 
 - Settings > System status > "Configuration problems".
@@ -46,7 +46,6 @@ entries are trimmed and empty entries are dropped.
 
 | Name | Kind | Required | Format |
 |---|---|---|---|
-| `PUBLIC_URL` | var | Recommended; required for Access login | `https://host[:port]` origin |
 | `TOKENGATE_KEK` | secret | One of `TOKENGATE_KEK` / `TOKENGATE_KEYRING` | Standard base64 of 32 bytes |
 | `TOKENGATE_KEYRING` | secret | One of `TOKENGATE_KEK` / `TOKENGATE_KEYRING` | JSON keyring |
 | `AUTH_ACCESS_TEAM_DOMAIN` | var | For the admin UI | `<team>`, `<team>.cloudflareaccess.com` or `https://<team>.cloudflareaccess.com` |
@@ -57,28 +56,12 @@ Sign-in to the admin UI goes through Cloudflare Access only
 ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). Without a working Access login, `/admin`
 shows a setup page (`503`) that lists the variables to set. `AUTH_DEV_EMAIL` is for `pnpm dev` only.
 
-### `PUBLIC_URL`
-
-The canonical origin of the gateway, for example `https://tokengate.example.com`.
-
-- **When set:** `/admin` answers only on this exact origin (scheme, host and port). Every other
-  hostname, including `*.workers.dev`, gets `404 Not Found` ([I-DEPLOY-1](threat-model.md#i-deploy-1)). The
-  snippets and invitation links shown in the admin UI use this origin.
-- **When unset:** `/admin` answers on every hostname of the Worker, and Access login is turned off.
-  So nobody can sign in.
-- **When malformed:** every `/admin` request gets 404, and Access login is turned off. The operator
-  asked for pinning, so a typo does not turn it off.
-- **Rules:** https only (http only for `localhost`, `127.0.0.1`, `[::1]`); no credentials, path, query or
-  fragment; no trailing dot on the host.
-- `/proxy/*`, `/healthz` and `/readyz` are never pinned. They answer on every hostname.
-- A service base URL can never point at this host or at the host the request arrived on
-  ([I-SSRF-1](threat-model.md#i-ssrf-1)).
-
 ### First owner
 
 There is no variable for it. While no owner exists, the first person to sign in becomes an active
 owner, once per deployment ([I-BOOT-1](threat-model.md#i-boot-1)). Keep the Access policy limited to
-your own email until you have signed in, then widen it. Everyone after joins with the join defaults
+your own email until you have signed in, then widen it. The hostname of that sign-in becomes the first
+[admin host](#admin-hosts). Everyone after joins with the join defaults
 and is managed by owners on the Users page. The bootstrap is recorded in settings and does not run
 again, even if every owner is later removed: recover with
 [operations/break-glass.md](operations/break-glass.md).
@@ -110,7 +93,8 @@ one of the two.
 
 ### Cloudflare Access login: `AUTH_ACCESS_*`
 
-1. Set `PUBLIC_URL` to an https origin on a custom domain. Access login refuses `workers.dev`.
+1. Serve the gateway on a custom domain. `/admin` never answers on `workers.dev`
+   ([admin hosts](#admin-hosts)).
 2. In Zero Trust, create a self-hosted Access application for that hostname, limited to the `/admin`
    path. Do not put `/proxy` behind Access: CI jobs call it without an Access session. See
    [operations/cloudflare-zone-settings.md](operations/cloudflare-zone-settings.md).
@@ -132,20 +116,52 @@ one of the two.
   hostname. To end a user's sessions on every device, revoke them in Zero Trust.
 - Users are linked to `<team domain>|<sub>`. A different team is a different identity: after a team
   change, each user needs "Reset login" and a new sign-in.
-- Errors: only one of the pair set; an invalid team domain or AUD; `PUBLIC_URL` missing, not https or on
-  `workers.dev`.
+- Errors: only one of the pair set; an invalid team domain or AUD.
 
 ### Local development login: `AUTH_DEV_EMAIL`
 
 With `AUTH_DEV_EMAIL` set, every admin request is signed in as that email, without any check. Use it
 only with `pnpm dev`.
 
-- It is accepted only when `PUBLIC_URL` is on `localhost`, `127.0.0.1` or `[::1]`. Host pinning then
-  refuses every admin request to another origin, so the edge can never reach it.
+- It applies only to requests whose hostname is `localhost`, `127.0.0.1` or `[::1]`. The gateway
+  checks this on every request. No request through Cloudflare's edge has such a hostname.
 - When Access is also configured, Access is the only accepted proof and `AUTH_DEV_EMAIL` is ignored.
-- The same rules apply: the first sign-in becomes owner, later ones join with the join defaults.
-- Errors: an invalid email; `PUBLIC_URL` missing or not on a loopback host.
+- The same rules apply: the first sign-in becomes owner, later ones join with the join defaults. The
+  first sign-in on `http://localhost:8787/admin` stores `localhost` as the admin host in the local D1.
+- Errors: an invalid email.
 
+## Admin hosts
+
+The hostnames that `/admin` answers on ([I-DEPLOY-1](threat-model.md#i-deploy-1),
+[ADR 0016](adr/0016-admin-hosts-in-settings.md)). It is a setting in the admin UI, not a variable:
+Settings > "Admin hosts". Only owners can change it (permission `settings:write`). Each change writes
+a `settings.admin_hosts` audit event.
+
+- **Initial value:** the hostname of the first sign-in, which creates the first owner
+  ([I-BOOT-1](threat-model.md#i-boot-1)). The same D1 batch stores it, only if no list is set yet. The
+  `user.bootstrap` audit event records it as `host`. If that hostname is not a valid entry, nothing
+  is stored.
+- **Before the first sign-in:** `/admin` answers on every hostname except `workers.dev`. Access still
+  guards sign-in.
+- **After:** `/admin` answers only on a listed hostname. Every other hostname gets `404 Not Found`.
+  A hostname other than a loopback host must use https; over http it gets 404. The port is ignored.
+- **Always:** `/admin` never answers on `workers.dev` or `*.workers.dev`. `/proxy/*`, `/healthz` and
+  `/readyz` are never pinned. They answer on every hostname.
+- **Entries:** the same format as the [upstream host allowlist](#upstream-host-allowlist): an exact
+  hostname (`tokengate.example.com`) or `*.<domain>`, which matches the hosts below the domain but not
+  the domain itself. `localhost`, `127.0.0.1` and `[::1]` are also valid. No scheme, port or path.
+  Entries on `workers.dev` are refused.
+- **Save rules:** the list cannot be empty, and it must keep the hostname you use at that moment. So an
+  owner cannot lock themselves out. Put every hostname you add behind your Cloudflare Access
+  application.
+- **Self-exclusion:** a service base URL can never point at an admin host (wildcards included) or at the
+  host the request arrived on ([I-SSRF-1](threat-model.md#i-ssrf-1)).
+- **Request origin:** the admin UI has no fixed origin. The CSRF `Origin` check, invitation links and
+  the proxy URL snippets use the origin of the current request. Host pinning makes this safe.
+- **Stored value:** key `admin_hosts` in the `settings` table, a JSON array. A stored value that is not
+  a valid list denies every host (fail closed). To recover, see
+  [operations/break-glass.md](operations/break-glass.md#lost-admin-host).
+- Settings > System status shows the list, or "not set yet: set on the first sign-in."
 
 ## Upstream host allowlist
 
@@ -154,7 +170,7 @@ The hosts that service base URLs may use. It is a setting in the admin UI, not a
 Each change writes a `settings.upstream_hosts` audit event.
 
 - **Empty (the default):** any public https host is allowed. You can load a credential for any
-  upstream. IP literals, `localhost`, `*.workers.dev` and the gateway's own host are always refused
+  upstream. IP literals, `localhost`, `*.workers.dev` and the gateway's own hosts ([admin hosts](#admin-hosts) and the request host) are always refused
   ([I-SSRF-1](threat-model.md#i-ssrf-1)).
 - **Entries:** one per line, or separated by commas or spaces. `api.example.com` matches that host
   only. `*.example.com` matches any host below it (`a.example.com`, `a.b.example.com`) but not
@@ -313,7 +329,7 @@ A soft cap, enforced by the hourly job (`src/telemetry/retention.ts`):
 |---|---|---|
 | `compatibility_flags` | `nodejs_compat` | Node.js compatibility. On by default from compatibility date 2026-08-04 ([docs](https://developers.cloudflare.com/workers/runtime-apis/nodejs/)); listed for clarity |
 | `compatibility_flags` | `global_fetch_strictly_public` | A same-zone upstream is fetched through Cloudflare's front door (Access, WAF), not straight from the origin ([I-SSRF-1](threat-model.md#i-ssrf-1), [docs](https://developers.cloudflare.com/workers/configuration/compatibility-flags/)) |
-| `workers_dev` | `true` | Enables the `*.workers.dev` URL for the quick start. Set `PUBLIC_URL` to pin the admin UI elsewhere |
+| `workers_dev` | `true` | Enables the `*.workers.dev` URL for the quick start. Only `/proxy` and the health endpoints answer there; `/admin` needs a custom domain ([admin hosts](#admin-hosts)) |
 | `preview_urls` | `false` | Version preview URLs would run old code against production data and secrets ([I-DEPLOY-1](threat-model.md#i-deploy-1)) |
 | `observability.head_sampling_rate` | `1` | Audit events are `audit.event` log lines; sampling below 1 can drop them |
 | `assets.run_worker_first` | `["/*", "!/static/*"]` | The Worker handles every path except `/static/*`, so security headers and host pinning always apply |

@@ -6,7 +6,7 @@ import { ACCESS_JWT_HEADER, resetAccessCertsCacheForTests } from '../../src/admi
 import { CSRF_COOKIE } from '../../src/admin/auth/csrf';
 import { SEEN_INTERVAL_MS } from '../../src/admin/auth/middleware';
 import { formData, renderPage } from '../../src/admin/render';
-import { putSettingStatement } from '../../src/db/settings';
+import { getAdminHosts, putSettingStatement } from '../../src/db/settings';
 import {
   adminGet,
   adminPost,
@@ -233,11 +233,10 @@ describe('dev login', () => {
   const DEV_ORIGIN = 'http://localhost:8787';
   const DEV_ENV = {
     ...NO_ACCESS,
-    PUBLIC_URL: DEV_ORIGIN,
     AUTH_DEV_EMAIL: 'dev@example.com',
   };
 
-  it('signs every request in as AUTH_DEV_EMAIL on a loopback PUBLIC_URL', async () => {
+  it('signs every request to localhost in as AUTH_DEV_EMAIL and pins admin to localhost', async () => {
     const app = createAdminTestApp({ env: DEV_ENV, routes: stubAdminPages });
     const res = await app.request('/admin', { origin: DEV_ORIGIN });
     expect(res.status).toBe(200);
@@ -246,31 +245,21 @@ describe('dev login', () => {
       'SELECT login_provider, subject FROM user_identities',
     ).first();
     expect(identity).toEqual({ login_provider: 'dev', subject: 'dev@example.com' });
-  });
-
-  it('is unreachable on any other origin (host pinning)', async () => {
-    const app = createAdminTestApp({ env: DEV_ENV, routes: stubAdminPages });
+    expect(await getAdminHosts(env.DB)).toEqual(['localhost']);
+    // The bootstrap hostname is now the only admin host.
     expect((await app.request('/admin', { origin: 'https://gw.test' })).status).toBe(404);
-    expect(await env.DB.prepare('SELECT count(*) AS n FROM users').first('n')).toBe(0);
   });
 
-  it('is refused when PUBLIC_URL is not loopback, even for a localhost request', async () => {
-    const app = createAdminTestApp({
-      env: { ...DEV_ENV, PUBLIC_URL: '' },
-      routes: stubAdminPages,
-    });
-    const res = await app.request('/admin', { origin: DEV_ORIGIN });
+  it('is refused on a non-loopback host, before any admin host is stored', async () => {
+    const app = createAdminTestApp({ env: DEV_ENV, routes: stubAdminPages });
+    const res = await app.request('/admin', { origin: 'https://gw.test' });
     expect(res.status).toBe(503);
-    expect(await res.text()).toContain('AUTH_DEV_EMAIL requires PUBLIC_URL');
     expect(await env.DB.prepare('SELECT count(*) AS n FROM users').first('n')).toBe(0);
   });
 
   it('is ignored when Access is configured', async () => {
     const app = createAdminTestApp({
-      env: {
-        PUBLIC_URL: 'https://localhost',
-        AUTH_DEV_EMAIL: 'dev@example.com',
-      },
+      env: { AUTH_DEV_EMAIL: 'dev@example.com' },
       routes: stubAdminPages,
     });
     const res = await app.request('/admin', { origin: 'https://localhost' });

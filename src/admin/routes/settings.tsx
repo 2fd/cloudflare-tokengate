@@ -1,11 +1,12 @@
 // Admin pages: settings (retention, sampling, row cap), encryption key status and re-encryption,
 // system status, and the configuration export download (POST /admin/export). System status shows
-// names, counts and the PUBLIC_URL origin, never configured values that could be secret (I-CFG-1).
+// names, counts and the admin hosts, never configured values that could be secret (I-CFG-1).
 import type { App } from '../../app';
 import { type Config, parseConfig, upstreamHostAllowed } from '../../config';
 import { type SchemaState, schemaStatusByDatabase } from '../../db/migrations';
 import { listServices } from '../../db/services';
 import {
+  getAdminHosts,
   getAllowedUpstreamHosts,
   getSettings,
   SETTING_BOUNDS,
@@ -19,6 +20,7 @@ import { KEYRING_ERROR_TEXT, keyringStatus, rewrapCredentials } from '../ops/key
 import {
   EDITABLE_SETTINGS,
   SETTING_LABELS,
+  updateAdminHosts,
   updateSettings,
   updateUpstreamHosts,
 } from '../ops/settings';
@@ -46,6 +48,9 @@ const NOTICES = {
   hosts_saved:
     'Upstream host allowlist saved. It applies to service saves and to every proxied request.',
   hosts_unchanged: 'Nothing changed: that is the current upstream host allowlist.',
+  admin_hosts_saved:
+    'Admin hosts saved. The admin console now answers only on these hosts. Put each new hostname behind your Cloudflare Access application.',
+  admin_hosts_unchanged: 'Nothing changed: that is the current admin host list.',
   key_confirmed:
     'New key confirmed: every credential opens with it. Credentials under older keys, if any, were re-encrypted with the active key.',
 } as const;
@@ -104,6 +109,22 @@ export function registerSettingsRoutes(app: App): void {
     return redirectWithNotice(c, SECTION, result.changed ? 'hosts_saved' : 'hosts_unchanged');
   });
 
+  app.post(`${SECTION}/admin-hosts`, async (c) => {
+    const form = await formData(c);
+    const raw = text(form, 'admin_hosts') ?? '';
+    const host = new URL(c.req.url).hostname;
+    const result = await updateAdminHosts(c.get('deps'), adminActor(c), raw, host);
+    if (!result.ok) {
+      const status = result.reason === 'conflict' ? 409 : 400;
+      return settingsPage(c, { errors: result.errors, submittedAdminHosts: raw, status });
+    }
+    return redirectWithNotice(
+      c,
+      SECTION,
+      result.changed ? 'admin_hosts_saved' : 'admin_hosts_unchanged',
+    );
+  });
+
   app.post(`${SECTION}/rewrap`, async (c) => {
     const result = await rewrapCredentials(c.get('deps'), adminActor(c));
     if (!result.ok) return failurePage(c, result);
@@ -142,6 +163,7 @@ async function settingsPage(
     errors?: string[];
     submitted?: SettingValues;
     submittedHosts?: string;
+    submittedAdminHosts?: string;
     status?: 400 | 409;
   },
 ) {
@@ -149,17 +171,28 @@ async function settingsPage(
   const viewer = c.get('viewer');
   const role = viewer.user.role;
   const config = parseConfig(deps.env);
-  const [settings, keyring, health, cron, schema, activeOwners, upstreamHosts, services] =
-    await Promise.all([
-      getSettings(deps.env.DB),
-      keyringStatus(deps),
-      keyringHealth(deps),
-      cronHealth(deps),
-      schemaStatusByDatabase(deps),
-      countActiveOwners(deps.env.DB),
-      getAllowedUpstreamHosts(deps.env.DB),
-      listServices(deps.env.DB),
-    ]);
+  const [
+    settings,
+    keyring,
+    health,
+    cron,
+    schema,
+    activeOwners,
+    upstreamHosts,
+    adminHosts,
+    services,
+  ] = await Promise.all([
+    getSettings(deps.env.DB),
+    keyringStatus(deps),
+    keyringHealth(deps),
+    cronHealth(deps),
+    schemaStatusByDatabase(deps),
+    countActiveOwners(deps.env.DB),
+    getAllowedUpstreamHosts(deps.env.DB),
+    getAdminHosts(deps.env.DB),
+    listServices(deps.env.DB),
+  ]);
+  const currentHost = new URL(c.req.url).hostname;
   const outsideAllowlist = services.filter(
     (service) => !upstreamHostAllowed(new URL(service.base_url).hostname, upstreamHosts),
   );
@@ -230,6 +263,34 @@ async function settingsPage(
         </p>
       )}
 
+      <h2>Admin hosts</h2>
+      <p>
+        The admin console answers only on these hostnames; any other hostname gets 404. The hostname
+        of the first sign-in is the first entry. Put every hostname you add behind your Cloudflare
+        Access application. The admin console never answers on workers.dev.
+      </p>
+      {can(role, 'settings:write') ? (
+        <form method="post" action={`${SECTION}/admin-hosts`} class="stack">
+          <Csrf token={viewer.csrfToken} />
+          <label class="field">
+            <span>Admin hosts</span>
+            <textarea name="admin_hosts" rows={3} placeholder={currentHost}>
+              {options.submittedAdminHosts ?? (adminHosts ?? []).join('\n')}
+            </textarea>
+            <small>
+              One per line (or separated by commas): an exact hostname such as
+              tokengate.example.com, or *.example.com for every host below example.com. Keep{' '}
+              {currentHost}, the host you are using now.
+            </small>
+          </label>
+          <div class="actions">
+            <button type="submit">Save admin hosts</button>
+          </div>
+        </form>
+      ) : (
+        <p class="muted">{adminHostsText(adminHosts)} Only owners can change this.</p>
+      )}
+
       <h2>Encryption keys</h2>
       <KeyringSection
         csrf={viewer.csrfToken}
@@ -250,14 +311,7 @@ async function settingsPage(
             </>,
           ],
           ['Hourly maintenance job', <CronStatus cron={cron} />],
-          [
-            'Public URL (PUBLIC_URL)',
-            config.publicUrl ? (
-              <code>{config.publicUrl.origin}</code>
-            ) : (
-              'not set: the admin console answers on any hostname of this Worker'
-            ),
-          ],
+          ['Admin hosts', adminHostsText(adminHosts)],
           ['Login providers', loginStatusText(config)],
           [
             'Upstream host allowlist',
@@ -518,6 +572,11 @@ function loginStatusText(config: Config): string {
   return names.length > 0
     ? names.join(', ')
     : 'none configured: nobody can sign in (docs/configuration.md)';
+}
+
+function adminHostsText(hosts: string[] | null): string {
+  if (hosts === null) return 'not set yet: set on the first sign-in.';
+  return `${hosts.join(', ')}.`;
 }
 
 function bindingText(bound: boolean, whenMissing: string): string {

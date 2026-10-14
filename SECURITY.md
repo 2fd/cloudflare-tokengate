@@ -92,8 +92,9 @@ steps.
 
 1. Generate the keyring key outside Cloudflare and store a copy in your company vault. Losing it
    loses every stored credential ([key rotation](docs/operations/key-rotation.md)).
-2. Serve the gateway on a custom domain and set `PUBLIC_URL`. With it, `/admin` answers only on
-   that origin ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)) ([configuration](docs/configuration.md)).
+2. Serve the gateway on a custom domain and sign in there first. That hostname becomes the only admin
+   host: `/admin` then answers only on the hosts in Settings > "Admin hosts", and never on `workers.dev`
+   ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)) ([configuration](docs/configuration.md#admin-hosts)).
 3. In Settings > "Upstream hosts", list the upstream hosts you use. Empty allows any public https
    host ([I-SSRF-1](docs/threat-model.md#i-ssrf-1)) ([configuration](docs/configuration.md#upstream-host-allowlist)).
 4. Set operator variables in the Cloudflare dashboard, not as `""` placeholders in `wrangler.jsonc`.

@@ -344,6 +344,12 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
     fields: { allowed_upstream_hosts: `${unique('host')}.example.com` },
   }),
 
+  'POST /admin/settings/admin-hosts': async () => ({
+    path: '/admin/settings/admin-hosts',
+    action: 'settings.admin_hosts',
+    fields: { admin_hosts: `gw.test\n${unique('host')}.example.com` },
+  }),
+
   'POST /admin/export': async () => ({
     path: '/admin/export',
     action: 'config.export',

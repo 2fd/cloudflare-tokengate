@@ -7,7 +7,7 @@ This page takes a platform engineer from an empty Cloudflare account to a GitHub
 - **Manual deploy.** Follow steps 1 to 16.
 - **Deploy button.** The button replaces steps 1 to 6. Read [Deploy button](#deploy-button) first, then continue at step 7.
 
-The proxy works on the `*.workers.dev` hostname right after step 5. The admin UI does not: sign-in goes through Cloudflare Access, which needs a custom domain (steps 7 to 9). Until then, `/admin` shows a setup page.
+The proxy works on the `*.workers.dev` hostname right after step 5. The admin UI does not: `/admin` never answers on workers.dev, and sign-in goes through Cloudflare Access on a custom domain (steps 7 to 9).
 
 ## Prerequisites
 
@@ -135,13 +135,10 @@ Set operator variables in the Cloudflare dashboard, not in `wrangler.jsonc`. `wr
 
    | Variable | Value | Why |
    |---|---|---|
-   | `PUBLIC_URL` | `<gateway>`, for example `https://tokengate.example.com` | `/admin` answers only on this origin. Access login requires it. |
    | `AUTH_ACCESS_TEAM_DOMAIN` | Your team name from step 8 | The gateway checks the Access token against this team's keys. |
    | `AUTH_ACCESS_AUD` | The AUD tag from step 8 | The Access token must be for this application. |
 
 3. Save and deploy the change.
-
-From now on, `/admin` answers `404` on every other hostname, including workers.dev.
 
 If a variable is half-configured or malformed, Access login stays off. `/admin` then shows the setup page, which names the variable ([I-CFG-1](threat-model.md#i-cfg-1)). Every variable, its format and its failure behavior are in [configuration.md](configuration.md).
 
@@ -151,7 +148,7 @@ If a variable is half-configured or malformed, Access login stays off. `/admin` 
 2. Sign in. The Access policy from step 8 lets in only you, so you are the first person to sign in.
 3. The gateway creates your user with the role `owner` and opens the Dashboard.
 
-The bootstrap creates at most one owner, once ([I-BOOT-1](threat-model.md#i-boot-1)). The Audit log shows a `user.bootstrap` event.
+The bootstrap creates at most one owner, once ([I-BOOT-1](threat-model.md#i-boot-1)). The Audit log shows a `user.bootstrap` event. The same sign-in stores its hostname as the only admin host: from now on, `/admin` answers `404` on every other hostname ([I-DEPLOY-1](threat-model.md#i-deploy-1)). To add hostnames, use Settings > "Admin hosts", and put each one behind your Access application ([configuration](configuration.md#admin-hosts)).
 
 The gateway keeps no session of its own. "Sign out" ends the Access session for the hostname.
 

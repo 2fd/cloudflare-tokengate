@@ -44,7 +44,7 @@ describe('csrfCheck', () => {
   it('requires both layers', async () => {
     const sameSite = new Headers({ 'sec-fetch-site': 'same-origin' });
     const crossSite = new Headers({ 'sec-fetch-site': 'cross-site' });
-    const base = { canonicalOrigin: ORIGIN, cookieToken: 't' };
+    const base = { expectedOrigin: ORIGIN, cookieToken: 't' };
     expect(await csrfCheck({ ...base, headers: sameSite, submittedToken: 't' })).toBe(true);
     expect(await csrfCheck({ ...base, headers: sameSite, submittedToken: 'x' })).toBe(false);
     expect(await csrfCheck({ ...base, headers: crossSite, submittedToken: 't' })).toBe(false);
@@ -52,7 +52,7 @@ describe('csrfCheck', () => {
 
   it('fails without the cookie, even when the field is empty too', async () => {
     const sameSite = new Headers({ 'sec-fetch-site': 'same-origin' });
-    const base = { canonicalOrigin: ORIGIN, headers: sameSite, cookieToken: null };
+    const base = { expectedOrigin: ORIGIN, headers: sameSite, cookieToken: null };
     expect(await csrfCheck({ ...base, submittedToken: 't' })).toBe(false);
     expect(await csrfCheck({ ...base, submittedToken: '' })).toBe(false);
   });

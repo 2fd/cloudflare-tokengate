@@ -3,7 +3,6 @@
 // re-entered credential (I-CRED-2); submitted credentials are never rendered back (I-CRED-1).
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { App } from '../../app';
-import { canonicalOrigin, parseConfig } from '../../config';
 import { loadKeyring } from '../../crypto/keyring';
 import { listCallerProviders } from '../../db/caller-providers';
 import { grantCountsByService, listGrants } from '../../db/grants';
@@ -406,7 +405,7 @@ async function create(c: AdminContext) {
       secret,
       save_anyway: flag(form, 'save_anyway'),
     },
-    opContextFor(deps.env, new URL(c.req.url)),
+    opContextFor(new URL(c.req.url)),
   );
   if (!result.ok) {
     return renderNewForm(c, {
@@ -498,7 +497,7 @@ async function setCredential(c: AdminContext) {
       credential_expires_at: expiry.value ?? undefined,
       confirm_destination: values.confirm_destination,
     },
-    opContextFor(deps.env, new URL(c.req.url)),
+    opContextFor(new URL(c.req.url)),
   );
   if (!result.ok) {
     if (result.reason === 'not_found') return notFound(c);
@@ -524,7 +523,7 @@ async function testCredential(c: AdminContext) {
     deps,
     adminActor(c),
     service.id,
-    opContextFor(deps.env, new URL(c.req.url)),
+    opContextFor(new URL(c.req.url)),
   );
   if (!result.ok) {
     if (result.reason === 'not_found') return notFound(c);
@@ -994,7 +993,7 @@ async function renderDetail(c: AdminContext, service: Service, state: DetailStat
   const canWrite = can(viewer.user.role, 'config:write');
   const csrf = viewer.csrfToken;
   const now = deps.now();
-  const proxyUrl = `${canonicalOrigin(parseConfig(deps.env), new URL(c.req.url))}/proxy/${service.slug}`;
+  const proxyUrl = `${new URL(c.req.url).origin}/proxy/${service.slug}`;
   const template = SERVICE_TEMPLATES.find(
     (candidate) =>
       candidate.base_url === service.base_url &&

@@ -23,7 +23,7 @@ jq -e '[.d1_databases[].binding] | (index("DB") and index("TELEMETRY_DB"))' <<<"
 [[ "$(jq -r '.keep_vars' <<<"$config")" == "true" ]] ||
   fail 'wrangler.jsonc must set "keep_vars": true so deploys keep vars set in the dashboard'
 # A blank var is still uploaded and overwrites the dashboard value; config.ts reads blank as unset,
-# so a blank PUBLIC_URL fails open (no host pinning).
+# so a blank AUTH_ACCESS_AUD turns off admin sign-in.
 # Checks top-level and per-environment (`env.<name>.vars`) blocks.
 empty="$(jq -r '
   [(.vars // {}), (.env // {} | .[] | .vars // {})] | .[] | to_entries[]

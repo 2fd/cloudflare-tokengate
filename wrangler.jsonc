@@ -38,11 +38,11 @@
     // Hourly: rollups, retention, expiry notices. See src/telemetry/cron.ts.
     "crons": ["7 * * * *"]
   },
-  // Operator vars (PUBLIC_URL, AUTH_*; full list in
+  // Operator vars (AUTH_*; full list in
   // docs/configuration.md) are set in the dashboard (Worker > Settings > Variables and Secrets).
   // keep_vars makes deploys leave them alone. Any name added under "vars" here is re-uploaded on every
   // deploy and overwrites the dashboard value, so set each var in one place only and never commit ""
-  // placeholders: an emptied PUBLIC_URL silently turns off host pinning (I-DEPLOY-1).
+  // placeholders: an emptied AUTH_ACCESS_AUD silently turns off admin sign-in (I-DEPLOY-1).
   // scripts/check-config.sh enforces this.
   "keep_vars": true
 

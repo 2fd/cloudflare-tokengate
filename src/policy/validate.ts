@@ -1,7 +1,7 @@
 // Save-time validation of services, caller providers and grants (docs/policies.md, docs/concepts.md); pure, no I/O.
 // Enforces anchor rules (I-AUTHZ-2), tenant pins (I-TEN-1), algs/audience/token age (I-JWT-1),
 // base URLs (I-SSRF-1), injection and forward-header shapes (I-INJ-1) and credential hygiene.
-import { upstreamHostAllowed } from '../config';
+import { hostListed, upstreamHostAllowed } from '../config';
 import type { CallerProvider, Service } from '../db/types';
 import type { IssuerProfile, ProfileId } from '../identity/types';
 import { canonicalJson } from '../lib/json';
@@ -94,12 +94,13 @@ type Result<T> = ({ ok: true } & T) | { ok: false; error: string };
 
 /**
  * Validates an upstream base URL (I-SSRF-1). Also called by the proxy at request time.
+ * `gatewayHosts` are `hostListed` entries for this gateway: the admin hosts and the request host.
  * `normalized` is origin + pathname without a trailing '/', the form stored and bound into the
  * credential AAD.
  */
 export function validateBaseUrl(
   raw: string,
-  ctx: { publicHost: string | null; allowedUpstreamHosts: string[] | null },
+  ctx: { gatewayHosts: readonly string[]; allowedUpstreamHosts: string[] | null },
 ): Result<{ normalized: string }> {
   const fail = (error: string) => ({ ok: false as const, error: `base URL ${error}` });
   if (typeof raw !== 'string') return fail('is required');
@@ -140,8 +141,7 @@ export function validateBaseUrl(
   if (host === 'workers.dev' || host.endsWith('.workers.dev')) {
     return fail('host must not be a workers.dev Worker');
   }
-  const publicHost = ctx.publicHost?.toLowerCase().replace(/:\d+$/, '') ?? null;
-  if (publicHost !== null && host === publicHost) return fail('must not point at this gateway');
+  if (hostListed(host, ctx.gatewayHosts)) return fail('must not point at this gateway');
   if (!upstreamHostAllowed(host, ctx.allowedUpstreamHosts)) {
     return fail(`host ${host} is not in the upstream host allowlist (Settings)`);
   }

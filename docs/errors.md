@@ -298,7 +298,7 @@ does not opt in to it ([I-AUTHZ-3](threat-model.md#i-authz-3)).
   - `keyring_absent`, `keyring_malformed`, `active_kid_missing`, `key_not_32_bytes`,
     `both_kek_and_keyring_set`: the `TOKENGATE_KEK` or `TOKENGATE_KEYRING` secret is missing or invalid.
   - `base_url_invalid`: the service's base URL is no longer allowed, for example after a change to
-    the upstream host allowlist (Settings) or `PUBLIC_URL` ([I-SSRF-1](threat-model.md#i-ssrf-1)).
+    the upstream host allowlist or the admin hosts (Settings) ([I-SSRF-1](threat-model.md#i-ssrf-1)).
   - `profile_unknown`: the caller provider names a profile this version does not know. This check
     runs before the token is verified, so these records are pre-trust records.
 - **Caller:** contact the admins with the request ID.

@@ -179,6 +179,7 @@ describe('I-LINK-1: email linking only for invited, unexpired users with an auth
           subject,
           emails: ['dev@acme.com'],
           name: null,
+          host: 'gw.test',
         }),
       ),
     );

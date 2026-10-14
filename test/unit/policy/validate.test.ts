@@ -14,7 +14,7 @@ import {
 } from '../../../src/policy/validate';
 import { genericProfile, githubProfile, gitlabProfile, provider } from './fixtures';
 
-const open = { publicHost: null, allowedUpstreamHosts: null };
+const open = { gatewayHosts: [], allowedUpstreamHosts: null };
 
 describe('I-SSRF-1: validateBaseUrl', () => {
   it.each([
@@ -86,14 +86,16 @@ describe('I-SSRF-1: validateBaseUrl', () => {
     expect(validateBaseUrl(first.normalized, open)).toEqual(first);
   });
 
-  it('rejects the gateway host itself', () => {
-    const ctx = { publicHost: 'Gate.Acme.com', allowedUpstreamHosts: null };
-    expect(validateBaseUrl('https://gate.acme.com/x', ctx).ok).toBe(false);
+  it('rejects the gateway hosts, wildcard admin hosts included', () => {
+    const ctx = { gatewayHosts: ['gate.acme.com', '*.admin.acme.com'], allowedUpstreamHosts: null };
+    expect(validateBaseUrl('https://Gate.Acme.com/x', ctx).ok).toBe(false);
+    expect(validateBaseUrl('https://eu.admin.acme.com/x', ctx).ok).toBe(false);
     expect(validateBaseUrl('https://api.acme.com/x', ctx).ok).toBe(true);
+    expect(validateBaseUrl('https://admin.acme.com/x', ctx).ok).toBe(true);
   });
 
   it('enforces ALLOWED_UPSTREAM_HOSTS', () => {
-    const ctx = { publicHost: null, allowedUpstreamHosts: ['slack.com', '*.openai.com'] };
+    const ctx = { gatewayHosts: [], allowedUpstreamHosts: ['slack.com', '*.openai.com'] };
     expect(validateBaseUrl('https://slack.com', ctx).ok).toBe(true);
     expect(validateBaseUrl('https://api.openai.com/v1', ctx).ok).toBe(true);
     expect(validateBaseUrl('https://hooks.slack.com', ctx).ok).toBe(false);

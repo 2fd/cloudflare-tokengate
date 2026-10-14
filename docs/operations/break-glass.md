@@ -1,7 +1,8 @@
 # Break-glass
 
-This page explains how to regain owner access when no owner can sign in, with `wrangler d1 execute`,
-and how to sign every admin out at once. It is for platform engineers with write access to the
+This page explains how to regain owner access when no owner can sign in, how to restore the admin
+hosts when `/admin` answers 404 everywhere, both with `wrangler d1 execute`, and how to sign every
+admin out at once. It is for platform engineers with write access to the
 Cloudflare account.
 
 Use these procedures only when the admin UI cannot do the job. SQL changes bypass the admin UI's
@@ -32,11 +33,12 @@ Before you start:
 
 - You can run `pnpm wrangler` against the account (`pnpm wrangler login`), from a clone of the
   repository.
-- Access login works: `<PUBLIC_URL>/admin` asks you to sign in with Access, and after that shows
+- Access login works: `https://<admin host>/admin` asks you to sign in with Access, and after that shows
   the console as a viewer or a gateway page such as "Another user already has this email address"
   (not "Set up sign-in" or "Cloudflare Access did not present a valid user identity"). If it does not, fix the Access application or the `AUTH_ACCESS_*`
   variables first ([zone settings](cloudflare-zone-settings.md#cloudflare-access),
-  [configuration](../configuration.md)).
+  [configuration](../configuration.md)). If it answers `404 Not Found`, restore the admin hosts first
+  ([lost admin host](#lost-admin-host)).
 - The Access policy allows you, and you know the email address that Access reports for you: the
   email of your account at the identity provider that Access uses.
 
@@ -84,7 +86,7 @@ Steps:
              'Break-glass: owner $EMAIL invited with wrangler d1 execute', NULL, NULL, NULL);"
    ```
 
-6. Within the hour, open `<PUBLIC_URL>/admin` and sign in with Access. On that first request the
+6. Within the hour, open `https://<admin host>/admin` and sign in with Access. On that first request the
    gateway links the identity, makes the user active and writes a `user.link` audit event.
 
    A login identity that is already linked to a user always signs in as that user
@@ -113,6 +115,45 @@ delete the expired row:
 pnpm wrangler d1 execute DB --remote --command \
   "DELETE FROM users WHERE email = '$EMAIL' AND status = 'invited'"
 ```
+
+## Lost admin host
+
+Use this when `/admin` answers `404 Not Found` on every hostname you can use: for example after a
+domain change, or when the stored list is not valid. `/admin` answers only on the hostnames in the
+`admin_hosts` setting, and a stored value that is not a valid list denies every host
+([I-DEPLOY-1](../threat-model.md#i-deploy-1), [admin hosts](../configuration.md#admin-hosts)).
+
+1. Read the current value:
+
+   ```sh
+   pnpm wrangler d1 execute DB --remote --command \
+     "SELECT value FROM settings WHERE key = 'admin_hosts'"
+   ```
+
+2. Generate an audit event id, as in [step 4](#regain-owner-access) above:
+
+   ```sh
+   AUDIT_ID=$(node -e 'const A="0123456789ABCDEFGHJKMNPQRSTVWXYZ";let t=Date.now(),s="";for(let i=0;i<10;i++){s=A[t%32]+s;t=Math.floor(t/32)}for(const b of crypto.getRandomValues(new Uint8Array(16)))s+=A[b%32];console.log(`aud_${s}`)')
+   ```
+
+3. Set the list to the hostname you use, and write the audit row. The value is a JSON array of
+   lowercase entries, in the format of [admin hosts](../configuration.md#admin-hosts):
+
+   ```sh
+   pnpm wrangler d1 execute DB --remote --command "
+     UPDATE settings SET value = '[\"tokengate.example.com\"]', updated_at = unixepoch() * 1000, updated_by = NULL WHERE key = 'admin_hosts';
+     INSERT INTO audit_log (id, ts, actor_type, actor_id, actor_email, action, target_type, target_id, summary, diff, ip, user_agent)
+     VALUES ('$AUDIT_ID', unixepoch() * 1000, 'system', NULL, NULL, 'settings.admin_hosts', 'settings', NULL,
+             'Break-glass: admin hosts set with wrangler d1 execute', NULL, NULL, NULL);"
+   ```
+
+4. Make sure the hostname is behind your Cloudflare Access application, then open
+   `https://<hostname>/admin` and sign in. Add other hostnames in Settings > "Admin hosts".
+
+Deleting the row (`DELETE FROM settings WHERE key = 'admin_hosts'`) also restores access, but it
+opens `/admin` on every hostname except `workers.dev` until an owner saves a list in Settings. Every
+request still needs a valid Access JWT. Bootstrap runs only once, so no later sign-in sets the list
+again.
 
 ## Sign every admin out
 

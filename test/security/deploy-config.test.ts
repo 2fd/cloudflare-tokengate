@@ -15,15 +15,10 @@ function parseJsonc(text: string): Record<string, unknown> {
   return JSON.parse(lines.join('\n'));
 }
 
-// config.ts reads a blank value as unset, which fails open for PUBLIC_URL (no host pinning).
+// config.ts reads a blank value as unset, which turns admin sign-in off for AUTH_ACCESS_*.
 const isBlank = (value: unknown): boolean => typeof value === 'string' && value.trim() === '';
 
-const OPERATOR_VARS = [
-  'PUBLIC_URL',
-  'AUTH_ACCESS_TEAM_DOMAIN',
-  'AUTH_ACCESS_AUD',
-  'AUTH_DEV_EMAIL',
-];
+const OPERATOR_VARS = ['AUTH_ACCESS_TEAM_DOMAIN', 'AUTH_ACCESS_AUD', 'AUTH_DEV_EMAIL'];
 
 describe('I-DEPLOY-1 / I-SSRF-1: deploys do not wipe operator vars set in the dashboard', () => {
   const config = parseJsonc(wranglerJsonc);

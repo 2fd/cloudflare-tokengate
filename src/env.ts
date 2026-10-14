@@ -9,8 +9,6 @@ export interface AppEnv {
   TELEMETRY_DB: D1Database;
   ASSETS?: Fetcher;
 
-  PUBLIC_URL?: string;
-
   TOKENGATE_KEK?: string;
   TOKENGATE_KEYRING?: string;
 

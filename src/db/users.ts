@@ -227,14 +227,17 @@ export interface BootstrapInput {
   loginProvider: string;
   subject: string;
   name: string | null;
+  /** Hostname of the bootstrap request, for the admin host allowlist (I-DEPLOY-1); null skips it. */
+  host: string | null;
   now: number;
   audit: AuditEvent;
 }
 
 /**
  * Creates the first owner (I-BOOT-1). The user INSERT only happens while no owner exists,
- * `bootstrap_completed_at` is absent and no user has this email; identity, settings marker and audit row are each conditioned
- * on that new user row existing. The caller checks `meta.changes === 1` on the first result.
+ * `bootstrap_completed_at` is absent and no user has this email; identity, settings marker,
+ * admin hosts and audit row are each conditioned on that new user row existing. Admin hosts
+ * already set are kept. The caller checks `meta.changes === 1` on the first result.
  */
 export function bootstrapOwnerStatements(
   db: D1Database,
@@ -263,6 +266,17 @@ export function bootstrapOwnerStatements(
          SELECT 'bootstrap_completed_at', ?, ?, ? WHERE ${created}`,
       )
       .bind(JSON.stringify(input.now), input.now, input.userId, input.userId),
+    ...(input.host === null
+      ? []
+      : [
+          db
+            .prepare(
+              `INSERT INTO settings (key, value, updated_at, updated_by)
+               SELECT 'admin_hosts', ?, ?, ? WHERE ${created}
+               ON CONFLICT (key) DO NOTHING`,
+            )
+            .bind(JSON.stringify([input.host]), input.now, input.userId, input.userId),
+        ]),
     auditStatement(db, input.audit, { sql: created, binds: [input.userId] }),
   ];
 }

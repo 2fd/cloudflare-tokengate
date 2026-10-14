@@ -1,7 +1,6 @@
 // Service mutations for the admin UI. base_url and injection change only together with a newly
 // entered credential, sealed with AAD over (id, base_url, injection) (I-CRED-2); plaintext never
 // reaches results, audit diffs or logs (I-CRED-1); each change writes one audit row (I-AUDIT-1).
-import { parseConfig } from '../../config';
 import {
   credentialAad,
   type OpenCredentialError,
@@ -24,10 +23,14 @@ import {
   updateServiceCredentialStatement,
   updateServiceFieldsStatement,
 } from '../../db/services';
-import { getAllowedUpstreamHosts, getState, recordKeyCheckValueStatement } from '../../db/settings';
+import {
+  getAdminHosts,
+  getAllowedUpstreamHosts,
+  getState,
+  recordKeyCheckValueStatement,
+} from '../../db/settings';
 import type { Actor, Service } from '../../db/types';
 import type { Deps } from '../../deps';
-import type { AppEnv } from '../../env';
 import { newId } from '../../lib/ids';
 import { canonicalJson } from '../../lib/json';
 import type { Injection, VerifyCheck } from '../../policy/types';
@@ -55,13 +58,17 @@ import { runVerifyCheck, type VerifyOutcome } from './verify';
 
 /** Request-derived inputs of service validation. */
 export interface OpContext {
-  /** Host of this gateway (PUBLIC_URL host, else the request host); base URLs may not point at it. */
-  publicHost: string | null;
+  /** Hostname of the current request; base URLs may not point at it or at the admin hosts. */
+  requestHost: string;
 }
 
-/** PUBLIC_URL host when configured, otherwise the host of the current request. */
-export function opContextFor(env: AppEnv, requestUrl: URL): OpContext {
-  return { publicHost: parseConfig(env).publicUrl?.host ?? requestUrl.host };
+export function opContextFor(requestUrl: URL): OpContext {
+  return { requestHost: requestUrl.hostname };
+}
+
+/** The admin hosts and the request host: base URLs may not point at this gateway (I-SSRF-1). */
+async function gatewayHosts(db: D1Database, context: OpContext): Promise<string[]> {
+  return [...((await getAdminHosts(db)) ?? []), context.requestHost];
 }
 
 export const DEFAULT_TIMEOUT_MS = 120_000;
@@ -108,7 +115,7 @@ export async function createService(
 ): Promise<CredentialOpResult> {
   const errors: string[] = [];
   const base = validateBaseUrl(input.base_url, {
-    publicHost: context.publicHost,
+    gatewayHosts: await gatewayHosts(deps.env.DB, context),
     allowedUpstreamHosts: await getAllowedUpstreamHosts(deps.env.DB),
   });
   if (!base.ok) errors.push(base.error);
@@ -404,7 +411,7 @@ export async function setServiceCredential(
 
   const errors: string[] = [];
   const base = validateBaseUrl(input.base_url, {
-    publicHost: context.publicHost,
+    gatewayHosts: await gatewayHosts(deps.env.DB, context),
     allowedUpstreamHosts: await getAllowedUpstreamHosts(deps.env.DB),
   });
   if (!base.ok) errors.push(base.error);
@@ -545,7 +552,7 @@ export async function testServiceCredential(
 
   // Same use-time checks as the proxy: the stored row is not trusted (I-SSRF-1, I-CRED-2).
   const base = validateBaseUrl(service.base_url, {
-    publicHost: context.publicHost,
+    gatewayHosts: await gatewayHosts(deps.env.DB, context),
     allowedUpstreamHosts: await getAllowedUpstreamHosts(deps.env.DB),
   });
   if (!base.ok) return opFailure('unavailable', [`stored ${base.error}`]);

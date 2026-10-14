@@ -4,6 +4,7 @@ import { setServiceCredential } from '../../src/admin/ops/services';
 import { registerSettingsRoutes } from '../../src/admin/routes/settings';
 import { loadKeyring } from '../../src/crypto/keyring';
 import {
+  getAdminHosts,
   getAllowedUpstreamHosts,
   getSettings,
   putSettingStatement,
@@ -432,5 +433,40 @@ describe('I-SSRF-1: upstream host allowlist in Settings', () => {
     });
     expect(res.status).toBe(403);
     expect(await getAllowedUpstreamHosts(env.DB)).toBeNull();
+  });
+});
+
+describe('admin hosts (I-DEPLOY-1)', () => {
+  it('owners save a normalized list that keeps the current host, with one audit row', async () => {
+    const owner = await sessionFor('owner');
+    const save = await adminPost(app, owner, '/admin/settings/admin-hosts', {
+      admin_hosts: 'GW.test\n*.Admin.example.com, gw.test',
+    });
+    expect(save.headers.get('location')).toBe('/admin/settings?notice=admin_hosts_saved');
+    expect(await getAdminHosts(env.DB)).toEqual(['gw.test', '*.admin.example.com']);
+    expect(await auditActions()).toEqual(['settings.admin_hosts']);
+    const html = await (await adminGet(app, owner, '/admin/settings')).text();
+    expect(html).toContain('gw.test, *.admin.example.com.');
+  });
+
+  it.each([
+    ['an empty list', ' \n '],
+    ['a list without the current host', 'other.example.com'],
+    ['a workers.dev entry', 'gw.test\ntokengate.acme.workers.dev'],
+    ['a URL instead of a hostname', 'gw.test\nhttps://other.example.com'],
+  ])('refuses %s and keeps the previous list', async (_, raw) => {
+    const owner = await sessionFor('owner');
+    const res = await adminPost(app, owner, '/admin/settings/admin-hosts', { admin_hosts: raw });
+    expect(res.status).toBe(400);
+    expect(await getAdminHosts(env.DB)).toBeNull();
+    expect(await auditActions()).toEqual([]);
+  });
+
+  it('is forbidden for admins', async () => {
+    const res = await adminPost(app, await sessionFor('admin'), '/admin/settings/admin-hosts', {
+      admin_hosts: 'gw.test',
+    });
+    expect(res.status).toBe(403);
+    expect(await getAdminHosts(env.DB)).toBeNull();
   });
 });

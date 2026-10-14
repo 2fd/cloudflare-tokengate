@@ -1,10 +1,9 @@
 // Proxy pipeline (docs/architecture.md, "Proxy pipeline"): verify the caller token, authorize it against grants, swap
 // it for the service credential, stream the upstream response back. I-TOK-1/2, I-TEN-1, I-AUTHZ-1,
 // I-PATH-1, I-INJ-1, I-CRED-2, I-SSRF-1, I-REDIR-1, I-RESP-1, I-LOG-1/2.
-import { parseConfig } from '../config';
 import { credentialAad, openCredential } from '../crypto/envelope';
 import { loadKeyring } from '../crypto/keyring';
-import { loadProxyContext } from '../db/proxy-context';
+import { loadProxyContext, type ProxyContext } from '../db/proxy-context';
 import type { CallerProvider, Service } from '../db/types';
 import type { Deps } from '../deps';
 import {
@@ -234,7 +233,7 @@ async function runPipeline(
   const keyring = await loadKeyring(deps.env);
   if (!keyring.ok) return fail('not_configured', { reason: keyring.error });
   const requestUrl = new URL(request.url);
-  if (!storedBaseUrlValid(service.base_url, deps, requestUrl, context.allowedUpstreamHosts)) {
+  if (!storedBaseUrlValid(service.base_url, requestUrl, context)) {
     return fail('not_configured', { reason: 'base_url_invalid' });
   }
   const normalized = normalizeInjection(service.injection);
@@ -349,24 +348,19 @@ async function runPipeline(
 
 /**
  * I-SSRF-1 at request time: the stored base URL passes the save-time rules and is already in the
- * normalized form those rules produce. The gateway's own host is excluded both as configured
- * (PUBLIC_URL) and as reached by this request, when they differ.
+ * normalized form those rules produce. The gateway's own hosts are excluded: the admin hosts and
+ * the host this request reached.
  */
 function storedBaseUrlValid(
   baseUrl: string,
-  deps: Deps,
   requestUrl: URL,
-  allowedUpstreamHosts: string[] | null,
+  context: Pick<ProxyContext, 'adminHosts' | 'allowedUpstreamHosts'>,
 ): boolean {
-  const config = parseConfig(deps.env);
-  const ownHosts = new Set([config.publicUrl?.host ?? requestUrl.host, requestUrl.host]);
-  return [...ownHosts].every((publicHost) => {
-    const checked = validateBaseUrl(baseUrl, {
-      publicHost,
-      allowedUpstreamHosts,
-    });
-    return checked.ok && checked.normalized === baseUrl;
+  const checked = validateBaseUrl(baseUrl, {
+    gatewayHosts: [...(context.adminHosts ?? []), requestUrl.hostname],
+    allowedUpstreamHosts: context.allowedUpstreamHosts,
   });
+  return checked.ok && checked.normalized === baseUrl;
 }
 
 /** Hint for event_not_trusted: may echo the event value only (docs/architecture.md). */

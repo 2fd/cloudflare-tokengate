@@ -1,6 +1,8 @@
 // Maps a verified login (provider, stable subject, authoritative emails) to a user. Only invited
-// users are linked by email (I-LINK-1); the first owner is bootstrapped at most once (I-BOOT-1);
+// users are linked by email (I-LINK-1); the first owner is bootstrapped at most once (I-BOOT-1),
+// with the request hostname as the admin host allowlist (I-DEPLOY-1);
 // anyone else that Access lets through joins with the owner-configured role and status.
+import { isAdminHostEntry } from '../../config';
 import { buildAuditEvent, emitAuditLine } from '../../db/audit';
 import { getJoinDefaults } from '../../db/settings';
 import type { Actor, User } from '../../db/types';
@@ -47,14 +49,15 @@ const NAME_MAX = 200;
 /**
  * 1) Known identity: its user, if active.
  * 2) Else an invited, unexpired user matching an authoritative email is linked and activated.
- * 3) Else, while no owner exists and bootstrap has never run, this person becomes the first owner.
+ * 3) Else, while no owner exists and bootstrap has never run, this person becomes the first owner,
+ * and `host` (the request hostname) becomes the admin host allowlist unless one is already set.
  * 4) Else a user is created for the first authoritative email with the join defaults (role
  * viewer or admin; status active, pending or suspended; set by owners on the users page).
  * 5) Else (that email already belongs to another user, e.g. an expired invitation) `email_taken`.
  */
 export async function resolveLogin(
   deps: Deps,
-  input: LoginIdentity & { meta?: RequestMeta },
+  input: LoginIdentity & { meta?: RequestMeta; host: string },
 ): Promise<LoginResolution> {
   const db = deps.env.DB;
   const known = await findUserByIdentity(db, input.loginProvider, input.subject);
@@ -94,6 +97,7 @@ export async function resolveLogin(
 
   const email = input.emails[0];
   if (email !== undefined) {
+    const host = isAdminHostEntry(input.host) ? input.host : null;
     const now = deps.now();
     const userId = newId('usr', now, deps.random);
     const audit = buildAuditEvent(deps, actorFor(userId, email, meta), {
@@ -101,7 +105,13 @@ export async function resolveLogin(
       targetType: 'user',
       targetId: userId,
       summary: 'First owner created on the first sign-in',
-      diff: { login_provider: input.loginProvider, subject: input.subject, email, role: 'owner' },
+      diff: {
+        login_provider: input.loginProvider,
+        subject: input.subject,
+        email,
+        role: 'owner',
+        host,
+      },
     });
     const results = await db.batch(
       bootstrapOwnerStatements(db, {
@@ -110,6 +120,7 @@ export async function resolveLogin(
         loginProvider: input.loginProvider,
         subject: input.subject,
         name,
+        host,
         now,
         audit,
       }),

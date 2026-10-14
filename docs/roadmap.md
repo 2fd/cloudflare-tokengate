@@ -39,7 +39,7 @@ These are outside the project's scope. Pull requests that add them are unlikely 
 
 - **Admin JSON API.** Manage services, caller providers and grants from scripts. Today the only machine-readable output is the export (`POST /admin/export`).
 - **Import and plan/apply.** Keep configuration in git, preview the changes, then apply them.
-- **Detection of configuration regressions.** Warn on the dashboard and fail `/readyz` when `PUBLIC_URL` changes from set to unset. Today `scripts/check-config.sh` guards only the committed `wrangler.jsonc` ([ADR 0013](adr/0013-operator-variables-outside-wrangler-config.md)).
+- **Detection of configuration regressions.** Warn on the dashboard and fail `/readyz` when Access login changes from configured to off. Today `scripts/check-config.sh` guards only the committed `wrangler.jsonc` ([ADR 0013](adr/0013-operator-variables-outside-wrangler-config.md)).
 - **Configuration check during deploy.** Run `scripts/check-config.sh` in `pnpm run deploy`. It is not run there yet. The script needs `bash` and `jq`, and their presence in the Workers Builds image is not confirmed.
 
 ### Telemetry

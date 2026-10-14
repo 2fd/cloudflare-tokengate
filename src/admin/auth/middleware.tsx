@@ -8,7 +8,7 @@ import type { MiddlewareHandler } from 'hono';
 import { matchedRoutes } from 'hono/route';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { App, AppContext } from '../../app';
-import { canonicalOrigin, parseConfig } from '../../config';
+import { parseConfig } from '../../config';
 import type { User } from '../../db/types';
 import { recordSeenStatements } from '../../db/users';
 import type { Deps } from '../../deps';
@@ -63,7 +63,8 @@ export const adminMiddleware: MiddlewareHandler<AppContext> = async (c, next) =>
   }
   const identity = verified.identity;
   const meta = requestMeta(c.req.raw.headers);
-  const resolution = await resolveLogin(deps, { ...identity, meta });
+  const requestUrl = new URL(c.req.url);
+  const resolution = await resolveLogin(deps, { ...identity, meta, host: requestUrl.hostname });
   if (!resolution.ok) {
     console.warn(
       JSON.stringify({
@@ -97,7 +98,7 @@ export const adminMiddleware: MiddlewareHandler<AppContext> = async (c, next) =>
     }
     const passed = await csrfCheck({
       headers: c.req.raw.headers,
-      canonicalOrigin: canonicalOrigin(config, new URL(c.req.url)),
+      expectedOrigin: requestUrl.origin,
       submittedToken: form.fields[CSRF_FIELD],
       cookieToken,
     });
@@ -185,7 +186,7 @@ function setupPage(c: AdminContext) {
         text: `${error.variable}: ${error.message}`,
       }))}
     >
-      <SetupInstructions origin={canonicalOrigin(config, new URL(c.req.url))} />
+      <SetupInstructions host={new URL(c.req.url).hostname} />
     </Layout>,
     503,
   );

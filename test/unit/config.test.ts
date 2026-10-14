@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { parseUpstreamHostInput } from '../../src/admin/ops/settings';
+import { parseAdminHostInput, parseUpstreamHostInput } from '../../src/admin/ops/settings';
 import {
-  adminOriginAllowed,
+  adminHostAllowed,
   type Config,
-  canonicalOrigin,
+  hostListed,
+  isAdminHostEntry,
   normalizeAccessTeamDomain,
   parseConfig,
   splitList,
   upstreamHostAllowed,
 } from '../../src/config';
-import { upstreamHostsFromValue } from '../../src/db/settings';
+import { adminHostsFromValue, upstreamHostsFromValue } from '../../src/db/settings';
 import type { AppEnv } from '../../src/env';
 
-const SECRET = 'sekrit-value-that-must-never-leak';
 const AUD = 'a'.repeat(64);
 
 function envWith(vars: Partial<AppEnv>): AppEnv {
@@ -27,7 +27,6 @@ describe('parseConfig: empty environment', () => {
   it('enables nothing and reports no errors', () => {
     const config = parseConfig(envWith({}));
     expect(config).toEqual({
-      publicUrl: null,
       errors: [],
       login: { access: null, dev: null },
     });
@@ -36,7 +35,6 @@ describe('parseConfig: empty environment', () => {
   it('treats empty and whitespace-only strings as unset', () => {
     const config = parseConfig(
       envWith({
-        PUBLIC_URL: '',
         AUTH_ACCESS_TEAM_DOMAIN: '  ',
         AUTH_ACCESS_AUD: ' ',
         AUTH_DEV_EMAIL: '',
@@ -47,97 +45,118 @@ describe('parseConfig: empty environment', () => {
   });
 });
 
-describe('PUBLIC_URL', () => {
-  it.each([
-    ['https://gw.example.com', 'https://gw.example.com'],
-    ['https://gw.example.com/', 'https://gw.example.com'],
-    ['https://GW.Example.com:8443', 'https://gw.example.com:8443'],
-    ['http://localhost:8787', 'http://localhost:8787'],
-    ['http://127.0.0.1:8787/', 'http://127.0.0.1:8787'],
-    ['http://[::1]:8787', 'http://[::1]:8787'],
-  ])('accepts %s', (raw, origin) => {
-    const config = parseConfig(envWith({ PUBLIC_URL: raw }));
-    expect(config.errors).toEqual([]);
-    expect(config.publicUrl?.origin).toBe(origin);
-    expect(config.publicUrl?.href).toBe(`${origin}/`);
-  });
-
-  it.each([
-    'gw.example.com',
-    'not a url',
-    'http://gw.example.com',
-    'ftp://gw.example.com',
-    'https://user:pass@gw.example.com',
-    'https://gw.example.com/admin',
-    'https://gw.example.com/?x=1',
-    'https://gw.example.com/?',
-    'https://gw.example.com/#frag',
-    'https://gw.example.com.',
-    'https://gw.example.com%2e',
-    'https://gw.example.com\u3002',
-    'http://localhost.example.com',
-  ])('rejects %s and leaves publicUrl null', (raw) => {
-    const config = parseConfig(envWith({ PUBLIC_URL: raw }));
-    expect(config.publicUrl).toBeNull();
-    expect(config.errors).toEqual([
-      { feature: 'public_url', variable: 'PUBLIC_URL', message: expect.any(String) },
-    ]);
-  });
-
-  it('does not echo the configured value in errors', () => {
-    const config = parseConfig(envWith({ PUBLIC_URL: `https://${SECRET}@gw.example.com` }));
-    expect(JSON.stringify(config.errors)).not.toContain(SECRET);
-  });
-});
-
-describe('canonicalOrigin', () => {
-  const request = new URL('https://other.example.net/admin?x=1');
-
-  it('uses PUBLIC_URL when set', () => {
-    const config = parseConfig(envWith({ PUBLIC_URL: 'https://gw.example.com/' }));
-    expect(canonicalOrigin(config, request)).toBe('https://gw.example.com');
-  });
-
-  it('falls back to the request origin', () => {
-    expect(canonicalOrigin(parseConfig(envWith({})), request)).toBe('https://other.example.net');
-  });
-});
-
-describe('I-DEPLOY-1: admin host pinning when PUBLIC_URL is set', () => {
+describe('I-DEPLOY-1: admin host pinning against the stored admin hosts', () => {
   const at = (href: string) => new URL(href);
-
-  it('serves any origin when PUBLIC_URL is unset', () => {
-    const config = parseConfig(envWith({}));
-    expect(adminOriginAllowed(config, at('https://tokengate.acme.workers.dev/admin'))).toBe(true);
-  });
 
   it.each([
     ['https://gw.example.com/admin', true],
-    ['https://GW.example.com:443/admin/users', true],
+    ['http://gw.example.com/admin', true],
+    ['http://localhost:8787/admin', true],
     ['https://tokengate.acme.workers.dev/admin', false],
-    ['http://gw.example.com/admin', false],
-    ['https://gw.example.com:8443/admin', false],
-    ['https://gw.example.com.evil.com/admin', false],
-    ['https://sub.gw.example.com/admin', false],
-  ])('PUBLIC_URL=https://gw.example.com: %s → %s', (href, expected) => {
-    const config = parseConfig(envWith({ PUBLIC_URL: 'https://gw.example.com' }));
-    expect(adminOriginAllowed(config, at(href))).toBe(expected);
+    ['https://TokenGate.Acme.Workers.Dev/admin', false],
+    ['https://workers.dev/admin', false],
+  ])('before the first sign-in (null): %s → %s', (href, expected) => {
+    expect(adminHostAllowed(null, at(href))).toBe(expected);
   });
 
-  it.each(['http://gw.example.com', 'https://gw.example.com/tokengate', 'gw.example.com'])(
-    'malformed PUBLIC_URL %s denies every origin instead of disabling pinning',
-    (raw) => {
-      const config = parseConfig(envWith({ PUBLIC_URL: raw }));
-      expect(config.publicUrl).toBeNull();
-      for (const href of [
-        'https://gw.example.com/admin',
-        'http://gw.example.com/admin',
-        'https://tokengate.acme.workers.dev/admin',
-      ]) {
-        expect(adminOriginAllowed(config, at(href)), href).toBe(false);
-      }
-    },
-  );
+  const hosts = ['gw.example.com', '*.admin.example.org', 'localhost'];
+  it.each([
+    ['https://gw.example.com/admin', true],
+    ['https://GW.example.com:443/admin/users', true],
+    ['https://gw.example.com:8443/admin', true],
+    ['https://eu.admin.example.org/admin', true],
+    ['https://a.b.admin.example.org/admin', true],
+    ['http://localhost:8787/admin', true],
+    ['https://localhost/admin', true],
+    ['http://gw.example.com/admin', false],
+    ['http://eu.admin.example.org/admin', false],
+    ['https://admin.example.org/admin', false],
+    ['https://gw.example.com.evil.com/admin', false],
+    ['https://sub.gw.example.com/admin', false],
+    ['https://tokengate.acme.workers.dev/admin', false],
+    ['http://127.0.0.1:8787/admin', false],
+  ])(`${hosts.join(',')}: %s → %s`, (href, expected) => {
+    expect(adminHostAllowed(hosts, at(href))).toBe(expected);
+  });
+
+  it('an empty list (a stored value that is not valid) denies every host', () => {
+    expect(adminHostAllowed([], at('https://gw.example.com/admin'))).toBe(false);
+    expect(adminHostAllowed([], at('http://localhost:8787/admin'))).toBe(false);
+  });
+});
+
+describe('admin host entries', () => {
+  it.each([
+    ['gw.example.com', true],
+    ['*.example.com', true],
+    ['localhost', true],
+    ['127.0.0.1', true],
+    ['[::1]', true],
+    ['*.com', false],
+    ['*', false],
+    ['https://gw.example.com', false],
+    ['gw.example.com:443', false],
+    ['gw.example.com.', false],
+    ['.example.com', false],
+    ['tokengate.acme.workers.dev', false],
+    ['workers.dev', false],
+    ['*.workers.dev', false],
+    ['*.acme.workers.dev', false],
+    ['[fe80::1]', false],
+  ])('%j → %s', (entry, expected) => {
+    expect(isAdminHostEntry(entry)).toBe(expected);
+  });
+
+  it('parses the textarea: lowercased, deduplicated, keeps the current host', () => {
+    expect(
+      parseAdminHostInput(
+        ' GW.example.com, ,*.Admin.example.org\ngw.example.com',
+        'gw.example.com',
+      ),
+    ).toEqual({
+      ok: true,
+      hosts: ['gw.example.com', '*.admin.example.org'],
+    });
+    expect(parseAdminHostInput('*.example.com', 'eu.example.com')).toEqual({
+      ok: true,
+      hosts: ['*.example.com'],
+    });
+  });
+
+  it.each([
+    ['', 'gw.example.com'],
+    [' \n ', 'gw.example.com'],
+    ['other.example.com', 'gw.example.com'],
+    ['*.example.com', 'example.com'],
+    ['gw.example.com, tokengate.acme.workers.dev', 'gw.example.com'],
+    ['gw.example.com https://x.example.com', 'gw.example.com'],
+  ])('refuses %j while on %s', (raw, current) => {
+    expect(parseAdminHostInput(raw, current)).toEqual({ ok: false, error: expect.any(String) });
+  });
+
+  it.each([
+    [undefined, null],
+    [
+      '["gw.example.com","*.example.org","localhost"]',
+      ['gw.example.com', '*.example.org', 'localhost'],
+    ],
+    ['[]', []],
+    ['null', []],
+    ['"gw.example.com"', []],
+    ['["https://gw.example.com"]', []],
+    ['["tokengate.acme.workers.dev"]', []],
+    ['[1]', []],
+    ['{', []],
+  ])('stored admin hosts %j read as %j (malformed denies every host)', (raw, expected) => {
+    expect(adminHostsFromValue(raw)).toEqual(expected);
+  });
+
+  it('hostListed matches exact hosts and strict subdomains of wildcards', () => {
+    expect(hostListed('A.example.com', ['*.example.com'])).toBe(true);
+    expect(hostListed('example.com', ['*.example.com'])).toBe(false);
+    expect(hostListed('evilexample.com', ['*.example.com'])).toBe(false);
+    expect(hostListed('gw.example.com', ['gw.example.com'])).toBe(true);
+  });
 });
 
 describe('Access login', () => {
@@ -164,14 +183,8 @@ describe('Access login', () => {
     expect(normalizeAccessTeamDomain(raw)).toBeNull();
   });
 
-  it('enables with team domain, AUD and an https custom-domain PUBLIC_URL', () => {
-    const config = parseConfig(
-      envWith({
-        PUBLIC_URL: 'https://gw.example.com',
-        AUTH_ACCESS_TEAM_DOMAIN: 'acme',
-        AUTH_ACCESS_AUD: AUD,
-      }),
-    );
+  it('enables with team domain and AUD', () => {
+    const config = parseConfig(envWith({ AUTH_ACCESS_TEAM_DOMAIN: 'acme', AUTH_ACCESS_AUD: AUD }));
     expect(config.errors).toEqual([]);
     expect(config.login.access).toEqual({
       teamDomain: 'https://acme.cloudflareaccess.com',
@@ -181,15 +194,8 @@ describe('Access login', () => {
 });
 
 describe('dev login', () => {
-  it.each([
-    'http://localhost:8787',
-    'http://127.0.0.1:8787',
-    'http://[::1]:8787',
-    'https://localhost',
-  ])('enables AUTH_DEV_EMAIL on loopback PUBLIC_URL %s', (publicUrl) => {
-    const config = parseConfig(
-      envWith({ PUBLIC_URL: publicUrl, AUTH_DEV_EMAIL: ' Dev@Example.com ' }),
-    );
+  it('enables AUTH_DEV_EMAIL, lowercased (requestIdentity limits it to loopback hosts)', () => {
+    const config = parseConfig(envWith({ AUTH_DEV_EMAIL: ' Dev@Example.com ' }));
     expect(config.errors).toEqual([]);
     expect(config.login.dev).toEqual({ email: 'dev@example.com' });
   });
@@ -197,7 +203,6 @@ describe('dev login', () => {
   it('Access stays enabled next to a dev login it overrides', () => {
     const config = parseConfig(
       envWith({
-        PUBLIC_URL: 'https://localhost',
         AUTH_ACCESS_TEAM_DOMAIN: 'acme',
         AUTH_ACCESS_AUD: AUD,
         AUTH_DEV_EMAIL: 'dev@example.com',
@@ -220,126 +225,38 @@ describe('I-CFG-1: malformed config disables the affected feature; never runs ha
   }> = [
     {
       name: 'Access team domain without AUD',
-      env: { PUBLIC_URL: 'https://gw.example.com', AUTH_ACCESS_TEAM_DOMAIN: 'acme' },
+      env: { AUTH_ACCESS_TEAM_DOMAIN: 'acme' },
       feature: 'login.access',
       variable: 'AUTH_ACCESS_AUD',
       disabled: (c) => c.login.access,
     },
     {
       name: 'Access AUD without team domain',
-      env: { PUBLIC_URL: 'https://gw.example.com', AUTH_ACCESS_AUD: AUD },
+      env: { AUTH_ACCESS_AUD: AUD },
       feature: 'login.access',
       variable: 'AUTH_ACCESS_TEAM_DOMAIN',
       disabled: (c) => c.login.access,
     },
     {
       name: 'Access team domain on a foreign host',
-      env: {
-        ...access,
-        PUBLIC_URL: 'https://gw.example.com',
-        AUTH_ACCESS_TEAM_DOMAIN: 'https://evil.com',
-      },
+      env: { ...access, AUTH_ACCESS_TEAM_DOMAIN: 'https://evil.com' },
       feature: 'login.access',
       variable: 'AUTH_ACCESS_TEAM_DOMAIN',
       disabled: (c) => c.login.access,
     },
     {
       name: 'Access AUD with whitespace inside',
-      env: { ...access, PUBLIC_URL: 'https://gw.example.com', AUTH_ACCESS_AUD: 'abc def' },
+      env: { ...access, AUTH_ACCESS_AUD: 'abc def' },
       feature: 'login.access',
       variable: 'AUTH_ACCESS_AUD',
       disabled: (c) => c.login.access,
     },
     {
-      name: 'Access without PUBLIC_URL',
-      env: access,
-      feature: 'login.access',
-      variable: 'PUBLIC_URL',
-      disabled: (c) => c.login.access,
-    },
-    {
-      name: 'Access with PUBLIC_URL on workers.dev',
-      env: { ...access, PUBLIC_URL: 'https://tokengate.acme.workers.dev' },
-      feature: 'login.access',
-      variable: 'PUBLIC_URL',
-      disabled: (c) => c.login.access,
-    },
-    {
-      name: 'Access with PUBLIC_URL on workers.dev (mixed case)',
-      env: { ...access, PUBLIC_URL: 'https://TokenGate.Acme.Workers.Dev' },
-      feature: 'login.access',
-      variable: 'PUBLIC_URL',
-      disabled: (c) => c.login.access,
-    },
-    {
-      name: 'Access with http localhost PUBLIC_URL',
-      env: { ...access, PUBLIC_URL: 'http://localhost:8787' },
-      feature: 'login.access',
-      variable: 'PUBLIC_URL',
-      disabled: (c) => c.login.access,
-    },
-    {
-      name: 'Access with malformed PUBLIC_URL',
-      env: { ...access, PUBLIC_URL: 'http://gw.example.com' },
-      feature: 'login.access',
-      variable: 'PUBLIC_URL',
-      disabled: (c) => c.login.access,
-    },
-    {
-      name: 'dev login without PUBLIC_URL',
-      env: { AUTH_DEV_EMAIL: 'dev@example.com' },
-      feature: 'login.dev',
-      variable: 'PUBLIC_URL',
-      disabled: (c) => c.login.dev,
-    },
-    {
-      name: 'dev login on a public PUBLIC_URL',
-      env: { AUTH_DEV_EMAIL: 'dev@example.com', PUBLIC_URL: 'https://gw.example.com' },
-      feature: 'login.dev',
-      variable: 'PUBLIC_URL',
-      disabled: (c) => c.login.dev,
-    },
-    {
-      name: 'dev login on a workers.dev PUBLIC_URL',
-      env: { AUTH_DEV_EMAIL: 'dev@example.com', PUBLIC_URL: 'https://tokengate.acme.workers.dev' },
-      feature: 'login.dev',
-      variable: 'PUBLIC_URL',
-      disabled: (c) => c.login.dev,
-    },
-    {
-      name: 'dev login on a host that only starts with localhost',
-      env: { AUTH_DEV_EMAIL: 'dev@example.com', PUBLIC_URL: 'https://localhost.example.com' },
-      feature: 'login.dev',
-      variable: 'PUBLIC_URL',
-      disabled: (c) => c.login.dev,
-    },
-    {
-      name: 'dev login with a malformed PUBLIC_URL',
-      env: { AUTH_DEV_EMAIL: 'dev@example.com', PUBLIC_URL: 'http://localhost:8787/admin' },
-      feature: 'login.dev',
-      variable: 'PUBLIC_URL',
-      disabled: (c) => c.login.dev,
-    },
-    {
       name: 'dev login with an invalid email',
-      env: { AUTH_DEV_EMAIL: 'dev', PUBLIC_URL: 'http://localhost:8787' },
+      env: { AUTH_DEV_EMAIL: 'dev' },
       feature: 'login.dev',
       variable: 'AUTH_DEV_EMAIL',
       disabled: (c) => c.login.dev,
-    },
-    {
-      name: 'http PUBLIC_URL on a public host',
-      env: { PUBLIC_URL: 'http://gw.example.com' },
-      feature: 'public_url',
-      variable: 'PUBLIC_URL',
-      disabled: (c) => c.publicUrl,
-    },
-    {
-      name: 'PUBLIC_URL with a path',
-      env: { PUBLIC_URL: 'https://gw.example.com/tokengate' },
-      feature: 'public_url',
-      variable: 'PUBLIC_URL',
-      disabled: (c) => c.publicUrl,
     },
   ];
 
@@ -347,18 +264,11 @@ describe('I-CFG-1: malformed config disables the affected feature; never runs ha
     const config = parseConfig(envWith(env));
     expect(disabled(config)).toBeNull();
     expect(errorsFor(config, feature).map((e) => e.variable)).toContain(variable);
-    expect(JSON.stringify(config.errors)).not.toContain(SECRET);
     expect(JSON.stringify(config.errors)).not.toContain(AUD);
   });
 
   it('a broken feature does not disable unrelated features', () => {
-    const config = parseConfig(
-      envWith({
-        PUBLIC_URL: 'https://gw.example.com',
-        ...access,
-        AUTH_DEV_EMAIL: 'dev@example.com',
-      }),
-    );
+    const config = parseConfig(envWith({ ...access, AUTH_DEV_EMAIL: 'dev' }));
     expect(config.login.access).not.toBeNull();
     expect(config.login.dev).toBeNull();
     expect(config.errors.map((e) => e.feature)).toEqual(['login.dev']);
@@ -427,12 +337,7 @@ describe('upstream host allowlist', () => {
 
 describe('I-CFG-1: hostile values never throw and never appear in errors', () => {
   const MARK = 'leakmarker';
-  const variables = [
-    'PUBLIC_URL',
-    'AUTH_ACCESS_TEAM_DOMAIN',
-    'AUTH_ACCESS_AUD',
-    'AUTH_DEV_EMAIL',
-  ] as const;
+  const variables = ['AUTH_ACCESS_TEAM_DOMAIN', 'AUTH_ACCESS_AUD', 'AUTH_DEV_EMAIL'] as const;
   const hostile = [
     `https://${MARK}:${MARK}@x.example.com/${MARK}?${MARK}#${MARK}`,
     `${MARK}\u0000\n,${MARK}`,

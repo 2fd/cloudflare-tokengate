@@ -21,6 +21,7 @@ Each ADR uses the format from [0001](0001-record-architecture-decisions.md): Sta
 | [0013](0013-operator-variables-outside-wrangler-config.md) | Operator variables outside `wrangler.jsonc` | Accepted |
 | [0014](0014-integrity-rules-in-sql.md) | Integrity rules and audit rows enforced in SQL | Accepted |
 | [0015](0015-cloudflare-access-only-admin-login.md) | Cloudflare Access as the only admin login, without gateway sessions | Accepted |
+| [0016](0016-admin-hosts-in-settings.md) | Admin hosts in Settings instead of `PUBLIC_URL` | Accepted |
 
 ## Adding an ADR
 

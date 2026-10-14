@@ -14,7 +14,7 @@ export const GITHUB_ISSUER = 'https://token.actions.githubusercontent.com';
 export const GITHUB_JWKS = 'https://token.actions.githubusercontent.com/.well-known/jwks';
 export const OWNER_ID = '4242';
 export const REPOSITORY_ID = '987654321';
-export const CONTEXT = { publicHost: 'gw.example.com' };
+export const CONTEXT = { requestHost: 'gw.example.com' };
 
 export const KEK_1 = toBase64(new Uint8Array(32).fill(1));
 export const KEK_2 = toBase64(new Uint8Array(32).fill(2));

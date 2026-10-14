@@ -39,7 +39,7 @@ All bindings, variables and secrets are listed in [configuration.md](configurati
 
 1. A middleware that builds `Deps` for the request.
 2. Proxy routes (`src/proxy/routes.ts`). They come before the security middleware because proxy responses carry their own header policy.
-3. The security middleware (`src/http/security.ts`). It applies to every response outside `/proxy`: CSP without `script-src`, `nosniff`, `no-referrer`, HSTS on https, and `no-store` on `/admin`. When `PUBLIC_URL` is set, it answers 404 for `/admin` on any other origin. When `PUBLIC_URL` is malformed, it answers 404 for `/admin` on every origin ([I-DEPLOY-1](threat-model.md#i-deploy-1)).
+3. The security middleware (`src/http/security.ts`). It applies to every response outside `/proxy`: CSP without `script-src`, `nosniff`, `no-referrer`, HSTS on https, and `no-store` on `/admin`. It reads the admin hosts from D1 on every `/admin` request. It answers 404 for `/admin` on `workers.dev`, and, once the admin hosts are set, on any hostname that is not listed. A stored list that is not valid closes `/admin` on every hostname ([I-DEPLOY-1](threat-model.md#i-deploy-1)).
 4. Health routes (`src/health.ts`).
 5. The admin middleware (`src/admin/auth/middleware.tsx`).
 6. Admin pages (`src/admin/routes/index.ts`).
@@ -93,8 +93,8 @@ Every proxy response carries `x-tokengate-request-id`, `x-tokengate-source` (`ga
 A request to `/admin/*` passes these gates (`src/admin/auth/middleware.tsx`):
 
 1. Host pinning in the security middleware ([I-DEPLOY-1](threat-model.md#i-deploy-1)).
-2. A verified identity: the `Cf-Access-Jwt-Assertion` header is checked against the team's keys, issuer and AUD, on every request ([I-SESS-1](threat-model.md#i-sess-1)). A missing or invalid token gets 401; unreachable team keys get 503. With no login configured, `/admin` shows the setup page (503). The local development login (`AUTH_DEV_EMAIL`) replaces this step only on a loopback `PUBLIC_URL`.
-3. A user for that identity: a linked, active user, or else an invited user linked by the token's email ([I-LINK-1](threat-model.md#i-link-1)), or else the first owner ([I-BOOT-1](threat-model.md#i-boot-1)). Otherwise 403. Last-seen times are written at most every 5 minutes.
+2. A verified identity: the `Cf-Access-Jwt-Assertion` header is checked against the team's keys, issuer and AUD, on every request ([I-SESS-1](threat-model.md#i-sess-1)). A missing or invalid token gets 401; unreachable team keys get 503. With no login configured, `/admin` shows the setup page (503). The local development login (`AUTH_DEV_EMAIL`) replaces this step only on requests to `localhost`, `127.0.0.1` or `[::1]`.
+3. A user for that identity: a linked, active user, or else an invited user linked by the token's email ([I-LINK-1](threat-model.md#i-link-1)), or else the first owner, whose sign-in also stores its hostname as the first admin host ([I-BOOT-1](threat-model.md#i-boot-1)). Otherwise 403. Last-seen times are written at most every 5 minutes.
 4. The route must be in the RBAC table in `src/admin/auth/rbac.ts`. Unknown routes are denied ([I-RBAC-1](threat-model.md#i-rbac-1)).
 5. For unsafe methods, and for routes the RBAC table marks as mutating: body size cap of 64 KiB (413), then the fetch-metadata or `Origin` check and the `_csrf` field check against the `__Host-tokengate_csrf` cookie ([I-CSRF-1](threat-model.md#i-csrf-1)).
 6. The user's role must have the route's permission.
@@ -145,6 +145,8 @@ Runtime settings and their defaults (`src/db/settings.ts`). Values outside the b
 | `request_log_max_rows` | 5,000,000 | 10,000 to 50,000,000 |
 
 Internal state keys: `bootstrap_completed_at`, `cron_last_success_at`, `cron_last_error`, `cron_last_error_at`, `keyring_kcv`, `credential_expiry_notices`, `rollup_watermark`.
+
+Host lists: `allowed_upstream_hosts` ([upstream host allowlist](configuration.md#upstream-host-allowlist)) and `admin_hosts` ([admin hosts](configuration.md#admin-hosts)), JSON arrays (`allowed_upstream_hosts` can also be `null`). A stored value that is not a valid list denies every host.
 
 ```mermaid
 erDiagram

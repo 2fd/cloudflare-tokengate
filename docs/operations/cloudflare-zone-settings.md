@@ -12,7 +12,7 @@ applies to a custom domain in your own zone.
 | Setting | Where | Recommended |
 |---|---|---|
 | Custom domain | Workers & Pages > tokengate > Settings > Domains & Routes, or `routes` in your clone's `wrangler.jsonc` | One hostname for the gateway, for example `tokengate.example.com` |
-| `PUBLIC_URL` | Worker variable | `https://tokengate.example.com`. `/admin` then answers `404` on every other origin ([I-DEPLOY-1](../threat-model.md#i-deploy-1)) |
+| Admin hosts | Admin UI: Settings > "Admin hosts" | `tokengate.example.com`, stored on the first sign-in. `/admin` then answers `404` on every other hostname ([I-DEPLOY-1](../threat-model.md#i-deploy-1)) |
 | `workers_dev` | `wrangler.jsonc` | `false` once the custom domain works |
 | `preview_urls` | `wrangler.jsonc` | `false` (already set; `scripts/check-config.sh` enforces it) |
 
@@ -26,9 +26,8 @@ To declare the custom domain in `wrangler.jsonc` instead of the dashboard:
 Then run `pnpm run deploy`.
 
 Why turn off `workers_dev`: with it on, `/proxy/` also answers on the workers.dev hostname, where your
-zone's rate limiting and WAF rules do not run. Host pinning already closes `/admin` there when
-`PUBLIC_URL` is set. Admin sign-in uses Cloudflare Access, which requires `PUBLIC_URL` on a custom
-domain, not workers.dev (`src/config.ts`). So the admin UI is never available on workers.dev.
+zone's rate limiting and WAF rules do not run. Host pinning always closes `/admin` there
+(`src/config.ts`, `adminHostAllowed`). So the admin UI is never available on workers.dev.
 
 ## Bot Fight Mode
 
@@ -90,10 +89,13 @@ tokens and cannot pass an Access login. `/healthz` and `/readyz` must stay reach
    ([application paths](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/)).
 3. Add a policy that allows your administrators.
 4. Copy the application's Audience (AUD) tag into `AUTH_ACCESS_AUD` and your team name into
-   `AUTH_ACCESS_TEAM_DOMAIN`. Set `PUBLIC_URL` to the custom domain
+   `AUTH_ACCESS_TEAM_DOMAIN`
    ([configuration](../configuration.md#cloudflare-access-login-auth_access_)).
 5. Open `https://tokengate.example.com/admin` in a private window. Access must ask you to sign in.
 6. Open `https://tokengate.example.com/readyz`. It must answer without an Access login.
+
+Each hostname that you add later in Settings > "Admin hosts" needs the same two destinations in this
+application ([configuration](../configuration.md#admin-hosts)).
 
 The gateway keeps no admin sessions. On every `/admin` request it verifies the
 `Cf-Access-Jwt-Assertion` header itself (`src/admin/auth/access.ts`): signature, issuer, audience
@@ -132,4 +134,4 @@ a `CF-Worker` header that names your zone ([known limitations](../threat-model.m
 - [getting-started.md](../getting-started.md#production-on-a-custom-domain): moving to a custom domain.
 - [troubleshooting.md](troubleshooting.md#the-response-has-no-x-tokengate-request-id): responses that
   come from Cloudflare, not the gateway.
-- [configuration.md](../configuration.md): `PUBLIC_URL`, Access variables and bindings.
+- [configuration.md](../configuration.md): admin hosts, Access variables and bindings.

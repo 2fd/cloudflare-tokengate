@@ -5,7 +5,7 @@ import type { LoginProviderId } from './resolve-login';
 export interface EmailEvidence {
   /** `email` claim of a validated Cloudflare Access JWT. */
   access: { email: unknown };
-  /** AUTH_DEV_EMAIL, accepted only on a loopback PUBLIC_URL (src/config.ts). */
+  /** AUTH_DEV_EMAIL, accepted only on loopback hosts (src/admin/auth/identity.ts). */
   dev: { email: unknown };
 }
 

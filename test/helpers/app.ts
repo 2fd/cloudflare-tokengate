@@ -30,7 +30,6 @@ export const TEST_ORIGIN = 'https://gw.test';
 
 /** Admin login every test app gets unless `env` overrides it: the shared fake Access team. */
 export const TEST_ACCESS_ENV = {
-  PUBLIC_URL: TEST_ORIGIN,
   AUTH_ACCESS_TEAM_DOMAIN: TEST_ACCESS_TEAM,
   AUTH_ACCESS_AUD: 'a'.repeat(64),
 } as const satisfies Partial<AppEnv>;
@@ -78,6 +77,20 @@ export function createTestApp(options: TestAppOptions = {}): TestApp {
 export async function setUpstreamHosts(hosts: string[] | null): Promise<void> {
   await env.DB.prepare(
     `INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('allowed_upstream_hosts', ?, 0, NULL)
+     ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+  )
+    .bind(JSON.stringify(hosts))
+    .run();
+}
+
+/** Sets the admin host allowlist setting (null = not set yet, any host but workers.dev). */
+export async function setAdminHosts(hosts: string[] | null): Promise<void> {
+  if (hosts === null) {
+    await env.DB.prepare("DELETE FROM settings WHERE key = 'admin_hosts'").run();
+    return;
+  }
+  await env.DB.prepare(
+    `INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('admin_hosts', ?, 0, NULL)
      ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
   )
     .bind(JSON.stringify(hosts))

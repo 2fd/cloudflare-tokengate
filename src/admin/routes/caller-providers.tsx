@@ -3,7 +3,6 @@
 // issuer/JWKS change under enabled grants needs the confirm checkbox; disabling never validates.
 import type { Child } from 'hono/jsx';
 import type { App } from '../../app';
-import { canonicalOrigin, parseConfig } from '../../config';
 import { getCallerProvider, listCallerProviders } from '../../db/caller-providers';
 import { listGrants } from '../../db/grants';
 import type { CallerProvider, Grant } from '../../db/types';
@@ -493,7 +492,7 @@ async function renderDetail(
   const viewer = c.get('viewer');
   const canWrite = can(viewer.user.role, 'config:write');
   const grants = await listGrants(deps.env.DB, { caller_provider_id: provider.id });
-  const origin = canonicalOrigin(parseConfig(deps.env), new URL(c.req.url));
+  const origin = new URL(c.req.url).origin;
   // Re-check the stored configuration so standing risks (e.g. no tenant pin) stay visible.
   const stored = validateCallerProvider(provider, profile, provider);
 

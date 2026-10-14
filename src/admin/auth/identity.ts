@@ -1,5 +1,5 @@
 // Who is making this admin request. There are no gateway sessions: every request carries its own
-// proof, the Cloudflare Access JWT (I-SESS-1). The dev login only exists on a loopback PUBLIC_URL.
+// proof, the Cloudflare Access JWT (I-SESS-1). The dev login only applies to loopback hosts.
 import { type Config, LOCAL_DEV_HOSTS } from '../../config';
 import type { Deps } from '../../deps';
 import { ACCESS_JWT_HEADER, type AccessVerifyError, verifyAccessAssertion } from './access';

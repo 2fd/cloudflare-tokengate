@@ -66,14 +66,16 @@ openssl rand -base64 32   # store this value in your vault first
 pnpm wrangler secret put TOKENGATE_KEK
 ```
 
-Then attach a custom domain, put `/admin` behind a Cloudflare Access application, set the operator variables, sign in as the first owner, add a caller provider and add a service. [docs/getting-started.md](docs/getting-started.md) shows each step.
+Then attach a custom domain, put `/admin` behind a Cloudflare Access application, set the operator variables, sign in on the custom domain as the first owner, add a caller provider and add a service. [docs/getting-started.md](docs/getting-started.md) shows each step.
 
 ### Run it locally
 
 ```sh
 pnpm install
-pnpm run setup   # creates .dev.vars (local key, PUBLIC_URL, AUTH_DEV_EMAIL) and the local databases
-pnpm dev         # http://localhost:8787/admin, signed in as your git email
+pnpm run setup          # copies .dev.vars.example to .dev.vars
+# in .dev.vars: set TOKENGATE_KEK (pnpm keyring generate) and uncomment AUTH_DEV_EMAIL
+pnpm db:migrate:local   # creates the local databases
+pnpm dev                # http://localhost:8787/admin, signed in as AUTH_DEV_EMAIL
 ```
 
 Details: [CONTRIBUTING.md](CONTRIBUTING.md#set-up).

@@ -1,6 +1,6 @@
 // The D1 `settings` table: admin-editable runtime settings and internal state keys, JSON values.
 // Defaults and bounds live here so every reader agrees; bounds are re-applied on read, not only on save.
-import { isUpstreamHostEntry } from '../config';
+import { isAdminHostEntry, isUpstreamHostEntry } from '../config';
 
 export interface Settings {
   request_log_retention_days: number;
@@ -100,6 +100,36 @@ export async function getAllowedUpstreamHosts(db: D1Database): Promise<string[] 
   return upstreamHostsFromValue(row?.value);
 }
 
+/**
+ * Admin host allowlist (I-DEPLOY-1): the hostnames /admin answers on, as a JSON array of lowercased
+ * `isAdminHostEntry` entries. The first-owner bootstrap stores the hostname of that sign-in
+ * (`bootstrapOwnerStatements`); owners edit it in Settings. Absent until then.
+ */
+export const ADMIN_HOSTS_KEY = 'admin_hosts';
+
+/** null = not set yet (any host). A stored value that is not a valid list denies every host. */
+export function adminHostsFromValue(raw: string | null | undefined): string[] | null {
+  if (raw === null || raw === undefined) return null;
+  const value = parseJsonOrNull(raw);
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    !value.every((entry) => typeof entry === 'string' && isAdminHostEntry(entry))
+  ) {
+    return [];
+  }
+  return value as string[];
+}
+
+export function adminHostsStatement(db: D1Database): D1PreparedStatement {
+  return db.prepare('SELECT value FROM settings WHERE key = ?').bind(ADMIN_HOSTS_KEY);
+}
+
+export async function getAdminHosts(db: D1Database): Promise<string[] | null> {
+  const row = await adminHostsStatement(db).first<{ value: string }>();
+  return adminHostsFromValue(row?.value);
+}
+
 /** Internal bookkeeping keys, not editable in the UI. */
 export type StateKey =
   | 'bootstrap_completed_at'
@@ -150,7 +180,7 @@ export async function getSettings(db: D1Database): Promise<Settings> {
 
 export function putSettingStatement(
   db: D1Database,
-  key: keyof Settings | StateKey | JoinKey | typeof UPSTREAM_HOSTS_KEY,
+  key: keyof Settings | StateKey | JoinKey | typeof UPSTREAM_HOSTS_KEY | typeof ADMIN_HOSTS_KEY,
   value: unknown,
   now: number,
   updatedBy: string | null,

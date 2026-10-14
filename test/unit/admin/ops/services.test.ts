@@ -11,8 +11,7 @@ import {
 import { credentialAad, openCredential, sealedKid } from '../../../../src/crypto/envelope';
 import { loadKeyring } from '../../../../src/crypto/keyring';
 import { getService } from '../../../../src/db/services';
-import type { AppEnv } from '../../../../src/env';
-import { setUpstreamHosts } from '../../../helpers/app';
+import { setAdminHosts, setUpstreamHosts } from '../../../helpers/app';
 import {
   ACTOR,
   auditCount,
@@ -43,14 +42,10 @@ async function openStored(serviceId: string): Promise<string | null> {
 beforeEach(resetControlPlane);
 
 describe('opContextFor', () => {
-  it('uses the PUBLIC_URL host when configured, else the request host', () => {
-    const base = env as unknown as AppEnv;
-    expect(
-      opContextFor({ ...base, PUBLIC_URL: '' }, new URL('https://a.example:8443/admin')),
-    ).toEqual({ publicHost: 'a.example:8443' });
-    expect(
-      opContextFor({ ...base, PUBLIC_URL: 'https://gw.example.com' }, new URL('https://x.test/')),
-    ).toEqual({ publicHost: 'gw.example.com' });
+  it('takes the request hostname without the port', () => {
+    expect(opContextFor(new URL('https://A.example:8443/admin'))).toEqual({
+      requestHost: 'a.example',
+    });
   });
 });
 
@@ -126,6 +121,19 @@ describe('createService', () => {
       CONTEXT,
     );
     expect(result.ok).toBe(false);
+  });
+
+  it('refuses a base URL pointing at a stored admin host', async () => {
+    await setAdminHosts(['gw.example.com', '*.admin.example.org']);
+    const result = await createService(
+      opsDeps(),
+      ACTOR,
+      serviceInput({ base_url: 'https://eu.admin.example.org/api' }),
+      { requestHost: 'other.example.net' },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.errors.join()).toMatch(/must not point at this gateway/);
   });
 
   it('enforces the upstream host allowlist setting', async () => {

@@ -2,6 +2,8 @@
 // so disabling a grant, service or caller provider takes effect on the next request; I-AUTHZ-1).
 import { callerProviderFromRow, grantFromRow, serviceFromRow } from './rows';
 import {
+  adminHostsFromValue,
+  adminHostsStatement,
   type Settings,
   settingsFromRows,
   settingsStatement,
@@ -25,6 +27,8 @@ export interface ProxyContext {
   settings: Settings;
   /** Upstream host allowlist (I-SSRF-1); null = any public https host. */
   allowedUpstreamHosts: string[] | null;
+  /** Admin host allowlist (I-DEPLOY-1); base URLs may not point at it (I-SSRF-1). */
+  adminHosts: string[] | null;
 }
 
 type Row = Record<string, unknown>;
@@ -35,7 +39,7 @@ export async function loadProxyContext(
   now: number,
 ): Promise<ProxyContext> {
   // `enabled = 1` is written literally so the partial index grants_lookup (WHERE enabled = 1) applies.
-  const [services, providers, grants, settings, upstreamHosts] = await db.batch<Row>([
+  const [services, providers, grants, settings, upstreamHosts, adminHosts] = await db.batch<Row>([
     db.prepare('SELECT * FROM services WHERE slug = ?1').bind(slug),
     db.prepare('SELECT * FROM caller_providers WHERE enabled = 1 ORDER BY created_at, id'),
     db
@@ -50,6 +54,7 @@ export async function loadProxyContext(
       .bind(slug, now),
     settingsStatement(db),
     upstreamHostsStatement(db),
+    adminHostsStatement(db),
   ]);
 
   const serviceRow = services?.results[0];
@@ -69,5 +74,6 @@ export async function loadProxyContext(
     allowedUpstreamHosts: upstreamHostsFromValue(
       upstreamHosts?.results[0]?.value as string | undefined,
     ),
+    adminHosts: adminHostsFromValue(adminHosts?.results[0]?.value as string | undefined),
   };
 }

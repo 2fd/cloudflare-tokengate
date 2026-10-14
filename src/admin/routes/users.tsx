@@ -2,7 +2,7 @@
 // pending sign-ins, change roles or statuses, reset logins and set the join defaults (I-RBAC-1). Mutations go through ops/users.ts, which keeps an active
 // owner (I-OWNER-1); every admin request re-reads the user, so changes apply at once (I-SESS-1).
 import type { App } from '../../app';
-import { type Config, canonicalOrigin, parseConfig } from '../../config';
+import { type Config, parseConfig } from '../../config';
 import { getJoinDefaults, JOIN_ROLES, JOIN_STATUSES, type JoinDefaults } from '../../db/settings';
 import type { Role, User } from '../../db/types';
 import { INVITE_TTL_MS, listUsers, type UserListEntry } from '../../db/users';
@@ -238,7 +238,7 @@ async function usersPage(
           values={options.invite}
           config={config}
           providerText={providerText}
-          loginUrl={`${canonicalOrigin(config, new URL(c.req.url))}/admin`}
+          loginUrl={`${new URL(c.req.url).origin}/admin`}
         />
       ) : (
         <p class="muted">Only owners can invite users or change their access.</p>

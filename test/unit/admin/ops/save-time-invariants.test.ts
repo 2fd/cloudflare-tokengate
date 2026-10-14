@@ -201,7 +201,7 @@ describe('I-SSRF-1: base URLs are validated before the credential is used or sto
     'https://user:pw@api.github.com',
     'https://api.github.com/?x=1',
     'https://other.workers.dev',
-    `https://${CONTEXT.publicHost}`,
+    `https://${CONTEXT.requestHost}`,
     'https://api.github.com/a/../b',
   ];
 

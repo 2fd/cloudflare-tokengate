@@ -8,8 +8,8 @@ configuration export, and the secrets that no backup holds. It is for platform e
 | State | Where | Backed up by |
 |---|---|---|
 | Keyring (`TOKENGATE_KEK` or `TOKENGATE_KEYRING`) | Worker secret | Only your vault. Cloudflare cannot return a secret's value |
-| Variables (`PUBLIC_URL`, `AUTH_*` ...) | Worker settings | Keep a copy in your runbook ([configuration](../configuration.md#variables)) |
-| Users, login identities, caller providers, services, sealed credentials, grants, settings (including the upstream host allowlist), audit log | `DB` (`tokengate`) | Time Travel, `d1 export` |
+| Variables (`AUTH_*`) | Worker settings | Keep a copy in your runbook ([configuration](../configuration.md#variables)) |
+| Users, login identities, caller providers, services, sealed credentials, grants, settings (including the upstream host allowlist and the admin hosts), audit log | `DB` (`tokengate`) | Time Travel, `d1 export` |
 | Access application and policy (who can reach `/admin`) | Cloudflare One | Keep a copy in your runbook ([zone settings](cloudflare-zone-settings.md#cloudflare-access)) |
 | Request log and rollups | `TELEMETRY_DB` (`tokengate-telemetry`) | Time Travel, `d1 export`; optional R2 archive |
 | Code and `wrangler.jsonc` | Your clone of the repository | Git |
@@ -147,8 +147,10 @@ Use this when the Cloudflare account or both databases are lost.
 5. Settings > System status shows the database schema as "up to date".
 6. Users shows the owners you expect, and no user you had suspended is active.
 7. Grants, services and caller providers you disabled during an incident are still disabled.
-8. On a service with a credential check, "Test credential" passes.
-9. A workflow call succeeds ([GitHub Actions](../callers/github-actions.md)).
+8. Settings > "Admin hosts" and "Upstream hosts" list the hosts you expect. A restore brings back
+   the lists of the restore point.
+9. On a service with a credential check, "Test credential" passes.
+10. A workflow call succeeds ([GitHub Actions](../callers/github-actions.md)).
 
 ## Related pages
 

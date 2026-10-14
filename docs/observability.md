@@ -191,13 +191,13 @@ Banners are sorted by severity. The texts below are abbreviated.
 | info | Credentials are sealed with a key other than the active key | Run the re-encryption in Settings ([key rotation](operations/key-rotation.md)) |
 | info | There is only one active owner | Invite a second owner ([break-glass](operations/break-glass.md)) |
 
-Settings > System status shows the database schema state, the hourly job, `PUBLIC_URL`, Login
+Settings > System status shows the database schema state, the hourly job, the admin hosts, Login
 providers, the upstream host allowlist, each optional binding and whether the first owner exists, plus any
 configuration problems by variable name.
 
 ## Health endpoints
 
-Both endpoints are unauthenticated, are not pinned to `PUBLIC_URL`, and send `cache-control:
+Both endpoints are unauthenticated, are not pinned to the admin hosts, and send `cache-control:
 no-store` (`src/health.ts`).
 
 **`GET /healthz`** returns `200 {"ok":true}`. It does no I/O. Use it for liveness only.
@@ -236,7 +236,7 @@ or user id). Retention is "Audit log retention (days)": default 365, never less 
 | Services | `service.create`, `.update`, `.enable`, `.disable`, `.delete`, `service.credential.set`, `service.credential.test` |
 | Grants | `grant.create`, `.duplicate`, `.update`, `.enable`, `.disable`, `.delete` |
 | Users | `user.invite`, `.resend_invite`, `.update` (also approve and reject), `.reset_login`, `.link`, `.bootstrap`, `.join`, `.join_defaults` |
-| System | `settings.update`, `settings.upstream_hosts`, `keyring.rewrap`, `config.export`, `credential.expiring` (hourly job, actor `system`) |
+| System | `settings.update`, `settings.upstream_hosts`, `settings.admin_hosts`, `keyring.rewrap`, `config.export`, `credential.expiring` (hourly job, actor `system`) |
 
 Changes made directly in D1 (`wrangler d1 execute`) are not audited.
 
