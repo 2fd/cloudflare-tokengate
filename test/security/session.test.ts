@@ -111,6 +111,6 @@ describe('I-SESS-1: every admin request is authenticated by its own Access JWT',
     await env.DB.prepare('DELETE FROM user_identities WHERE user_id = ?').bind(user.id).run();
     const res = await adminGet(app, session, '/admin');
     expect(res.status).toBe(403);
-    expect(await res.text()).toContain('not been invited');
+    expect(await res.text()).toContain('Another user already has this email address');
   });
 });

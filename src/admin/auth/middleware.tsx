@@ -28,8 +28,8 @@ const MESSAGES = {
   access_invalid:
     'Cloudflare Access did not present a valid user identity for this request. Check that the Access application covers /admin on this hostname, then reload.',
   certs_unavailable: 'Cloudflare Access could not be reached to check your identity. Try again.',
-  not_invited:
-    'This account has not been invited. Ask an owner to invite your email address, then reload this page.',
+  email_taken:
+    'Another user already has this email address (for example an expired invitation, or an account linked to another sign-in). Ask an owner to use "Resend invitation" or "Reset login", then reload this page.',
   disabled: 'This account is disabled or must be re-invited by an owner.',
 } as const;
 type MessageKey = keyof typeof MESSAGES;

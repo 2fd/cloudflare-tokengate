@@ -12,6 +12,13 @@ function deps(bootstrapEmails = BOOTSTRAP) {
   return createAdminTestApp({ env: { BOOTSTRAP_OWNER_EMAILS: bootstrapEmails } }).deps;
 }
 
+async function auditActions(): Promise<string[]> {
+  const { results } = await env.DB.prepare('SELECT action FROM audit_log ORDER BY action').all<{
+    action: string;
+  }>();
+  return results.map((row) => row.action);
+}
+
 async function owners(): Promise<string[]> {
   const { results } = await env.DB.prepare("SELECT email FROM users WHERE role = 'owner'").all<{
     email: string;
@@ -68,10 +75,14 @@ describe('I-BOOT-1: bootstrap creates at most one owner, once', () => {
         name: null,
       }),
     ]);
-    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    // One owner; the other email joins as viewer; the second identity for the owner's email is refused.
+    expect(results.filter((result) => result.ok)).toHaveLength(2);
     expect(await owners()).toHaveLength(1);
-    expect(await env.DB.prepare('SELECT count(*) AS n FROM users').first('n')).toBe(1);
-    expect(await env.DB.prepare('SELECT count(*) AS n FROM user_identities').first('n')).toBe(1);
+    expect(await env.DB.prepare('SELECT count(*) AS n FROM users').first('n')).toBe(2);
+    expect(
+      await env.DB.prepare("SELECT count(*) AS n FROM users WHERE role = 'viewer'").first('n'),
+    ).toBe(1);
+    expect(await env.DB.prepare('SELECT count(*) AS n FROM user_identities').first('n')).toBe(2);
     expect(
       await env.DB.prepare(
         "SELECT count(*) AS n FROM audit_log WHERE action = 'user.bootstrap'",
@@ -79,7 +90,7 @@ describe('I-BOOT-1: bootstrap creates at most one owner, once', () => {
     ).toBe(1);
   });
 
-  it('is ignored once an owner exists', async () => {
+  it('is ignored once an owner exists: the next person joins as viewer', async () => {
     await createUser({ email: 'existing@acme.com', role: 'owner' });
     const result = await resolveLogin(deps(), {
       loginProvider: 'access',
@@ -87,9 +98,9 @@ describe('I-BOOT-1: bootstrap creates at most one owner, once', () => {
       emails: ['first@acme.com'],
       name: null,
     });
-    expect(result).toEqual({ ok: false, reason: 'not_invited' });
+    expect(result).toMatchObject({ ok: true, via: 'join', user: { role: 'viewer' } });
     expect(await owners()).toEqual(['existing@acme.com']);
-    expect(await env.DB.prepare('SELECT count(*) AS n FROM audit_log').first('n')).toBe(0);
+    expect(await auditActions()).toEqual(['user.join']);
   });
 
   it('is ignored once bootstrap_completed_at is set, even with no owner left', async () => {
@@ -100,26 +111,57 @@ describe('I-BOOT-1: bootstrap creates at most one owner, once', () => {
       emails: ['first@acme.com'],
       name: null,
     });
-    expect(result).toEqual({ ok: false, reason: 'not_invited' });
-    expect(await env.DB.prepare('SELECT count(*) AS n FROM users').first('n')).toBe(0);
+    expect(result).toMatchObject({ ok: true, via: 'join', user: { role: 'viewer' } });
+    expect(await owners()).toEqual([]);
   });
 
-  it('requires an authoritative email listed in BOOTSTRAP_OWNER_EMAILS', async () => {
+  it('with BOOTSTRAP_OWNER_EMAILS set, an unlisted first person joins as viewer', async () => {
     const result = await resolveLogin(deps(), {
       loginProvider: 'access',
       subject: '1',
       emails: ['someone@acme.com'],
       name: null,
     });
-    expect(result).toEqual({ ok: false, reason: 'not_invited' });
-    const none = await resolveLogin(deps(''), {
+    expect(result).toMatchObject({ ok: true, via: 'join', user: { role: 'viewer' } });
+    expect(await owners()).toEqual([]);
+    // A listed person can still become the first owner afterwards.
+    const listed = await resolveLogin(deps(), {
+      loginProvider: 'access',
+      subject: '2',
+      emails: ['second@acme.com'],
+      name: null,
+    });
+    expect(listed).toMatchObject({ ok: true, via: 'bootstrap' });
+  });
+
+  it('without BOOTSTRAP_OWNER_EMAILS, the first person to sign in becomes owner', async () => {
+    const first = await resolveLogin(deps(''), {
+      loginProvider: 'access',
+      subject: '1',
+      emails: ['anyone@acme.com'],
+      name: null,
+    });
+    expect(first).toMatchObject({ ok: true, via: 'bootstrap', user: { role: 'owner' } });
+    const second = await resolveLogin(deps(''), {
+      loginProvider: 'access',
+      subject: '2',
+      emails: ['next@acme.com'],
+      name: null,
+    });
+    expect(second).toMatchObject({ ok: true, via: 'join', user: { role: 'viewer' } });
+    expect(await owners()).toEqual(['anyone@acme.com']);
+  });
+
+  it('never bootstraps over an existing user with the same email', async () => {
+    await createUser({ email: 'first@acme.com', role: 'viewer', status: 'disabled' });
+    const result = await resolveLogin(deps(''), {
       loginProvider: 'access',
       subject: '1',
       emails: ['first@acme.com'],
       name: null,
     });
-    expect(none).toEqual({ ok: false, reason: 'not_invited' });
-    expect(await env.DB.prepare('SELECT count(*) AS n FROM users').first('n')).toBe(0);
+    expect(result).toEqual({ ok: false, reason: 'email_taken' });
+    expect(await owners()).toEqual([]);
   });
 
   it('a second login of the bootstrapped owner resolves by identity', async () => {

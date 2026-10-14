@@ -231,8 +231,8 @@ export interface BootstrapInput {
 }
 
 /**
- * Creates the first owner (I-BOOT-1). The user INSERT only happens while no owner exists and
- * `bootstrap_completed_at` is absent; identity, settings marker and audit row are each conditioned
+ * Creates the first owner (I-BOOT-1). The user INSERT only happens while no owner exists,
+ * `bootstrap_completed_at` is absent and no user has this email; identity, settings marker and audit row are each conditioned
  * on that new user row existing. The caller checks `meta.changes === 1` on the first result.
  */
 export function bootstrapOwnerStatements(
@@ -246,9 +246,10 @@ export function bootstrapOwnerStatements(
         `INSERT INTO users (id, email, name, role, status, invite_expires_at, created_at, updated_at)
          SELECT ?, ?, ?, 'owner', 'active', NULL, ?, ?
          WHERE NOT EXISTS (SELECT 1 FROM users WHERE role = 'owner')
-           AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'bootstrap_completed_at')`,
+           AND NOT EXISTS (SELECT 1 FROM settings WHERE key = 'bootstrap_completed_at')
+           AND NOT EXISTS (SELECT 1 FROM users WHERE email = ?)`,
       )
-      .bind(input.userId, input.email, input.name, input.now, input.now),
+      .bind(input.userId, input.email, input.name, input.now, input.now, input.email),
     db
       .prepare(
         `INSERT INTO user_identities (login_provider, subject, user_id, email, created_at, last_used_at)
@@ -261,6 +262,42 @@ export function bootstrapOwnerStatements(
          SELECT 'bootstrap_completed_at', ?, ?, ? WHERE ${created}`,
       )
       .bind(JSON.stringify(input.now), input.now, input.userId, input.userId),
+    auditStatement(db, input.audit, { sql: created, binds: [input.userId] }),
+  ];
+}
+
+export interface JoinInput {
+  userId: string;
+  email: string;
+  loginProvider: string;
+  subject: string;
+  name: string | null;
+  now: number;
+  audit: AuditEvent;
+}
+
+/**
+ * Creates an active viewer for a first sign-in that matches no user (I-LINK-1: an existing user is
+ * never linked by email outside an invitation). The user INSERT only happens while no user has this
+ * email; identity and audit row are each conditioned on that new user row existing. The caller
+ * checks `meta.changes === 1` on the first result.
+ */
+export function joinAsViewerStatements(db: D1Database, input: JoinInput): D1PreparedStatement[] {
+  const created = 'EXISTS (SELECT 1 FROM users WHERE id = ?)';
+  return [
+    db
+      .prepare(
+        `INSERT INTO users (id, email, name, role, status, invite_expires_at, created_at, updated_at)
+         SELECT ?, ?, ?, 'viewer', 'active', NULL, ?, ?
+         WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = ?)`,
+      )
+      .bind(input.userId, input.email, input.name, input.now, input.now, input.email),
+    db
+      .prepare(
+        `INSERT INTO user_identities (login_provider, subject, user_id, email, created_at, last_used_at)
+         SELECT ?, ?, ?, ?, ?, NULL WHERE ${created}`,
+      )
+      .bind(input.loginProvider, input.subject, input.userId, input.email, input.now, input.userId),
     auditStatement(db, input.audit, { sql: created, binds: [input.userId] }),
   ];
 }

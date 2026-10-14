@@ -1,5 +1,6 @@
 // Maps a verified login (provider, stable subject, authoritative emails) to a user. Only invited
-// users are linked by email (I-LINK-1); the first owner is bootstrapped at most once (I-BOOT-1).
+// users are linked by email (I-LINK-1); the first owner is bootstrapped at most once (I-BOOT-1);
+// anyone else that Access lets through joins as a viewer, so an owner can grant more.
 import { parseConfig } from '../../config';
 import { buildAuditEvent, emitAuditLine } from '../../db/audit';
 import type { Actor, User } from '../../db/types';
@@ -8,6 +9,7 @@ import {
   findRedeemableInvite,
   findUserByIdentity,
   getUser,
+  joinAsViewerStatements,
   linkInvitedUserStatements,
 } from '../../db/users';
 import type { Deps } from '../../deps';
@@ -36,17 +38,19 @@ export type LoginResolution =
   | {
       ok: true;
       user: User;
-      via: 'identity' | 'invite' | 'bootstrap';
+      via: 'identity' | 'invite' | 'bootstrap' | 'join';
     }
-  | { ok: false; reason: 'not_invited' | 'disabled' };
+  | { ok: false; reason: 'email_taken' | 'disabled' };
 
 const NAME_MAX = 200;
 
 /**
  * 1) Known identity: its user, if active.
  * 2) Else an invited, unexpired user matching an authoritative email is linked and activated.
- * 3) Else, if an email is in BOOTSTRAP_OWNER_EMAILS and bootstrap has never run, the first owner
- * is created. 4) Else `not_invited`.
+ * 3) Else, while no owner exists and bootstrap has never run, the first owner is created. When
+ * BOOTSTRAP_OWNER_EMAILS is set, only an email it lists can become that owner.
+ * 4) Else a new active viewer is created for the first authoritative email.
+ * 5) Else (that email already belongs to another user, e.g. an expired invitation) `email_taken`.
  */
 export async function resolveLogin(
   deps: Deps,
@@ -93,7 +97,10 @@ export async function resolveLogin(
   }
 
   const bootstrapEmails = parseConfig(deps.env).bootstrapOwnerEmails;
-  const email = input.emails.find((candidate) => bootstrapEmails.includes(candidate));
+  const email =
+    bootstrapEmails.length === 0
+      ? input.emails[0]
+      : input.emails.find((candidate) => bootstrapEmails.includes(candidate));
   if (email !== undefined) {
     const now = deps.now();
     const userId = newId('usr', now, deps.random);
@@ -101,7 +108,7 @@ export async function resolveLogin(
       action: 'user.bootstrap',
       targetType: 'user',
       targetId: userId,
-      summary: 'First owner created from BOOTSTRAP_OWNER_EMAILS',
+      summary: 'First owner created on the first sign-in',
       diff: { login_provider: input.loginProvider, subject: input.subject, email, role: 'owner' },
     });
     const results = await db.batch(
@@ -122,7 +129,44 @@ export async function resolveLogin(
     }
   }
 
-  return { ok: false, reason: 'not_invited' };
+  const joinEmail = input.emails[0];
+  if (joinEmail !== undefined) {
+    const now = deps.now();
+    const userId = newId('usr', now, deps.random);
+    const audit = buildAuditEvent(deps, actorFor(userId, joinEmail, meta), {
+      action: 'user.join',
+      targetType: 'user',
+      targetId: userId,
+      summary: 'Joined as viewer on the first sign-in',
+      diff: {
+        login_provider: input.loginProvider,
+        subject: input.subject,
+        email: joinEmail,
+        role: 'viewer',
+      },
+    });
+    const results = await db.batch(
+      joinAsViewerStatements(db, {
+        userId,
+        email: joinEmail,
+        loginProvider: input.loginProvider,
+        subject: input.subject,
+        name,
+        now,
+        audit,
+      }),
+    );
+    if (results[0]?.meta.changes === 1) {
+      emitAuditLine(audit);
+      const user = await getUser(db, userId);
+      if (user) return { ok: true, user, via: 'join' };
+    }
+    // A concurrent first request of the same identity may have created the user meanwhile.
+    const raced = await findUserByIdentity(db, input.loginProvider, input.subject);
+    if (raced?.status === 'active') return { ok: true, user: raced, via: 'identity' };
+  }
+
+  return { ok: false, reason: 'email_taken' };
 }
 
 function actorFor(userId: string, email: string, meta: RequestMeta): Actor {

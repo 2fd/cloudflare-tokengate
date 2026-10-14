@@ -118,11 +118,11 @@ The Access application puts the admin UI behind your Zero Trust login. It must c
 
 1. In Zero Trust, open Access controls > Applications and add a self-hosted application.
 2. Add two public hostnames on your custom domain: path `admin` and path `admin/*`. A path with `/*` does not cover its parent path, so you need both ([application paths](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/)).
-3. Add an Allow policy for the people who may use the admin UI, for example your email address or your company's email domain.
+3. Add an Allow policy with only your own email address for now. The first person through Access becomes the owner, and everyone after joins as a viewer, so widen the policy (for example to your company's email domain) only after step 10.
 4. Save the application. Copy its "Application Audience (AUD) Tag".
 5. Note your team name: the `<team>` in `<team>.cloudflareaccess.com`, shown in the Zero Trust settings.
 
-The gateway does not trust Access blindly. It verifies the Access token on every `/admin` request, so a request that reaches the Worker without a valid token gets `401`. Access only lets a person authenticate: they still need an invitation in tokengate, or must be the first owner (step 10).
+The gateway does not trust Access blindly. It verifies the Access token on every `/admin` request, so a request that reaches the Worker without a valid token gets `401`. The Access policy decides who can see the admin UI: the first person to sign in becomes the owner (step 10), and everyone after that joins as a viewer. Viewers see every page, but no page shows a secret.
 
 More about the zone and Access: [operations/cloudflare-zone-settings.md](operations/cloudflare-zone-settings.md).
 
@@ -139,31 +139,32 @@ Set operator variables in the Cloudflare dashboard, not in `wrangler.jsonc`. `wr
    | `AUTH_ACCESS_TEAM_DOMAIN` | Your team name from step 8 | The gateway checks the Access token against this team's keys. |
    | `AUTH_ACCESS_AUD` | The AUD tag from step 8 | The Access token must be for this application. |
    | `ALLOWED_UPSTREAM_HOSTS` | `api.github.com` | Services can only point at these hosts ([I-SSRF-1](threat-model.md#i-ssrf-1)). Add the exact host of each service you add, for example `slack.com` for the Slack Web API and `api.openai.com` for OpenAI. `*.slack.com` does not match `slack.com`. |
-   | `BOOTSTRAP_OWNER_EMAILS` | Your email address | The first listed person to sign in becomes the owner. |
 
 3. Save and deploy the change.
 
-`BOOTSTRAP_OWNER_EMAILS` must match the email address that Access reports for you. From now on, `/admin` answers `404` on every other hostname, including workers.dev.
+Optional: if your Access policy already lets in other people, also set `BOOTSTRAP_OWNER_EMAILS` to your email address, so only you can become the first owner. It must match the email address that Access reports for you ([configuration.md](configuration.md#bootstrap_owner_emails)).
+
+From now on, `/admin` answers `404` on every other hostname, including workers.dev.
 
 If a variable is half-configured or malformed, Access login stays off. `/admin` then shows the setup page, which names the variable ([I-CFG-1](threat-model.md#i-cfg-1)). Every variable, its format and its failure behavior are in [configuration.md](configuration.md).
 
 ## 10. Sign in as the first owner
 
 1. Open `<gateway>/admin`. Access asks you to sign in.
-2. Sign in with the email address from `BOOTSTRAP_OWNER_EMAILS`.
+2. Sign in. With `BOOTSTRAP_OWNER_EMAILS` set, use a listed email address.
 3. The gateway creates your user with the role `owner` and opens the Dashboard.
 
 The bootstrap creates at most one owner, once ([I-BOOT-1](threat-model.md#i-boot-1)). The Audit log shows a `user.bootstrap` event.
 
 The gateway keeps no session of its own. "Sign out" ends the Access session for the hostname.
 
-## 11. Remove the bootstrap variable
+## 11. Open the admin UI to your team and add a second owner
 
-1. Delete `BOOTSTRAP_OWNER_EMAILS` in Workers & Pages > tokengate > Settings > Variables and Secrets.
-2. Open Settings in the admin UI. The row "First-owner bootstrap (BOOTSTRAP_OWNER_EMAILS)" shows "not set".
-3. Open Users. Under "Invite a user", enter the "Email address" of a second owner, set "Role" to "Owner: everything, plus users, settings and keys" and click "Invite". If the only owner loses access, recovery needs a manual database edit ([operations/break-glass.md](operations/break-glass.md)).
+1. If you set `BOOTSTRAP_OWNER_EMAILS`, delete it in Workers & Pages > tokengate > Settings > Variables and Secrets. Settings > System status shows "done: an owner exists".
+2. Widen the Access policy to the people who may see the admin UI.
+3. Ask a second person to open `<gateway>/admin`. They join as a viewer. Open Users, set their role to "Owner" and click "Change role". If the only owner loses access, recovery needs a manual database edit ([operations/break-glass.md](operations/break-glass.md)).
 
-The gateway sends no email. Send `<gateway>/admin` to the invited person yourself. The Access policy must let them in. They must open the admin UI with the invited email address within 7 days. The gateway links a login to an invited user only through the email address in the Access token ([I-LINK-1](threat-model.md#i-link-1)).
+To give someone a role before their first sign-in, open Users and use "Invite a user". The gateway sends no email: send `<gateway>/admin` to the person yourself. They must open it with the invited email address within 7 days. The gateway links a login to an invited user only through the email address in the Access token ([I-LINK-1](threat-model.md#i-link-1)).
 
 ## 12. Add a caller provider
 

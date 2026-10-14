@@ -135,6 +135,10 @@ async function usersPage(
         People who can sign in to this admin console. Callers (CI jobs) are not users: they are
         authorized by <a href="/admin/grants">grants</a>.
       </p>
+      <p class="muted">
+        Anyone your Cloudflare Access policy lets in joins as a viewer on their first sign-in.
+        Invite people to give them another role from the start.
+      </p>
       <Messages errors={options.errors} />
       <UsersTable
         users={users}

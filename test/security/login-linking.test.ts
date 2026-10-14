@@ -76,7 +76,7 @@ describe('I-LINK-1: email linking only for invited, unexpired users with an auth
     );
     const res = await accessLogin({ email: 'dev@acme.com' });
     expect(res.status).toBe(403);
-    expect(await res.text()).toContain('not been invited');
+    expect(await res.text()).toContain('Another user already has this email address');
     expect(
       await count(
         `SELECT count(*) AS n FROM user_identities WHERE subject = '${await subjectOf('777')}'`,
@@ -99,10 +99,12 @@ describe('I-LINK-1: email linking only for invited, unexpired users with an auth
     expect(await count("SELECT count(*) AS n FROM users WHERE status = 'invited'")).toBe(1);
   });
 
-  it('does not link an invitation for another email', async () => {
+  it('does not link an invitation for another email: that person joins as viewer', async () => {
+    await createUser({ email: 'owner@acme.com', role: 'owner' }, T0);
     await createUser({ email: 'dev@acme.com', status: 'invited', inviteExpiresAt: T0 + 1000 }, T0);
     const res = await accessLogin({ email: 'personal@example.com' });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('ok viewer');
     expect(await count("SELECT count(*) AS n FROM users WHERE status = 'invited'")).toBe(1);
   });
 

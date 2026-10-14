@@ -235,7 +235,7 @@ or user id). Retention is "Audit log retention (days)": default 365, never less 
 | Caller providers | `caller_provider.create`, `.update`, `.enable`, `.disable`, `.delete` |
 | Services | `service.create`, `.update`, `.enable`, `.disable`, `.delete`, `service.credential.set`, `service.credential.test` |
 | Grants | `grant.create`, `.duplicate`, `.update`, `.enable`, `.disable`, `.delete` |
-| Users | `user.invite`, `.resend_invite`, `.update`, `.reset_login`, `.link`, `.bootstrap` |
+| Users | `user.invite`, `.resend_invite`, `.update`, `.reset_login`, `.link`, `.bootstrap`, `.join` |
 | System | `settings.update`, `keyring.rewrap`, `config.export`, `credential.expiring` (hourly job, actor `system`) |
 
 Changes made directly in D1 (`wrangler d1 execute`) are not audited.
@@ -280,7 +280,7 @@ a sink ([I-LOG-1](threat-model.md#i-log-1)).
 | `telemetry.late_rollup_failed` | error | The consumer stored a batch but could not roll up its late hours (`hours`); retried in 30 s |
 | `cron.done` / `cron.failed` | info / error | Hourly job summary or failed steps |
 | `auth.login_failed` | warn | An admin request had no valid Cloudflare Access token (`error`: `missing`, `invalid`, `no_email` or `certs_unavailable`) |
-| `auth.login_denied` | warn | A valid Access identity was refused (`provider`, `reason`: `not_invited` or `disabled`) |
+| `auth.login_denied` | warn | A valid Access identity was refused (`provider`, `reason`: `email_taken` or `disabled`) |
 | `service.credential.test_result` | info | Result of "Test credential": `audit_id` (the `service.credential.test` audit event written before the check was sent), `service_id`, `status`, `passed`, `error` |
 
 ### Workers Logs and OpenTelemetry

@@ -33,8 +33,8 @@ Before you start:
 - You can run `pnpm wrangler` against the account (`pnpm wrangler login`), from a clone of the
   repository.
 - Access login works: `<PUBLIC_URL>/admin` asks you to sign in with Access, and after that shows
-  "This account has not been invited." (not "Set up sign-in" or "Cloudflare Access did not present a
-  valid user identity"). If it does not, fix the Access application or the `AUTH_ACCESS_*`
+  the console as a viewer or a gateway page such as "Another user already has this email address"
+  (not "Set up sign-in" or "Cloudflare Access did not present a valid user identity"). If it does not, fix the Access application or the `AUTH_ACCESS_*`
   variables first ([zone settings](cloudflare-zone-settings.md#cloudflare-access),
   [configuration](../configuration.md)).
 - The Access policy allows you, and you know the email address that Access reports for you: the
@@ -55,13 +55,15 @@ Steps:
      "SELECT id, email, role, status FROM users WHERE email = '$EMAIL'"
    ```
 
-3. If a user has this email, give that user a placeholder email, so the new user can take it. Active
-   and disabled users are never linked by email, and emails are unique. Changing the email does not
-   change role or status, so the `last_owner` trigger allows it:
+3. If a user has this email, unlink its login identities and give it a placeholder email, so the new
+   user can take the email and your Access identity. This also covers the viewer that your earlier
+   sign-ins created. Active and disabled users are never linked by email, and emails are unique.
+   Changing the email does not change role or status, so the `last_owner` trigger allows it:
 
    ```sh
    pnpm wrangler d1 execute DB --remote --command \
-     "UPDATE users SET email = 'locked-' || id || '@example.invalid', updated_at = unixepoch() * 1000 WHERE email = '$EMAIL'"
+     "DELETE FROM user_identities WHERE user_id IN (SELECT id FROM users WHERE email = '$EMAIL');
+      UPDATE users SET email = 'locked-' || id || '@example.invalid', updated_at = unixepoch() * 1000 WHERE email = '$EMAIL'"
    ```
 
 4. Generate a user id and an audit event id in the gateway's format (`<prefix>_<ULID>`,

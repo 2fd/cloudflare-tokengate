@@ -17,7 +17,8 @@ TOKENGATE_KEK=
 # Comma-separated upstream hosts services may use ("api.example.com" or "*.example.com").
 # ALLOWED_UPSTREAM_HOSTS=api.github.com,slack.com,hooks.slack.com
 
-# Comma-separated emails; the first listed person to sign in while no owner exists becomes owner.
+# Optional. Without it, the first person to sign in becomes owner; later sign-ins join as viewers.
+# With it, only a listed email can become the first owner.
 # BOOTSTRAP_OWNER_EMAILS=you@example.com
 
 # Local development login: every admin request is signed in as this email, with no check at all.

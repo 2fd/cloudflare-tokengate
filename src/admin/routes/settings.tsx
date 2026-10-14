@@ -207,10 +207,12 @@ async function settingsPage(
           ],
           [
             'First-owner bootstrap (BOOTSTRAP_OWNER_EMAILS)',
-            config.bootstrapOwnerEmails.length === 0
-              ? 'not set'
-              : activeOwners > 0
-                ? 'set: an owner exists, so it is no longer used. Remove it from the Worker variables.'
+            activeOwners > 0
+              ? config.bootstrapOwnerEmails.length === 0
+                ? 'done: an owner exists'
+                : 'done: an owner exists, so it is no longer used. Remove it from the Worker variables.'
+              : config.bootstrapOwnerEmails.length === 0
+                ? 'not set: the first person to sign in becomes owner'
                 : 'set: the first listed person to sign in becomes owner',
           ],
         ]}

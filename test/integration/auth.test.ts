@@ -88,6 +88,21 @@ describe('Cloudflare Access login', () => {
     expect(await auditActions()).toEqual(['user.bootstrap']);
   });
 
+  it('everyone after the first owner joins as a viewer the owner can promote', async () => {
+    const access = await testAccess();
+    const app = accessApp({ BOOTSTRAP_OWNER_EMAILS: '' });
+    const as = async (sub: string, email: string) =>
+      (
+        await app.request('/admin', {
+          headers: { [ACCESS_JWT_HEADER]: await access.sign({ sub, email }) },
+        })
+      ).text();
+    expect(await as('first', 'first@acme.com')).toBe('ok owner');
+    expect(await as('second', 'second@acme.com')).toBe('ok viewer');
+    expect(await as('second', 'second@acme.com')).toBe('ok viewer');
+    expect(await auditActions()).toEqual(['user.bootstrap', 'user.join']);
+  });
+
   it('keeps no session: each request is authorized by its own JWT', async () => {
     const app = accessApp();
     const owner = await createUser({ email: 'o@acme.com', role: 'owner' });
