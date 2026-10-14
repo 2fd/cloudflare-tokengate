@@ -92,8 +92,8 @@ steps.
 
 1. Generate the keyring key outside Cloudflare and store a copy in your company vault. Losing it
    loses every stored credential ([key rotation](docs/operations/key-rotation.md)).
-2. Serve the gateway on a custom domain and set `PUBLIC_URL`. With it, `/admin` and `/auth` answer
-   only on that origin ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)) ([configuration](docs/configuration.md)).
+2. Serve the gateway on a custom domain and set `PUBLIC_URL`. With it, `/admin` answers only on
+   that origin ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)) ([configuration](docs/configuration.md)).
 3. Set `ALLOWED_UPSTREAM_HOSTS` to the upstream hosts you use ([I-SSRF-1](docs/threat-model.md#i-ssrf-1))
    ([configuration](docs/configuration.md)).
 4. Set operator variables in the Cloudflare dashboard, not as `""` placeholders in `wrangler.jsonc`.
@@ -106,10 +106,11 @@ steps.
 7. Restrict who can deploy the Worker, set its secrets or write to its D1 databases in your
    Cloudflare account. These permissions bypass the admin UI and the audit log
    ([threat model](docs/threat-model.md#actors)).
-8. Put a Cloudflare WAF rate-limiting rule on `/auth/*` and `/proxy/*`. Bot Fight Mode can block CI
+8. Put a Cloudflare WAF rate-limiting rule on `/admin/*` and `/proxy/*`. Bot Fight Mode can block CI
    callers and cannot be skipped per path: disable it on the gateway zone, or use Super Bot Fight
-   Mode with a skip rule for `/proxy/`. Consider a Cloudflare Access application for
-   `/admin` and `/auth` ([zone settings](docs/operations/cloudflare-zone-settings.md)).
+   Mode with a skip rule for `/proxy/`. Protect `/admin` with a Cloudflare Access application,
+   which is the only admin login, and never set `AUTH_DEV_EMAIL` in production
+   ([zone settings](docs/operations/cloudflare-zone-settings.md)).
 9. Give every caller provider a tenant pin. The gateway requires one on shared issuers, also for
    the `generic` profile ([I-TEN-1](docs/threat-model.md#i-ten-1)) ([policies](docs/policies.md)).
 10. Write narrow grants: exact numeric IDs, `ref_protected exact true` on ref and environment

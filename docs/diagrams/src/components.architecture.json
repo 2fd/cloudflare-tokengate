@@ -73,16 +73,16 @@
     {
       "id": "admin",
       "type": "frontend",
-      "label": "Admin UI + login",
-      "sublabel": "/admin, /auth",
+      "label": "Admin UI",
+      "sublabel": "/admin",
       "pos": [320, 540],
       "size": [170, 64]
     },
     {
       "id": "login",
       "type": "security",
-      "label": "Login provider",
-      "sublabel": "GitHub, OIDC, Access",
+      "label": "Cloudflare Access",
+      "sublabel": "admin sign-in",
       "pos": [880, 540],
       "size": [170, 64]
     }
@@ -139,7 +139,7 @@
       "id": "browser-admin",
       "from": "browser",
       "to": "admin",
-      "label": "session"
+      "label": "Access JWT"
     },
     {
       "id": "admin-db",
@@ -153,7 +153,7 @@
       "id": "admin-login",
       "from": "admin",
       "to": "login",
-      "label": "OAuth / OIDC / Access",
+      "label": "certs, cached",
       "variant": "security"
     }
   ],
@@ -171,7 +171,7 @@
       "dot": "emerald",
       "title": "Storage",
       "items": [
-        "DB holds config, users, sessions, audit log",
+        "DB holds config, users, identities, audit log",
         "TELEMETRY_DB holds request records only",
         "Optional: queue batching, R2 archive"
       ]
@@ -181,6 +181,7 @@
       "title": "Trust",
       "items": [
         "Caller tokens verified against issuer JWKS",
+        "Admin requests verified by their Access JWT",
         "Credentials sealed with the keyring secret"
       ]
     }

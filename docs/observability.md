@@ -222,7 +222,8 @@ no-store` (`src/health.ts`).
 ## Audit log
 
 Every admin change writes exactly one row to `audit_log` (`DB`) in the same D1 batch as the change
-([I-AUDIT-1](threat-model.md#i-audit-1)). Sign-ins and the hourly job also write rows. Secrets are
+([I-AUDIT-1](threat-model.md#i-audit-1)). A first sign-in that links a login or creates the first owner, and
+the hourly job, also write rows. Other admin requests write none: the gateway keeps no sessions. Secrets are
 replaced with `[redacted]` in diffs ([I-CRED-1](threat-model.md#i-cred-1)). Saving a form without
 changes writes nothing.
 
@@ -234,7 +235,7 @@ or user id). Retention is "Audit log retention (days)": default 365, never less 
 | Caller providers | `caller_provider.create`, `.update`, `.enable`, `.disable`, `.delete` |
 | Services | `service.create`, `.update`, `.enable`, `.disable`, `.delete`, `service.credential.set`, `service.credential.test` |
 | Grants | `grant.create`, `.duplicate`, `.update`, `.enable`, `.disable`, `.delete` |
-| Users | `user.invite`, `.resend_invite`, `.update`, `.reset_login`, `.revoke_sessions`, `.link`, `.login`, `.bootstrap` |
+| Users | `user.invite`, `.resend_invite`, `.update`, `.reset_login`, `.link`, `.bootstrap` |
 | System | `settings.update`, `keyring.rewrap`, `config.export`, `credential.expiring` (hourly job, actor `system`) |
 
 Changes made directly in D1 (`wrangler d1 execute`) are not audited.
@@ -278,7 +279,8 @@ a sink ([I-LOG-1](threat-model.md#i-log-1)).
 | `telemetry.queue_batch_failed` | error | The consumer could not write a batch; retried in 30 s |
 | `telemetry.late_rollup_failed` | error | The consumer stored a batch but could not roll up its late hours (`hours`); retried in 30 s |
 | `cron.done` / `cron.failed` | info / error | Hourly job summary or failed steps |
-| `auth.login_failed` / `auth.login_denied` | warn | Login provider error / login refused (`not_invited`, `disabled`) |
+| `auth.login_failed` | warn | An admin request had no valid Cloudflare Access token (`error`: `missing`, `invalid`, `no_email` or `certs_unavailable`) |
+| `auth.login_denied` | warn | A valid Access identity was refused (`provider`, `reason`: `not_invited` or `disabled`) |
 | `service.credential.test_result` | info | Result of "Test credential": `audit_id` (the `service.credential.test` audit event written before the check was sent), `service_id`, `status`, `passed`, `error` |
 
 ### Workers Logs and OpenTelemetry

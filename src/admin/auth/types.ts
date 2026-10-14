@@ -1,15 +1,18 @@
-// The authenticated admin for the current request, set by the admin middleware after the session
+// The authenticated admin for the current request, set by the admin middleware after the identity
 // (I-SESS-1), CSRF (I-CSRF-1) and RBAC (I-RBAC-1) checks pass.
 import type { Actor, User } from '../../db/types';
 import type { Permission } from './rbac';
+import type { LoginProviderId } from './resolve-login';
 
 /**
  * What the request was authorized with. Audited writes re-check it inside their D1 batch, so a
- * request that passed the middleware cannot commit after its session is revoked or its user is
- * disabled or loses the permission (see commitAudited in admin/ops/shared.ts).
+ * request that passed the middleware cannot commit after its user is disabled, loses the login
+ * identity it signed in with, or loses the permission (see commitAudited in admin/ops/shared.ts).
  */
 export interface ActorAuthority {
-  sessionIdHash: string;
+  userId: string;
+  loginProvider: LoginProviderId;
+  subject: string;
   permission: Permission;
 }
 
@@ -21,9 +24,8 @@ export interface AdminActor extends Actor {
 
 export interface AdminViewer {
   user: User;
-  sessionIdHash: string;
   csrfToken: string;
-  loginProvider: string;
+  loginProvider: LoginProviderId;
   /** Pre-filled actor for audit rows written during this request. */
   actor: AdminActor;
 }

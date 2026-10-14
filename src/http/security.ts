@@ -1,6 +1,6 @@
 // Browser hardening for every response outside /proxy (docs/threat-model.md): script-free CSP, nosniff,
-// no-referrer, HSTS on https, no-store on /admin and /auth. Host pinning (I-DEPLOY-1): with
-// PUBLIC_URL set, /admin and /auth answer 404 on any other origin. /proxy sets its own headers.
+// no-referrer, HSTS on https, no-store on /admin. Host pinning (I-DEPLOY-1): with PUBLIC_URL set,
+// /admin answers 404 on any other origin. /proxy sets its own headers.
 import type { App } from '../app';
 import { adminOriginAllowed, parseConfig } from '../config';
 
@@ -18,7 +18,7 @@ export function applySecurityMiddleware(app: App): void {
       await next();
       return;
     }
-    const pinned = isUnder(path, '/admin') || isUnder(path, '/auth');
+    const pinned = isUnder(path, '/admin');
     if (pinned && !adminOriginAllowed(parseConfig(c.get('deps').env), url)) {
       c.res = c.text('Not Found', 404);
     } else {

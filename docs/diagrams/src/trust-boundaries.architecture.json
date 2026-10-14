@@ -18,7 +18,7 @@
       "id": "browser",
       "type": "frontend",
       "label": "Admin browser",
-      "sublabel": "session cookie",
+      "sublabel": "via Cloudflare Access",
       "pos": [40, 320],
       "size": [170, 64]
     },
@@ -42,7 +42,7 @@
       "id": "idp",
       "type": "security",
       "label": "IdPs and JWKS",
-      "sublabel": "caller + login",
+      "sublabel": "caller + Access certs",
       "pos": [920, 320],
       "size": [170, 64]
     },
@@ -81,7 +81,7 @@
       "id": "b3",
       "from": "browser",
       "to": "worker",
-      "label": "3 session + CSRF",
+      "label": "3 Access JWT + CSRF",
       "variant": "security"
     },
     {
@@ -97,7 +97,7 @@
       "id": "b5",
       "from": "worker",
       "to": "idp",
-      "label": "5 JWKS, OAuth",
+      "label": "5 JWKS, certs",
       "variant": "security"
     }
   ],
@@ -107,7 +107,7 @@
       "title": "Crossing in",
       "items": [
         "1: token verified before any claim is trusted",
-        "3: no client JS, CSRF token, RBAC per route"
+        "3: JWT on every request, CSRF, RBAC"
       ]
     },
     {

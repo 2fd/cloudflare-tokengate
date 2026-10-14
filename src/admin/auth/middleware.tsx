@@ -1,25 +1,48 @@
-// Gate for every /admin route, in order: live session (I-SESS-1) → Access JWT re-check for Access
-// sessions → route listed in the RBAC table (I-RBAC-1) → body cap and CSRF for unsafe methods or
+// Gate for every /admin route, in order: verified identity from the Cloudflare Access JWT, on every
+// request (I-SESS-1) → linked, active user (or invite link / first-owner bootstrap, I-LINK-1,
+// I-BOOT-1) → route listed in the RBAC table (I-RBAC-1) → body cap and CSRF for unsafe methods or
 // mutating routes (I-CSRF-1) → role permission. Only then is `viewer` set and the handler run. The
-// actor carries the session and permission so audited writes re-check both at commit (I-SESS-1).
+// actor carries the identity and permission so audited writes re-check both at commit (I-SESS-1).
+// There are no gateway sessions: Access owns sign-in, sign-out and session lifetime.
 import type { MiddlewareHandler } from 'hono';
 import { matchedRoutes } from 'hono/route';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { App, AppContext } from '../../app';
-import { type Config, canonicalOrigin, parseConfig } from '../../config';
-import type { Session, User } from '../../db/types';
+import { canonicalOrigin, parseConfig } from '../../config';
+import type { User } from '../../db/types';
+import { recordSeenStatements } from '../../db/users';
+import type { Deps } from '../../deps';
 import { ADMIN_FORM_MAX_BYTES, type AdminContext, parsedForm } from '../render';
 import { Layout } from '../views/layout';
-import { ACCESS_JWT_HEADER, verifyAccessAssertion } from './access';
-import { CSRF_FIELD, csrfCheck, isUnsafeMethod } from './csrf';
+import { CSRF_FIELD, csrfCheck, ensureCsrfCookie, isUnsafeMethod, readCsrfCookie } from './csrf';
+import { type IdentityError, requestIdentity, requestMeta, signOutUrl } from './identity';
 import { can, routePermission } from './rbac';
-import {
-  clearSessionCookie,
-  loadSession,
-  readSessionCookie,
-  requestMeta,
-  revokeSession,
-  touchSession,
-} from './session';
+import { type LoginIdentity, type LoginProviderId, resolveLogin } from './resolve-login';
+import { SetupInstructions } from './setup';
+
+/** users.last_login_at / user_identities.last_used_at are written at most this often per user. */
+export const SEEN_INTERVAL_MS = 5 * 60 * 1000;
+
+/** User-facing messages. Keys only ever come from this module. */
+const MESSAGES = {
+  access_invalid:
+    'Cloudflare Access did not present a valid user identity for this request. Check that the Access application covers /admin on this hostname, then reload.',
+  certs_unavailable: 'Cloudflare Access could not be reached to check your identity. Try again.',
+  not_invited:
+    'This account has not been invited. Ask an owner to invite your email address, then reload this page.',
+  disabled: 'This account is disabled or must be re-invited by an owner.',
+} as const;
+type MessageKey = keyof typeof MESSAGES;
+
+const IDENTITY_FAILURE: Record<
+  Exclude<IdentityError, 'not_configured'>,
+  { key: MessageKey; status: ContentfulStatusCode }
+> = {
+  missing: { key: 'access_invalid', status: 401 },
+  invalid: { key: 'access_invalid', status: 401 },
+  no_email: { key: 'access_invalid', status: 401 },
+  certs_unavailable: { key: 'certs_unavailable', status: 503 },
+};
 
 export function registerAdminMiddleware(app: App): void {
   // `/admin/*` also matches `/admin` itself.
@@ -30,23 +53,40 @@ export const adminMiddleware: MiddlewareHandler<AppContext> = async (c, next) =>
   const deps = c.get('deps');
   const config = parseConfig(deps.env);
 
-  const cookie = readSessionCookie(c);
-  const loaded = cookie === null ? null : await loadSession(deps, cookie);
-  if (!loaded) {
-    if (cookie !== null) clearSessionCookie(c);
-    return unauthenticated(c);
+  const verified = await requestIdentity(c.req.raw, config, deps);
+  if (!verified.ok) {
+    if (verified.error === 'not_configured') return setupPage(c);
+    console.warn(JSON.stringify({ type: 'auth.login_failed', error: verified.error }));
+    const failure = IDENTITY_FAILURE[verified.error];
+    return errorPage(c, failure.key, failure.status);
   }
-  const { session, user } = loaded;
-
-  if (session.login_provider === 'access' && !(await accessStillValid(c, config, session))) {
-    await revokeSession(deps, session.id_hash);
-    clearSessionCookie(c);
-    return unauthenticated(c);
+  const identity = verified.identity;
+  const meta = requestMeta(c.req.raw.headers);
+  const resolution = await resolveLogin(deps, { ...identity, meta });
+  if (!resolution.ok) {
+    console.warn(
+      JSON.stringify({
+        type: 'auth.login_denied',
+        provider: identity.loginProvider,
+        reason: resolution.reason,
+      }),
+    );
+    return errorPage(c, resolution.reason, 403);
   }
+  const { user } = resolution;
+  const cookieToken = readCsrfCookie(c);
+  const csrfToken = ensureCsrfCookie(c, deps);
 
   const route = endpointRoute(c);
   const rule = route ? routePermission(route.method, route.path) : null;
-  if (!rule) return forbidden(c, loaded, 'This page does not exist or is not available.');
+  if (!rule) {
+    return forbidden(
+      c,
+      user,
+      identity.loginProvider,
+      'This page does not exist or is not available.',
+    );
+  }
 
   if (isUnsafeMethod(c.req.method) || rule.mutates) {
     // Bounded read: any role's oversized body is refused before it is buffered in full.
@@ -58,38 +98,56 @@ export const adminMiddleware: MiddlewareHandler<AppContext> = async (c, next) =>
       headers: c.req.raw.headers,
       canonicalOrigin: canonicalOrigin(config, new URL(c.req.url)),
       submittedToken: form.fields[CSRF_FIELD],
-      sessionToken: session.csrf_token,
+      cookieToken,
     });
     if (!passed) {
       return forbidden(
         c,
-        loaded,
+        user,
+        identity.loginProvider,
         'The form was not accepted (it expired or came from another site). Reload the page and try again.',
       );
     }
   }
 
   if (!can(user.role, rule.permission)) {
-    return forbidden(c, loaded, 'Your role does not allow this action.');
+    return forbidden(c, user, identity.loginProvider, 'Your role does not allow this action.');
   }
 
-  await touchSession(deps, session);
-  const meta = requestMeta(c.req.raw.headers);
+  await recordSeen(deps, user, identity);
   c.set('viewer', {
     user,
-    sessionIdHash: session.id_hash,
-    csrfToken: session.csrf_token,
-    loginProvider: session.login_provider,
+    csrfToken,
+    loginProvider: identity.loginProvider,
     actor: {
       type: 'user',
       id: user.id,
       email: user.email,
       ...meta,
-      authority: { sessionIdHash: session.id_hash, permission: rule.permission },
+      authority: {
+        userId: user.id,
+        loginProvider: identity.loginProvider,
+        subject: identity.subject,
+        permission: rule.permission,
+      },
     },
   });
   await next();
 };
+
+/** Updates last-seen times at most once per SEEN_INTERVAL_MS, so reads rarely write. */
+async function recordSeen(deps: Deps, user: User, identity: LoginIdentity): Promise<void> {
+  const now = deps.now();
+  if (user.last_login_at !== null && now - user.last_login_at < SEEN_INTERVAL_MS) return;
+  await deps.env.DB.batch(
+    recordSeenStatements(deps.env.DB, {
+      userId: user.id,
+      loginProvider: identity.loginProvider,
+      subject: identity.subject,
+      now,
+    }),
+  );
+}
 
 /**
  * The page handler Hono will run: the first matched route registered with a concrete method.
@@ -103,40 +161,40 @@ function endpointRoute(c: AdminContext): { method: string; path: string } | null
   return route ? { method: route.method, path: route.path } : null;
 }
 
-/** Access sessions stay valid only while the edge keeps presenting a JWT for the same subject. */
-async function accessStillValid(
-  c: AdminContext,
-  config: Config,
-  session: Session,
-): Promise<boolean> {
-  const access = config.login.access;
-  if (!access) return false;
-  const result = await verifyAccessAssertion(
-    c.req.header(ACCESS_JWT_HEADER),
-    access,
-    c.get('deps'),
+function errorPage(c: AdminContext, key: MessageKey, status: ContentfulStatusCode) {
+  return c.html(
+    <Layout title="Sign-in problem" banners={[{ level: 'error', text: MESSAGES[key] }]}>
+      <p>
+        <a href="/admin">Reload</a>
+      </p>
+    </Layout>,
+    status,
   );
-  return result.ok && result.identity.subject === session.identity_subject;
 }
 
-function unauthenticated(c: AdminContext): Response {
-  if (c.req.method === 'GET' || c.req.method === 'HEAD') {
-    const url = new URL(c.req.url);
-    const target = new URLSearchParams({ return_to: url.pathname + url.search });
-    return c.redirect(`/auth/login?${target}`, 302);
-  }
-  return c.text('Sign-in required.', 401);
+/** Shown when no login is configured. Lists the variables to set, never their values. */
+function setupPage(c: AdminContext) {
+  const config = parseConfig(c.get('deps').env);
+  const loginErrors = config.errors.filter((error) => error.feature.startsWith('login.'));
+  return c.html(
+    <Layout
+      title="Set up sign-in"
+      banners={loginErrors.map((error) => ({
+        level: 'error' as const,
+        text: `${error.variable}: ${error.message}`,
+      }))}
+    >
+      <SetupInstructions origin={canonicalOrigin(config, new URL(c.req.url))} />
+    </Layout>,
+    503,
+  );
 }
 
-function forbidden(
-  c: AdminContext,
-  { session, user }: { session: Session; user: User },
-  message: string,
-) {
+function forbidden(c: AdminContext, user: User, loginProvider: LoginProviderId, message: string) {
   return c.html(
     <Layout
       title="Forbidden"
-      viewer={{ email: user.email, role: user.role, csrfToken: session.csrf_token }}
+      viewer={{ email: user.email, role: user.role, signOutUrl: signOutUrl(loginProvider) }}
     >
       <p class="banner error" role="alert">
         {message}

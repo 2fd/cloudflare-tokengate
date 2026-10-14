@@ -315,9 +315,9 @@ rect.c-bg-rect { fill: var(--bg); }
         <!-- Connection paths (before components for correct z-order) -->
         <path data-edge-from="caller" data-edge-to="worker" data-edge-label="1 caller token" data-edge-key="0" data-edge-id="b1" data-composition-points="210,112;345,112;345,225;480,225" d="M 210 112 L 337 112 Q 345 112 345 120 L 345 217 Q 345 225 353 225 L 480 225" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="worker" data-edge-to="upstream" data-edge-label="2 credential" data-edge-key="1" data-edge-id="b2" data-composition-points="660,225;790,225;790,112;920,112" d="M 660 225 L 782 225 Q 790 225 790 217 L 790 120 Q 790 112 798 112 L 920 112" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="browser" data-edge-to="worker" data-edge-label="3 session + CSRF" data-edge-key="2" data-edge-id="b3" data-composition-points="210,352;345,352;345,239;480,239" d="M 210 352 L 337 352 Q 345 352 345 344 L 345 247 Q 345 239 353 239 L 480 239" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="browser" data-edge-to="worker" data-edge-label="3 Access JWT + CSRF" data-edge-key="2" data-edge-id="b3" data-composition-points="210,352;345,352;345,239;480,239" d="M 210 352 L 337 352 Q 345 352 345 344 L 345 247 Q 345 239 353 239 L 480 239" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
         <path data-edge-from="worker" data-edge-to="d1" data-edge-label="4 binding" data-edge-key="3" data-edge-id="b4" data-composition-points="570,264;570,420" d="M 570 264 L 570 420" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="worker" data-edge-to="idp" data-edge-label="5 JWKS, OAuth" data-edge-key="4" data-edge-id="b5" data-composition-points="660,239;790,239;790,352;920,352" d="M 660 239 L 782 239 Q 790 239 790 247 L 790 344 Q 790 352 798 352 L 920 352" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="worker" data-edge-to="idp" data-edge-label="5 JWKS, certs" data-edge-key="4" data-edge-id="b5" data-composition-points="660,239;790,239;790,352;920,352" d="M 660 239 L 782 239 Q 790 239 790 247 L 790 344 Q 790 352 798 352 L 920 352" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
 
         <!-- Components -->
         <g id="node-caller" data-node-id="caller" data-node-label="CI job" tabindex="0" role="button" aria-label="Focus CI job, untrusted input, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="untrusted input" data-node-context="Architecture component">
@@ -332,8 +332,8 @@ rect.c-bg-rect { fill: var(--bg); }
         <text x="125" y="126" class="t-muted" font-size="9" text-anchor="middle">untrusted input</text>
         </g>
 
-        <g id="node-browser" data-node-id="browser" data-node-label="Admin browser" tabindex="0" role="button" aria-label="Focus Admin browser, session cookie, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="session cookie" data-node-context="Architecture component">
-          <title>Admin browser · session cookie · Architecture component</title>
+        <g id="node-browser" data-node-id="browser" data-node-label="Admin browser" tabindex="0" role="button" aria-label="Focus Admin browser, via Cloudflare Access, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="via Cloudflare Access" data-node-context="Architecture component">
+          <title>Admin browser · via Cloudflare Access · Architecture component</title>
           <rect x="40" y="320" width="170" height="64" rx="6" class="c-mask"/>
           <rect x="40" y="320" width="170" height="64" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(46 326) scale(0.6875)">
@@ -343,7 +343,7 @@ rect.c-bg-rect { fill: var(--bg); }
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
           <text data-node-label="" x="125" y="350" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Admin browser</text>
-        <text x="125" y="366" class="t-muted" font-size="9" text-anchor="middle">session cookie</text>
+        <text x="125" y="366" class="t-muted" font-size="9" text-anchor="middle">via Cloudflare Access</text>
         </g>
 
         <g id="node-worker" data-node-id="worker" data-node-label="tokengate Worker" tabindex="0" role="button" aria-label="Focus tokengate Worker, proxy + admin, Your Cloudflare account" aria-pressed="false" data-node-kind="backend" data-node-sublabel="proxy + admin" data-node-context="Your Cloudflare account">
@@ -369,8 +369,8 @@ rect.c-bg-rect { fill: var(--bg); }
         <text x="1005" y="126" class="t-muted" font-size="9" text-anchor="middle">gets the credential</text>
         </g>
 
-        <g id="node-idp" data-node-id="idp" data-node-label="IdPs and JWKS" tabindex="0" role="button" aria-label="Focus IdPs and JWKS, caller + login, Architecture component" aria-pressed="false" data-node-kind="security" data-node-sublabel="caller + login" data-node-context="Architecture component">
-          <title>IdPs and JWKS · caller + login · Architecture component</title>
+        <g id="node-idp" data-node-id="idp" data-node-label="IdPs and JWKS" tabindex="0" role="button" aria-label="Focus IdPs and JWKS, caller + Access certs, Architecture component" aria-pressed="false" data-node-kind="security" data-node-sublabel="caller + Access certs" data-node-context="Architecture component">
+          <title>IdPs and JWKS · caller + Access certs · Architecture component</title>
           <rect x="920" y="320" width="170" height="64" rx="6" class="c-mask"/>
           <rect x="920" y="320" width="170" height="64" rx="6" class="c-security" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(926 326) scale(0.6875)">
@@ -378,7 +378,7 @@ rect.c-bg-rect { fill: var(--bg); }
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
           <text data-node-label="" x="1005" y="350" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">IdPs and JWKS</text>
-        <text x="1005" y="366" class="t-muted" font-size="9" text-anchor="middle">caller + login</text>
+        <text x="1005" y="366" class="t-muted" font-size="9" text-anchor="middle">caller + Access certs</text>
         </g>
 
         <g id="node-d1" data-node-id="d1" data-node-label="D1" tabindex="0" role="button" aria-label="Focus D1, DB + TELEMETRY_DB, Your Cloudflare account" aria-pressed="false" data-node-kind="database" data-node-sublabel="DB + TELEMETRY_DB" data-node-context="Your Cloudflare account">
@@ -402,17 +402,17 @@ rect.c-bg-rect { fill: var(--bg); }
           <rect x="756.2" y="148.5" width="67.6" height="14" rx="3" class="c-mask"/>
           <text x="790" y="158.5" class="t-backend" font-size="8" text-anchor="middle">2 credential</text>
         </g>
-        <g data-edge-from="browser" data-edge-to="worker" data-edge-label="3 session + CSRF" data-edge-key="2" data-edge-id="b3">
-          <rect x="301.6" y="275.5" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="345" y="285.5" class="t-security" font-size="8" text-anchor="middle">3 session + CSRF</text>
+        <g data-edge-from="browser" data-edge-to="worker" data-edge-label="3 Access JWT + CSRF" data-edge-key="2" data-edge-id="b3">
+          <rect x="294.4" y="275.5" width="101.2" height="14" rx="3" class="c-mask"/>
+          <text x="345" y="285.5" class="t-security" font-size="8" text-anchor="middle">3 Access JWT + CSRF</text>
         </g>
         <g data-edge-from="worker" data-edge-to="d1" data-edge-label="4 binding" data-edge-key="3" data-edge-id="b4">
           <rect x="543.4" y="332" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
           <text x="570" y="342" class="t-muted" font-size="8" text-anchor="middle">4 binding</text>
         </g>
-        <g data-edge-from="worker" data-edge-to="idp" data-edge-label="5 JWKS, OAuth" data-edge-key="4" data-edge-id="b5">
+        <g data-edge-from="worker" data-edge-to="idp" data-edge-label="5 JWKS, certs" data-edge-key="4" data-edge-id="b5">
           <rect x="753.8" y="275.5" width="72.4" height="14" rx="3" class="c-mask"/>
-          <text x="790" y="285.5" class="t-security" font-size="8" text-anchor="middle">5 JWKS, OAuth</text>
+          <text x="790" y="285.5" class="t-security" font-size="8" text-anchor="middle">5 JWKS, certs</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->

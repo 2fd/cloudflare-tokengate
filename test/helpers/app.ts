@@ -4,9 +4,13 @@ import { env } from 'cloudflare:workers';
 import { createApp } from '../../src/app';
 import type { Deps } from '../../src/deps';
 import type { AppEnv } from '../../src/env';
+import { TEST_ACCESS_TEAM, withTestAccessCerts } from './login-providers';
 
 export interface TestAppOptions {
-  /** Outbound fetch used for upstreams, JWKS and login providers. Defaults to a fetch that fails. */
+  /**
+   * Outbound fetch used for upstreams and JWKS. Defaults to a fetch that fails. The test Access
+   * team's certs are always served (TEST_ACCESS_ENV).
+   */
   fetch?: typeof fetch;
   /** Fixed or advancing clock. Defaults to the real clock. */
   now?: () => number;
@@ -24,18 +28,26 @@ export interface TestApp {
 
 export const TEST_ORIGIN = 'https://gw.test';
 
+/** Admin login every test app gets unless `env` overrides it: the shared fake Access team. */
+export const TEST_ACCESS_ENV = {
+  PUBLIC_URL: TEST_ORIGIN,
+  AUTH_ACCESS_TEAM_DOMAIN: TEST_ACCESS_TEAM,
+  AUTH_ACCESS_AUD: 'a'.repeat(64),
+} as const satisfies Partial<AppEnv>;
+
 export function createTestApp(options: TestAppOptions = {}): TestApp {
   const pending: Promise<unknown>[] = [];
-  const testEnv = { ...env, ...options.env } as unknown as Env;
+  const testEnv = { ...env, ...TEST_ACCESS_ENV, ...options.env } as unknown as Env;
   const deps: Deps = {
     env: testEnv as unknown as AppEnv,
-    fetch:
+    fetch: withTestAccessCerts(
       options.fetch ??
-      (async (input) => {
-        throw new Error(
-          `unexpected outbound fetch in test: ${String(input instanceof Request ? input.url : input)}`,
-        );
-      }),
+        (async (input) => {
+          throw new Error(
+            `unexpected outbound fetch in test: ${String(input instanceof Request ? input.url : input)}`,
+          );
+        }),
+    ),
     now: options.now ?? (() => Date.now()),
     random: (length) => crypto.getRandomValues(new Uint8Array(length)),
     waitUntil: (promise) => {

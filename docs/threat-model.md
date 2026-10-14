@@ -17,8 +17,12 @@ module that enforces it and the tests whose `describe()` name starts with it.
   read the keyring and therefore every credential. This model does not defend against them.
 - Upstream APIs are trusted to enforce their own authorization for the credential they receive.
   The gateway only limits which callers may send which requests.
-- Caller provider issuers (GitHub, GitLab, other OIDC issuers) and login providers are trusted to sign only
-  true claims.
+- Caller provider issuers (GitHub, GitLab, other OIDC issuers) are trusted to sign only true claims.
+- Cloudflare Access is the only production admin login. Access, and the identity provider set up for
+  it in Zero Trust, are trusted to authenticate users and to put a true `email` in the JWT. The
+  Access application must cover `/admin`. A gap fails closed: the Worker verifies the Access JWT
+  itself on every admin request (I-SESS-1), so a request that bypasses Access has no valid JWT and
+  gets 401.
 
 ## Assets
 
@@ -26,7 +30,7 @@ module that enforces it and the tests whose `describe()` name starts with it.
 |---|---|---|
 | Upstream credentials | `services.credential_sealed` in `DB`, sealed with the keyring | Direct access to upstream APIs; the main asset. |
 | Keyring (`TOKENGATE_KEK` or `TOKENGATE_KEYRING`) | Worker secret; your vault | Opens every credential. Losing it loses every credential. |
-| Admin sessions | `__Host-tokengate_session` cookie; SHA-256 of the id in `sessions` | A session acts with the user's role. |
+| Admin Access JWTs | `Cf-Access-Jwt-Assertion` header and the `CF_Authorization` cookie, set by Access | A valid JWT acts with its user's role until it expires. The gateway stores no session of its own. |
 | Policy (caller providers, services, grants, users) | `DB` | Decides who can use which credential. |
 | Request records | `request_log` in `TELEMETRY_DB`; optional R2 archive | Allowlisted claims (repository, actor, ref, run), client IP, user agent. |
 | Audit events | `audit_log` in `DB`; `audit.event` log lines | Evidence of every admin change. |
@@ -36,20 +40,21 @@ module that enforces it and the tests whose `describe()` name starts with it.
 
 | Actor | Can do | Main controls |
 |---|---|---|
-| Anyone on the internet | Mint a valid GitHub Actions or GitLab.com OIDC token for any audience from their own repository, because these issuers are shared. Send any request to `/proxy/*`, `/auth/*`, `/healthz`, `/readyz`. | Audience check (I-JWT-1), tenant pin required on shared issuers (I-TEN-1), deny by default (I-AUTHZ-1). |
+| Anyone on the internet | Mint a valid GitHub Actions or GitLab.com OIDC token for any audience from their own repository, because these issuers are shared. Send any request to `/proxy/*`, `/admin/*`, `/healthz`, `/readyz`. | Audience check (I-JWT-1), tenant pin required on shared issuers (I-TEN-1), deny by default (I-AUTHZ-1). `/admin/*` needs a valid Access JWT (I-SESS-1). |
 | CI workload in your tenant | Present a token with claims that describe its repository, ref, event and workflow. Includes untrusted pull request code. | Grants pin immutable IDs or a workflow path (I-AUTHZ-2; workflow pins follow repository names, see [Callers and tokens](#callers-and-tokens)); untrusted events need an exact opt-in (I-AUTHZ-3); conditions fail closed (I-AUTHZ-4); rules limit method and path (I-AUTHZ-1, I-PATH-1). |
 | Org member who can create repositories | Create a repository inside the tenant. Its tokens pass the tenant pin. | Anchor rules: a grant pins an exact `repository_id` or `job_workflow_ref` (GitLab: `project_id` or `ci_config_ref_uri`) (I-AUTHZ-2). A new repository matches no repository-pinned grant. A `job_workflow_ref` or `ci_config_ref_uri` grant admits any repository or project that runs the pinned workflow or configuration, and a renamed, transferred or deleted pinned repository can be recreated: add `repository_id` / `project_id` and hardcode the gateway URL in the pinned file ([Callers and tokens](#callers-and-tokens)). |
 | Repository writer or admin | Push branches and tags, start `workflow_dispatch`, create environments, change branch protection, rulesets and environment rules. | Conditions on `ref`, `environment` and `ref_protected` are only as strong as the repository settings. Save-time warnings flag broad globs and missing `ref_protected exact true` ([policies](policies.md)). |
 | Admin user (`admin` role) | Create and change caller providers, services and grants; enter and test credentials; export configuration. | Can USE a credential through a grant but cannot EXTRACT it from the gateway (I-CRED-1, I-CRED-2). Every change is audited (I-AUDIT-1). |
-| Owner user (`owner` role) | Everything an admin can do, plus users, settings, keyring re-encryption and session revocation. | RBAC table (I-RBAC-1); last-owner trigger (I-OWNER-1). |
+| Owner user (`owner` role) | Everything an admin can do, plus users, settings and keyring re-encryption. | RBAC table (I-RBAC-1); last-owner trigger (I-OWNER-1). |
 | Viewer user (`viewer` role) | Read every admin page except the create forms, including request records. | No page shows secret material (I-RBAC-1, I-CRED-1). |
-| Holder of D1 read access or a D1 backup | Read sealed credentials, request records, emails, audit events. | Credentials are sealed; the keyring is not in D1 (I-CRED-2). Session ids are stored hashed (I-SESS-1). |
+| Holder of D1 read access or a D1 backup | Read sealed credentials, request records, emails, audit events. | Credentials are sealed; the keyring is not in D1 (I-CRED-2). No session or bearer token is stored (I-SESS-1). |
 | Holder of D1 write access | Insert or change any row. | Cannot open a credential (I-CRED-2). Can change a service's destination: the stored credential then fails closed, and the next credential entry is blocked until the admin types the destination host. A service the writer strips of its credential or inserts has no such check ([known limitations](#admin-side)). Can create a caller provider and grant and so USE Credentials, and can make any user an owner, without an audit event. Treat D1 write as admin-equivalent ([break-glass](operations/break-glass.md) relies on it). |
+| Zero Trust administrator | Change the Access application, its policies and the identity provider, so decide who gets an Access JWT. Revoke Access sessions. | Access alone grants nothing: the user must also be invited or linked in the gateway, with a role (I-LINK-1, I-RBAC-1). Treat Zero Trust admin as able to impersonate any user whose email it controls in the identity provider. |
 | Worker deployer, keyring holder | Deploy code, which can read every secret. Set secrets. Hold a copy of the keyring. | Out of scope: full trust. |
 
 ## Trust boundaries
 
-![Trust boundaries: (1) CI job to the tokengate Worker with a caller token, (2) Worker to the upstream API with the credential, (3) admin browser to the Worker with session and CSRF token, (4) Worker to D1 through its binding, inside your Cloudflare account, (5) Worker to identity providers and JWKS.](diagrams/trust-boundaries.svg)
+![Trust boundaries: (1) CI job to the tokengate Worker with a caller token, (2) Worker to the upstream API with the credential, (3) admin browser to the Worker with the Access JWT and CSRF token, (4) Worker to D1 through its binding, inside your Cloudflare account, (5) Worker to identity providers and JWKS.](diagrams/trust-boundaries.svg)
 
 <sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
@@ -61,17 +66,14 @@ module that enforces it and the tests whose `describe()` name starts with it.
    base URL (I-PATH-1, I-SSRF-1). Redirects are never followed (I-REDIR-1). Response headers are
    filtered (I-RESP-1). Response bodies pass through untouched (see
    [Known limitations](#known-limitations)).
-3. **Browser → admin.** Server-rendered HTML without scripts. Sessions (I-SESS-1), CSRF
-   (I-CSRF-1), OAuth state (I-OAUTH-1), RBAC (I-RBAC-1), host pinning (I-DEPLOY-1).
+3. **Browser → admin.** Server-rendered HTML without scripts. Access JWT on every request
+   (I-SESS-1), CSRF (I-CSRF-1), RBAC (I-RBAC-1), host pinning (I-DEPLOY-1).
 4. **Worker → D1.** D1 is the source of truth and is read on every request; there is no policy
    cache. Integrity rules that matter are enforced in SQL: last owner (I-OWNER-1), bootstrap
    (I-BOOT-1), invite linking (I-LINK-1), audit atomicity (I-AUDIT-1).
-5. **Worker → IdP and JWKS.** JWKS fetches are gated per URI (I-JWT-2). GitHub and OIDC admin
-   logins use the authorization code flow with PKCE. Cloudflare Access logins verify the
-   `Cf-Access-Jwt-Assertion` header against the team keys. The OIDC ID token comes straight
-   from the discovered token endpoint over TLS, which OpenID Connect Core
-   [§3.1.3.7](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation) accepts in
-   place of a signature check.
+5. **Worker → IdP and JWKS.** JWKS fetches are gated per URI (I-JWT-2). Admin requests verify the
+   `Cf-Access-Jwt-Assertion` header against the team keys at
+   `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs` (RS256, exact issuer and AUD).
 
 ## Invariants
 
@@ -98,18 +100,23 @@ whose `describe()` names the ID. Paths are relative to the repository root.
 | <a id="i-ssrf-1"></a>I-SSRF-1 | Base URLs are https, have no credentials, query or fragment, are not IP literals, `localhost`, `*.workers.dev` or the gateway's own host, and match `ALLOWED_UPSTREAM_HOSTS` when set. Checked at save time and on every proxied request. `global_fetch_strictly_public` is on. | `src/policy/validate.ts` (`validateBaseUrl`), `src/proxy/handler.ts` (`storedBaseUrlValid`), `src/config.ts` (`upstreamHostAllowed`), `wrangler.jsonc`, `scripts/check-config.sh` | `test/security/proxy-ssrf.test.ts`, `test/security/deploy-config.test.ts`, `test/security/check-config-test.sh`, `test/unit/policy/validate.test.ts`, `test/unit/admin/ops/save-time-invariants.test.ts` |
 | <a id="i-log-1"></a>I-LOG-1 | No raw token or credential reaches any sink (request log, archive, console, trace). Only the profile's allowlisted claims are stored. The get-token action masks every token it prints. | `src/telemetry/record.ts`, `src/telemetry/sinks.ts`, `src/identity/profiles/*.ts` (`logClaimAllowlist`), `src/policy/conditions.ts` (trace details), `actions/get-token/action.yml` | `test/security/no-leak.test.ts`, `test/security/proxy-logging.test.ts`, `test/security/jwt.test.ts`, `test/security/deploy-config.test.ts`, `test/security/get-token-action.sh`, `test/unit/policy/evaluate.test.ts` |
 | <a id="i-log-2"></a>I-LOG-2 | Unverified claims are never stored. "Create grant from this request" prefills only from verified records. | `src/telemetry/record.ts`, `src/admin/routes/grants.tsx`, `src/admin/routes/requests.tsx` | `test/security/proxy-logging.test.ts`, `test/integration/admin-grants.test.ts` |
-| <a id="i-sess-1"></a>I-SESS-1 | Session ids are stored as SHA-256. User status and role are re-read on every request. Every audited admin write re-checks, in its own D1 batch, that the request's session is still live and the user's current role still holds the route's permission; otherwise nothing is written. "Test credential" commits its audit row with this check before it sends the stored credential, so every use of a stored credential by an admin is audited and nothing is sent when the check fails. Login issues a new id and revokes the previous one. A session is valid only while its login identity is still linked to the user. A login refused at that point writes nothing (no session, audit row or login timestamps). | `src/admin/auth/session.ts`, `src/db/sessions.ts`, `src/db/users.ts` (`recordLoginStatements`), `src/admin/auth/middleware.tsx`, `src/admin/ops/shared.ts` (`commitAudited`), `src/admin/ops/users.ts` | `test/security/session.test.ts`, `test/security/admin-actor-recheck.test.ts` |
-| <a id="i-csrf-1"></a>I-CSRF-1 | Unsafe admin requests need `Sec-Fetch-Site` `same-origin`/`none` (or, without it, an exact `Origin`) AND the `_csrf` synchronizer token. Form bodies are capped at 64 KiB (413) before parsing. | `src/admin/auth/csrf.ts`, `src/admin/auth/middleware.tsx`, `src/admin/render.tsx` (`ADMIN_FORM_MAX_BYTES`) | `test/security/csrf.test.ts` |
-| <a id="i-oauth-1"></a>I-OAUTH-1 | OAuth state lives in one `__Host-` cookie that holds at most 3 pending logins keyed by `state`, each valid for 10 minutes. A callback consumes only the entry whose `state` it returns; a missing or unknown `state` gets 400 and leaves the cookie unchanged. The authorization code is single use at the login provider and bound to PKCE. `return_to` is sanitized at start and at callback, is at most 512 characters after URL serialization and contains no character that JSON escapes (`\` becomes `%5C`), so 3 entries always fit in the cookie (under 4 KB) and only the 3-entry limit drops an entry. | `src/admin/auth/oauth-state.ts`, `src/admin/auth/routes.tsx`, `src/admin/auth/session.ts` (`sanitizeReturnTo`) | `test/security/oauth-state.test.ts`, `test/security/oauth-pending-logins.test.ts` |
-| <a id="i-link-1"></a>I-LINK-1 | Email linking happens only for invited, unexpired users, with an authoritative email. Active and disabled users are never linked by email. | `src/admin/auth/email.ts`, `src/admin/auth/resolve-login.ts`, `src/db/users.ts` | `test/security/login-linking.test.ts`, `test/security/google-issuer-variants.test.ts`, `test/security/oidc-issuer-subject.test.ts`, `test/unit/admin/auth/email.test.ts` |
+| <a id="i-sess-1"></a>I-SESS-1 | The gateway keeps no admin sessions. Every `/admin` request is authenticated by its own Cloudflare Access JWT (RS256, exact team issuer, exact AUD, not expired, a `sub` and an email; service tokens are refused). A missing or invalid JWT gets 401 (503 when the team keys cannot be fetched) and writes nothing. The only other login is `AUTH_DEV_EMAIL`, for local development on a loopback `PUBLIC_URL` (I-CFG-1). The identity `(access, <team domain>\|<sub>)` is resolved to its user on every request, so a disable, role change or login reset applies to the user's next request. Every audited admin write re-checks, in its own D1 batch, that the request's identity is still linked to the active user and that the user's current role still holds the route's permission; otherwise nothing is written. "Test credential" commits its audit row with this check before it sends the stored credential, so every use of a stored credential by an admin is audited and nothing is sent when the check fails. | `src/admin/auth/identity.ts`, `src/admin/auth/access.ts`, `src/admin/auth/middleware.tsx`, `src/db/users.ts` (`liveIdentityGuard`), `src/admin/ops/shared.ts` (`commitAudited`), `src/admin/ops/users.ts` | `test/security/session.test.ts`, `test/security/admin-actor-recheck.test.ts` |
+| <a id="i-csrf-1"></a>I-CSRF-1 | Unsafe admin requests need `Sec-Fetch-Site` `same-origin`/`none` (or, without it, an exact `Origin`) AND a `_csrf` form field equal to the browser's `__Host-tokengate_csrf` cookie (double submit). The cookie is 32 random bytes, `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, with no `Domain`, so no other site or subdomain can read or set it. A request without the cookie fails. Form bodies are capped at 64 KiB (413) before parsing. | `src/admin/auth/csrf.ts`, `src/admin/auth/middleware.tsx`, `src/admin/render.tsx` (`ADMIN_FORM_MAX_BYTES`) | `test/security/csrf.test.ts` |
+| <a id="i-link-1"></a>I-LINK-1 | Email linking happens only for invited, unexpired users, with an authoritative email: the `email` of a valid Access JWT, or `AUTH_DEV_EMAIL` for the local development login. Active and disabled users are never linked by email. | `src/admin/auth/email.ts`, `src/admin/auth/resolve-login.ts`, `src/db/users.ts` | `test/security/login-linking.test.ts`, `test/unit/admin/auth/email.test.ts` |
 | <a id="i-boot-1"></a>I-BOOT-1 | Bootstrap creates at most one owner, once, in SQL-guarded statements. | `src/admin/auth/resolve-login.ts`, `src/db/users.ts` | `test/security/bootstrap.test.ts` |
 | <a id="i-rbac-1"></a>I-RBAC-1 | Every admin route is in the RBAC table. Routes outside the table are denied. The route × role matrix is tested on the real app. | `src/admin/auth/rbac.ts`, `src/admin/auth/middleware.tsx` | `test/security/rbac-routes.test.ts`, `test/unit/admin/auth/rbac.test.ts`, `test/integration/admin-dashboard.test.ts` |
 | <a id="i-audit-1"></a>I-AUDIT-1 | Every admin mutation writes exactly one audit row in the same D1 batch. Failed operations write nothing. | `src/admin/ops/shared.ts`, `src/db/audit.ts`, `src/admin/ops/*.ts`, `src/telemetry/cron.ts` (`credential.expiring`) | `test/security/audit-coverage-ops.test.ts`, `test/security/audit-coverage-routes.test.ts`, `test/unit/telemetry/cron.test.ts` |
 | <a id="i-owner-1"></a>I-OWNER-1 | The last active owner cannot be demoted, disabled or deleted. SQL triggers abort the statement with `last_owner`. | `migrations/0001_initial.sql` (`users_last_owner_update`, `users_last_owner_delete`), `src/admin/ops/users.ts` | `test/unit/admin/ops/users.test.ts` |
-| <a id="i-cfg-1"></a>I-CFG-1 | Malformed configuration disables the affected feature and names the variable. No feature runs half-configured. Errors never echo values. | `src/config.ts`, `src/crypto/keyring.ts` | `test/unit/config.test.ts` |
-| <a id="i-deploy-1"></a>I-DEPLOY-1 | `preview_urls` is false. With `PUBLIC_URL` set, `/admin` and `/auth` answer only on that origin; a malformed `PUBLIC_URL` closes them. Deploys keep dashboard vars (`keep_vars: true`, no blank vars). | `wrangler.jsonc`, `scripts/check-config.sh`, `src/config.ts` (`adminOriginAllowed`), `src/http/security.ts` | `test/security/security-headers.test.ts`, `test/security/deploy-config.test.ts`, `test/security/check-config-test.sh`, `test/unit/config.test.ts` |
+| <a id="i-cfg-1"></a>I-CFG-1 | Malformed configuration disables the affected feature and names the variable. No feature runs half-configured. Errors never echo values. `AUTH_DEV_EMAIL` is disabled unless `PUBLIC_URL` is on `localhost`, `127.0.0.1` or `[::1]`. | `src/config.ts`, `src/crypto/keyring.ts` | `test/unit/config.test.ts` |
+| <a id="i-deploy-1"></a>I-DEPLOY-1 | `preview_urls` is false. With `PUBLIC_URL` set, `/admin` answers only on that origin; a malformed `PUBLIC_URL` closes it. Deploys keep dashboard vars (`keep_vars: true`, no blank vars). | `wrangler.jsonc`, `scripts/check-config.sh`, `src/config.ts` (`adminOriginAllowed`), `src/http/security.ts` | `test/security/security-headers.test.ts`, `test/security/deploy-config.test.ts`, `test/security/check-config-test.sh`, `test/unit/config.test.ts` |
 
 `test/security/*.sh` and `scripts/check-config.sh` run in `pnpm test:scripts`, not in vitest.
+
+### Retired invariants
+
+- <a id="i-oauth-1"></a>The OAuth state invariant (pending GitHub and OIDC logins in a `__Host-` cookie)
+  was removed with the GitHub and OIDC logins
+  ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). Its ID is not reused.
 
 ### Exact semantics
 
@@ -256,7 +263,7 @@ a vulnerability (see [SECURITY.md](../SECURITY.md)).
   no user agent. Above the budget they are dropped, so the request log is not a complete record of
   anonymous probing.
 - **Anonymous traffic is not throttled by the Worker.** Use a Cloudflare WAF rate-limiting rule for
-  `/auth/*` and token-less `/proxy/*`. Bot Fight Mode can block CI callers on datacenter IPs and
+  JWT-less `/admin/*` and token-less `/proxy/*`. Bot Fight Mode can block CI callers on datacenter IPs and
   cannot be skipped per path; disable it on the gateway zone, or use Super Bot Fight Mode with a skip
   rule for `/proxy/` ([zone settings](operations/cloudflare-zone-settings.md)).
 
@@ -274,32 +281,26 @@ a vulnerability (see [SECURITY.md](../SECURITY.md)).
 
 ### Admin side
 
-- **OAuth state has no server-side single-use record.** Replay protection relies on (1) the browser
-  storing the cookie without the consumed entry after the first matching callback, (2) the
-  10-minute expiry and (3) the login provider rejecting a reused authorization code, which is bound
-  to PKCE and the client secret. The cookie is neither encrypted nor MACed. Its integrity relies on
-  the browser's `__Host-` rules: no other site or subdomain can set it, so a forged callback fails
-  the state check. A user can change only their own cookie, which affects only their own login. The
-  PKCE verifier in the cookie is readable only by someone who already holds the browser's cookies,
-  including the session. Unauthenticated `/auth/*/start` makes no D1 writes.
-- **Another site can push out a pending login.** A callback with a wrong or missing `state` changes
-  nothing, so a cross-site link to `/auth/*/callback` cannot cancel a sign-in. But each top-level
-  navigation to `/auth/*/start` adds an entry, and the cookie keeps only the 3 newest. A page that
-  opens `/auth/*/start` 3 times while a user is at the login provider makes that sign-in fail with
-  "This sign-in attempt expired"; the user starts again. It gains no access. Each navigation drops
-  at most the oldest entry, whatever `return_to` it carries (3 entries of the largest size fit in
-  the cookie), so it takes 3 navigations, or fewer only when the user has other sign-ins in
-  progress in the same browser. The same limit applies when one browser starts more than 3
-  sign-ins at once.
-- **GitHub and OIDC sessions outlive IdP changes.** Org membership and email domain are checked at
-  sign-in. A session then lasts up to 12 hours idle and 7 days in total. To remove someone at once,
-  disable the user in Users; that revokes their sessions (I-SESS-1). Cloudflare Access sessions are
-  re-validated on every admin request.
-- **A D1 restore brings back ended sessions.** Revocation is the `revoked_at` column in `DB`, with
-  no record outside it. A Time Travel or export restore resets every session ended after the
-  restore point, including by sign-out, Users > End sessions, a disable or role change, or
-  break-glass. Such a session works again until it expires. After every restore of `DB`, end every
-  admin session ([backup and restore](operations/backup-restore.md#checks-after-a-restore)).
+- **The local development login has no proof.** With `AUTH_DEV_EMAIL` set, every admin request
+  signs in as that email. It is accepted only when `PUBLIC_URL` is a loopback origin (I-CFG-1), and
+  host pinning (I-DEPLOY-1) then answers 404 to every admin request whose URL is not that origin. No
+  request through Cloudflare's edge has a loopback URL. A Worker that calls this Worker through a
+  service binding chooses the request URL and so could reach it; only account members who can
+  deploy Workers can add such a binding, and they already have full trust. Never set
+  `AUTH_DEV_EMAIL` in production; System status names the login in use.
+- **Access decides who reaches the console.** The gateway trusts the Access JWT `email` to link
+  invitations and bootstrap the first owner (I-LINK-1, I-BOOT-1). Choose an identity provider that
+  verifies emails, and restrict the Access policy to your organization. A user who is removed from
+  the identity provider keeps a valid Access JWT until the Access session ends. To remove someone at
+  once, disable the user in Users (effective on the next request, I-SESS-1) and revoke their Access
+  session in Zero Trust.
+- **The Access JWT is a bearer credential.** Anyone who copies a user's `CF_Authorization` cookie
+  or JWT acts as that user until it expires. The gateway cannot revoke it; Zero Trust can. Keep the
+  Access session duration short.
+- **A D1 restore brings back old access.** Users, roles and identity links live only in `DB`. A
+  Time Travel or export restore brings back every user, role and identity link as it was at the
+  restore point, including access that was removed later. After every restore of `DB`, check the
+  Users page ([backup and restore](operations/backup-restore.md#checks-after-a-restore)).
 - **D1 write access bypasses the admin UI.** Changes made with `wrangler d1 execute` are not
   audited. Restrict D1 access in your Cloudflare account like admin access.
 - **A D1 writer can stage a service for the next credential.** When a changed base URL or

@@ -18,21 +18,6 @@ export interface User {
   last_login_at: number | null;
 }
 
-export interface Session {
-  id_hash: string;
-  user_id: string;
-  login_provider: string;
-  identity_subject: string;
-  csrf_token: string;
-  created_at: number;
-  last_seen_at: number;
-  expires_at: number;
-  idle_expires_at: number;
-  ip: string | null;
-  user_agent: string | null;
-  revoked_at: number | null;
-}
-
 export interface CallerProvider {
   id: string;
   name: string;

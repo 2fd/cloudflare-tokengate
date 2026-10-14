@@ -4,7 +4,7 @@ This page defines the terms that the code, the admin UI and the documentation us
 
 ## How the terms relate
 
-![Concepts: a profile (code) defines the rules for a caller provider; a caller provider has many grants; each grant targets one service; a service has zero or one credential, encrypted by the keyring (Worker secret); a login provider signs in users; each user change writes an audit event; grant decisions are recorded as request records in TELEMETRY_DB. Caller providers, grants, services, credentials, users and audit events live in the D1 control-plane database.](diagrams/domain-model.svg)
+![Concepts: a profile (code) defines the rules for a caller provider; a caller provider has many grants; each grant targets one service; a service has zero or one credential, encrypted by the keyring (Worker secret); Cloudflare Access signs in users; each user change writes an audit event; grant decisions are recorded as request records in TELEMETRY_DB. Caller providers, grants, services, credentials, users and audit events live in the D1 control-plane database.](diagrams/domain-model.svg)
 
 <sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
@@ -114,13 +114,13 @@ A user is a person who signs in to the admin UI. A user has a role and a status 
 |---|---|
 | `viewer` | Read every page. No page shows secret material. |
 | `admin` | Also create, change and delete caller providers, services and grants; download the configuration export. |
-| `owner` | Also invite users and change roles, change settings, re-encrypt credentials, revoke sessions. |
+| `owner` | Also invite users, change roles and statuses, reset logins, change settings, re-encrypt credentials. |
 
 Every admin route has an entry in the permission table, and unknown routes are denied ([I-RBAC-1](threat-model.md#i-rbac-1)). The database refuses to remove the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). IDs start with `usr_`. Admin UI: Users. Code: `src/admin/auth/rbac.ts`.
 
 ### Login provider
 
-A login provider is how users sign in: `github` (GitHub OAuth App), `oidc` (any OpenID Connect issuer; Google is a preset of it) or `access` (Cloudflare Access). Login providers are configured with Worker variables and secrets, not in the database ([configuration.md](configuration.md)). A login provider proves a stable subject and, sometimes, verified email addresses. The gateway links a new login to a user only when that user is invited, the invitation is not expired, and the email is verified by the login provider ([I-LINK-1](threat-model.md#i-link-1)). The first owner comes from `BOOTSTRAP_OWNER_EMAILS`, at most once ([I-BOOT-1](threat-model.md#i-boot-1)). Code: `src/admin/auth/`.
+Users sign in through Cloudflare Access (login provider `access`), configured with Worker variables, not in the database ([configuration.md](configuration.md), [ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). The gateway keeps no session: it verifies the Access token on every admin request. The token proves a stable subject (`<team domain>|<sub>`) and an email address. The gateway links a new login to a user only when that user is invited, the invitation is not expired, and the email in the token matches ([I-LINK-1](threat-model.md#i-link-1)). The first owner comes from `BOOTSTRAP_OWNER_EMAILS`, at most once ([I-BOOT-1](threat-model.md#i-boot-1)). For local development only, `AUTH_DEV_EMAIL` (login provider `dev`) signs every request in as one email. Code: `src/admin/auth/`.
 
 ### Request record
 
@@ -128,7 +128,7 @@ A request record is one row in `request_log` in `TELEMETRY_DB` for a call to `/p
 
 ### Audit event
 
-An audit event is one row in `audit_log` in `DB` for every admin change and sign-in. It records who acted, what changed (a before and after diff without secrets), when, and from which IP address. It is written in the same database batch as the change, so a change without its audit event cannot happen ([I-AUDIT-1](threat-model.md#i-audit-1)). Each audit event is also emitted as a log line with `"type":"audit.event"` for your SIEM. Audit events are kept 365 days by default (minimum 90). IDs start with `aud_`. Admin UI: Audit log.
+An audit event is one row in `audit_log` in `DB` for every admin change, and for the first sign-in that links a login to a user. It records who acted, what changed (a before and after diff without secrets), when, and from which IP address. It is written in the same database batch as the change, so a change without its audit event cannot happen ([I-AUDIT-1](threat-model.md#i-audit-1)). Each audit event is also emitted as a log line with `"type":"audit.event"` for your SIEM. Audit events are kept 365 days by default (minimum 90). IDs start with `aud_`. Admin UI: Audit log.
 
 ### Keyring
 

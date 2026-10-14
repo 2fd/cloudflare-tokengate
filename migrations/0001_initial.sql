@@ -45,23 +45,6 @@ CREATE TABLE user_identities (
 );
 CREATE INDEX user_identities_user ON user_identities (user_id);
 
--- Only the SHA-256 of the session id is stored (I-SESS-1).
-CREATE TABLE sessions (
-  id_hash TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-  login_provider TEXT NOT NULL,
-  identity_subject TEXT NOT NULL,
-  csrf_token TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  last_seen_at INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL,
-  idle_expires_at INTEGER NOT NULL,
-  ip TEXT,
-  user_agent TEXT,
-  revoked_at INTEGER
-);
-CREATE INDEX sessions_user ON sessions (user_id);
-
 -- Trusted workload-identity issuers. `profile` is immutable after creation.
 CREATE TABLE caller_providers (
   id TEXT PRIMARY KEY,

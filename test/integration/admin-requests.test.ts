@@ -327,11 +327,10 @@ describe('request log pages without proxy traffic', () => {
     }
   });
 
-  it('requires a session', async () => {
+  it('requires a signed-in user', async () => {
     const a = app();
     const res = await adminGet(a, null, '/admin/requests');
-    expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toContain('/auth/login');
+    expect(res.status).toBe(401);
   });
 
   it('shows the sample weight of sampled allowed records', async () => {

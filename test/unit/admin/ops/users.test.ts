@@ -6,13 +6,12 @@ import {
   normalizeEmail,
   resendInvite,
   resetLogin,
-  revokeSessions,
   updateUser,
 } from '../../../../src/admin/ops/users';
 import { auditFromRow } from '../../../../src/db/audit';
 import type { Actor, User } from '../../../../src/db/types';
 import { getUser, INVITE_TTL_MS, listIdentities } from '../../../../src/db/users';
-import { createUser, loginAs, resetControlPlane } from '../../../helpers/admin-auth';
+import { createUser, resetControlPlane } from '../../../helpers/admin-auth';
 import { opsDeps } from './helpers';
 
 const T0 = Date.UTC(2026, 9, 13, 12);
@@ -22,11 +21,11 @@ function actorFor(user: User): Actor {
   return { type: 'user', id: user.id, email: user.email, ip: null, userAgent: null };
 }
 
-/** Audit rows written by the ops under test (logins in fixtures write `user.login`). */
+/** Audit rows written by the ops under test. */
 async function audits() {
-  const { results } = await env.DB.prepare(
-    "SELECT * FROM audit_log WHERE action <> 'user.login' ORDER BY rowid",
-  ).all<Record<string, unknown>>();
+  const { results } = await env.DB.prepare('SELECT * FROM audit_log ORDER BY rowid').all<
+    Record<string, unknown>
+  >();
   return results.map(auditFromRow);
 }
 
@@ -46,15 +45,6 @@ function racingDeps(sql: string, id: string) {
     },
   });
   return { ...base, env: { ...base.env, DB: db } };
-}
-
-async function liveSessions(userId: string): Promise<number> {
-  const row = await env.DB.prepare(
-    'SELECT count(*) AS n FROM sessions WHERE user_id = ? AND revoked_at IS NULL',
-  )
-    .bind(userId)
-    .first<{ n: number }>();
-  return row?.n ?? 0;
 }
 
 let owner: User;
@@ -136,15 +126,12 @@ describe('inviteUser', () => {
 });
 
 describe('updateUser', () => {
-  it('changes the role, revokes their sessions and audits before/after', async () => {
+  it('changes the role and audits before/after', async () => {
     const admin = await createUser({ email: 'admin@example.com', role: 'admin' }, T0);
-    await loginAs({ deps: deps() }, admin);
-    expect(await liveSessions(admin.id)).toBe(1);
 
     const result = await updateUser(deps(), actorFor(owner), admin.id, { role: 'viewer' });
     expect(result).toMatchObject({ ok: true, user: { role: 'viewer', status: 'active' } });
     expect((await getUser(env.DB, admin.id))?.role).toBe('viewer');
-    expect(await liveSessions(admin.id)).toBe(0);
     const rows = await audits();
     expect(rows).toHaveLength(1);
     expect(rows[0]?.diff).toEqual({
@@ -153,17 +140,15 @@ describe('updateUser', () => {
     });
   });
 
-  it('disables a user and ends their sessions', async () => {
+  it('disables a user', async () => {
     const admin = await createUser({ email: 'admin@example.com', role: 'admin' }, T0);
-    await loginAs({ deps: deps() }, admin);
     const result = await updateUser(deps(), actorFor(owner), admin.id, { status: 'disabled' });
     expect(result).toMatchObject({ ok: true, user: { status: 'disabled' } });
-    expect(await liveSessions(admin.id)).toBe(0);
+    expect((await getUser(env.DB, admin.id))?.status).toBe('disabled');
   });
 
   it('refuses when the user changed between read and write, writing nothing', async () => {
     const admin = await createUser({ email: 'admin@example.com', role: 'admin' }, T0);
-    await loginAs({ deps: deps() }, admin);
     const racing = racingDeps(
       "UPDATE users SET status = 'disabled', updated_at = updated_at + 1 WHERE id = ?",
       admin.id,
@@ -171,7 +156,6 @@ describe('updateUser', () => {
     const result = await updateUser(racing, actorFor(owner), admin.id, { role: 'viewer' });
     expect(result).toMatchObject({ ok: false, reason: 'conflict' });
     expect(await getUser(env.DB, admin.id)).toMatchObject({ role: 'admin', status: 'disabled' });
-    expect(await liveSessions(admin.id)).toBe(1);
     expect(await audits()).toEqual([]);
   });
 
@@ -213,7 +197,7 @@ describe('updateUser', () => {
       {
         email: 'u@example.com',
         status: 'disabled',
-        identity: { loginProvider: 'github', subject: '77' },
+        identity: { loginProvider: 'access', subject: 'team|77' },
       },
       T0,
     );
@@ -273,23 +257,21 @@ describe('I-OWNER-1: the last active owner cannot be removed', () => {
 });
 
 describe('resetLogin', () => {
-  it('unlinks identities, re-invites with a fresh expiry and ends sessions', async () => {
+  it('unlinks identities and re-invites with a fresh expiry', async () => {
     const admin = await createUser(
       {
         email: 'admin@example.com',
         role: 'admin',
-        identity: { loginProvider: 'github', subject: '123' },
+        identity: { loginProvider: 'access', subject: 'team|123' },
       },
       T0,
     );
-    await loginAs({ deps: deps() }, admin);
     const result = await resetLogin(deps(), actorFor(owner), admin.id);
     expect(result).toMatchObject({
       ok: true,
       user: { status: 'invited', invite_expires_at: T0 + INVITE_TTL_MS },
     });
     expect(await listIdentities(env.DB, admin.id)).toEqual([]);
-    expect(await liveSessions(admin.id)).toBe(0);
     expect((await audits()).map((row) => row.action)).toEqual(['user.reset_login']);
   });
 
@@ -298,11 +280,10 @@ describe('resetLogin', () => {
       {
         email: 'admin@example.com',
         role: 'admin',
-        identity: { loginProvider: 'github', subject: '123' },
+        identity: { loginProvider: 'access', subject: 'team|123' },
       },
       T0,
     );
-    await loginAs({ deps: deps() }, admin);
     const racing = racingDeps(
       "UPDATE users SET role = 'viewer', updated_at = updated_at + 1 WHERE id = ?",
       admin.id,
@@ -311,25 +292,12 @@ describe('resetLogin', () => {
     expect(result).toMatchObject({ ok: false, reason: 'conflict' });
     expect(await getUser(env.DB, admin.id)).toMatchObject({ role: 'viewer', status: 'active' });
     expect(await listIdentities(env.DB, admin.id)).toHaveLength(1);
-    expect(await liveSessions(admin.id)).toBe(1);
     expect(await audits()).toEqual([]);
   });
 
   it('refuses resetting the actor’s own login', async () => {
     const result = await resetLogin(deps(), actorFor(owner), owner.id);
     expect(result).toMatchObject({ ok: false, reason: 'invalid' });
-  });
-});
-
-describe('revokeSessions', () => {
-  it('ends every live session of the user and reports the count', async () => {
-    const admin = await createUser({ email: 'admin@example.com', role: 'admin' }, T0);
-    await loginAs({ deps: deps() }, admin);
-    await loginAs({ deps: deps() }, admin);
-    const result = await revokeSessions(deps(), actorFor(owner), admin.id);
-    expect(result).toEqual({ ok: true, revoked: 2 });
-    expect(await liveSessions(admin.id)).toBe(0);
-    expect((await audits()).map((row) => row.action)).toEqual(['user.revoke_sessions']);
   });
 });
 

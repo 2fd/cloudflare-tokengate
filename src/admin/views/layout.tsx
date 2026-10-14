@@ -2,12 +2,12 @@
 // `default-src 'none'` with no script-src (src/http/security.ts).
 import type { Child } from 'hono/jsx';
 import type { Role } from '../../db/types';
-import { Csrf } from './components';
 
 export interface Viewer {
   email: string;
   role: Role;
-  csrfToken: string;
+  /** Sign-out link; null when the login has none (local dev login). */
+  signOutUrl: string | null;
 }
 
 export interface Banner {
@@ -59,15 +59,12 @@ export function Layout(props: {
             </nav>
           ) : null}
           {props.viewer ? (
-            <form method="post" action="/auth/logout" class="whoami">
+            <div class="whoami">
               <span>
                 {props.viewer.email} <span class="badge">{props.viewer.role}</span>
               </span>
-              <Csrf token={props.viewer.csrfToken} />
-              <button type="submit" class="link">
-                Sign out
-              </button>
-            </form>
+              {props.viewer.signOutUrl ? <a href={props.viewer.signOutUrl}>Sign out</a> : null}
+            </div>
           ) : null}
         </header>
         <main>

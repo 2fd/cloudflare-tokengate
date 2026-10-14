@@ -3,38 +3,12 @@
 // admin host pinning (I-DEPLOY-1). Error messages name variables only and never echo values.
 import type { AppEnv } from './env';
 
-export type ConfigFeature =
-  | 'public_url'
-  | 'login.github'
-  | 'login.oidc'
-  | 'login.access'
-  | 'upstream_hosts';
+export type ConfigFeature = 'public_url' | 'login.access' | 'login.dev' | 'upstream_hosts';
 
 export interface ConfigError {
   feature: ConfigFeature;
   variable: string;
   message: string;
-}
-
-export interface GithubLogin {
-  clientId: string;
-  clientSecret: string;
-  /** Lowercased org logins; empty = any GitHub user may attempt login. */
-  allowedOrgs: string[];
-}
-
-export interface OidcLogin {
-  kind: 'oidc' | 'google';
-  /**
-   * Issuer as configured. Discovery compares its parsed URL with the document's `issuer`; subjects
-   * are namespaced by canonicalIssuer (src/admin/auth/oidc.ts).
-   */
-  issuer: string;
-  clientId: string;
-  clientSecret: string;
-  label: string;
-  /** Lowercased email domains; empty = any domain. */
-  allowedDomains: string[];
 }
 
 export interface AccessLogin {
@@ -43,29 +17,29 @@ export interface AccessLogin {
   aud: string;
 }
 
+/** Local development login: every admin request is this user. Only on a loopback PUBLIC_URL. */
+export interface DevLogin {
+  /** Lowercased. */
+  email: string;
+}
+
 export interface Config {
   /** Canonical origin; null when unset or malformed (malformed also adds a `public_url` error). */
   publicUrl: URL | null;
   errors: ConfigError[];
-  login: { github: GithubLogin | null; oidc: OidcLogin | null; access: AccessLogin | null };
+  login: { access: AccessLogin | null; dev: DevLogin | null };
   /** Lowercased, trimmed. */
   bootstrapOwnerEmails: string[];
   /** null = unrestricted. Malformed configuration yields [] (deny every host). */
   allowedUpstreamHosts: string[] | null;
 }
 
-export const GOOGLE_ISSUER = 'https://accounts.google.com';
-export const DEFAULT_OIDC_LABEL = 'Single sign-on';
-export const GOOGLE_LABEL = 'Google';
-
-const LOCAL_DEV_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
-// GitHub org logins: alphanumerics and single inner hyphens, at most 39 characters. Also keeps the
-// value safe to interpolate into /user/memberships/orgs/{org}.
-// https://docs.github.com/en/organizations
-const GITHUB_ORG_RE = /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,38}$/;
+export const LOCAL_DEV_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]']);
 const DNS_LABEL_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const ACCESS_TEAM_SUFFIX = '.cloudflareaccess.com';
 const ACCESS_AUD_RE = /^[A-Za-z0-9._:-]{1,256}$/;
+/** Same shape as invited emails (admin/ops/users.ts normalizeEmail), so the dev user can be invited. */
+const DEV_EMAIL_RE = /^[^\s@,;<>"]+@[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 
 export function parseConfig(env: AppEnv): Config {
   const errors: ConfigError[] = [];
@@ -74,9 +48,8 @@ export function parseConfig(env: AppEnv): Config {
     publicUrl,
     errors,
     login: {
-      github: parseGithubLogin(env, errors),
-      oidc: parseOidcLogin(env, errors),
       access: parseAccessLogin(env, publicUrl, errors),
+      dev: parseDevLogin(env, publicUrl, errors),
     },
     bootstrapOwnerEmails: splitList(env.BOOTSTRAP_OWNER_EMAILS).map((email) => email.toLowerCase()),
     allowedUpstreamHosts: parseUpstreamHosts(env.ALLOWED_UPSTREAM_HOSTS, errors),
@@ -85,7 +58,7 @@ export function parseConfig(env: AppEnv): Config {
 
 /**
  * PUBLIC_URL origin when configured, otherwise the origin of the current request.
- * A malformed PUBLIC_URL also falls back to the request origin, so admin and auth routes must be
+ * A malformed PUBLIC_URL also falls back to the request origin, so admin routes must be
  * gated by `adminOriginAllowed` first.
  */
 export function canonicalOrigin(config: Config, requestUrl: URL): string {
@@ -93,7 +66,7 @@ export function canonicalOrigin(config: Config, requestUrl: URL): string {
 }
 
 /**
- * Host pinning for /admin and /auth (I-DEPLOY-1). With PUBLIC_URL set, only its exact origin
+ * Host pinning for /admin (I-DEPLOY-1). With PUBLIC_URL set, only its exact origin
  * (scheme, host and port) is served. A malformed PUBLIC_URL denies every request: the operator
  * asked for pinning, so a typo must not turn it off.
  */
@@ -164,138 +137,6 @@ function parsePublicUrl(env: AppEnv, errors: ConfigError[]): URL | null {
   return new URL(url.origin);
 }
 
-function parseGithubLogin(env: AppEnv, errors: ConfigError[]): GithubLogin | null {
-  const fail = (variable: string, message: string): null => {
-    errors.push({ feature: 'login.github', variable, message });
-    return null;
-  };
-  const clientId = readVar(env.AUTH_GITHUB_CLIENT_ID);
-  const clientSecret = readVar(env.AUTH_GITHUB_CLIENT_SECRET);
-  const orgs = splitList(env.AUTH_GITHUB_ALLOWED_ORGS).map((org) => org.toLowerCase());
-
-  if (clientId === null && clientSecret === null) {
-    if (orgs.length > 0) {
-      return fail(
-        'AUTH_GITHUB_ALLOWED_ORGS',
-        'AUTH_GITHUB_ALLOWED_ORGS is set but AUTH_GITHUB_CLIENT_ID and AUTH_GITHUB_CLIENT_SECRET are not.',
-      );
-    }
-    return null;
-  }
-  if (clientId === null) {
-    return fail(
-      'AUTH_GITHUB_CLIENT_ID',
-      'AUTH_GITHUB_CLIENT_SECRET is set but AUTH_GITHUB_CLIENT_ID is not.',
-    );
-  }
-  if (clientSecret === null) {
-    return fail(
-      'AUTH_GITHUB_CLIENT_SECRET',
-      'AUTH_GITHUB_CLIENT_ID is set but AUTH_GITHUB_CLIENT_SECRET is not.',
-    );
-  }
-  if (!orgs.every((org) => GITHUB_ORG_RE.test(org))) {
-    return fail(
-      'AUTH_GITHUB_ALLOWED_ORGS',
-      'AUTH_GITHUB_ALLOWED_ORGS contains an invalid organization login.',
-    );
-  }
-  return { clientId, clientSecret, allowedOrgs: orgs };
-}
-
-function parseOidcLogin(env: AppEnv, errors: ConfigError[]): OidcLogin | null {
-  const fail = (variable: string, message: string): null => {
-    errors.push({ feature: 'login.oidc', variable, message });
-    return null;
-  };
-  const issuer = readVar(env.AUTH_OIDC_ISSUER);
-  const oidcId = readVar(env.AUTH_OIDC_CLIENT_ID);
-  const oidcSecret = readVar(env.AUTH_OIDC_CLIENT_SECRET);
-  const googleId = readVar(env.AUTH_GOOGLE_CLIENT_ID);
-  const googleSecret = readVar(env.AUTH_GOOGLE_CLIENT_SECRET);
-  const anyOidc = issuer !== null || oidcId !== null || oidcSecret !== null;
-  const anyGoogle = googleId !== null || googleSecret !== null;
-  const name = readVar(env.AUTH_OIDC_NAME);
-  const domains = splitList(env.AUTH_OIDC_ALLOWED_DOMAINS).map((domain) => domain.toLowerCase());
-
-  if (anyOidc && anyGoogle) {
-    return fail(
-      'AUTH_GOOGLE_CLIENT_ID',
-      'AUTH_GOOGLE_* and AUTH_OIDC_ISSUER/AUTH_OIDC_CLIENT_* are mutually exclusive; both are disabled.',
-    );
-  }
-  if (!anyOidc && !anyGoogle) {
-    if (domains.length > 0) {
-      return fail(
-        'AUTH_OIDC_ALLOWED_DOMAINS',
-        'AUTH_OIDC_ALLOWED_DOMAINS is set but no OIDC or Google login is configured.',
-      );
-    }
-    return null;
-  }
-  if (!domains.every(isDomainName)) {
-    return fail(
-      'AUTH_OIDC_ALLOWED_DOMAINS',
-      'AUTH_OIDC_ALLOWED_DOMAINS contains an invalid domain.',
-    );
-  }
-
-  if (anyGoogle) {
-    if (googleId === null) {
-      return fail(
-        'AUTH_GOOGLE_CLIENT_ID',
-        'AUTH_GOOGLE_CLIENT_SECRET is set but AUTH_GOOGLE_CLIENT_ID is not.',
-      );
-    }
-    if (googleSecret === null) {
-      return fail(
-        'AUTH_GOOGLE_CLIENT_SECRET',
-        'AUTH_GOOGLE_CLIENT_ID is set but AUTH_GOOGLE_CLIENT_SECRET is not.',
-      );
-    }
-    return {
-      kind: 'google',
-      issuer: GOOGLE_ISSUER,
-      clientId: googleId,
-      clientSecret: googleSecret,
-      label: name ?? GOOGLE_LABEL,
-      allowedDomains: domains,
-    };
-  }
-
-  if (issuer === null || oidcId === null || oidcSecret === null) {
-    const missing = [
-      issuer === null ? 'AUTH_OIDC_ISSUER' : null,
-      oidcId === null ? 'AUTH_OIDC_CLIENT_ID' : null,
-      oidcSecret === null ? 'AUTH_OIDC_CLIENT_SECRET' : null,
-    ].filter((variable) => variable !== null);
-    return fail(
-      missing[0] ?? 'AUTH_OIDC_ISSUER',
-      `OIDC login is partially configured; missing ${missing.join(', ')}.`,
-    );
-  }
-  if (!isHttpsIssuer(issuer)) {
-    return fail(
-      'AUTH_OIDC_ISSUER',
-      'AUTH_OIDC_ISSUER must be an https URL without credentials, query or fragment.',
-    );
-  }
-  // Google's issuer configured through AUTH_OIDC_* still gets the Google preset, so the `hd`
-  // check applies to AUTH_OIDC_ALLOWED_DOMAINS (an email domain alone does not prove Workspace
-  // membership). Compared as parsed URLs, like discovery does, so `https://accounts.google.com/`
-  // and an upper-case host also get it. `issuer` stays as configured for discovery; subjects are
-  // namespaced by its canonical form (oidcSubject in src/admin/auth/oidc.ts).
-  const google = new URL(issuer).href === new URL(GOOGLE_ISSUER).href;
-  return {
-    kind: google ? 'google' : 'oidc',
-    issuer,
-    clientId: oidcId,
-    clientSecret: oidcSecret,
-    label: name ?? (google ? GOOGLE_LABEL : DEFAULT_OIDC_LABEL),
-    allowedDomains: domains,
-  };
-}
-
 function parseAccessLogin(
   env: AppEnv,
   publicUrl: URL | null,
@@ -347,6 +188,31 @@ function parseAccessLogin(
   return { teamDomain, aud };
 }
 
+/**
+ * AUTH_DEV_EMAIL signs every admin request in as that email, with no proof at all. It is accepted
+ * only when PUBLIC_URL is a loopback origin: host pinning (I-DEPLOY-1) then refuses every admin
+ * request whose URL is not that origin, which no request through Cloudflare's edge can have.
+ */
+function parseDevLogin(env: AppEnv, publicUrl: URL | null, errors: ConfigError[]): DevLogin | null {
+  const raw = readVar(env.AUTH_DEV_EMAIL);
+  if (raw === null) return null;
+  const fail = (variable: string, message: string): null => {
+    errors.push({ feature: 'login.dev', variable, message });
+    return null;
+  };
+  const email = raw.toLowerCase();
+  if (!DEV_EMAIL_RE.test(email)) {
+    return fail('AUTH_DEV_EMAIL', 'AUTH_DEV_EMAIL is not a valid email address.');
+  }
+  if (publicUrl === null || !LOCAL_DEV_HOSTS.has(publicUrl.hostname)) {
+    return fail(
+      'PUBLIC_URL',
+      'AUTH_DEV_EMAIL requires PUBLIC_URL on localhost, 127.0.0.1 or [::1]. Never set it in production.',
+    );
+  }
+  return { email };
+}
+
 /** Accepts `team`, `team.cloudflareaccess.com` or `https://team.cloudflareaccess.com[/]`. */
 export function normalizeAccessTeamDomain(raw: string): string | null {
   let host = raw.trim().toLowerCase();
@@ -387,18 +253,4 @@ function isDomainName(name: string): boolean {
 
 function isWorkersDev(hostname: string): boolean {
   return hostname === 'workers.dev' || hostname.endsWith('.workers.dev');
-}
-
-function isHttpsIssuer(raw: string): boolean {
-  if (!URL.canParse(raw)) return false;
-  const url = new URL(raw);
-  return (
-    url.protocol === 'https:' &&
-    url.username === '' &&
-    url.password === '' &&
-    url.search === '' &&
-    url.hash === '' &&
-    !raw.includes('?') &&
-    !raw.includes('#')
-  );
 }

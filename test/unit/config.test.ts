@@ -27,7 +27,7 @@ describe('parseConfig: empty environment', () => {
     expect(config).toEqual({
       publicUrl: null,
       errors: [],
-      login: { github: null, oidc: null, access: null },
+      login: { access: null, dev: null },
       bootstrapOwnerEmails: [],
       allowedUpstreamHosts: null,
     });
@@ -37,15 +37,14 @@ describe('parseConfig: empty environment', () => {
     const config = parseConfig(
       envWith({
         PUBLIC_URL: '',
-        AUTH_GITHUB_CLIENT_ID: '  ',
-        AUTH_GITHUB_CLIENT_SECRET: '',
-        AUTH_OIDC_ISSUER: '',
+        AUTH_ACCESS_TEAM_DOMAIN: '  ',
         AUTH_ACCESS_AUD: ' ',
+        AUTH_DEV_EMAIL: '',
         ALLOWED_UPSTREAM_HOSTS: '',
       }),
     );
     expect(config.errors).toEqual([]);
-    expect(config.login).toEqual({ github: null, oidc: null, access: null });
+    expect(config.login).toEqual({ access: null, dev: null });
     expect(config.allowedUpstreamHosts).toBeNull();
   });
 });
@@ -116,7 +115,7 @@ describe('I-DEPLOY-1: admin host pinning when PUBLIC_URL is set', () => {
 
   it.each([
     ['https://gw.example.com/admin', true],
-    ['https://GW.example.com:443/auth/login', true],
+    ['https://GW.example.com:443/admin/users', true],
     ['https://tokengate.acme.workers.dev/admin', false],
     ['http://gw.example.com/admin', false],
     ['https://gw.example.com:8443/admin', false],
@@ -141,120 +140,6 @@ describe('I-DEPLOY-1: admin host pinning when PUBLIC_URL is set', () => {
       }
     },
   );
-});
-
-describe('GitHub login', () => {
-  it('enables with both id and secret, normalizing orgs', () => {
-    const config = parseConfig(
-      envWith({
-        AUTH_GITHUB_CLIENT_ID: ' Iv1.abc ',
-        AUTH_GITHUB_CLIENT_SECRET: SECRET,
-        AUTH_GITHUB_ALLOWED_ORGS: ' Acme , ,acme-labs,',
-      }),
-    );
-    expect(config.errors).toEqual([]);
-    expect(config.login.github).toEqual({
-      clientId: 'Iv1.abc',
-      clientSecret: SECRET,
-      allowedOrgs: ['acme', 'acme-labs'],
-    });
-  });
-
-  it('rejects org logins that are not valid GitHub logins', () => {
-    for (const org of ['acme/../x', '-acme', 'ac--me', 'a'.repeat(40), 'acme?x']) {
-      const config = parseConfig(
-        envWith({
-          AUTH_GITHUB_CLIENT_ID: 'id',
-          AUTH_GITHUB_CLIENT_SECRET: SECRET,
-          AUTH_GITHUB_ALLOWED_ORGS: org,
-        }),
-      );
-      expect(config.login.github, org).toBeNull();
-      expect(errorsFor(config, 'login.github')[0]?.variable).toBe('AUTH_GITHUB_ALLOWED_ORGS');
-    }
-  });
-});
-
-describe('OIDC login', () => {
-  it('enables generic OIDC with the default label', () => {
-    const config = parseConfig(
-      envWith({
-        AUTH_OIDC_ISSUER: 'https://idp.example.com/realms/main',
-        AUTH_OIDC_CLIENT_ID: 'client',
-        AUTH_OIDC_CLIENT_SECRET: SECRET,
-        AUTH_OIDC_ALLOWED_DOMAINS: 'Example.com, corp.example.org',
-      }),
-    );
-    expect(config.errors).toEqual([]);
-    expect(config.login.oidc).toEqual({
-      kind: 'oidc',
-      issuer: 'https://idp.example.com/realms/main',
-      clientId: 'client',
-      clientSecret: SECRET,
-      label: 'Single sign-on',
-      allowedDomains: ['example.com', 'corp.example.org'],
-    });
-  });
-
-  it('keeps the issuer string verbatim (exact-match semantics)', () => {
-    const config = parseConfig(
-      envWith({
-        AUTH_OIDC_ISSUER: 'https://idp.example.com/',
-        AUTH_OIDC_CLIENT_ID: 'client',
-        AUTH_OIDC_CLIENT_SECRET: SECRET,
-        AUTH_OIDC_NAME: 'Okta',
-      }),
-    );
-    expect(config.login.oidc?.issuer).toBe('https://idp.example.com/');
-    expect(config.login.oidc?.label).toBe('Okta');
-  });
-
-  it('maps AUTH_GOOGLE_* to OIDC with the Google issuer', () => {
-    const config = parseConfig(
-      envWith({
-        AUTH_GOOGLE_CLIENT_ID: 'gid.apps.googleusercontent.com',
-        AUTH_GOOGLE_CLIENT_SECRET: SECRET,
-        AUTH_OIDC_ALLOWED_DOMAINS: 'example.com',
-      }),
-    );
-    expect(config.errors).toEqual([]);
-    expect(config.login.oidc).toEqual({
-      kind: 'google',
-      issuer: 'https://accounts.google.com',
-      clientId: 'gid.apps.googleusercontent.com',
-      clientSecret: SECRET,
-      label: 'Google',
-      allowedDomains: ['example.com'],
-    });
-  });
-});
-
-describe('OIDC login with the Google issuer', () => {
-  it('applies the Google preset (hd check) when AUTH_OIDC_ISSUER is Google', () => {
-    const config = parseConfig(
-      envWith({
-        AUTH_OIDC_ISSUER: 'https://accounts.google.com',
-        AUTH_OIDC_CLIENT_ID: 'gid',
-        AUTH_OIDC_CLIENT_SECRET: SECRET,
-        AUTH_OIDC_ALLOWED_DOMAINS: 'example.com',
-      }),
-    );
-    expect(config.errors).toEqual([]);
-    expect(config.login.oidc?.kind).toBe('google');
-    expect(config.login.oidc?.label).toBe('Google');
-    expect(config.login.oidc?.allowedDomains).toEqual(['example.com']);
-  });
-
-  it('keeps AUTH_OIDC_NAME as the label for both kinds', () => {
-    const config = parseConfig(
-      envWith({
-        AUTH_GOOGLE_CLIENT_ID: 'gid',
-        AUTH_GOOGLE_CLIENT_SECRET: SECRET,
-        AUTH_OIDC_NAME: 'Acme',
-      }),
-    );
-    expect(config.login.oidc?.label).toBe('Acme');
-  });
 });
 
 describe('Access login', () => {
@@ -297,14 +182,36 @@ describe('Access login', () => {
   });
 });
 
+describe('dev login', () => {
+  it.each([
+    'http://localhost:8787',
+    'http://127.0.0.1:8787',
+    'http://[::1]:8787',
+    'https://localhost',
+  ])('enables AUTH_DEV_EMAIL on loopback PUBLIC_URL %s', (publicUrl) => {
+    const config = parseConfig(
+      envWith({ PUBLIC_URL: publicUrl, AUTH_DEV_EMAIL: ' Dev@Example.com ' }),
+    );
+    expect(config.errors).toEqual([]);
+    expect(config.login.dev).toEqual({ email: 'dev@example.com' });
+  });
+
+  it('Access stays enabled next to a dev login it overrides', () => {
+    const config = parseConfig(
+      envWith({
+        PUBLIC_URL: 'https://localhost',
+        AUTH_ACCESS_TEAM_DOMAIN: 'acme',
+        AUTH_ACCESS_AUD: AUD,
+        AUTH_DEV_EMAIL: 'dev@example.com',
+      }),
+    );
+    expect(config.login.access).not.toBeNull();
+    expect(config.login.dev).not.toBeNull();
+  });
+});
+
 describe('I-CFG-1: malformed config disables the affected feature; never runs half-configured', () => {
   const access = { AUTH_ACCESS_TEAM_DOMAIN: 'acme', AUTH_ACCESS_AUD: AUD };
-  const oidc = {
-    AUTH_OIDC_ISSUER: 'https://idp.example.com',
-    AUTH_OIDC_CLIENT_ID: 'client',
-    AUTH_OIDC_CLIENT_SECRET: SECRET,
-  };
-  const google = { AUTH_GOOGLE_CLIENT_ID: 'gid', AUTH_GOOGLE_CLIENT_SECRET: SECRET };
 
   const cases: Array<{
     name: string;
@@ -313,118 +220,6 @@ describe('I-CFG-1: malformed config disables the affected feature; never runs ha
     variable: string;
     disabled: (config: Config) => unknown;
   }> = [
-    {
-      name: 'GitHub id without secret',
-      env: { AUTH_GITHUB_CLIENT_ID: 'id' },
-      feature: 'login.github',
-      variable: 'AUTH_GITHUB_CLIENT_SECRET',
-      disabled: (c) => c.login.github,
-    },
-    {
-      name: 'GitHub secret without id',
-      env: { AUTH_GITHUB_CLIENT_SECRET: SECRET },
-      feature: 'login.github',
-      variable: 'AUTH_GITHUB_CLIENT_ID',
-      disabled: (c) => c.login.github,
-    },
-    {
-      name: 'GitHub allowed orgs without client pair',
-      env: { AUTH_GITHUB_ALLOWED_ORGS: 'acme' },
-      feature: 'login.github',
-      variable: 'AUTH_GITHUB_ALLOWED_ORGS',
-      disabled: (c) => c.login.github,
-    },
-    {
-      name: 'OIDC issuer only',
-      env: { AUTH_OIDC_ISSUER: 'https://idp.example.com' },
-      feature: 'login.oidc',
-      variable: 'AUTH_OIDC_CLIENT_ID',
-      disabled: (c) => c.login.oidc,
-    },
-    {
-      name: 'OIDC without secret',
-      env: { ...oidc, AUTH_OIDC_CLIENT_SECRET: '' },
-      feature: 'login.oidc',
-      variable: 'AUTH_OIDC_CLIENT_SECRET',
-      disabled: (c) => c.login.oidc,
-    },
-    {
-      name: 'OIDC http issuer',
-      env: { ...oidc, AUTH_OIDC_ISSUER: 'http://idp.example.com' },
-      feature: 'login.oidc',
-      variable: 'AUTH_OIDC_ISSUER',
-      disabled: (c) => c.login.oidc,
-    },
-    {
-      name: 'OIDC issuer not a URL',
-      env: { ...oidc, AUTH_OIDC_ISSUER: 'idp.example.com' },
-      feature: 'login.oidc',
-      variable: 'AUTH_OIDC_ISSUER',
-      disabled: (c) => c.login.oidc,
-    },
-    {
-      name: 'OIDC issuer with query',
-      env: { ...oidc, AUTH_OIDC_ISSUER: 'https://idp.example.com/?tenant=x' },
-      feature: 'login.oidc',
-      variable: 'AUTH_OIDC_ISSUER',
-      disabled: (c) => c.login.oidc,
-    },
-    {
-      name: 'OIDC issuer with fragment',
-      env: { ...oidc, AUTH_OIDC_ISSUER: 'https://idp.example.com/#x' },
-      feature: 'login.oidc',
-      variable: 'AUTH_OIDC_ISSUER',
-      disabled: (c) => c.login.oidc,
-    },
-    {
-      name: 'OIDC issuer with credentials',
-      env: { ...oidc, AUTH_OIDC_ISSUER: 'https://u:p@idp.example.com' },
-      feature: 'login.oidc',
-      variable: 'AUTH_OIDC_ISSUER',
-      disabled: (c) => c.login.oidc,
-    },
-    {
-      name: 'AUTH_OIDC_* and AUTH_GOOGLE_* both set',
-      env: { ...oidc, ...google },
-      feature: 'login.oidc',
-      variable: 'AUTH_GOOGLE_CLIENT_ID',
-      disabled: (c) => c.login.oidc,
-    },
-    {
-      name: 'partial AUTH_OIDC_* with AUTH_GOOGLE_* set',
-      env: { AUTH_OIDC_ISSUER: 'https://idp.example.com', ...google },
-      feature: 'login.oidc',
-      variable: 'AUTH_GOOGLE_CLIENT_ID',
-      disabled: (c) => c.login.oidc,
-    },
-    {
-      name: 'Google id without secret',
-      env: { AUTH_GOOGLE_CLIENT_ID: 'gid' },
-      feature: 'login.oidc',
-      variable: 'AUTH_GOOGLE_CLIENT_SECRET',
-      disabled: (c) => c.login.oidc,
-    },
-    {
-      name: 'Google secret without id',
-      env: { AUTH_GOOGLE_CLIENT_SECRET: SECRET },
-      feature: 'login.oidc',
-      variable: 'AUTH_GOOGLE_CLIENT_ID',
-      disabled: (c) => c.login.oidc,
-    },
-    {
-      name: 'invalid allowed domain',
-      env: { ...google, AUTH_OIDC_ALLOWED_DOMAINS: 'example.com,@evil.com' },
-      feature: 'login.oidc',
-      variable: 'AUTH_OIDC_ALLOWED_DOMAINS',
-      disabled: (c) => c.login.oidc,
-    },
-    {
-      name: 'allowed domains without any OIDC login',
-      env: { AUTH_OIDC_ALLOWED_DOMAINS: 'example.com' },
-      feature: 'login.oidc',
-      variable: 'AUTH_OIDC_ALLOWED_DOMAINS',
-      disabled: (c) => c.login.oidc,
-    },
     {
       name: 'Access team domain without AUD',
       env: { PUBLIC_URL: 'https://gw.example.com', AUTH_ACCESS_TEAM_DOMAIN: 'acme' },
@@ -493,6 +288,48 @@ describe('I-CFG-1: malformed config disables the affected feature; never runs ha
       disabled: (c) => c.login.access,
     },
     {
+      name: 'dev login without PUBLIC_URL',
+      env: { AUTH_DEV_EMAIL: 'dev@example.com' },
+      feature: 'login.dev',
+      variable: 'PUBLIC_URL',
+      disabled: (c) => c.login.dev,
+    },
+    {
+      name: 'dev login on a public PUBLIC_URL',
+      env: { AUTH_DEV_EMAIL: 'dev@example.com', PUBLIC_URL: 'https://gw.example.com' },
+      feature: 'login.dev',
+      variable: 'PUBLIC_URL',
+      disabled: (c) => c.login.dev,
+    },
+    {
+      name: 'dev login on a workers.dev PUBLIC_URL',
+      env: { AUTH_DEV_EMAIL: 'dev@example.com', PUBLIC_URL: 'https://tokengate.acme.workers.dev' },
+      feature: 'login.dev',
+      variable: 'PUBLIC_URL',
+      disabled: (c) => c.login.dev,
+    },
+    {
+      name: 'dev login on a host that only starts with localhost',
+      env: { AUTH_DEV_EMAIL: 'dev@example.com', PUBLIC_URL: 'https://localhost.example.com' },
+      feature: 'login.dev',
+      variable: 'PUBLIC_URL',
+      disabled: (c) => c.login.dev,
+    },
+    {
+      name: 'dev login with a malformed PUBLIC_URL',
+      env: { AUTH_DEV_EMAIL: 'dev@example.com', PUBLIC_URL: 'http://localhost:8787/admin' },
+      feature: 'login.dev',
+      variable: 'PUBLIC_URL',
+      disabled: (c) => c.login.dev,
+    },
+    {
+      name: 'dev login with an invalid email',
+      env: { AUTH_DEV_EMAIL: 'dev', PUBLIC_URL: 'http://localhost:8787' },
+      feature: 'login.dev',
+      variable: 'AUTH_DEV_EMAIL',
+      disabled: (c) => c.login.dev,
+    },
+    {
       name: 'http PUBLIC_URL on a public host',
       env: { PUBLIC_URL: 'http://gw.example.com' },
       feature: 'public_url',
@@ -519,17 +356,16 @@ describe('I-CFG-1: malformed config disables the affected feature; never runs ha
   it('a broken feature does not disable unrelated features', () => {
     const config = parseConfig(
       envWith({
-        AUTH_GITHUB_CLIENT_ID: 'id',
-        AUTH_GITHUB_CLIENT_SECRET: SECRET,
-        ...oidc,
-        ...google,
+        PUBLIC_URL: 'https://gw.example.com',
+        ...access,
+        AUTH_DEV_EMAIL: 'dev@example.com',
         ALLOWED_UPSTREAM_HOSTS: 'api.slack.com',
       }),
     );
-    expect(config.login.github).not.toBeNull();
-    expect(config.login.oidc).toBeNull();
+    expect(config.login.access).not.toBeNull();
+    expect(config.login.dev).toBeNull();
     expect(config.allowedUpstreamHosts).toEqual(['api.slack.com']);
-    expect(config.errors.map((e) => e.feature)).toEqual(['login.oidc']);
+    expect(config.errors.map((e) => e.feature)).toEqual(['login.dev']);
   });
 
   it.each([
@@ -596,18 +432,9 @@ describe('I-CFG-1: hostile values never throw and never appear in errors', () =>
     'PUBLIC_URL',
     'BOOTSTRAP_OWNER_EMAILS',
     'ALLOWED_UPSTREAM_HOSTS',
-    'AUTH_GITHUB_CLIENT_ID',
-    'AUTH_GITHUB_CLIENT_SECRET',
-    'AUTH_GITHUB_ALLOWED_ORGS',
-    'AUTH_OIDC_ISSUER',
-    'AUTH_OIDC_CLIENT_ID',
-    'AUTH_OIDC_CLIENT_SECRET',
-    'AUTH_OIDC_NAME',
-    'AUTH_OIDC_ALLOWED_DOMAINS',
-    'AUTH_GOOGLE_CLIENT_ID',
-    'AUTH_GOOGLE_CLIENT_SECRET',
     'AUTH_ACCESS_TEAM_DOMAIN',
     'AUTH_ACCESS_AUD',
+    'AUTH_DEV_EMAIL',
   ] as const;
   const hostile = [
     `https://${MARK}:${MARK}@x.example.com/${MARK}?${MARK}#${MARK}`,
@@ -623,6 +450,7 @@ describe('I-CFG-1: hostile values never throw and never appear in errors', () =>
     const config = parseConfig(env);
     expect(JSON.stringify(config.errors)).not.toContain(MARK);
     expect(config.login.access).toBeNull();
+    expect(config.login.dev).toBeNull();
     expect(config.allowedUpstreamHosts).not.toBeNull();
   });
 });

@@ -15,17 +15,13 @@ import {
 } from '../helpers/admin-auth';
 
 const T0 = Date.UTC(2026, 9, 13, 12);
-const GITHUB_LOGIN = {
-  AUTH_GITHUB_CLIENT_ID: 'gh-client',
-  AUTH_GITHUB_CLIENT_SECRET: 'gh-secret-value',
-};
 
 let app: AdminTestApp;
 let owner: User;
 
 beforeEach(async () => {
   await resetControlPlane();
-  app = createAdminTestApp({ routes: registerUsersRoutes, now: () => T0, env: GITHUB_LOGIN });
+  app = createAdminTestApp({ routes: registerUsersRoutes, now: () => T0 });
   owner = await createUser({ email: 'owner@example.com', role: 'owner' }, T0);
 });
 
@@ -35,9 +31,9 @@ async function sessionFor(role: Role): Promise<AdminSession> {
 }
 
 async function auditActions(): Promise<string[]> {
-  const { results } = await env.DB.prepare(
-    "SELECT action FROM audit_log WHERE action <> 'user.login' ORDER BY rowid",
-  ).all<{ action: string }>();
+  const { results } = await env.DB.prepare('SELECT action FROM audit_log ORDER BY rowid').all<{
+    action: string;
+  }>();
   return results.map((row) => row.action);
 }
 
@@ -60,7 +56,9 @@ describe('GET /admin/users', () => {
     expect(html).toContain(`action="/admin/users/${admin.id}/reset-login"`);
     expect(html).not.toContain(`action="/admin/users/${owner.id}/reset-login"`);
     expect(html).toContain('Only one active owner');
-    expect(html).toContain('verified email address of their GitHub account');
+    expect(html).toContain('verified email address of their Cloudflare Access account');
+    expect(html).toContain('<code>https://gw.test/admin</code>');
+    expect(html).not.toContain('revoke-sessions');
   });
 
   it('escapes user-controlled text', async () => {
@@ -87,8 +85,6 @@ describe('RBAC on user mutations', () => {
       expect(invite.status).toBe(403);
       const change = await adminPost(app, session, `/admin/users/${owner.id}`, { role: 'viewer' });
       expect(change.status).toBe(403);
-      const revoke = await adminPost(app, session, `/admin/users/${owner.id}/revoke-sessions`);
-      expect(revoke.status).toBe(403);
     }
     expect((await getUser(env.DB, owner.id))?.role).toBe('owner');
     expect(await auditActions()).toEqual([]);
@@ -115,7 +111,7 @@ describe('POST /admin/users (invite)', () => {
     expect(await auditActions()).toEqual(['user.invite']);
 
     const page = await (await adminGet(app, session, '/admin/users?notice=invited')).text();
-    expect(page).toContain('sign in with GitHub using the invited email address');
+    expect(page).toContain('sign in with Cloudflare Access using the invited email address');
   });
 
   it('re-renders the form with the submitted values on validation errors', async () => {
@@ -141,7 +137,7 @@ describe('POST /admin/users (invite)', () => {
 });
 
 describe('POST /admin/users/:id and actions', () => {
-  it('changes a role and ends the user’s sessions', async () => {
+  it('changes a role, effective on the user’s next request', async () => {
     const admin = await createUser({ email: 'a1@example.com', role: 'admin' }, T0);
     const adminSession = await loginAs(app, admin);
     const res = await adminPost(app, await sessionFor('owner'), `/admin/users/${admin.id}`, {
@@ -150,8 +146,9 @@ describe('POST /admin/users/:id and actions', () => {
     expect(res.status).toBe(303);
     expect(res.headers.get('location')).toBe('/admin/users?notice=updated');
     expect((await getUser(env.DB, admin.id))?.role).toBe('viewer');
-    const after = await adminGet(app, adminSession, '/admin/users');
-    expect(after.status).toBe(302);
+    const after = await adminPost(app, adminSession, '/admin/users', { email: 'x@example.com' });
+    expect(after.status).toBe(403);
+    expect(await after.text()).toContain('Your role does not allow this action.');
     expect(await auditActions()).toEqual(['user.update']);
   });
 
@@ -171,13 +168,13 @@ describe('POST /admin/users/:id and actions', () => {
     expect(res.status).toBe(404);
   });
 
-  it('resets a login, resends an invitation and ends sessions', async () => {
+  it('resets a login and resends an invitation', async () => {
     const session = await sessionFor('owner');
     const admin = await createUser(
       {
         email: 'a2@example.com',
         role: 'admin',
-        identity: { loginProvider: 'github', subject: '99' },
+        identity: { loginProvider: 'access', subject: 'team|99' },
       },
       T0,
     );
@@ -188,14 +185,7 @@ describe('POST /admin/users/:id and actions', () => {
     const resend = await adminPost(app, session, `/admin/users/${admin.id}/resend-invite`);
     expect(resend.headers.get('location')).toBe('/admin/users?notice=resent');
 
-    const revoke = await adminPost(app, session, `/admin/users/${admin.id}/revoke-sessions`);
-    expect(revoke.headers.get('location')).toBe('/admin/users?notice=revoked');
-
-    expect(await auditActions()).toEqual([
-      'user.reset_login',
-      'user.resend_invite',
-      'user.revoke_sessions',
-    ]);
+    expect(await auditActions()).toEqual(['user.reset_login', 'user.resend_invite']);
   });
 
   it('refuses resending an invitation to an active user', async () => {
@@ -239,12 +229,12 @@ describe('review: CSRF, method safety and input handling', () => {
       {
         email: 'r2@example.com',
         role: 'admin',
-        identity: { loginProvider: 'github', subject: '7' },
+        identity: { loginProvider: 'access', subject: 'team|7' },
       },
       T0,
     );
     const session = await sessionFor('owner');
-    for (const action of ['reset-login', 'resend-invite', 'revoke-sessions']) {
+    for (const action of ['reset-login', 'resend-invite']) {
       const res = await adminGet(app, session, `/admin/users/${admin.id}/${action}`);
       expect(res.status).toBeGreaterThanOrEqual(400);
     }

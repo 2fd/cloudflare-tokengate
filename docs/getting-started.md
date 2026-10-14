@@ -4,9 +4,10 @@ This page takes a platform engineer from an empty Cloudflare account to a GitHub
 
 ## Choose a path
 
-- **Quickstart on workers.dev.** Follow steps 1 to 15. The gateway runs on `https://tokengate.<your-subdomain>.workers.dev`. Use it to evaluate.
-- **Production on a custom domain.** Follow steps 1 to 15, then [Production on a custom domain](#production-on-a-custom-domain).
+- **Manual deploy.** Follow steps 1 to 16.
 - **Deploy button.** The button replaces steps 1 to 6. Read [Deploy button](#deploy-button) first, then continue at step 7.
+
+The proxy works on the `*.workers.dev` hostname right after step 5. The admin UI does not: sign-in goes through Cloudflare Access, which needs a custom domain (steps 7 to 9). Until then, `/admin` shows a setup page.
 
 ## Prerequisites
 
@@ -14,6 +15,8 @@ This page takes a platform engineer from an empty Cloudflare account to a GitHub
 - Node.js 22.18 or later. `pnpm keyring` (used for key rotation) needs TypeScript type stripping, which Node.js has from 22.18.
 - pnpm. The version is pinned in the `packageManager` field of `package.json`.
 - `git` and `openssl`.
+- A domain whose zone is in the same Cloudflare account, for the admin UI hostname, for example `tokengate.example.com`.
+- Cloudflare Zero Trust set up for the account, with a login method for your team (for example your company identity provider, or one-time PIN). Admin sign-in uses Cloudflare Access.
 - A company vault (password manager or secrets manager) for the key-encryption key.
 - A GitHub repository where you can add a workflow, and the [`gh` CLI](https://cli.github.com/) for the commands below.
 
@@ -42,7 +45,7 @@ tokengate uses two databases (see [architecture.md](architecture.md)):
 
 | Binding | Database name | Contents |
 |---|---|---|
-| `DB` | `tokengate` | Users, sessions, caller providers, services, grants, settings, audit log |
+| `DB` | `tokengate` | Users, caller providers, services, grants, settings, audit log |
 | `TELEMETRY_DB` | `tokengate-telemetry` | Request log and hourly rollups |
 
 1. Choose a location hint near your CI runners: `weur`, `eeur`, `apac`, `oc`, `wnam` or `enam`.
@@ -70,13 +73,13 @@ pnpm run deploy
 
 This command applies the migrations in `migrations/` to `DB` and the migrations in `migrations-telemetry/` to `TELEMETRY_DB`, then deploys the Worker. Answer yes when Wrangler asks to apply the migrations.
 
-Note the URL that Wrangler prints, for example `https://tokengate.<your-subdomain>.workers.dev`. The rest of this page calls it `<gateway>`.
+Note the URL that Wrangler prints, for example `https://tokengate.<your-subdomain>.workers.dev`. Use it until step 7 gives the Worker its custom domain.
 
 Check that the Worker answers:
 
 ```sh
-curl -sS <gateway>/healthz
-curl -sS <gateway>/readyz
+curl -sS https://tokengate.<your-subdomain>.workers.dev/healthz
+curl -sS https://tokengate.<your-subdomain>.workers.dev/readyz
 ```
 
 `/healthz` returns `{"ok":true}`. `/readyz` returns `503` with `"keyring":false` until you finish step 6.
@@ -98,11 +101,32 @@ The key-encryption key (KEK) encrypts every stored credential. Cloudflare secret
    pnpm wrangler secret put TOKENGATE_KEK
    ```
 
-4. Check readiness again. `curl -sS <gateway>/readyz` now returns `"ok":true`. Each isolate caches the answer for 10 seconds, so retry once if it still shows `"keyring":false`.
+4. Check readiness again. `/readyz` now returns `"ok":true`. Each isolate caches the answer for 10 seconds, so retry once if it still shows `"keyring":false`.
 
 To rotate the KEK later, see [operations/key-rotation.md](operations/key-rotation.md).
 
-## 7. Set the operator variables
+## 7. Attach a custom domain
+
+1. Add the domain's zone to your Cloudflare account, if it is not there yet.
+2. Open Workers & Pages > tokengate > Settings > Domains & Routes and add a custom domain, for example `tokengate.example.com`.
+
+The rest of this page calls `https://tokengate.example.com` `<gateway>`. Check that `curl -sS <gateway>/healthz` returns `{"ok":true}`.
+
+## 8. Create the Access application
+
+The Access application puts the admin UI behind your Zero Trust login. It must cover `/admin` only. CI jobs call `/proxy` without an Access session, so `/proxy` must stay outside Access.
+
+1. In Zero Trust, open Access controls > Applications and add a self-hosted application.
+2. Add two public hostnames on your custom domain: path `admin` and path `admin/*`. A path with `/*` does not cover its parent path, so you need both ([application paths](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/)).
+3. Add an Allow policy for the people who may use the admin UI, for example your email address or your company's email domain.
+4. Save the application. Copy its "Application Audience (AUD) Tag".
+5. Note your team name: the `<team>` in `<team>.cloudflareaccess.com`, shown in the Zero Trust settings.
+
+The gateway does not trust Access blindly. It verifies the Access token on every `/admin` request, so a request that reaches the Worker without a valid token gets `401`. Access only lets a person authenticate: they still need an invitation in tokengate, or must be the first owner (step 10).
+
+More about the zone and Access: [operations/cloudflare-zone-settings.md](operations/cloudflare-zone-settings.md).
+
+## 9. Set the operator variables
 
 Set operator variables in the Cloudflare dashboard, not in `wrangler.jsonc`. `wrangler.jsonc` sets `"keep_vars": true` and declares no variables, so deploys keep the values that you set in the dashboard ([I-DEPLOY-1](threat-model.md#i-deploy-1)).
 
@@ -111,66 +135,37 @@ Set operator variables in the Cloudflare dashboard, not in `wrangler.jsonc`. `wr
 
    | Variable | Value | Why |
    |---|---|---|
-   | `PUBLIC_URL` | `<gateway>`, for example `https://tokengate.acme.workers.dev` | `/admin` and `/auth` answer only on this origin. Login callback URLs use it. |
+   | `PUBLIC_URL` | `<gateway>`, for example `https://tokengate.example.com` | `/admin` answers only on this origin. Access login requires it. |
+   | `AUTH_ACCESS_TEAM_DOMAIN` | Your team name from step 8 | The gateway checks the Access token against this team's keys. |
+   | `AUTH_ACCESS_AUD` | The AUD tag from step 8 | The Access token must be for this application. |
    | `ALLOWED_UPSTREAM_HOSTS` | `api.github.com` | Services can only point at these hosts ([I-SSRF-1](threat-model.md#i-ssrf-1)). Add the exact host of each service you add, for example `slack.com` for the Slack Web API and `api.openai.com` for OpenAI. `*.slack.com` does not match `slack.com`. |
    | `BOOTSTRAP_OWNER_EMAILS` | Your email address | The first listed person to sign in becomes the owner. |
 
 3. Save and deploy the change.
 
-`BOOTSTRAP_OWNER_EMAILS` must match an email address that your login provider reports as verified. For GitHub, this is any verified address on your GitHub account. Google and other OpenID Connect login add domain rules; see [configuration.md](configuration.md).
+`BOOTSTRAP_OWNER_EMAILS` must match the email address that Access reports for you. From now on, `/admin` answers `404` on every other hostname, including workers.dev.
 
-Every variable, its format and its failure behavior are in [configuration.md](configuration.md).
+If a variable is half-configured or malformed, Access login stays off. `/admin` then shows the setup page, which names the variable ([I-CFG-1](threat-model.md#i-cfg-1)). Every variable, its format and its failure behavior are in [configuration.md](configuration.md).
 
-## 8. Configure a login provider
+## 10. Sign in as the first owner
 
-Open `<gateway>/auth/login`. While no login provider is configured, the page "Set up sign-in" lists the exact callback URL for each option:
-
-| Login provider | Callback URL to register | Variables | Secret |
-|---|---|---|---|
-| GitHub | `<gateway>/auth/github/callback` | `AUTH_GITHUB_CLIENT_ID`, optional `AUTH_GITHUB_ALLOWED_ORGS` | `AUTH_GITHUB_CLIENT_SECRET` |
-| Google | `<gateway>/auth/oidc/callback` | `AUTH_GOOGLE_CLIENT_ID`, optional `AUTH_OIDC_ALLOWED_DOMAINS` | `AUTH_GOOGLE_CLIENT_SECRET` |
-| Other OpenID Connect | `<gateway>/auth/oidc/callback` | `AUTH_OIDC_ISSUER`, `AUTH_OIDC_CLIENT_ID`, optional `AUTH_OIDC_NAME`, `AUTH_OIDC_ALLOWED_DOMAINS` | `AUTH_OIDC_CLIENT_SECRET` |
-| Cloudflare Access | none | `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` | none |
-
-Cloudflare Access login requires `PUBLIC_URL` on a custom domain. Google and other OpenID Connect login cannot be used together. Details are in [configuration.md](configuration.md).
-
-The steps below use GitHub:
-
-1. In GitHub, open Settings > Developer settings > OAuth Apps > New OAuth App. For an organization-owned app, use the organization's settings instead.
-2. Set "Homepage URL" to `<gateway>`.
-3. Set "Authorization callback URL" to `<gateway>/auth/github/callback`.
-4. Register the application and copy the client ID.
-5. Generate a client secret and copy it.
-6. Set the secret:
-
-   ```sh
-   pnpm wrangler secret put AUTH_GITHUB_CLIENT_SECRET
-   ```
-
-   If you have no local clone (Deploy button path), add it in Workers & Pages > tokengate > Settings > Variables and Secrets with the type "Secret" instead.
-
-7. In the dashboard (step 7), add the variable `AUTH_GITHUB_CLIENT_ID` with the client ID.
-8. Optional: add `AUTH_GITHUB_ALLOWED_ORGS` with a comma-separated list of organization logins. Only active members of these organizations can sign in. If an organization restricts OAuth App access, approve the app for that organization first. Until then, GitHub hides the membership and the sign-in fails.
-
-If a variable is half-configured or malformed, that login provider stays off and the sign-in page names the variable ([I-CFG-1](threat-model.md#i-cfg-1)).
-
-## 9. Sign in as the first owner
-
-1. Open `<gateway>/admin`. The gateway redirects you to the sign-in page.
-2. Click "Sign in with GitHub" and authorize the OAuth App.
+1. Open `<gateway>/admin`. Access asks you to sign in.
+2. Sign in with the email address from `BOOTSTRAP_OWNER_EMAILS`.
 3. The gateway creates your user with the role `owner` and opens the Dashboard.
 
 The bootstrap creates at most one owner, once ([I-BOOT-1](threat-model.md#i-boot-1)). The Audit log shows a `user.bootstrap` event.
 
-## 10. Remove the bootstrap variable
+The gateway keeps no session of its own. "Sign out" ends the Access session for the hostname.
+
+## 11. Remove the bootstrap variable
 
 1. Delete `BOOTSTRAP_OWNER_EMAILS` in Workers & Pages > tokengate > Settings > Variables and Secrets.
 2. Open Settings in the admin UI. The row "First-owner bootstrap (BOOTSTRAP_OWNER_EMAILS)" shows "not set".
 3. Open Users. Under "Invite a user", enter the "Email address" of a second owner, set "Role" to "Owner: everything, plus users, settings and keys" and click "Invite". If the only owner loses access, recovery needs a manual database edit ([operations/break-glass.md](operations/break-glass.md)).
 
-The gateway sends no email. Send the sign-in page address to the invited person yourself. They must sign in with the invited email address within 7 days. The gateway links a login to an invited user only through an email address that the login provider reports as verified ([I-LINK-1](threat-model.md#i-link-1)).
+The gateway sends no email. Send `<gateway>/admin` to the invited person yourself. The Access policy must let them in. They must open the admin UI with the invited email address within 7 days. The gateway links a login to an invited user only through the email address in the Access token ([I-LINK-1](threat-model.md#i-link-1)).
 
-## 11. Add a caller provider
+## 12. Add a caller provider
 
 A caller provider tells the gateway which CI tokens to trust.
 
@@ -193,7 +188,7 @@ A caller provider tells the gateway which CI tokens to trust.
 
 GitLab CI and other issuers are covered in [callers/gitlab-ci.md](callers/gitlab-ci.md) and [callers/generic-oidc.md](callers/generic-oidc.md).
 
-## 12. Add a service
+## 13. Add a service
 
 A service is one upstream API plus the credential the gateway attaches. This example uses the GitHub REST API.
 
@@ -208,13 +203,13 @@ The template includes a credential check (`GET /rate_limit`). If it passes, the 
 
 The credential is encrypted before it is stored. The UI shows only its length and last 4 characters ([I-CRED-1](threat-model.md#i-cred-1)). More templates and their settings are in [upstreams/github.md](upstreams/github.md) and the other [upstreams](upstreams/) pages.
 
-## 13. Make the first call
+## 14. Make the first call
 
-1. Use a test repository owned by the organization whose ID you entered in step 11. Set two Actions variables on it. Replace `OWNER/REPO` with the test repository. You run these commands in the gateway clone, so `--repo` is required.
+1. Use a test repository owned by the organization whose ID you entered in step 12. Set two Actions variables on it. Replace `OWNER/REPO` with the test repository. You run these commands in the gateway clone, so `--repo` is required.
 
    ```sh
    gh variable set TOKENGATE_URL --repo OWNER/REPO --body "<gateway>"
-   gh variable set TOKENGATE_AUDIENCE --repo OWNER/REPO --body "<audience from step 11>"
+   gh variable set TOKENGATE_AUDIENCE --repo OWNER/REPO --body "<audience from step 12>"
    ```
 
 2. Add `.github/workflows/tokengate-smoke.yml` on the default branch:
@@ -253,7 +248,7 @@ The credential is encrypted before it is stored. The UI shows only its length an
 
 The step fails with HTTP 403. The body contains `"code":"no_matching_grant"` and the `request_id`. This is expected: access is denied by default ([I-AUTHZ-1](threat-model.md#i-authz-1)). The response headers carry `x-tokengate-error` and `x-tokengate-request-id`. All error codes are in [errors.md](errors.md).
 
-## 14. Create the grant from the denied request
+## 15. Create the grant from the denied request
 
 1. In the admin UI, open Requests. You can also use "Recent denials" on the Dashboard.
 2. Open the denied request. Its reason is `no_matching_grant`.
@@ -276,7 +271,7 @@ The step fails with HTTP 403. The body contains `"code":"no_matching_grant"` and
 
 Only requests with a verified token that were denied with `no_matching_grant` or `event_not_trusted` offer this button ([I-LOG-2](threat-model.md#i-log-2)). The button requires the role `admin` or `owner`.
 
-## 15. Call again
+## 16. Call again
 
 ```sh
 gh workflow run tokengate-smoke.yml --repo OWNER/REPO
@@ -289,25 +284,20 @@ The Requests page shows the call as allowed, with the grant that matched, unless
 
 ## Production on a custom domain
 
-Do these steps after step 15, or in place of the workers.dev values in steps 7 and 8.
+The steps above already put the admin UI on a custom domain. Before real use:
 
-1. Add the domain's zone to your Cloudflare account.
-2. Attach a custom domain to the Worker, for example `tokengate.example.com`. Use Workers & Pages > tokengate > Settings > Domains & Routes.
-3. Set `PUBLIC_URL` to `https://tokengate.example.com`. From then on, `/admin` and `/auth` answer `404` on every other hostname, including workers.dev ([I-DEPLOY-1](threat-model.md#i-deploy-1)).
-4. Change the callback URL at your login provider to `https://tokengate.example.com/auth/github/callback` (or `/auth/oidc/callback`). For a GitHub OAuth App, also change "Homepage URL". Then sign in again on the new hostname: the session cookie is bound to the old host.
-5. Change `TOKENGATE_URL` in your CI variables to `https://tokengate.example.com`.
-6. Check the zone's bot and firewall settings. GitHub-hosted runners connect from datacenter IP addresses:
+1. Check the zone's bot and firewall settings. GitHub-hosted runners connect from datacenter IP addresses:
    - If Bot Fight Mode is on, it blocks CI callers, and no rule can skip it for one path. Turn it off for the zone. On a Pro or higher plan, you can use Super Bot Fight Mode with a skip rule for `/proxy/*` instead.
    - If WAF managed rules block API traffic, add a skip rule for `/proxy/*`.
    - A response without an `x-tokengate-request-id` header came from Cloudflare, not from the gateway.
 
    Details are in [operations/cloudflare-zone-settings.md](operations/cloudflare-zone-settings.md).
-7. Optional: use Cloudflare Access for admin sign-in. Protect only the `/admin` and `/auth` paths with the Access application, never `/proxy`. Set `AUTH_ACCESS_TEAM_DOMAIN` and `AUTH_ACCESS_AUD`.
-8. Optional: turn off the workers.dev hostname. Set `"workers_dev": false` in your clone's `wrangler.jsonc` and run `pnpm run deploy`.
-9. Keep `ALLOWED_UPSTREAM_HOSTS` set to the exact hosts your services use.
-10. Pin `actions/get-token` to a commit SHA in every workflow.
-11. Monitor `<gateway>/readyz` and read [observability.md](observability.md). Optional bindings (request log queue, R2 archive, rate limiter) are in [configuration.md](configuration.md).
-12. Plan backups and key custody: [operations/backup-restore.md](operations/backup-restore.md) and [operations/key-rotation.md](operations/key-rotation.md).
+2. If CI jobs still use the workers.dev URL, change `TOKENGATE_URL` in your CI variables to `<gateway>`.
+3. Optional: turn off the workers.dev hostname. Set `"workers_dev": false` in your clone's `wrangler.jsonc` and run `pnpm run deploy`.
+4. Keep `ALLOWED_UPSTREAM_HOSTS` set to the exact hosts your services use.
+5. Pin `actions/get-token` to a commit SHA in every workflow.
+6. Monitor `<gateway>/readyz` and read [observability.md](observability.md). Optional bindings (request log queue, R2 archive, rate limiter) are in [configuration.md](configuration.md).
+7. Plan backups and key custody: [operations/backup-restore.md](operations/backup-restore.md) and [operations/key-rotation.md](operations/key-rotation.md).
 
 ## Deploy button
 
@@ -315,11 +305,9 @@ Do these steps after step 15, or in place of the workers.dev values in steps 7 a
 
 1. Generate the KEK and store it in your vault first (step 6, items 1 and 2).
 2. Click the button. Cloudflare copies this repository into a new repository in your GitHub or GitLab account, creates the two D1 databases and sets up Workers Builds.
-3. The form asks for the secrets listed in `.dev.vars.example`:
-   - `TOKENGATE_KEK`: paste the KEK.
-   - `AUTH_GITHUB_CLIENT_SECRET`, `AUTH_OIDC_CLIENT_SECRET`, `AUTH_GOOGLE_CLIENT_SECRET`: leave them empty. You set the one you need in step 8.
+3. The form asks for the secret listed in `.dev.vars.example`: `TOKENGATE_KEK`. Paste the KEK.
 4. Check that the Workers Builds deploy command runs the `deploy` script: `pnpm run deploy`. Cloudflare pre-fills it from `package.json`. If the field shows a plain `wrangler deploy`, change it: that command does not apply the database migrations.
-5. After the first deploy, continue at [step 7](#7-set-the-operator-variables). The variables are not part of the button form: `wrangler.jsonc` declares none.
+5. After the first deploy, continue at [step 7](#7-attach-a-custom-domain). The variables are not part of the button form: `wrangler.jsonc` declares none.
 
 Caveats:
 

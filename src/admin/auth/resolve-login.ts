@@ -12,11 +12,11 @@ import {
 } from '../../db/users';
 import type { Deps } from '../../deps';
 import { newId } from '../../lib/ids';
-import type { RequestMeta } from './session';
+import type { RequestMeta } from './identity';
 
-export type LoginProviderId = 'github' | 'oidc' | 'access';
+export type LoginProviderId = 'access' | 'dev';
 
-export const LOGIN_PROVIDER_IDS: readonly LoginProviderId[] = ['github', 'oidc', 'access'];
+export const LOGIN_PROVIDER_IDS: readonly LoginProviderId[] = ['access', 'dev'];
 
 export function isLoginProviderId(value: string): value is LoginProviderId {
   return (LOGIN_PROVIDER_IDS as readonly string[]).includes(value);
@@ -27,9 +27,6 @@ export interface LoginIdentity {
   loginProvider: LoginProviderId;
   /** Stable, provider-scoped subject (never an email). */
   subject: string;
-  /** Other spellings of `subject` that an existing identity may be stored under; looked up only
-   * when `subject` is not linked. New identities are always linked under `subject`. */
-  legacySubjects?: string[];
   /** Output of `authoritativeEmails` only. */
   emails: string[];
   name: string | null;
@@ -40,15 +37,13 @@ export type LoginResolution =
       ok: true;
       user: User;
       via: 'identity' | 'invite' | 'bootstrap';
-      /** The stored identity subject the session binds to. */
-      subject: string;
     }
   | { ok: false; reason: 'not_invited' | 'disabled' };
 
 const NAME_MAX = 200;
 
 /**
- * 1) Known identity (under `subject`, else under one of `legacySubjects`): its user, if active.
+ * 1) Known identity: its user, if active.
  * 2) Else an invited, unexpired user matching an authoritative email is linked and activated.
  * 3) Else, if an email is in BOOTSTRAP_OWNER_EMAILS and bootstrap has never run, the first owner
  * is created. 4) Else `not_invited`.
@@ -58,13 +53,11 @@ export async function resolveLogin(
   input: LoginIdentity & { meta?: RequestMeta },
 ): Promise<LoginResolution> {
   const db = deps.env.DB;
-  for (const subject of [input.subject, ...(input.legacySubjects ?? [])]) {
-    const known = await findUserByIdentity(db, input.loginProvider, subject);
-    if (known) {
-      return known.status === 'active'
-        ? { ok: true, user: known, via: 'identity', subject }
-        : { ok: false, reason: 'disabled' };
-    }
+  const known = await findUserByIdentity(db, input.loginProvider, input.subject);
+  if (known) {
+    return known.status === 'active'
+      ? { ok: true, user: known, via: 'identity' }
+      : { ok: false, reason: 'disabled' };
   }
 
   const name = input.name?.trim().slice(0, NAME_MAX) || null;
@@ -95,8 +88,7 @@ export async function resolveLogin(
     if (results.at(-1)?.meta.changes === 1) {
       emitAuditLine(audit);
       const user = await getUser(db, invited.id);
-      if (user?.status === 'active')
-        return { ok: true, user, via: 'invite', subject: input.subject };
+      if (user?.status === 'active') return { ok: true, user, via: 'invite' };
     }
   }
 
@@ -126,7 +118,7 @@ export async function resolveLogin(
     if (results[0]?.meta.changes === 1) {
       emitAuditLine(audit);
       const user = await getUser(db, userId);
-      if (user) return { ok: true, user, via: 'bootstrap', subject: input.subject };
+      if (user) return { ok: true, user, via: 'bootstrap' };
     }
   }
 

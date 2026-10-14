@@ -50,8 +50,8 @@
     {
       "id": "login",
       "type": "security",
-      "label": "Login provider",
-      "sublabel": "GitHub, OIDC, Access",
+      "label": "Cloudflare Access",
+      "sublabel": "admin login",
       "tag": "Worker vars",
       "pos": [40, 380],
       "size": [190, 64]

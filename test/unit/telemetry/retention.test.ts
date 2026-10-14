@@ -37,7 +37,6 @@ beforeEach(async () => {
   ]);
   await env.DB.batch([
     env.DB.prepare('DELETE FROM audit_log'),
-    env.DB.prepare('DELETE FROM sessions'),
     env.DB.prepare('DELETE FROM users'),
   ]);
 });
@@ -83,7 +82,7 @@ describe('purge: request_log', () => {
   });
 });
 
-describe('purge: rollups, audit log, sessions', () => {
+describe('purge: rollups and audit log', () => {
   it('deletes rollups older than rollup_retention_days (floor 30)', async () => {
     const insert = (hour: number) =>
       env.TELEMETRY_DB.prepare(
@@ -107,36 +106,6 @@ describe('purge: rollups, audit log, sessions', () => {
     expect(result.auditLog).toBe(1);
     const left = await env.DB.prepare('SELECT id FROM audit_log').all<{ id: string }>();
     expect(left.results.map((r) => r.id)).toEqual(['aud_new']);
-  });
-
-  it('deletes sessions ended more than a day ago', async () => {
-    await env.DB.prepare(
-      "INSERT INTO users (id, email, role, status, created_at, updated_at) VALUES ('usr_1', 'a@example.com', 'admin', 'active', 0, 0)",
-    ).run();
-    const session = (id: string, expires: number, idle: number, revoked: number | null) =>
-      env.DB.prepare(
-        `INSERT INTO sessions (id_hash, user_id, login_provider, identity_subject, csrf_token, created_at, last_seen_at, expires_at, idle_expires_at, revoked_at)
-         VALUES (?, 'usr_1', 'github', '1', 'c', 0, 0, ?, ?, ?)`,
-      ).bind(id, expires, idle, revoked);
-    const later = NOW + DAY;
-    await env.DB.batch([
-      session('active', later, later, null),
-      session('expired_recently', NOW - 1000, NOW - 1000, null),
-      session('expired_long_ago', NOW - 2 * DAY, NOW - 2 * DAY, null),
-      session('idle_long_ago', later, NOW - 2 * DAY, null),
-      session('revoked_recently', later, later, NOW - 1000),
-      session('revoked_long_ago', later, later, NOW - 2 * DAY),
-    ]);
-    const result = await purge(deps, settings());
-    expect(result.sessions).toBe(3);
-    const sessions = await env.DB.prepare('SELECT id_hash FROM sessions ORDER BY id_hash').all<{
-      id_hash: string;
-    }>();
-    expect(sessions.results.map((r) => r.id_hash)).toEqual([
-      'active',
-      'expired_recently',
-      'revoked_recently',
-    ]);
   });
 });
 

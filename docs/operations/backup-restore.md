@@ -8,9 +8,9 @@ configuration export, and the secrets that no backup holds. It is for platform e
 | State | Where | Backed up by |
 |---|---|---|
 | Keyring (`TOKENGATE_KEK` or `TOKENGATE_KEYRING`) | Worker secret | Only your vault. Cloudflare cannot return a secret's value |
-| Login provider client secrets (`AUTH_*_CLIENT_SECRET`) | Worker secret | Your vault, or the login provider (create a new one) |
 | Variables (`PUBLIC_URL`, `ALLOWED_UPSTREAM_HOSTS`, `AUTH_*` ...) | Worker settings | Keep a copy in your runbook ([configuration](../configuration.md#variables)) |
-| Users, sessions, caller providers, services, sealed credentials, grants, settings, audit log | `DB` (`tokengate`) | Time Travel, `d1 export` |
+| Users, login identities, caller providers, services, sealed credentials, grants, settings, audit log | `DB` (`tokengate`) | Time Travel, `d1 export` |
+| Access application and policy (who can reach `/admin`) | Cloudflare One | Keep a copy in your runbook ([zone settings](cloudflare-zone-settings.md#cloudflare-access)) |
 | Request log and rollups | `TELEMETRY_DB` (`tokengate-telemetry`) | Time Travel, `d1 export`; optional R2 archive |
 | Code and `wrangler.jsonc` | Your clone of the repository | Git |
 
@@ -44,12 +44,13 @@ The restore overwrites the database in place. Every change after that time is lo
 
 - Grants, services and caller providers you disabled after that time come back enabled. Disable them
   again before you continue.
-- Users you disabled come back active, and their sessions come back if they were still valid.
-- Every admin session ended after that time comes back if it has not expired: sign-outs, Users >
-  "End sessions", disables, role changes, login resets and break-glass
-  [End every admin session](break-glass.md#end-every-admin-session). A stolen session cookie you
-  revoked during an incident works again. The first [check after a restore](#checks-after-a-restore)
-  ends every session.
+- Users you disabled come back active, demoted users get their old role back, and identities you
+  unlinked with "Reset login" are linked again. Anyone with such a user and a valid Access session
+  has access again on their next request. The first [check after a restore](#checks-after-a-restore)
+  disables them again.
+- Access sessions are not in D1, so a restore does not change them.
+- A restore to a time before a migration also removes that migration's changes and its row in
+  `d1_migrations`. The schema state then shows "behind" until you apply the migrations again.
 - Audit events after that time are gone from D1. If you export `audit.event` log lines, your SIEM
   still has them ([observability](../observability.md#auditevent-log-lines-for-a-siem)).
 - Credentials saved after that time revert to the earlier credential.
@@ -66,7 +67,7 @@ example weekly.
 pnpm wrangler d1 export tokengate --remote --output "tokengate-$(date -u +%Y%m%d).sql"
 ```
 
-The file holds sealed credentials, user emails, session hashes and the audit log. Store it as
+The file holds sealed credentials, user emails, login identities and the audit log. Store it as
 sensitive data, and never in the same place as the keyring: together they expose every credential.
 
 The request log is optional to export; it can be large:
@@ -126,24 +127,28 @@ Use this when the Cloudflare account or both databases are lost.
    [checks after a restore](#checks-after-a-restore).
 4. If you have only a configuration export, recreate the caller providers with the same issuer and
    audience, then services, then grants, and enter every credential again.
-5. If the gateway URL changes, update every workflow that calls it, and the callback URL at each login
-   provider (`<PUBLIC_URL>/auth/github/callback` or `<PUBLIC_URL>/auth/oidc/callback`).
+5. If the gateway URL changes, update every workflow that calls it, and the hostname of the Access
+   application ([zone settings](cloudflare-zone-settings.md#cloudflare-access)). If the Access team
+   changes, every user must be linked again: use "Reset login" for each user, or
+   [break-glass](break-glass.md#regain-owner-access) when no owner can sign in.
 
 ## Checks after a restore
 
-1. End every admin session with break-glass
-   [End every admin session](break-glass.md#end-every-admin-session), then sign in again. Do this
-   after every restore of `DB` (Time Travel or export): the restore brings back sessions that were
-   ended after the restore point, and the admin UI has no action that ends every user's sessions.
-   The audit row it writes also marks the restore in the audit log.
-2. `/readyz` returns `200` with every check `true` ([observability](../observability.md#health-endpoints)).
-3. The dashboard shows no error banner. A keyring banner means a key id is missing or changed
+1. In Users, disable again every user you had disabled after the restore point, and fix roles and
+   login resets made after it. Do this after every restore of `DB` (Time Travel or export): the
+   gateway re-reads the user on every admin request, so these changes apply at once. If a user may
+   have taken part in an incident, also sign every admin out
+   ([break-glass](break-glass.md#sign-every-admin-out)).
+2. If the schema state is "behind", apply the migrations again:
+   `pnpm wrangler d1 migrations apply DB --remote` ([upgrades](upgrades.md#schema-state)).
+3. `/readyz` returns `200` with every check `true` ([observability](../observability.md#health-endpoints)).
+4. The dashboard shows no error banner. A keyring banner means a key id is missing or changed
    ([key rotation](key-rotation.md)).
-4. Settings > System status shows the database schema as "up to date".
-5. Users shows the owners you expect, and no user you had disabled is active.
-6. Grants, services and caller providers you disabled during an incident are still disabled.
-7. On a service with a credential check, "Test credential" passes.
-8. A workflow call succeeds ([GitHub Actions](../callers/github-actions.md)).
+5. Settings > System status shows the database schema as "up to date".
+6. Users shows the owners you expect, and no user you had disabled is active.
+7. Grants, services and caller providers you disabled during an incident are still disabled.
+8. On a service with a credential check, "Test credential" passes.
+9. A workflow call succeeds ([GitHub Actions](../callers/github-actions.md)).
 
 ## Related pages
 

@@ -6,7 +6,7 @@ Date: 2026-10-13
 
 ## Status
 
-Accepted
+Superseded by [0015](0015-cloudflare-access-only-admin-login.md)
 
 ## Context
 

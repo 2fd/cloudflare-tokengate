@@ -12,7 +12,7 @@ applies to a custom domain in your own zone.
 | Setting | Where | Recommended |
 |---|---|---|
 | Custom domain | Workers & Pages > tokengate > Settings > Domains & Routes, or `routes` in your clone's `wrangler.jsonc` | One hostname for the gateway, for example `tokengate.example.com` |
-| `PUBLIC_URL` | Worker variable | `https://tokengate.example.com`. `/admin` and `/auth` then answer `404` on every other origin ([I-DEPLOY-1](../threat-model.md#i-deploy-1)) |
+| `PUBLIC_URL` | Worker variable | `https://tokengate.example.com`. `/admin` then answers `404` on every other origin ([I-DEPLOY-1](../threat-model.md#i-deploy-1)) |
 | `workers_dev` | `wrangler.jsonc` | `false` once the custom domain works |
 | `preview_urls` | `wrangler.jsonc` | `false` (already set; `scripts/check-config.sh` enforces it) |
 
@@ -26,9 +26,9 @@ To declare the custom domain in `wrangler.jsonc` instead of the dashboard:
 Then run `pnpm run deploy`.
 
 Why turn off `workers_dev`: with it on, `/proxy/` also answers on the workers.dev hostname, where your
-zone's rate limiting and WAF rules do not run. Host pinning already closes `/admin` and `/auth` there
-when `PUBLIC_URL` is set. Cloudflare Access login requires `PUBLIC_URL` on a custom domain, not
-workers.dev (`src/config.ts`).
+zone's rate limiting and WAF rules do not run. Host pinning already closes `/admin` there when
+`PUBLIC_URL` is set. Admin sign-in uses Cloudflare Access, which requires `PUBLIC_URL` on a custom
+domain, not workers.dev (`src/config.ts`). So the admin UI is never available on workers.dev.
 
 ## Bot Fight Mode
 
@@ -58,7 +58,7 @@ Managed rules inspect request bodies. API payloads such as prompts, source code 
 trigger false positives. If a managed rule blocks CI calls, add a custom rule with the Skip action
 for the same expression as above and skip the managed rules that fire
 ([Skip action](https://developers.cloudflare.com/waf/custom-rules/skip/)). Keep managed rules on for
-`/admin` and `/auth`.
+`/admin`.
 
 Check Security > Analytics > Events to see which rule acted on a request.
 
@@ -69,7 +69,6 @@ stores (10 per minute per isolate). Use rate limiting rules for:
 
 | Expression | Counting | Purpose |
 |---|---|---|
-| `starts_with(http.request.uri.path, "/auth/")` | Per IP, for example 5 requests per 10 seconds | Login floods. `/auth/github/start` and `/auth/oidc/start` write nothing to D1, but an OIDC start and every callback call the login provider |
 | `starts_with(http.request.uri.path, "/proxy/")` | Per IP, well above your CI peak per runner address | Anonymous floods that cost Worker requests and D1 reads |
 
 - Below Enterprise, rate limiting rule expressions cannot use request headers, so a rule cannot tell
@@ -81,28 +80,38 @@ stores (10 per minute per isolate). Use rate limiting rules for:
 
 ## Cloudflare Access
 
-Access can protect the admin UI as a second layer, or act as the login provider
-(`AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD`). Either way, scope the Access application to `/admin`
-and `/auth` only. Callers on `/proxy/` authenticate with their own tokens and cannot pass an Access
-login; `/healthz` and `/readyz` must stay reachable for monitors.
+Cloudflare Access is the only login for the admin UI (`AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD`).
+Scope the Access application to `/admin` only. Callers on `/proxy/` authenticate with their own
+tokens and cannot pass an Access login. `/healthz` and `/readyz` must stay reachable for monitors.
 
 1. In Cloudflare One, create a self-hosted Access application.
-2. Add two destinations on the gateway hostname: path `admin` and path `auth`. A path also covers
-   the paths below it ([application paths](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/)).
+2. Add two destinations on the gateway hostname: path `admin` and path `admin/*`. A path with `/*`
+   does not cover its parent path, so you need both
+   ([application paths](https://developers.cloudflare.com/cloudflare-one/access-controls/policies/app-paths/)).
 3. Add a policy that allows your administrators.
-4. If Access is the login provider: copy the application's Audience (AUD) tag into `AUTH_ACCESS_AUD`
-   and your team name into `AUTH_ACCESS_TEAM_DOMAIN`, and set `PUBLIC_URL` to the custom domain
+4. Copy the application's Audience (AUD) tag into `AUTH_ACCESS_AUD` and your team name into
+   `AUTH_ACCESS_TEAM_DOMAIN`. Set `PUBLIC_URL` to the custom domain
    ([configuration](../configuration.md#cloudflare-access-login-auth_access_)).
 5. Open `https://tokengate.example.com/admin` in a private window. Access must ask you to sign in.
 6. Open `https://tokengate.example.com/readyz`. It must answer without an Access login.
 
-When Access is the login provider, the gateway verifies the `Cf-Access-Jwt-Assertion` header itself
-at `/auth/access/start` (`src/admin/auth/access.ts`): signature, issuer and audience. A request that
-reaches the Worker without Access gets "Cloudflare Access did not present a valid user identity for
-this request." On every later `/admin` request, the gateway checks the header again and ends the
-session if it is missing or names another user (`src/admin/auth/middleware.tsx`). The Access
-application must therefore cover `/admin` as well as `/auth`. The gateway still applies its own users
-and roles after Access.
+The gateway keeps no admin sessions. On every `/admin` request it verifies the
+`Cf-Access-Jwt-Assertion` header itself (`src/admin/auth/access.ts`): signature, issuer, audience
+and expiry. A request without a valid header gets `401` and "Cloudflare Access did not present a
+valid user identity for this request." This also covers a path that the Access application does not
+match: the request reaches the Worker without the header and is refused. Access service tokens carry
+no email and are refused. The gateway still applies its own users and roles after Access
+(`src/admin/auth/middleware.tsx`).
+
+Sign-in, sign-out and session length belong to Access:
+
+- "Sign out" in the admin UI opens `/cdn-cgi/access/logout`, which ends the Access session for the
+  hostname.
+- The application's session duration decides how long a user stays signed in.
+- To end a user's Access session at once, revoke it in Cloudflare One: on the user's page, or for
+  every user with the application's "revoke existing tokens" action
+  ([session management](https://developers.cloudflare.com/cloudflare-one/identity/users/session-management/)).
+  Disabling the user in the admin UI refuses their next request even while the Access session lives.
 
 ## HTTPS
 

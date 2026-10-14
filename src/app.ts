@@ -1,6 +1,6 @@
 // HTTP surface of the Worker. This file only composes routes; behavior lives in feature modules.
 import { Hono } from 'hono';
-import { registerAuthRoutes } from './admin/auth/routes';
+import { registerAdminMiddleware } from './admin/auth/middleware';
 import type { AdminViewer } from './admin/auth/types';
 import { registerAdminRoutes } from './admin/routes';
 import { type Deps, productionDeps } from './deps';
@@ -33,7 +33,7 @@ export function createApp(options: AppOptions = {}): App {
   registerProxyRoutes(app);
   applySecurityMiddleware(app);
   registerHealthRoutes(app);
-  registerAuthRoutes(app);
+  registerAdminMiddleware(app);
   registerAdminRoutes(app);
   app.get('/', (c) => c.redirect('/admin', 302));
   return app;

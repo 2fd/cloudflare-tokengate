@@ -5,6 +5,7 @@ import type { Child } from 'hono/jsx';
 import { parseBody } from 'hono/utils/body';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { AppContext } from '../app';
+import { signOutUrl } from './auth/identity';
 import type { AdminActor } from './auth/types';
 import { type Banner, Layout } from './views/layout';
 
@@ -26,7 +27,11 @@ export function renderPage(c: AdminContext, props: PageProps, body: Child) {
   return c.html(
     <Layout
       title={props.title}
-      viewer={{ email: viewer.user.email, role: viewer.user.role, csrfToken: viewer.csrfToken }}
+      viewer={{
+        email: viewer.user.email,
+        role: viewer.user.role,
+        signOutUrl: signOutUrl(viewer.loginProvider),
+      }}
       section={props.section}
       banners={props.banners}
       notice={props.notice}

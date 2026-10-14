@@ -1,7 +1,7 @@
 # Break-glass
 
-This page explains how to regain owner access when no owner can sign in, and how to end every admin
-session at once, with `wrangler d1 execute`. It is for platform engineers with write access to the
+This page explains how to regain owner access when no owner can sign in, with `wrangler d1 execute`,
+and how to sign every admin out at once. It is for platform engineers with write access to the
 Cloudflare account.
 
 Use these procedures only when the admin UI cannot do the job. SQL changes bypass the admin UI's
@@ -11,7 +11,8 @@ Each procedure below therefore adds an audit row by hand.
 ## Prevent the need
 
 - Keep at least two active owners. The dashboard shows "There is only one active owner." until you do.
-- Use a login provider that does not depend on one person's account.
+- Make sure the Access policy allows more than one owner, through an identity provider that does not
+  depend on one person's account.
 - The database refuses to demote, disable or delete the last active owner (trigger `last_owner`,
   [I-OWNER-1](../threat-model.md#i-owner-1)), so an owner cannot lock everyone out from the UI.
 
@@ -23,17 +24,21 @@ Setting the variable again has no effect.
 
 ## Regain owner access
 
-The procedure creates an invited owner in D1. You then sign in normally, and the gateway links your
-login identity to that user by email, with its usual checks ([I-LINK-1](../threat-model.md#i-link-1)).
+The procedure creates an invited owner in D1. You then open the admin UI through Cloudflare Access,
+and the gateway links your Access identity to that user by email, with its usual checks
+([I-LINK-1](../threat-model.md#i-link-1)).
 
 Before you start:
 
 - You can run `pnpm wrangler` against the account (`pnpm wrangler login`), from a clone of the
   repository.
-- At least one login provider works: the sign-in page at `<PUBLIC_URL>/auth/login` shows its button.
-  If none does, fix the login variables first ([configuration](../configuration.md)).
-- You know an email address that this login provider reports as verified for your account, and that
-  passes `AUTH_GITHUB_ALLOWED_ORGS` or `AUTH_OIDC_ALLOWED_DOMAINS` if they are set.
+- Access login works: `<PUBLIC_URL>/admin` asks you to sign in with Access, and after that shows
+  "This account has not been invited." (not "Set up sign-in" or "Cloudflare Access did not present a
+  valid user identity"). If it does not, fix the Access application or the `AUTH_ACCESS_*`
+  variables first ([zone settings](cloudflare-zone-settings.md#cloudflare-access),
+  [configuration](../configuration.md)).
+- The Access policy allows you, and you know the email address that Access reports for you: the
+  email of your account at the identity provider that Access uses.
 
 Steps:
 
@@ -77,13 +82,15 @@ Steps:
              'Break-glass: owner $EMAIL invited with wrangler d1 execute', NULL, NULL, NULL);"
    ```
 
-6. Within the hour, open `<PUBLIC_URL>/auth/login` and sign in with the login provider. The gateway
-   links the identity, makes the user active and writes a `user.link` audit event.
+6. Within the hour, open `<PUBLIC_URL>/admin` and sign in with Access. On that first request the
+   gateway links the identity, makes the user active and writes a `user.link` audit event.
 
    A login identity that is already linked to a user always signs in as that user
-   (`src/admin/auth/resolve-login.ts`). If the sign-in page says "This account is disabled or must
-   be re-invited by an owner.", your identity is still linked to a user that is not active. List
-   the identities of users that are not active, delete yours, and sign in again:
+   (`src/admin/auth/resolve-login.ts`). If the page says "This account is disabled or must be
+   re-invited by an owner.", your identity is still linked to a user that is not active. Access
+   identities have `login_provider = 'access'` and the subject
+   `https://<team>.cloudflareaccess.com|<sub>`. List the identities of users that are not active,
+   delete yours, and reload the page:
 
    ```sh
    pnpm wrangler d1 execute DB --remote --command \
@@ -105,27 +112,22 @@ pnpm wrangler d1 execute DB --remote --command \
   "DELETE FROM users WHERE email = '$EMAIL' AND status = 'invited'"
 ```
 
-## End every admin session
+## Sign every admin out
 
-Use this when admin sessions may be stolen and you cannot wait to disable users one by one, and
-after every restore of `DB`: a restore brings back sessions that were ended after the restore point
-([backup and restore](backup-restore.md#checks-after-a-restore)). Everyone, including you, must sign
-in again.
+Use this when admin access may be stolen and you cannot wait to disable users one by one. The gateway
+keeps no admin sessions: every `/admin` request must carry a valid Access JWT
+([I-SESS-1](../threat-model.md#i-sess-1)). Admin sessions are Access sessions, so you end them in
+Cloudflare One, not in D1.
 
-1. Generate an audit event id (step 4 above; only `AUDIT_ID` is used).
-2. Revoke the sessions and record it:
+1. In Cloudflare One, open the Access application that covers `/admin` and revoke its existing
+   tokens. Every user, including you, must sign in to Access again
+   ([session management](https://developers.cloudflare.com/cloudflare-one/identity/users/session-management/)).
+2. If the attacker's identity can still pass the Access policy, change the policy or the identity
+   provider account first. Otherwise they sign in again.
+3. Disable the affected users in Users. A disabled user is refused on the next request, even with a
+   valid Access session.
 
-   ```sh
-   pnpm wrangler d1 execute DB --remote --command "
-     UPDATE sessions SET revoked_at = unixepoch() * 1000 WHERE revoked_at IS NULL;
-     INSERT INTO audit_log (id, ts, actor_type, actor_id, actor_email, action, target_type, target_id, summary, diff, ip, user_agent)
-     VALUES ('$AUDIT_ID', unixepoch() * 1000, 'system', NULL, NULL, 'user.revoke_sessions', NULL, NULL,
-             'Break-glass: every session revoked with wrangler d1 execute', NULL, NULL, NULL);"
-   ```
-
-The gateway reads the session row on every admin request, so the next request of every user goes to
-the sign-in page ([I-SESS-1](../threat-model.md#i-sess-1)). This does not affect callers on
-`/proxy/`: they use workload identity tokens, not sessions.
+This does not affect callers on `/proxy/`: they use workload identity tokens, not Access.
 
 ## After a break-glass
 
@@ -137,4 +139,5 @@ the sign-in page ([I-SESS-1](../threat-model.md#i-sess-1)). This does not affect
 
 - [incident-response.md](incident-response.md): compromised admin accounts.
 - [troubleshooting.md](troubleshooting.md#admin-ui-and-maintenance): sign-in messages.
-- [configuration.md](../configuration.md): login providers and `BOOTSTRAP_OWNER_EMAILS`.
+- [configuration.md](../configuration.md): Access login variables and `BOOTSTRAP_OWNER_EMAILS`.
+- [cloudflare-zone-settings.md](cloudflare-zone-settings.md#cloudflare-access): the Access application.

@@ -11,7 +11,7 @@ settings live in `src/db/settings.ts`.
 | Kind | Where you set it | Survives `pnpm run deploy` |
 |---|---|---|
 | Operator variable (`PUBLIC_URL`, `AUTH_*`, ...) | Cloudflare dashboard: Workers & Pages > tokengate > Settings > Variables and Secrets | Yes (`keep_vars: true`) |
-| Secret (`TOKENGATE_KEK`, `*_CLIENT_SECRET`) | `pnpm wrangler secret put <NAME>` | Yes, always |
+| Secret (`TOKENGATE_KEK`, `TOKENGATE_KEYRING`) | `pnpm wrangler secret put <NAME>` | Yes, always |
 | Binding (D1, queue, pipeline, rate limiter) | `wrangler.jsonc` | Part of the deploy |
 | Runtime setting (retention, sampling) | Admin UI: Settings > Data retention and sampling | Stored in D1 |
 
@@ -34,12 +34,11 @@ which it only mentions.
 
 ## How invalid configuration fails
 
-Configuration is parsed per feature: `public_url`, `login.github`, `login.oidc`, `login.access` and
-`upstream_hosts` ([I-CFG-1](threat-model.md#i-cfg-1)). A malformed feature is turned off; it never runs half
+Configuration is parsed per feature: `public_url`, `login.access`, `login.dev` and `upstream_hosts` ([I-CFG-1](threat-model.md#i-cfg-1)). A malformed feature is turned off; it never runs half
 configured. Errors name the variable and never echo its value. They appear in two places:
 
 - Settings > System status > "Configuration problems".
-- The sign-in page, as error banners (login features only).
+- The setup page at `/admin`, as error banners, while no login works (login features only).
 
 Values are trimmed. An empty or whitespace-only value counts as unset. Lists are comma-separated;
 entries are trimmed and empty entries are dropped.
@@ -53,33 +52,25 @@ entries are trimmed and empty entries are dropped.
 | `BOOTSTRAP_OWNER_EMAILS` | var | Until the first owner signs in | Comma list of emails |
 | `TOKENGATE_KEK` | secret | One of `TOKENGATE_KEK` / `TOKENGATE_KEYRING` | Standard base64 of 32 bytes |
 | `TOKENGATE_KEYRING` | secret | One of `TOKENGATE_KEK` / `TOKENGATE_KEYRING` | JSON keyring |
-| `AUTH_GITHUB_CLIENT_ID` | var | For GitHub login | GitHub OAuth App client ID |
-| `AUTH_GITHUB_CLIENT_SECRET` | secret | For GitHub login | GitHub OAuth App client secret |
-| `AUTH_GITHUB_ALLOWED_ORGS` | var | Optional | Comma list of organization logins |
-| `AUTH_OIDC_ISSUER` | var | For OIDC login | https issuer URL |
-| `AUTH_OIDC_CLIENT_ID` | var | For OIDC login | Client ID |
-| `AUTH_OIDC_CLIENT_SECRET` | secret | For OIDC login | Client secret |
-| `AUTH_OIDC_NAME` | var | Optional | Button label text |
-| `AUTH_OIDC_ALLOWED_DOMAINS` | var | Optional | Comma list of email domains |
-| `AUTH_GOOGLE_CLIENT_ID` | var | For Google login | Google OAuth client ID |
-| `AUTH_GOOGLE_CLIENT_SECRET` | secret | For Google login | Google OAuth client secret |
-| `AUTH_ACCESS_TEAM_DOMAIN` | var | For Access login | `<team>`, `<team>.cloudflareaccess.com` or `https://<team>.cloudflareaccess.com` |
-| `AUTH_ACCESS_AUD` | var | For Access login | Access application audience (AUD) tag |
+| `AUTH_ACCESS_TEAM_DOMAIN` | var | For the admin UI | `<team>`, `<team>.cloudflareaccess.com` or `https://<team>.cloudflareaccess.com` |
+| `AUTH_ACCESS_AUD` | var | For the admin UI | Access application audience (AUD) tag |
+| `AUTH_DEV_EMAIL` | var | Local development only | Email address |
 
-At least one login provider is needed to use the admin UI. You can configure GitHub, one OIDC login
-(generic or Google) and Access at the same time; the sign-in page shows one button for each.
+Sign-in to the admin UI goes through Cloudflare Access only
+([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). Without a working Access login, `/admin`
+shows a setup page (`503`) that lists the variables to set. `AUTH_DEV_EMAIL` is for `pnpm dev` only.
 
 ### `PUBLIC_URL`
 
 The canonical origin of the gateway, for example `https://tokengate.example.com`.
 
-- **When set:** `/admin` and `/auth` answer only on this exact origin (scheme, host and port). Every
-  other hostname, including `*.workers.dev`, gets `404 Not Found` ([I-DEPLOY-1](threat-model.md#i-deploy-1)). Login
-  callback URLs and the snippets shown in the admin UI use this origin.
-- **When unset:** `/admin` and `/auth` answer on every hostname of the Worker. Callback URLs use the
-  origin of the current request.
-- **When malformed:** every `/admin` and `/auth` request gets 404, and Access login is turned off. The
-  operator asked for pinning, so a typo does not turn it off.
+- **When set:** `/admin` answers only on this exact origin (scheme, host and port). Every other
+  hostname, including `*.workers.dev`, gets `404 Not Found` ([I-DEPLOY-1](threat-model.md#i-deploy-1)). The
+  snippets and invitation links shown in the admin UI use this origin.
+- **When unset:** `/admin` answers on every hostname of the Worker, and Access login is turned off.
+  So nobody can sign in.
+- **When malformed:** every `/admin` request gets 404, and Access login is turned off. The operator
+  asked for pinning, so a typo does not turn it off.
 - **Rules:** https only (http only for `localhost`, `127.0.0.1`, `[::1]`); no credentials, path, query or
   fragment; no trailing dot on the host.
 - `/proxy/*`, `/healthz` and `/readyz` are never pinned. They answer on every hostname.
@@ -124,8 +115,8 @@ Emails that may become the first owner, for example `alice@example.com`. Compari
   once per deployment ([I-BOOT-1](threat-model.md#i-boot-1)). The bootstrap is recorded in settings; it does not
   run again even if every owner is later removed. Recover with
   [operations/break-glass.md](operations/break-glass.md).
-- The email must be one the login provider proves: a verified GitHub email, an OIDC `email` with
-  `email_verified: true`, or the email of a valid Access token ([I-LINK-1](threat-model.md#i-link-1)).
+- The email must be the email of a valid Access token ([I-LINK-1](threat-model.md#i-link-1)). The bootstrap
+  happens on the person's first request to `/admin`.
 - Remove the variable after the first sign-in. Settings > System status reminds you while it is set.
 
 ### Keyring: `TOKENGATE_KEK` or `TOKENGATE_KEYRING`
@@ -147,80 +138,49 @@ one of the two.
   vault-read tokengate-kek-k1 | pnpm wrangler secret put TOKENGATE_KEK
   ```
 
-- **When absent or invalid:** admin login still works. Proxied requests to a service with a credential
+- **When absent or invalid:** admin sign-in still works. Proxied requests to a service with a credential
   answer `503 not_configured` with reason `keyring_absent`, `keyring_malformed`, `active_kid_missing`,
   `key_not_32_bytes` or `both_kek_and_keyring_set`. Credential changes are refused. The dashboard shows a
   banner and `/readyz` reports `keyring: false`.
 - Rotation: [operations/key-rotation.md](operations/key-rotation.md).
 
-### GitHub login: `AUTH_GITHUB_*`
-
-1. Create a GitHub OAuth App. Set the authorization callback URL to `<PUBLIC_URL>/auth/github/callback`.
-2. Set `AUTH_GITHUB_CLIENT_ID` and the secret `AUTH_GITHUB_CLIENT_SECRET`.
-3. If only members of some organizations may sign in, set `AUTH_GITHUB_ALLOWED_ORGS` to their logins.
-
-- With `AUTH_GITHUB_ALLOWED_ORGS`, the user's membership in one listed organization must be `active`.
-  The login then also requests the `read:org` scope.
-- Errors: only one of the ID/secret pair set; `AUTH_GITHUB_ALLOWED_ORGS` set without the pair; an
-  invalid organization login.
-
-### OIDC login: `AUTH_OIDC_*`
-
-1. Register a client with your identity provider. Set the redirect URI to `<PUBLIC_URL>/auth/oidc/callback`.
-2. Set `AUTH_OIDC_ISSUER`, `AUTH_OIDC_CLIENT_ID` and the secret `AUTH_OIDC_CLIENT_SECRET`.
-3. Optional: set `AUTH_OIDC_NAME` (button label; default "Single sign-on") and
-   `AUTH_OIDC_ALLOWED_DOMAINS`.
-
-- `AUTH_OIDC_ISSUER` must be https without credentials, query or fragment. It must match the `issuer`
-  in `<AUTH_OIDC_ISSUER>/.well-known/openid-configuration`. Both are compared as parsed URLs, so a
-  trailing `/` after a bare host, an upper-case host or `:443` does not matter.
-- Linked users are stored under the canonical issuer: lower-case host, no default port, no `/` after
-  a bare host (`https://ACCOUNTS.google.com/` is stored as `https://accounts.google.com`). So you
-  can change between these spellings, or between `AUTH_GOOGLE_*` and
-  `AUTH_OIDC_ISSUER=https://accounts.google.com`, and users keep signing in. Any other change, such
-  as a different path, is a different issuer: users linked before then get "not invited" until an
-  owner uses "Reset login" (which invites them again) and they sign in from the invite. Users linked
-  by an earlier version under the exact configured spelling keep signing in while that spelling
-  stays the same.
-- `AUTH_OIDC_ALLOWED_DOMAINS`: the verified email must be in a listed domain. Setting it without an
-  OIDC or Google login is an error.
-- Errors: a partial triple; an invalid issuer or domain; `AUTH_OIDC_*` combined with `AUTH_GOOGLE_*`
-  (both are turned off).
-
-### Google login: `AUTH_GOOGLE_*`
-
-Google login is OIDC with issuer `https://accounts.google.com` and the label "Google".
-
-1. Create a Google OAuth client (web application). Set the authorized redirect URI to
-   `<PUBLIC_URL>/auth/oidc/callback`.
-2. Set `AUTH_GOOGLE_CLIENT_ID` and the secret `AUTH_GOOGLE_CLIENT_SECRET`.
-3. Optional: set `AUTH_OIDC_ALLOWED_DOMAINS` to your Workspace domains. `AUTH_OIDC_NAME` overrides the
-   label.
-
-- Do not combine with `AUTH_OIDC_ISSUER`/`AUTH_OIDC_CLIENT_*`.
-- An email counts only if the `hd` claim equals its domain (Workspace account), or if it is a
-  `@gmail.com` address without `hd`. With `AUTH_OIDC_ALLOWED_DOMAINS`, `hd` must be present and listed.
-  A consumer Google account registered with a company address never qualifies. The same rules apply
-  when `AUTH_OIDC_ISSUER` is `https://accounts.google.com`, compared as a parsed URL (a trailing `/`
-  or an upper-case host also selects them).
-
 ### Cloudflare Access login: `AUTH_ACCESS_*`
 
-1. Set `PUBLIC_URL` to a custom domain. Access login refuses `workers.dev`.
-2. Create an Access application for that hostname, limited to the `/admin` and `/auth` paths.
-   See [operations/cloudflare-zone-settings.md](operations/cloudflare-zone-settings.md).
+1. Set `PUBLIC_URL` to an https origin on a custom domain. Access login refuses `workers.dev`.
+2. In Zero Trust, create a self-hosted Access application for that hostname, limited to the `/admin`
+   path. Do not put `/proxy` behind Access: CI jobs call it without an Access session. See
+   [operations/cloudflare-zone-settings.md](operations/cloudflare-zone-settings.md).
 3. Set `AUTH_ACCESS_TEAM_DOMAIN` and `AUTH_ACCESS_AUD` (the application's AUD tag).
 
-- The gateway verifies the `Cf-Access-Jwt-Assertion` header against the team's keys, issuer and AUD.
-  Service-token JWTs (no email) are refused.
+- The gateway keeps no session of its own. On every `/admin` request it verifies the
+  `Cf-Access-Jwt-Assertion` header against the team's keys, issuer and AUD. A request without a valid
+  token gets `401`, also if it reaches the Worker around Access.
+- Service-token JWTs (no email) are refused.
+- Access decides who can authenticate and how long the Access session lasts. Tokengate decides who is
+  a user and which role they have: a person also needs an invitation, or must be the first owner.
+- "Sign out" in the admin UI opens `/cdn-cgi/access/logout`, which ends the Access session for the
+  hostname. To end a user's sessions on every device, revoke them in Zero Trust.
+- Users are linked to `<team domain>|<sub>`. A different team is a different identity: after a team
+  change, each user needs "Reset login" and a new sign-in.
 - Errors: only one of the pair set; an invalid team domain or AUD; `PUBLIC_URL` missing, not https or on
   `workers.dev`.
+
+### Local development login: `AUTH_DEV_EMAIL`
+
+With `AUTH_DEV_EMAIL` set, every admin request is signed in as that email, without any check. Use it
+only with `pnpm dev`.
+
+- It is accepted only when `PUBLIC_URL` is on `localhost`, `127.0.0.1` or `[::1]`. Host pinning then
+  refuses every admin request to another origin, so the edge can never reach it.
+- When Access is also configured, Access is the only accepted proof and `AUTH_DEV_EMAIL` is ignored.
+- The email still needs an invitation, or must be listed in `BOOTSTRAP_OWNER_EMAILS`.
+- Errors: an invalid email; `PUBLIC_URL` missing or not on a loopback host.
 
 ## Bindings
 
 | Binding | Type | Required | Purpose |
 |---|---|---|---|
-| `DB` | D1 (`tokengate`, `migrations/`) | Yes | Control plane: users, sessions, caller providers, services, grants, settings, audit log |
+| `DB` | D1 (`tokengate`, `migrations/`) | Yes | Control plane: users, caller providers, services, grants, settings, audit log |
 | `TELEMETRY_DB` | D1 (`tokengate-telemetry`, `migrations-telemetry/`) | Yes | Request log and hourly rollups |
 | `ASSETS` | Static assets (`./public`) | Yes | Serves `/static/*` (the stylesheet) |
 | `REQUEST_LOG_QUEUE` | Queue producer + consumer | Optional | Batches request-log writes |
@@ -311,7 +271,7 @@ viewers see them read-only. Each save that changes a value writes one audit even
 - Values outside the bounds are refused when saved. They are also clamped when read, so a direct D1
   edit cannot shorten the audit trail below 90 days.
 - The hourly cron (`7 * * * *`) applies retention: it deletes request records, rollups and audit events
-  older than their limits. It also deletes sessions that ended more than one day ago.
+  older than their limits.
 - `allowed_sample_rate` applies to allowed requests only. Denied and error records are always kept,
   except pre-trust failures (see [observability.md](observability.md)). With 0.1, about one allowed
   request in ten is recorded, and dashboard counts are scaled up. With 0, no allowed request is recorded.

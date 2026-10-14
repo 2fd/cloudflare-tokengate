@@ -27,6 +27,8 @@ Request volume and control-plane data behave differently:
 - `pnpm run deploy` applies the migrations of both databases, then deploys the Worker.
 - Workers Paid is the recommended plan. See [getting-started.md](../getting-started.md) and [observability.md](../observability.md) for plan limits.
 
+> Note (2026-10-14): [0015](0015-cloudflare-access-only-admin-login.md) removed `oauth4webapi` and the `sessions` table. Admin login is Cloudflare Access only.
+
 ## Consequences
 
 - There are no servers. A deployment is one Worker, two databases and a few secrets ([configuration.md](../configuration.md)).

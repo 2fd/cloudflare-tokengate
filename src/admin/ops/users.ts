@@ -1,7 +1,6 @@
 // User mutations (owner only, via RBAC), each with one audit row in the same batch (I-AUDIT-1).
-// Role/status changes and login resets revoke the user's sessions in that batch (I-SESS-1); the
-// last-owner trigger aborts it (I-OWNER-1).
-import { revokeSessionsForUserStatement } from '../../db/sessions';
+// Admin requests re-read the user on every request, so changes apply on the user's next request
+// (I-SESS-1); the last-owner trigger aborts a batch that would leave no active owner (I-OWNER-1).
 import type { Actor, Role, User, UserStatus } from '../../db/types';
 import {
   getUser,
@@ -162,7 +161,7 @@ export async function updateUser(
       action: 'user.update',
       targetType: 'user',
       targetId: id,
-      summary: `Changed ${describeChanges(existing, changes)} of ${existing.email}; their sessions were ended`,
+      summary: `Changed ${describeChanges(existing, changes)} of ${existing.email}`,
       diff: {
         before: { role: existing.role, status: existing.status },
         after: { role, status },
@@ -182,8 +181,8 @@ export async function updateUser(
 }
 
 /**
- * "Reset login": removes every login identity, returns the user to `invited` with a fresh
- * expiry and ends their sessions. The next sign-in with an authoritative email links again.
+ * "Reset login": removes every login identity and returns the user to `invited` with a fresh
+ * expiry. The next sign-in with an authoritative email links again.
  */
 export async function resetLogin(deps: Deps, actor: Actor, id: string): Promise<UserOpResult> {
   const existing = await getUser(deps.env.DB, id);
@@ -200,7 +199,7 @@ export async function resetLogin(deps: Deps, actor: Actor, id: string): Promise<
       action: 'user.reset_login',
       targetType: 'user',
       targetId: id,
-      summary: `Reset login of ${existing.email}; identities removed, sessions ended, invitation renewed`,
+      summary: `Reset login of ${existing.email}; identities removed, invitation renewed`,
       diff: {
         before: { status: existing.status, invite_expires_at: existing.invite_expires_at },
         after: { status: 'invited', invite_expires_at: inviteExpiresAt },
@@ -215,31 +214,6 @@ export async function resetLogin(deps: Deps, actor: Actor, id: string): Promise<
     ok: true,
     user: { ...existing, status: 'invited', invite_expires_at: inviteExpiresAt, updated_at: now },
   };
-}
-
-/** Ends every live session of the user; they must sign in again. */
-export async function revokeSessions(
-  deps: Deps,
-  actor: Actor,
-  id: string,
-): Promise<{ ok: true; revoked: number } | OpFailure> {
-  const existing = await getUser(deps.env.DB, id);
-  if (!existing) return opFailure('not_found', ['User not found.']);
-  const outcome = await commitUserChange(
-    deps,
-    actor,
-    {
-      action: 'user.revoke_sessions',
-      targetType: 'user',
-      targetId: id,
-      summary: `Ended all sessions of ${existing.email}`,
-    },
-    userExistsGuard(id),
-    [revokeSessionsForUserStatement(deps.env.DB, id, deps.now())],
-  );
-  if (!outcome.ok) return outcome;
-  if (!outcome.committed) return opFailure('not_found', ['User not found.']);
-  return { ok: true, revoked: outcome.results[1]?.meta.changes ?? 0 };
 }
 
 /** Renews a pending invitation for another INVITE_TTL_MS. Only for users still `invited`. */
@@ -285,10 +259,6 @@ export async function resendInvite(deps: Deps, actor: Actor, id: string): Promis
 
 function roleErrors(role: unknown): string[] {
   return ROLES.includes(role as Role) ? [] : ['Role must be owner, admin or viewer.'];
-}
-
-function userExistsGuard(id: string): SqlGuard {
-  return { sql: 'EXISTS (SELECT 1 FROM users WHERE id = ?)', binds: [id] };
 }
 
 /**

@@ -33,8 +33,7 @@ export function withQuery(path: string, params: Record<string, string | null | u
 /** Display names of the login providers that are configured without errors. */
 export function loginProviderNames(config: Config): string[] {
   return [
-    config.login.github ? 'GitHub' : null,
-    config.login.oidc ? config.login.oidc.label : null,
     config.login.access ? 'Cloudflare Access' : null,
+    config.login.dev ? 'the local development login' : null,
   ].filter((name): name is string => name !== null);
 }

@@ -29,9 +29,9 @@ The Cloudflare edge answered before the Worker ran, or the request did not reach
 |---|---|---|
 | HTML challenge page, or 403 with a Cloudflare error page | Bot Fight Mode, Super Bot Fight Mode or a WAF rule | Security > Analytics > Events shows the rule. See [zone settings](cloudflare-zone-settings.md#bot-fight-mode) |
 | 429 with a Cloudflare page | A zone rate limiting rule | Raise its threshold ([zone settings](cloudflare-zone-settings.md#rate-limiting)) |
-| Redirect to `<team>.cloudflareaccess.com` | An Access application covers `/proxy/` | Limit the application to `/admin` and `/auth` ([zone settings](cloudflare-zone-settings.md#cloudflare-access)) |
+| Redirect to `<team>.cloudflareaccess.com` | An Access application covers `/proxy/` | Limit the application to `/admin` ([zone settings](cloudflare-zone-settings.md#cloudflare-access)) |
 | 1xxx error page, DNS or TLS error | The hostname is not routed to the Worker | Check Workers & Pages > tokengate > Settings > Domains & Routes |
-| `404 Not Found` as plain text on `/admin` or `/auth` | `PUBLIC_URL` pins the admin UI to another origin, or `PUBLIC_URL` is malformed and closes it everywhere ([I-DEPLOY-1](../threat-model.md#i-deploy-1)) | Use the `PUBLIC_URL` origin. If it is malformed, fix the variable in the dashboard |
+| `404 Not Found` as plain text on `/admin` | `PUBLIC_URL` pins the admin UI to another origin, or `PUBLIC_URL` is malformed and closes it everywhere ([I-DEPLOY-1](../threat-model.md#i-deploy-1)) | Use the `PUBLIC_URL` origin. If it is malformed, fix the variable in the dashboard |
 
 ## Caller errors
 
@@ -83,19 +83,17 @@ status and body come from the upstream.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Sign-in page says "This account has not been invited." | No user with that email is invited, and bootstrap is done or the email is not in `BOOTSTRAP_OWNER_EMAILS` | An owner invites the email in Users. If no owner can sign in: [break-glass](break-glass.md) |
-| "This account is disabled or must be re-invited by an owner." | The login identity is linked to a user that is not active, usually a disabled user | An owner selects "Enable" in Users. "Reset login" instead removes the linked login identities and invites the user again |
-| "This sign-in attempt expired or was started in another browser." | The 10-minute OAuth state cookie expired or is missing, or more than 3 sign-ins were started in this browser at once ([I-OAUTH-1](../threat-model.md#i-oauth-1)) | Start again from the sign-in page, in one browser |
-| "Your GitHub account is not an active member of an allowed organization." | `AUTH_GITHUB_ALLOWED_ORGS` excludes the user, or the organization restricts OAuth App access and has not approved the app | Approve the OAuth App in the organization settings, or fix the variable |
-| "This account has no verified email address in an allowed domain." | `AUTH_OIDC_ALLOWED_DOMAINS` excludes every verified email | Fix the variable or the account's email |
-| Login provider shows a redirect URI error | The callback URL registered at the login provider differs | Register `<PUBLIC_URL>/auth/github/callback` or `<PUBLIC_URL>/auth/oidc/callback` (Google uses the `oidc` path) |
-| Sign-in page has no login button; Settings shows "none configured: nobody can sign in" | No login variables, or a malformed pair | Settings > System status > "Configuration problems" names the variable ([configuration](../configuration.md)) |
-| "Cloudflare Access did not present a valid user identity for this request." | The request reached the Worker without passing Access, or `AUTH_ACCESS_AUD` is wrong | [Zone settings: Access](cloudflare-zone-settings.md#cloudflare-access) |
-| Signed out on every page with Access login | The Access application does not cover `/admin` | Add the `admin` path to the application |
+| "This account has not been invited." (403) | Access let you in, but no user is linked to your Access identity, no invitation for your Access email is open, and bootstrap is done or the email is not in `BOOTSTRAP_OWNER_EMAILS` | An owner invites the email in Users, then you reload. If no owner can sign in: [break-glass](break-glass.md). A user linked through the GitHub or OIDC login of an earlier release needs "Reset login" |
+| "This account is disabled or must be re-invited by an owner." (403) | The Access identity is linked to a user that is not active, usually a disabled user | An owner selects "Enable" in Users. "Reset login" instead removes the linked login identities and invites the user again |
+| "Set up sign-in" page (503) | `AUTH_ACCESS_TEAM_DOMAIN` and `AUTH_ACCESS_AUD` are not set, or are malformed; the page names the variable | Set the Access variables and `PUBLIC_URL` on a custom domain ([configuration](../configuration.md), [zone settings](cloudflare-zone-settings.md#cloudflare-access)) |
+| "Cloudflare Access did not present a valid user identity for this request." (401) | The request reached the Worker without a valid `Cf-Access-Jwt-Assertion`: the Access application does not cover this path or hostname, `AUTH_ACCESS_AUD` or `AUTH_ACCESS_TEAM_DOMAIN` is wrong, the Access token expired, or an Access service token was used. The `auth.login_failed` log line has the reason | [Zone settings: Access](cloudflare-zone-settings.md#cloudflare-access). Service tokens cannot use the admin UI |
+| "Cloudflare Access could not be reached to check your identity." (503) | The gateway could not fetch the team's signing keys (`/cdn-cgi/access/certs`) | Reload. If it persists, check `AUTH_ACCESS_TEAM_DOMAIN` |
+| Admin UI on the workers.dev hostname answers `404` or "Set up sign-in" | Access login needs `PUBLIC_URL` on a custom domain, so the admin UI is not available on workers.dev | Use the custom domain ([zone settings](cloudflare-zone-settings.md#hostnames)) |
+| "Sign out" does not appear | The local development login (`AUTH_DEV_EMAIL`) is in use; it has no sign-out | Expected in local development |
 | "The form was not accepted (it expired or came from another site)." | CSRF check failed: stale page or cross-site submit ([I-CSRF-1](../threat-model.md#i-csrf-1)) | Reload the page and submit again |
 | "Request body too large (limit 65536 bytes)." (413) | The form exceeds 64 KiB | Shorten the input, for example split a grant's rules |
 | "Your role does not allow this action." | The role lacks the permission ([I-RBAC-1](../threat-model.md#i-rbac-1)) | Ask an owner |
-| "nothing was saved: your session ended or your role changed while the request ran; sign in again" (409) | While the request ran, your sessions were ended, your user was disabled or its login reset, or your role lost the permission ([I-SESS-1](../threat-model.md#i-sess-1)) | Sign in again. If your role changed, ask an owner |
+| "nothing was saved: your access or your role changed while the request ran; reload the page" (409) | While the request ran, your user was disabled or its login reset, or your role lost the permission ([I-SESS-1](../threat-model.md#i-sess-1)) | Reload the page. If your role changed or you lost access, ask an owner |
 | Owner cannot be disabled or demoted | Last active owner ([I-OWNER-1](../threat-model.md#i-owner-1)) | Invite and activate a second owner first |
 | Dashboard: "Database ... is missing migration" | Code deployed without `pnpm run deploy` | `pnpm wrangler d1 migrations apply DB --remote` and `pnpm wrangler d1 migrations apply TELEMETRY_DB --remote` ([upgrades](upgrades.md)) |
 | Dashboard: "The hourly maintenance job has not run yet." | First hour after deploy | Wait for the run at 7 minutes past the hour |

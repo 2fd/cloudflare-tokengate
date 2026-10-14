@@ -30,6 +30,8 @@ A JavaScript check followed by a write would leave a race between the two.
 - **Audit in the same batch.** Each admin op adds its audit event to the same `db.batch()` as the change. The audit statement repeats the change's guard, so it is written only if the change is ([I-AUDIT-1](../threat-model.md#i-audit-1), `src/admin/ops/shared.ts`, `src/db/audit.ts`).
 - **Compare-and-swap** for re-encryption: each credential is replaced only if it still holds the value that was opened.
 
+> Note (2026-10-14): since [0015](0015-cloudflare-access-only-admin-login.md) there is no session creation and no `src/db/sessions.ts`. The admin write re-check uses `liveIdentityGuard` in `src/db/users.ts`.
+
 ## Consequences
 
 - Concurrent admin actions cannot leave zero owners, two bootstrap owners or an unaudited change. In an admin op, a lost race is reported as a conflict.

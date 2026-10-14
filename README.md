@@ -13,7 +13,7 @@ This page is for anyone who evaluates, deploys or audits tokengate. Full documen
 - A reverse proxy that you deploy to your own Cloudflare account. Each company runs its own deployment.
 - A place to store upstream API keys encrypted. A key goes in through the admin UI and never comes out.
 - A policy engine. A grant decides which CI workloads (organization, repository, branch, tag, pull request, release, environment) may call which API paths and methods.
-- An admin UI with sign-in through GitHub, Google, any OpenID Connect login provider or Cloudflare Access.
+- An admin UI behind Cloudflare Access. The gateway verifies the Access token on every admin request and keeps no sessions of its own.
 
 ## What it is not
 
@@ -32,7 +32,7 @@ Non-goals and future work are listed in [docs/roadmap.md](docs/roadmap.md).
 - **Encrypted credentials.** AES-256-GCM envelope encryption under a key-encryption key that you generate and keep outside Cloudflare. The ciphertext is bound to the service and its destination.
 - **Request log.** Every proxied call can produce a request record with the outcome, the reason, the verified caller and the policy evaluation. Hourly rollups feed the dashboard. An optional archive writes every record to R2 through Basin Pipelines.
 - **Audit log.** Every admin change writes one audit event, also emitted as an `audit.event` log line for your SIEM.
-- **Multi-login admin UI.** Server-rendered pages without client-side JavaScript. Roles `owner`, `admin` and `viewer`. Denied requests offer a "Create grant from this request" button.
+- **Admin UI behind Cloudflare Access.** Server-rendered pages without client-side JavaScript. Roles `owner`, `admin` and `viewer`, given by invitation. Denied requests offer a "Create grant from this request" button.
 - **Self-hosted.** Apache-2.0. Runs on Workers and two D1 databases in your account.
 
 ## Quick start
@@ -46,13 +46,13 @@ The steps below are a summary. [docs/getting-started.md](docs/getting-started.md
 1. Before you click, generate the key-encryption key outside Cloudflare and store it in your company vault: `openssl rand -base64 32`.
 2. Click the button. Paste the key when the form asks for `TOKENGATE_KEK`.
 3. In the build settings, check that the deploy command runs the `deploy` script: `pnpm run deploy`. Cloudflare pre-fills it from `package.json`. This script applies the database migrations before it deploys.
-4. After the first deploy, continue with [getting-started.md, step 7](docs/getting-started.md#7-set-the-operator-variables).
+4. After the first deploy, continue with [getting-started.md, step 7](docs/getting-started.md#7-attach-a-custom-domain).
 
 The button copies this repository into a new repository in your account. It is not a fork, so you pull updates yourself ([docs/operations/upgrades.md](docs/operations/upgrades.md)).
 
 ### Option B: Manual deploy
 
-Prerequisites: Node.js 22.18 or later, pnpm, a Cloudflare account (Workers Paid recommended).
+Prerequisites: Node.js 22.18 or later, pnpm, a Cloudflare account (Workers Paid recommended), a domain in that account and Cloudflare Zero Trust for admin sign-in.
 
 ```sh
 git clone https://github.com/2fd/cloudflare-tokengate.git
@@ -66,7 +66,7 @@ openssl rand -base64 32   # store this value in your vault first
 pnpm wrangler secret put TOKENGATE_KEK
 ```
 
-Then set the operator variables, configure a login provider, sign in as the first owner, add a caller provider and add a service. [docs/getting-started.md](docs/getting-started.md) shows each step.
+Then attach a custom domain, put `/admin` behind a Cloudflare Access application, set the operator variables, sign in as the first owner, add a caller provider and add a service. [docs/getting-started.md](docs/getting-started.md) shows each step.
 
 ### Call it from GitHub Actions
 

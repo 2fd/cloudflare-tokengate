@@ -8,20 +8,19 @@ The code is the reference. Each section names the files that implement it. Invar
 
 tokengate is one Cloudflare Worker with two D1 databases. Each company deploys its own copy in its own Cloudflare account.
 
-![Components: a CI job calls the proxy pipeline with a caller token; the proxy reads one batch from D1 DB, fetches the caller provider issuer JWKS (cached), forwards to the upstream API with the credential injected, and writes request records to TELEMETRY_DB. The admin browser uses the admin UI, which signs in through a login provider and writes changes with their audit rows to DB. An hourly cron computes rollups and applies retention in TELEMETRY_DB.](diagrams/components.svg)
+![Components: a CI job calls the proxy pipeline with a caller token; the proxy reads one batch from D1 DB, fetches the caller provider issuer JWKS (cached), forwards to the upstream API with the credential injected, and writes request records to TELEMETRY_DB. The admin browser reaches the admin UI through Cloudflare Access, and the UI writes changes with their audit rows to DB. An hourly cron computes rollups and applies retention in TELEMETRY_DB.](diagrams/components.svg)
 
 <sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
 | Component | Binding or route | Role |
 |---|---|---|
 | Proxy | `ANY /proxy/:slug`, `ANY /proxy/:slug/*` | Verifies the caller token, authorizes the request, injects the credential and forwards. |
-| Admin UI | `/admin/*` | Server-rendered pages to manage services, caller providers, grants, users and settings. |
-| Login | `/auth/login`, `/auth/:login_provider/start`, `/auth/:login_provider/callback`, `POST /auth/logout` | Signs users in through a login provider (`github`, `oidc` or `access`; Google login uses `oidc`). |
+| Admin UI | `/admin/*` | Server-rendered pages to manage services, caller providers, grants, users and settings. Every request is authenticated by its Cloudflare Access JWT; there are no gateway sessions and no `/auth` routes ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). |
 | Health | `GET /healthz`, `GET /readyz` | Liveness without I/O; readiness as booleans only. See [observability.md](observability.md). |
 | Static files | `/static/*` (Workers Assets, binding `ASSETS`) | `public/static/app.css`. `run_worker_first` sends every other path to the Worker. |
 | Cron | `scheduled`, `7 * * * *` | Rollups, retention purge, credential-expiry notices, heartbeat. |
 | Queue consumer | `queue`, binding `REQUEST_LOG_QUEUE` (optional) | Batches request records into `TELEMETRY_DB`. |
-| Control plane | D1 binding `DB` | Users, sessions, caller providers, services, grants, settings, audit log. |
+| Control plane | D1 binding `DB` | Users, caller providers, services, grants, settings, audit log. |
 | Telemetry | D1 binding `TELEMETRY_DB` | Request log and hourly rollups. |
 | Archive | Pipelines binding `REQUEST_ARCHIVE` (optional) | Streams every request record to R2. |
 | Rate limiter | Rate limiting binding `PROXY_RATE_LIMITER` (optional) | Caps requests per grant. |
@@ -40,9 +39,9 @@ All bindings, variables and secrets are listed in [configuration.md](configurati
 
 1. A middleware that builds `Deps` for the request.
 2. Proxy routes (`src/proxy/routes.ts`). They come before the security middleware because proxy responses carry their own header policy.
-3. The security middleware (`src/http/security.ts`). It applies to every response outside `/proxy`: CSP without `script-src`, `nosniff`, `no-referrer`, HSTS on https, and `no-store` on `/admin` and `/auth`. When `PUBLIC_URL` is set, it answers 404 for `/admin` and `/auth` on any other origin. When `PUBLIC_URL` is malformed, it answers 404 for `/admin` and `/auth` on every origin ([I-DEPLOY-1](threat-model.md#i-deploy-1)).
+3. The security middleware (`src/http/security.ts`). It applies to every response outside `/proxy`: CSP without `script-src`, `nosniff`, `no-referrer`, HSTS on https, and `no-store` on `/admin`. When `PUBLIC_URL` is set, it answers 404 for `/admin` on any other origin. When `PUBLIC_URL` is malformed, it answers 404 for `/admin` on every origin ([I-DEPLOY-1](threat-model.md#i-deploy-1)).
 4. Health routes (`src/health.ts`).
-5. Login routes and the admin middleware (`src/admin/auth/routes.tsx`).
+5. The admin middleware (`src/admin/auth/middleware.tsx`).
 6. Admin pages (`src/admin/routes/index.ts`).
 7. `GET /` redirects to `/admin`.
 
@@ -94,20 +93,20 @@ Every proxy response carries `x-tokengate-request-id`, `x-tokengate-source` (`ga
 A request to `/admin/*` passes these gates (`src/admin/auth/middleware.tsx`):
 
 1. Host pinning in the security middleware ([I-DEPLOY-1](threat-model.md#i-deploy-1)).
-2. A live session: cookie hash found, not revoked, not expired, user active, login identity still linked ([I-SESS-1](threat-model.md#i-sess-1)).
-3. For Cloudflare Access sessions, the Access JWT is validated again and its `sub` must match the session.
+2. A verified identity: the `Cf-Access-Jwt-Assertion` header is checked against the team's keys, issuer and AUD, on every request ([I-SESS-1](threat-model.md#i-sess-1)). A missing or invalid token gets 401; unreachable team keys get 503. With no login configured, `/admin` shows the setup page (503). The local development login (`AUTH_DEV_EMAIL`) replaces this step only on a loopback `PUBLIC_URL`.
+3. A user for that identity: a linked, active user, or else an invited user linked by the token's email ([I-LINK-1](threat-model.md#i-link-1)), or else the first owner ([I-BOOT-1](threat-model.md#i-boot-1)). Otherwise 403. Last-seen times are written at most every 5 minutes.
 4. The route must be in the RBAC table in `src/admin/auth/rbac.ts`. Unknown routes are denied ([I-RBAC-1](threat-model.md#i-rbac-1)).
-5. For unsafe methods, and for routes the RBAC table marks as mutating: body size cap of 64 KiB (413), then the fetch-metadata or `Origin` check and the `_csrf` token check ([I-CSRF-1](threat-model.md#i-csrf-1)).
+5. For unsafe methods, and for routes the RBAC table marks as mutating: body size cap of 64 KiB (413), then the fetch-metadata or `Origin` check and the `_csrf` field check against the `__Host-tokengate_csrf` cookie ([I-CSRF-1](threat-model.md#i-csrf-1)).
 6. The user's role must have the route's permission.
 
-Every admin mutation lives in `src/admin/ops/*`. Each op writes its change and exactly one audit event in one `db.batch()` ([I-AUDIT-1](threat-model.md#i-audit-1)). The page modules in `src/admin/routes/*` only parse forms, call ops and render.
+Every admin mutation lives in `src/admin/ops/*`. Each op writes its change and exactly one audit event in one `db.batch()` ([I-AUDIT-1](threat-model.md#i-audit-1)). The batch also re-checks that the acting identity is still linked to an active user whose role holds the permission, so a disable, demotion or login reset during the request stops its write. The page modules in `src/admin/routes/*` only parse forms, call ops and render.
 
 ## Background work
 
 The hourly cron (`src/telemetry/cron.ts`) runs these steps. Steps 1 to 3 each run even if an earlier one failed. Step 4 runs only if steps 1 to 3 succeeded.
 
 1. Rollup: recompute the last 3 closed hours of `request_rollup_hourly` from `request_log`, then up to 24 older hours after the `rollup_watermark` (after a complete run, the hour before those 3). Recomputes never lower stored rollups (`src/telemetry/rollup.ts`, [observability.md](observability.md#rollups)).
-2. Purge: delete request records, rollups and audit events older than their retention, delete sessions that ended more than one day ago, and enforce `request_log_max_rows` (`src/telemetry/retention.ts`). Request log deletes run in chunks of 5,000 rows, at most 40 statements per run. Retention floors are re-applied here.
+2. Purge: delete request records, rollups and audit events older than their retention, and enforce `request_log_max_rows` (`src/telemetry/retention.ts`). Request log deletes run in chunks of 5,000 rows, at most 40 statements per run. Retention floors are re-applied here.
 3. Credential expiry: write a `credential.expiring` audit event for a service when its credential crosses 14 days and again 3 days before `credential_expires_at`. If both thresholds are crossed at once, write one event.
 4. Heartbeat: write `cron_last_success_at`.
 
@@ -127,14 +126,13 @@ Timestamps are integer milliseconds since the Unix epoch. IDs are `<prefix>_<ULI
 |---|---|---|
 | `users` | Users: email, role (`owner`, `admin`, `viewer`), status (`invited`, `active`, `disabled`), invite expiry. | Triggers `users_last_owner_update` and `users_last_owner_delete` abort any change that removes the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). |
 | `user_identities` | Login identity `(login_provider, subject)` → User. | Created only by invite linking or bootstrap ([I-LINK-1](threat-model.md#i-link-1), [I-BOOT-1](threat-model.md#i-boot-1)). |
-| `sessions` | Admin sessions, keyed by SHA-256 of the session id. | Holds the CSRF synchronizer token, idle and absolute expiry ([I-SESS-1](threat-model.md#i-sess-1)). |
 | `caller_providers` | Issuer, `jwks_uri`, audience (16 chars or more), profile, allowed algorithms, max token age, tenant pin, anchor claims. | `profile` cannot change after creation. |
 | `services` | Slug, base URL, injection (canonical JSON), forwarded headers, timeout, sealed credential, hint, expiry, verify check. | `credential_sealed` is bound to `(id, base_url, injection)` ([I-CRED-2](threat-model.md#i-cred-2)). |
 | `grants` | Caller provider, service, conditions (JSON), rules (JSON), enabled, expiry. | Partial index `grants_lookup` serves the proxy query. |
 | `settings` | Key → JSON value. | Runtime settings and internal state (see below). |
 | `audit_log` | Audit events: actor, action, target, summary, redacted diff. | Diffs never contain secrets ([I-CRED-1](threat-model.md#i-cred-1)). |
 
-Pending OAuth logins are not stored in D1. They live only in the `__Host-tokengate_oauth` cookie (up to 3 pending logins, keyed by `state`; [ADR 0011](adr/0011-oauth-state-in-host-cookie.md)).
+The gateway stores no admin sessions. Cloudflare Access owns sign-in, sign-out and session lifetime ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)).
 
 Runtime settings and their defaults (`src/db/settings.ts`). Values outside the bounds are rejected when saved and clamped when read.
 
@@ -151,7 +149,6 @@ Internal state keys: `bootstrap_completed_at`, `cron_last_success_at`, `cron_las
 ```mermaid
 erDiagram
   users ||--o{ user_identities : "signs in with"
-  users ||--o{ sessions : has
   caller_providers ||--o{ grants : "verifies callers for"
   services ||--o{ grants : "is reached through"
 ```
@@ -216,8 +213,7 @@ src/
     services.ts         Services repository; only the credential statement writes base_url and injection (I-CRED-2).
     caller-providers.ts Caller providers repository with SQL guards.
     grants.ts           Grants repository with SQL guards.
-    users.ts            Users and identities; guarded linking and bootstrap (I-LINK-1, I-BOOT-1).
-    sessions.ts         Session rows; validity decided in SQL on every load (I-SESS-1).
+    users.ts            Users and identities; guarded linking and bootstrap; identity guard for admin writes (I-LINK-1, I-BOOT-1, I-SESS-1).
     audit.ts            Audit statements for the same batch as the change; audit.event log line (I-AUDIT-1).
     settings.ts         Settings defaults, bounds and state keys.
     requests.ts         request_log inserts (INSERT OR IGNORE) and reads.
@@ -235,9 +231,9 @@ src/
     dashboard.ts        Dashboard data and alerts.
     types.ts            RequestRecord type.
   admin/
-    auth/               Login providers (github.ts, oidc.ts, access.ts), email trust (email.ts), login resolution (resolve-login.ts),
-                        sessions (session.ts), CSRF (csrf.ts), RBAC (rbac.ts), OAuth state cookie (oauth-state.ts),
-                        middleware and routes (I-SESS-1, I-CSRF-1, I-OAUTH-1, I-LINK-1, I-BOOT-1, I-RBAC-1).
+    auth/               Access JWT check (access.ts), per-request identity and dev login (identity.ts), email trust (email.ts),
+                        login resolution (resolve-login.ts), CSRF (csrf.ts), RBAC (rbac.ts), setup page (setup.tsx),
+                        middleware (I-SESS-1, I-CSRF-1, I-LINK-1, I-BOOT-1, I-RBAC-1).
     ops/                Mutations; one change and one audit event per batch (I-AUDIT-1); credentials never in results (I-CRED-1).
     routes/             Server-rendered pages (dashboard, services, caller providers, grants, requests, audit, users, settings).
     views/              Layout, components, formatting, reason texts. No client JavaScript.
@@ -268,7 +264,7 @@ Security-critical code takes its side effects from a `Deps` object (`src/deps.ts
 ```ts
 interface Deps {
   env: AppEnv;
-  fetch: typeof fetch;   // upstreams, JWKS, discovery, login providers
+  fetch: typeof fetch;   // upstreams, JWKS, Access team keys
   now(): number;
   random(length: number): Uint8Array;
   waitUntil(promise: Promise<unknown>): void;
@@ -306,7 +302,7 @@ Some data is cached per isolate. None of it decides authorization:
 | Cache | Lifetime | Module |
 |---|---|---|
 | JWKS per `jwks_uri` | jose refreshes after 10 minutes; at most one fetch per 30 seconds per `jwks_uri` | `src/identity/jwt.ts` |
-| OIDC discovery for admin login | 1 hour; a failed discovery for 30 seconds | `src/admin/auth/oidc.ts` |
+| Access team keys for admin sign-in | jose refreshes after 10 minutes or on an unknown `kid`; at most one fetch per 30 seconds | `src/admin/auth/access.ts` |
 | Schema status | `ok` or `ahead`: isolate lifetime. `behind` or `unknown`: 60 seconds | `src/db/migrations.ts` |
 | `/readyz` answer | 10 seconds | `src/health.ts` |
 

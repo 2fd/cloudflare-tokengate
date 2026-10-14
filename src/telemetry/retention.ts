@@ -8,8 +8,6 @@ import { idLowerBound } from '../lib/ids';
 import { hourStart, ROLLUP_HOURS_PER_RUN } from './rollup';
 
 const DAY_MS = 86_400_000;
-/** Ended sessions are kept this long for incident review before deletion. */
-const ENDED_SESSION_GRACE_MS = DAY_MS;
 
 export interface PurgeLimits {
   /** Rows per request_log DELETE. */
@@ -41,7 +39,6 @@ export interface PurgeResult {
   };
   rollups: number;
   auditLog: number;
-  sessions: number;
 }
 
 export async function purge(
@@ -54,7 +51,7 @@ export async function purge(
   // The databases are purged independently so an outage of one does not stop the other.
   const [telemetry, control] = await Promise.allSettled([
     purgeTelemetry(deps.env.TELEMETRY_DB, settings, now, cutoff, limits),
-    purgeControlPlane(deps.env.DB, now, cutoff),
+    purgeControlPlane(deps.env.DB, cutoff),
   ]);
   if (telemetry.status === 'rejected' || control.status === 'rejected') {
     const errors = [telemetry, control].flatMap((r) => (r.status === 'rejected' ? [r.reason] : []));
@@ -97,22 +94,13 @@ async function purgeTelemetry(
 
 async function purgeControlPlane(
   db: D1Database,
-  now: number,
   cutoff: (key: keyof Settings) => number,
-): Promise<Pick<PurgeResult, 'auditLog' | 'sessions'>> {
-  const ended = now - ENDED_SESSION_GRACE_MS;
-  const [audit, sessions] = await db.batch([
-    db.prepare('DELETE FROM audit_log WHERE ts < ?').bind(cutoff('audit_log_retention_days')),
-    db
-      .prepare(
-        'DELETE FROM sessions WHERE expires_at < ?1 OR idle_expires_at < ?1 OR revoked_at < ?1',
-      )
-      .bind(ended),
-  ]);
-  return {
-    auditLog: audit?.meta.changes ?? 0,
-    sessions: sessions?.meta.changes ?? 0,
-  };
+): Promise<Pick<PurgeResult, 'auditLog'>> {
+  const audit = await db
+    .prepare('DELETE FROM audit_log WHERE ts < ?')
+    .bind(cutoff('audit_log_retention_days'))
+    .run();
+  return { auditLog: audit.meta.changes };
 }
 
 /** Deletes request_log rows with id < bound, oldest first, one chunk per statement. */

@@ -53,7 +53,7 @@ For a GitHub token with a credential check, the gateway reads the expiry from th
 
 1. If the service has a credential check, select "Test credential" on the service page. It sends
    the check to the upstream now. It writes a `service.credential.test` audit event before it sends
-   the stored credential; if your session or role no longer allows the test, nothing is sent. The
+   the stored credential; if your user or role no longer allows the test, nothing is sent. The
    result appears on the page and in a `service.credential.test_result` log line.
 2. Open Admin > Requests, set service to this service and Outcome to "Allowed", and select "Apply
    filters".

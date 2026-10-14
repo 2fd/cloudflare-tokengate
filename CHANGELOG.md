@@ -17,9 +17,9 @@ First public release (0.1.0).
 - **Service templates** for the Slack Web API, Slack incoming webhooks, Discord webhooks, OpenAI, Anthropic, the GitHub REST API and GitHub uploads. An optional verify check tests a credential when it is saved or tested. See [docs/upstreams/](docs/upstreams/).
 - **Envelope encryption** of credentials with AES-256-GCM and a keyring (`TOKENGATE_KEK` or `TOKENGATE_KEYRING`). Key rotation with key check values and a rewrap action in Settings. `pnpm keyring generate` and `pnpm keyring check` generate and validate keys outside Cloudflare. See [docs/operations/key-rotation.md](docs/operations/key-rotation.md).
 - **Admin UI** at `/admin`, server-rendered without client-side JavaScript: Dashboard, services, caller providers, grants, Requests, Audit log, users, Settings. "Create grant from this request" prefills a grant from a denied request record.
-- **Login providers:** GitHub OAuth App (optional organization allowlist), generic OpenID Connect or Google (optional email domain allowlist), and Cloudflare Access. Users have the role `owner`, `admin` or `viewer`. Users are invited by email; `BOOTSTRAP_OWNER_EMAILS` creates the first owner.
+- **Admin sign-in through Cloudflare Access only.** The Worker verifies the Access JWT on every `/admin` request; it keeps no sessions of its own. "Sign out" goes to the Access logout endpoint. Users have the role `owner`, `admin` or `viewer`. Users are invited by email; `BOOTSTRAP_OWNER_EMAILS` creates the first owner. For local development, `AUTH_DEV_EMAIL` signs in as one email, and only on a loopback `PUBLIC_URL`. See [ADR 0015](docs/adr/0015-cloudflare-access-only-admin-login.md).
 - **Request log** in a separate D1 database (`TELEMETRY_DB`), with hourly rollups, retention settings, a sample rate for allowed requests and a row cap. Optional Queue for batched writes (`REQUEST_LOG_QUEUE`) and optional archive to R2 through Basin Pipelines (`REQUEST_ARCHIVE`, `scripts/setup-archive.sh`, `pipelines/request-log.v1.schema.json`). See [docs/observability.md](docs/observability.md).
-- **Audit log** of every admin change and every sign-in, also emitted as an `audit.event` log line for a SIEM.
+- **Audit log** of every admin change, invite link and first-owner bootstrap, also emitted as an `audit.event` log line for a SIEM.
 - **Health endpoints:** `/healthz` (liveness, no I/O) and `/readyz` (readiness, booleans only).
 - **Configuration export** (`POST /admin/export`) as deterministic JSON without secrets.
 - **Optional per-Grant rate limit** through the `PROXY_RATE_LIMITER` binding.
@@ -44,17 +44,18 @@ Each item links to its invariant in [docs/threat-model.md](docs/threat-model.md)
 - Upstream response headers are filtered. A header that echoes the credential is dropped and named in `x-tokengate-redacted` ([I-RESP-1](docs/threat-model.md#i-resp-1)). Response bodies pass through unchanged.
 - Base URLs are https only, checked against `ALLOWED_UPSTREAM_HOSTS` (when set) when a service is saved and on every request. `global_fetch_strictly_public` is enabled ([I-SSRF-1](docs/threat-model.md#i-ssrf-1)).
 - Request records keep only claims on the profile's allowlist ([I-LOG-1](docs/threat-model.md#i-log-1)). Unverified claims are never stored ([I-LOG-2](docs/threat-model.md#i-log-2)). `tokengate-token` masks every token it prints ([I-LOG-1](docs/threat-model.md#i-log-1)).
-- Admin sessions use a `__Host-` cookie, store only a SHA-256 hash, and have idle and absolute expiry ([I-SESS-1](docs/threat-model.md#i-sess-1)). OAuth state lives in the `__Host-tokengate_oauth` cookie with a 10-minute expiry ([I-OAUTH-1](docs/threat-model.md#i-oauth-1)).
-- Unsafe admin requests need `Sec-Fetch-Site` `same-origin` or `none` (without that header, an exact `Origin`) and a synchronizer token. Admin form bodies are capped at 64 KiB ([I-CSRF-1](docs/threat-model.md#i-csrf-1)).
-- Email linking applies only to invited users and uses only authoritative emails from the login provider ([I-LINK-1](docs/threat-model.md#i-link-1)). Bootstrap creates at most one owner, once ([I-BOOT-1](docs/threat-model.md#i-boot-1)).
+- Every admin request is authenticated by its own Cloudflare Access JWT (team certs, exact issuer, application AUD). A disable, role change or login reset applies to the user's next request, and admin writes re-check the acting identity and role when they commit ([I-SESS-1](docs/threat-model.md#i-sess-1)).
+- Unsafe admin requests need `Sec-Fetch-Site` `same-origin` or `none` (without that header, an exact `Origin`) and a `_csrf` field equal to the `__Host-tokengate_csrf` cookie (double submit). Admin form bodies are capped at 64 KiB ([I-CSRF-1](docs/threat-model.md#i-csrf-1)).
+- Email linking applies only to invited users and uses only the email of a valid Access JWT ([I-LINK-1](docs/threat-model.md#i-link-1)). Bootstrap creates at most one owner, once ([I-BOOT-1](docs/threat-model.md#i-boot-1)).
 - Every admin route has an RBAC entry ([I-RBAC-1](docs/threat-model.md#i-rbac-1)). Every admin change writes exactly one audit event in the same batch ([I-AUDIT-1](docs/threat-model.md#i-audit-1)). The last active owner cannot be demoted, disabled or deleted ([I-OWNER-1](docs/threat-model.md#i-owner-1)).
-- With `PUBLIC_URL` set, `/admin` and `/auth` answer only on that origin. `wrangler.jsonc` sets `preview_urls: false` and `keep_vars: true`, and `scripts/check-config.sh` enforces both ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)).
+- With `PUBLIC_URL` set, `/admin` answers only on that origin. `wrangler.jsonc` sets `preview_urls: false` and `keep_vars: true`, and `scripts/check-config.sh` enforces both ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)).
 - A malformed configuration variable turns off the affected feature and is reported by name; no feature runs half-configured ([I-CFG-1](docs/threat-model.md#i-cfg-1)).
 
 ### Upgrade notes
 
 - This is the first release. There is no upgrade path from earlier development snapshots: deploy it into new D1 databases.
 - Schema heads: `migrations/0001_initial.sql` (`DB`) and `migrations-telemetry/0001_initial.sql` (`TELEMETRY_DB`). `pnpm run deploy` applies both.
+- The admin UI needs `PUBLIC_URL` on a custom domain behind an Access application. On a `workers.dev` hostname only `/proxy` and the health endpoints work.
 - `wrangler.jsonc` declares no `vars`. Set operator variables in the Cloudflare dashboard; deploys keep them. See [docs/configuration.md](docs/configuration.md).
 
 [Unreleased]: https://github.com/2fd/cloudflare-tokengate/commits/main

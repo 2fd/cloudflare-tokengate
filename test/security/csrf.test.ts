@@ -21,8 +21,8 @@ async function setup(envOverrides: Record<string, string> = {}) {
   return { app, owner, session };
 }
 
-describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the synchronizer token', () => {
-  it('accepts a same-origin form POST with the session token', async () => {
+describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double-submit token', () => {
+  it('accepts a same-origin form POST whose token matches the CSRF cookie', async () => {
     const { app, session } = await setup();
     expect((await adminPost(app, session, '/admin/services', { name: 'x' })).status).toBe(200);
   });
@@ -44,10 +44,28 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the synchr
     expect(res.status).toBe(403);
   });
 
-  it("rejects another session's token", async () => {
+  it("rejects another browser's token", async () => {
     const { app, owner, session } = await setup();
     const other = await loginAs(app, owner);
     const res = await adminPost(app, session, '/admin/services', {}, { csrf: other.csrfToken });
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects a matching token when the browser sent no CSRF cookie', async () => {
+    const { app, session } = await setup();
+    const res = await adminPost(app, session, '/admin/services', {}, { headers: { cookie: null } });
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects a cookie value that is not a token we issue, even when the field matches it', async () => {
+    const { app, session } = await setup();
+    const res = await adminPost(
+      app,
+      session,
+      '/admin/services',
+      {},
+      { csrf: 'x', headers: { cookie: '__Host-tokengate_csrf=x' } },
+    );
     expect(res.status).toBe(403);
   });
 
@@ -64,7 +82,7 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the synchr
     const json = await app.request('/admin/services', {
       method: 'POST',
       headers: {
-        cookie: session.cookie,
+        ...session.headers,
         'sec-fetch-site': 'same-origin',
         'content-type': 'application/json',
       },
@@ -130,7 +148,7 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the synchr
       app.request('/admin/services', {
         method: 'POST',
         headers: {
-          cookie: session.cookie,
+          ...session.headers,
           origin,
           'content-type': 'application/x-www-form-urlencoded',
         },
@@ -144,25 +162,6 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the synchr
   it('does not require the token on GET', async () => {
     const { app, session } = await setup();
     expect((await adminGet(app, session, '/admin/services')).status).toBe(200);
-  });
-
-  it('protects logout: cross-site or tokenless logout leaves the session alive', async () => {
-    const { app, session } = await setup();
-    const cross = await adminPost(
-      app,
-      session,
-      '/auth/logout',
-      {},
-      { headers: { 'sec-fetch-site': 'cross-site' } },
-    );
-    expect(cross.status).toBe(403);
-    const tokenless = await adminPost(app, session, '/auth/logout', {}, { csrf: null });
-    expect(tokenless.status).toBe(403);
-    const revoked = await env.DB.prepare(
-      'SELECT revoked_at FROM sessions WHERE revoked_at IS NOT NULL',
-    ).first();
-    expect(revoked).toBeNull();
-    expect((await adminGet(app, session, '/admin')).status).toBe(200);
   });
 
   it('rejects a repeated _csrf field, even when every copy is the valid token', async () => {
@@ -189,7 +188,7 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the synchr
     body.set('_csrf', session.csrfToken);
     const res = await app.request('/admin/services', {
       method: 'POST',
-      headers: { cookie: session.cookie, 'sec-fetch-site': 'same-origin' },
+      headers: { ...session.headers, 'sec-fetch-site': 'same-origin' },
       body,
     });
     expect(res.status).toBe(200);
@@ -287,7 +286,7 @@ describe('I-CSRF-1: admin form bodies are capped before they are parsed (any rol
     const res = await app.request('/admin/services', {
       method: 'POST',
       headers: {
-        cookie: session.cookie,
+        ...session.headers,
         'sec-fetch-site': 'same-origin',
         'content-type': 'application/x-www-form-urlencoded',
         'content-length': String(ADMIN_FORM_MAX_BYTES * 4),
@@ -304,7 +303,7 @@ describe('I-CSRF-1: admin form bodies are capped before they are parsed (any rol
     const res = await app.request('/admin/services', {
       method: 'POST',
       headers: {
-        cookie: session.cookie,
+        ...session.headers,
         'sec-fetch-site': 'same-origin',
         'content-type': 'application/x-www-form-urlencoded',
       },
@@ -320,14 +319,5 @@ describe('I-CSRF-1: admin form bodies are capped before they are parsed (any rol
     const session = await loginAs(app, owner);
     const filler = 'a'.repeat(ADMIN_FORM_MAX_BYTES - 200);
     expect((await adminPost(app, session, '/admin/services', { filler })).status).toBe(200);
-  });
-
-  it('logout with an oversized body is refused and leaves the session alive', async () => {
-    const { app, session } = await viewerSetup();
-    const res = await adminPost(app, session, '/auth/logout', {
-      blob: 'a'.repeat(ADMIN_FORM_MAX_BYTES + 1),
-    });
-    expect(res.status).toBe(403);
-    expect((await adminGet(app, session, '/admin')).status).toBe(200);
   });
 });

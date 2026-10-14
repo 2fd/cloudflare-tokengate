@@ -8,8 +8,7 @@ export type Permission =
   | 'config:write'
   | 'users:write'
   | 'settings:write'
-  | 'keyring:rewrap'
-  | 'sessions:revoke';
+  | 'keyring:rewrap';
 
 export interface RoutePermission {
   permission: Permission;
@@ -20,14 +19,7 @@ export interface RoutePermission {
 const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
   viewer: new Set(['read']),
   admin: new Set(['read', 'config:write']),
-  owner: new Set([
-    'read',
-    'config:write',
-    'users:write',
-    'settings:write',
-    'keyring:rewrap',
-    'sessions:revoke',
-  ]),
+  owner: new Set(['read', 'config:write', 'users:write', 'settings:write', 'keyring:rewrap']),
 };
 
 export function can(role: Role, permission: Permission): boolean {
@@ -84,7 +76,6 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, RoutePermission>> = Obje
   'POST /admin/users/:id': usersWrite,
   'POST /admin/users/:id/reset-login': usersWrite,
   'POST /admin/users/:id/resend-invite': usersWrite,
-  'POST /admin/users/:id/revoke-sessions': { permission: 'sessions:revoke', mutates: true },
 
   'GET /admin/settings': read,
   'POST /admin/settings': { permission: 'settings:write', mutates: true },

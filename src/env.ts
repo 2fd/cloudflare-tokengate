@@ -16,18 +16,9 @@ export interface AppEnv {
   TOKENGATE_KEK?: string;
   TOKENGATE_KEYRING?: string;
 
-  AUTH_GITHUB_CLIENT_ID?: string;
-  AUTH_GITHUB_CLIENT_SECRET?: string;
-  AUTH_GITHUB_ALLOWED_ORGS?: string;
-  AUTH_OIDC_ISSUER?: string;
-  AUTH_OIDC_CLIENT_ID?: string;
-  AUTH_OIDC_CLIENT_SECRET?: string;
-  AUTH_OIDC_NAME?: string;
-  AUTH_OIDC_ALLOWED_DOMAINS?: string;
-  AUTH_GOOGLE_CLIENT_ID?: string;
-  AUTH_GOOGLE_CLIENT_SECRET?: string;
   AUTH_ACCESS_TEAM_DOMAIN?: string;
   AUTH_ACCESS_AUD?: string;
+  AUTH_DEV_EMAIL?: string;
 
   REQUEST_LOG_QUEUE?: Queue<RequestRecord>;
   REQUEST_ARCHIVE?: Pipeline<ArchiveRecord>;

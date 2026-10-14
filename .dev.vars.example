@@ -5,22 +5,13 @@
 # Losing it means losing every stored credential. For rotation use TOKENGATE_KEYRING instead (docs/operations/key-rotation.md).
 TOKENGATE_KEK=
 
-# GitHub OAuth App client secret (login provider "github"; pairs with AUTH_GITHUB_CLIENT_ID).
-AUTH_GITHUB_CLIENT_SECRET=
-
-# Generic OIDC client secret (login provider "oidc"; pairs with AUTH_OIDC_ISSUER and AUTH_OIDC_CLIENT_ID).
-AUTH_OIDC_CLIENT_SECRET=
-
-# Google OAuth client secret (pairs with AUTH_GOOGLE_CLIENT_ID).
-AUTH_GOOGLE_CLIENT_SECRET=
-
 # --- Local development only: operator variables ---
 # In production these are plain variables set in the dashboard (Worker > Settings > Variables and
 # Secrets); wrangler.jsonc declares none of them (keep_vars, I-DEPLOY-1). For `wrangler dev`, uncomment
 # the ones you need in .dev.vars. They are commented here so the Deploy button does not ask for them
 # as secrets. Full list and formats: docs/configuration.md.
 
-# Origin the admin console and login callbacks are pinned to. http is accepted only for localhost.
+# Origin the admin console is pinned to. http is accepted only for localhost.
 # PUBLIC_URL=http://localhost:8787
 
 # Comma-separated upstream hosts services may use ("api.example.com" or "*.example.com").
@@ -29,20 +20,11 @@ AUTH_GOOGLE_CLIENT_SECRET=
 # Comma-separated emails; the first listed person to sign in while no owner exists becomes owner.
 # BOOTSTRAP_OWNER_EMAILS=you@example.com
 
-# GitHub login (pairs with AUTH_GITHUB_CLIENT_SECRET above). Optional org allowlist, comma-separated.
-# AUTH_GITHUB_CLIENT_ID=
-# AUTH_GITHUB_ALLOWED_ORGS=
-
-# Generic OIDC login (pairs with AUTH_OIDC_CLIENT_SECRET above). Do not combine with AUTH_GOOGLE_*.
-# AUTH_OIDC_ISSUER=https://idp.example.com
-# AUTH_OIDC_CLIENT_ID=
-# AUTH_OIDC_NAME=Company SSO
-# AUTH_OIDC_ALLOWED_DOMAINS=example.com
-
-# Google login (pairs with AUTH_GOOGLE_CLIENT_SECRET above). AUTH_OIDC_ALLOWED_DOMAINS also applies.
-# AUTH_GOOGLE_CLIENT_ID=
+# Local development login: every admin request is signed in as this email, with no check at all.
+# Accepted only when PUBLIC_URL is on localhost, 127.0.0.1 or [::1]. Never set it in production.
+# AUTH_DEV_EMAIL=you@example.com
 
 # Cloudflare Access login: "<team>" or "https://<team>.cloudflareaccess.com", and the application AUD.
-# Requires PUBLIC_URL on a custom domain (not workers.dev).
+# Requires PUBLIC_URL on a custom domain (not workers.dev). Production uses only this login.
 # AUTH_ACCESS_TEAM_DOMAIN=
 # AUTH_ACCESS_AUD=

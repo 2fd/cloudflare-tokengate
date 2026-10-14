@@ -319,9 +319,9 @@ rect.c-bg-rect { fill: var(--bg); }
         <path data-edge-from="proxy" data-edge-to="db" data-edge-label="one batch read" data-edge-key="3" data-edge-id="proxy-db" data-composition-points="405,284;405,380" d="M 405 284 L 405 380" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="proxy" data-edge-to="tdb" data-edge-label="request record" data-edge-key="4" data-edge-id="proxy-tdb" data-composition-points="490,259;685,259;685,380" d="M 490 259 L 677 259 Q 685 259 685 267 L 685 380" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="cron" data-edge-to="tdb" data-edge-label="rollups, retention" data-edge-key="5" data-edge-id="cron-tdb" data-composition-points="880,412;770,412" d="M 880 412 L 770 412" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="browser" data-edge-to="admin" data-edge-label="session" data-edge-key="6" data-edge-id="browser-admin" data-composition-points="200,572;320,572" d="M 200 572 L 320 572" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="browser" data-edge-to="admin" data-edge-label="Access JWT" data-edge-key="6" data-edge-id="browser-admin" data-composition-points="200,572;320,572" d="M 200 572 L 320 572" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="admin" data-edge-to="db" data-edge-label="change + audit row" data-edge-key="7" data-edge-id="admin-db" data-composition-points="405,540;405,444" d="M 405 540 L 405 444" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="admin" data-edge-to="login" data-edge-label="OAuth / OIDC / Access" data-edge-key="8" data-edge-id="admin-login" data-composition-points="490,572;880,572" d="M 490 572 L 880 572" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="admin" data-edge-to="login" data-edge-label="certs, cached" data-edge-key="8" data-edge-id="admin-login" data-composition-points="490,572;880,572" d="M 490 572 L 880 572" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
 
         <!-- Components -->
         <g id="node-issuer" data-node-id="issuer" data-node-label="Caller provider issuer" tabindex="0" role="button" aria-label="Focus Caller provider issuer, OIDC JWKS, Architecture component" aria-pressed="false" data-node-kind="security" data-node-sublabel="OIDC JWKS" data-node-context="Architecture component">
@@ -420,8 +420,8 @@ rect.c-bg-rect { fill: var(--bg); }
         <text x="120" y="586" class="t-muted" font-size="9" text-anchor="middle">owner / admin / viewer</text>
         </g>
 
-        <g id="node-admin" data-node-id="admin" data-node-label="Admin UI + login" tabindex="0" role="button" aria-label="Focus Admin UI + login, /admin, /auth, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="/admin, /auth" data-node-context="Architecture component">
-          <title>Admin UI + login · /admin, /auth · Architecture component</title>
+        <g id="node-admin" data-node-id="admin" data-node-label="Admin UI" tabindex="0" role="button" aria-label="Focus Admin UI, /admin, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="/admin" data-node-context="Architecture component">
+          <title>Admin UI · /admin · Architecture component</title>
           <rect x="320" y="540" width="170" height="64" rx="6" class="c-mask"/>
           <rect x="320" y="540" width="170" height="64" rx="6" class="c-frontend" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(326 546) scale(0.6875)">
@@ -430,20 +430,20 @@ rect.c-bg-rect { fill: var(--bg); }
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" x="405" y="570" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Admin UI + login</text>
-        <text x="405" y="586" class="t-muted" font-size="9" text-anchor="middle">/admin, /auth</text>
+          <text data-node-label="" x="405" y="570" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Admin UI</text>
+        <text x="405" y="586" class="t-muted" font-size="9" text-anchor="middle">/admin</text>
         </g>
 
-        <g id="node-login" data-node-id="login" data-node-label="Login provider" tabindex="0" role="button" aria-label="Focus Login provider, GitHub, OIDC, Access, Architecture component" aria-pressed="false" data-node-kind="security" data-node-sublabel="GitHub, OIDC, Access" data-node-context="Architecture component">
-          <title>Login provider · GitHub, OIDC, Access · Architecture component</title>
+        <g id="node-login" data-node-id="login" data-node-label="Cloudflare Access" tabindex="0" role="button" aria-label="Focus Cloudflare Access, admin sign-in, Architecture component" aria-pressed="false" data-node-kind="security" data-node-sublabel="admin sign-in" data-node-context="Architecture component">
+          <title>Cloudflare Access · admin sign-in · Architecture component</title>
           <rect x="880" y="540" width="170" height="64" rx="6" class="c-mask"/>
           <rect x="880" y="540" width="170" height="64" rx="6" class="c-security" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(886 546) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" x="965" y="570" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Login provider</text>
-        <text x="965" y="586" class="t-muted" font-size="9" text-anchor="middle">GitHub, OIDC, Access</text>
+          <text data-node-label="" x="965" y="570" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Cloudflare Access</text>
+        <text x="965" y="586" class="t-muted" font-size="9" text-anchor="middle">admin sign-in</text>
         </g>
 
         <!-- Connection labels -->
@@ -471,17 +471,17 @@ rect.c-bg-rect { fill: var(--bg); }
           <rect x="776.8" y="392" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
           <text x="825" y="402" class="t-muted" font-size="8" text-anchor="middle">rollups, retention</text>
         </g>
-        <g data-edge-from="browser" data-edge-to="admin" data-edge-label="session" data-edge-key="6" data-edge-id="browser-admin">
-          <rect x="238.2" y="552" width="43.6" height="14" rx="3" class="c-mask"/>
-          <text x="260" y="562" class="t-muted" font-size="8" text-anchor="middle">session</text>
+        <g data-edge-from="browser" data-edge-to="admin" data-edge-label="Access JWT" data-edge-key="6" data-edge-id="browser-admin">
+          <rect x="231" y="552" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="260" y="562" class="t-muted" font-size="8" text-anchor="middle">Access JWT</text>
         </g>
         <g data-edge-from="admin" data-edge-to="db" data-edge-label="change + audit row" data-edge-key="7" data-edge-id="admin-db">
           <rect x="356.8" y="520" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
           <text x="405" y="530" class="t-muted" font-size="8" text-anchor="middle">change + audit row</text>
         </g>
-        <g data-edge-from="admin" data-edge-to="login" data-edge-label="OAuth / OIDC / Access" data-edge-key="8" data-edge-id="admin-login">
-          <rect x="629.6" y="552" width="110.8" height="14" rx="3" class="c-mask"/>
-          <text x="685" y="562" class="t-security" font-size="8" text-anchor="middle">OAuth / OIDC / Access</text>
+        <g data-edge-from="admin" data-edge-to="login" data-edge-label="certs, cached" data-edge-key="8" data-edge-id="admin-login">
+          <rect x="648.8" y="552" width="72.4" height="14" rx="3" class="c-mask"/>
+          <text x="685" y="562" class="t-security" font-size="8" text-anchor="middle">certs, cached</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->

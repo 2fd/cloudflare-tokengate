@@ -40,8 +40,8 @@ Steps:
 
    The key is printed on stdout and its key check value (KCV) on stderr.
 
-4. In `.dev.vars`, uncomment `PUBLIC_URL=http://localhost:8787` and `BOOTSTRAP_OWNER_EMAILS`, and set your email.
-5. Configure one login provider in `.dev.vars`. For GitHub, create an OAuth App with the callback URL `http://localhost:8787/auth/github/callback`, then set `AUTH_GITHUB_CLIENT_ID` and `AUTH_GITHUB_CLIENT_SECRET`. All variables are in [docs/configuration.md](docs/configuration.md).
+4. In `.dev.vars`, uncomment `PUBLIC_URL=http://localhost:8787`, `BOOTSTRAP_OWNER_EMAILS` and `AUTH_DEV_EMAIL`, and set your email in both.
+5. `AUTH_DEV_EMAIL` is the local development login: every admin request is signed in as that email, without Cloudflare Access. The gateway accepts it only while `PUBLIC_URL` is on `localhost`, `127.0.0.1` or `[::1]`. To test the real Access login, run the Worker behind a hostname that an Access application protects. All variables are in [docs/configuration.md](docs/configuration.md).
 6. Apply both migrations to the local databases:
 
    ```sh
@@ -54,7 +54,7 @@ Steps:
    pnpm dev
    ```
 
-You do not need a Cloudflare account or a login provider to run the tests.
+You do not need a Cloudflare account or Cloudflare Access to run the tests: they sign Access tokens with a fake team key (`test/helpers/login-providers.ts`).
 
 ## Commands
 
@@ -92,14 +92,14 @@ All Vitest tests run inside workerd. `test/helpers/apply-migrations.ts` applies 
 | `test/integration/` | The real app from `createApp()` (`src/app.ts`), driven over HTTP with injected dependencies. |
 | `test/security/` | One threat-model invariant per `describe`, adversarial inputs, and the two shell tests. |
 | `test/vectors/` | Language-neutral JSON tables (a `description` and arrays of cases) for claim conditions, globs, paths and the sealed credential format. |
-| `test/helpers/` | Test issuer and JWKS (`jwt.ts`), test app (`app.ts`), proxy fixture with a fake upstream (`proxy-fixtures.ts`), admin sessions (`admin-auth.ts`), fake login providers (`login-providers.ts`). |
+| `test/helpers/` | Test issuer and JWKS (`jwt.ts`), test app (`app.ts`), proxy fixture with a fake upstream (`proxy-fixtures.ts`), signed-in admin browsers (`admin-auth.ts`), fake Cloudflare Access team (`login-providers.ts`). |
 | `test/fixtures/admin-forms.ts` | A seeded admin "world" and one valid form submission per mutating admin route. |
 
 Conventions:
 
 - **Name invariants in `describe`.** A security test starts its `describe` name with the invariant ID: `describe('I-TEN-1: tenant pin is exact and fails closed', …)`. `scripts/check-threat-ids.sh` fails if any ID in [docs/threat-model.md](docs/threat-model.md) has no `describe` under `test/`.
 - **Inject, do not mock.** Code with side effects takes `Deps` (`src/deps.ts`): `fetch`, `now`, `random`, `waitUntil`. Tests pass fakes. The suite has no `vi.mock` and no global `fetch` stub. `vi.spyOn(console, …)` only captures or silences log lines. Fake `Date` timers appear only where jose reads the system clock itself (`test/security/jwt.test.ts`, `test/unit/identity/jwt.test.ts`).
-- **No network.** Issuer JWKS, login providers and upstreams are served through the injected `fetch`.
+- **No network.** Issuer JWKS, Access certs and upstreams are served through the injected `fetch`.
 - **Vectors are contracts.** Add a case when you find an edge case. Change an existing case only when you change the semantics on purpose, and say so in the PR and in CHANGELOG.md. `test/vectors/sealed.json` freezes sealed credential format v1: if it changes, stored credentials no longer open.
 - **Shell tests run outside Vitest.** workerd cannot spawn `bash`, so `test/security/*.sh` run through `pnpm test:scripts`.
 - **Tests that pin tables.** `test/unit/schema-head.test.ts`, `test/unit/admin/auth/rbac.test.ts`, `test/security/rbac-routes.test.ts` and `test/security/audit-coverage-routes.test.ts` fail when you add a migration, a route or a mutating route without updating the matching table. This is intended.
@@ -140,7 +140,7 @@ Comments are concise and say what the code guarantees and why. They are part of 
 | `src/identity/` | JWT verification and profiles ([I-JWT-1](docs/threat-model.md#i-jwt-1), [I-JWT-2](docs/threat-model.md#i-jwt-2), [I-TEN-1](docs/threat-model.md#i-ten-1)). |
 | `src/policy/` | Conditions, globs, rules, anchor claims, trusted events ([I-AUTHZ-1](docs/threat-model.md#i-authz-1) to [I-AUTHZ-4](docs/threat-model.md#i-authz-4)). |
 | `src/proxy/` | The request pipeline, injection, header and response filtering ([I-TOK-1](docs/threat-model.md#i-tok-1), [I-INJ-1](docs/threat-model.md#i-inj-1), [I-RESP-1](docs/threat-model.md#i-resp-1), [I-SSRF-1](docs/threat-model.md#i-ssrf-1), …). |
-| `src/admin/auth/` | Login, sessions, CSRF, RBAC, email linking, bootstrap ([I-SESS-1](docs/threat-model.md#i-sess-1), [I-CSRF-1](docs/threat-model.md#i-csrf-1), [I-OAUTH-1](docs/threat-model.md#i-oauth-1), [I-LINK-1](docs/threat-model.md#i-link-1), [I-BOOT-1](docs/threat-model.md#i-boot-1), [I-RBAC-1](docs/threat-model.md#i-rbac-1)). |
+| `src/admin/auth/` | Per-request Access identity, CSRF, RBAC, email linking, bootstrap ([I-SESS-1](docs/threat-model.md#i-sess-1), [I-CSRF-1](docs/threat-model.md#i-csrf-1), [I-LINK-1](docs/threat-model.md#i-link-1), [I-BOOT-1](docs/threat-model.md#i-boot-1), [I-RBAC-1](docs/threat-model.md#i-rbac-1)). |
 | `src/http/` | Security headers and host pinning ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)). |
 | `migrations/`, `migrations-telemetry/` | Schema, including SQL-enforced invariants. |
 | `wrangler.jsonc` | Compatibility flags, `preview_urls`, `keep_vars` ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1), [I-SSRF-1](docs/threat-model.md#i-ssrf-1)). |
@@ -244,7 +244,7 @@ Documentation is reviewed like code, and a passing test suite does not replace i
 
 ## Dependencies
 
-- Add a runtime dependency only when it is necessary. The Worker has three: `hono`, `jose`, `oauth4webapi`.
+- Add a runtime dependency only when it is necessary. The Worker has two: `hono` and `jose`.
 - `pnpm-workspace.yaml` allows install scripts only for `esbuild` and `workerd`. A new dependency that needs an install script must be justified in the PR.
 - Dependency review fails a PR on a moderate or higher advisory, or on a license outside the allow list in `.github/workflows/dependency-review.yml`.
 - Dependabot opens weekly update PRs for npm and GitHub Actions.

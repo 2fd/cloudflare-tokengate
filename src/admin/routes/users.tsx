@@ -1,13 +1,13 @@
 // Admin pages: users. Everyone can see who has access; only owners invite people, change roles or
-// statuses, reset logins and end sessions (I-RBAC-1). Mutations go through ops/users.ts, which
-// ends sessions on access changes (I-SESS-1) and keeps an active owner (I-OWNER-1).
+// statuses and reset logins (I-RBAC-1). Mutations go through ops/users.ts, which keeps an active
+// owner (I-OWNER-1); every admin request re-reads the user, so changes apply at once (I-SESS-1).
 import type { App } from '../../app';
 import { type Config, canonicalOrigin, parseConfig } from '../../config';
 import type { Role, User } from '../../db/types';
 import { INVITE_TTL_MS, listUsers, type UserListEntry } from '../../db/users';
 import { can } from '../auth/rbac';
 import type { OpFailure } from '../ops/shared';
-import { inviteUser, resendInvite, resetLogin, revokeSessions, updateUser } from '../ops/users';
+import { inviteUser, resendInvite, resetLogin, updateUser } from '../ops/users';
 import {
   type AdminContext,
   adminActor,
@@ -25,13 +25,11 @@ const INVITE_DAYS = Math.round(INVITE_TTL_MS / 86_400_000);
 
 const NOTICES = {
   invited: (providers: string) =>
-    `Invitation created. Ask the person to open the sign-in page and sign in with ${providers} using the invited email address within ${INVITE_DAYS} days.`,
-  updated: () =>
-    'User updated. Their sessions were ended, so the change applies the next time they sign in.',
+    `Invitation created. Ask the person to open the admin console and sign in with ${providers} using the invited email address within ${INVITE_DAYS} days.`,
+  updated: () => 'User updated. The change applies to their next request.',
   unchanged: () => 'Nothing changed: the user already has that role and status.',
   reset: (providers: string) =>
-    `Login reset. Their sign-in accounts were unlinked and their sessions ended. They can sign in again with ${providers} using their email address within ${INVITE_DAYS} days.`,
-  revoked: () => 'Sessions ended. The user must sign in again.',
+    `Login reset. Their sign-in accounts were unlinked. They can sign in again with ${providers} using their email address within ${INVITE_DAYS} days.`,
   resent: () => `Invitation renewed for another ${INVITE_DAYS} days.`,
 } as const;
 type NoticeKey = keyof typeof NOTICES;
@@ -88,12 +86,6 @@ export function registerUsersRoutes(app: App): void {
     const result = await resendInvite(c.get('deps'), adminActor(c), c.req.param('id'));
     if (!result.ok) return failurePage(c, result);
     return redirectWithNotice(c, SECTION, 'resent');
-  });
-
-  app.post('/admin/users/:id/revoke-sessions', async (c) => {
-    const result = await revokeSessions(c.get('deps'), adminActor(c), c.req.param('id'));
-    if (!result.ok) return failurePage(c, result);
-    return redirectWithNotice(c, SECTION, 'revoked');
   });
 }
 
@@ -179,7 +171,7 @@ async function usersPage(
           values={options.invite}
           config={config}
           providerText={providerText}
-          loginUrl={`${canonicalOrigin(config, new URL(c.req.url))}/auth/login`}
+          loginUrl={`${canonicalOrigin(config, new URL(c.req.url))}/admin`}
         />
       ) : (
         <p class="muted">Only owners can invite users or change their access.</p>
@@ -281,14 +273,6 @@ function UserActions(props: { user: UserListEntry; csrf: string }) {
           email={user.email}
         />
       ) : null}
-      {user.status === 'active' ? (
-        <RowAction
-          action={`${base}/revoke-sessions`}
-          csrf={csrf}
-          label="End sessions"
-          email={user.email}
-        />
-      ) : null}
       {user.status === 'disabled' && user.identity_count > 0 ? (
         <RowAction
           action={base}
@@ -328,25 +312,18 @@ function ActionsHelp() {
       <h2>What the actions do</h2>
       <dl class="details">
         <dt>Change role</dt>
-        <dd>
-          Gives the user the selected role. Their sessions end, so the new role applies when they
-          sign in again.
-        </dd>
-        <dt>End sessions</dt>
-        <dd>
-          Signs the user out on every device, for example after a lost laptop. They can sign in
-          again right away.
-        </dd>
+        <dd>Gives the user the selected role, from their next request on.</dd>
         <dt>Disable or Cancel invitation</dt>
         <dd>
-          Blocks all sign-ins and ends their sessions. Linked sign-in accounts are kept, so "Enable"
-          restores access later.
+          Blocks access from their next request on. Linked sign-in accounts are kept, so "Enable"
+          restores access later. To also end their Cloudflare Access session, revoke it in Zero
+          Trust.
         </dd>
         <dt>Reset login</dt>
         <dd>
-          Unlinks their sign-in accounts (for example after they lost access to their GitHub
-          account), ends their sessions and invites them again for {INVITE_DAYS} days with the same
-          role. They regain access by signing in with their email address.
+          Unlinks their sign-in accounts (for example after their identity provider account was
+          replaced) and invites them again for {INVITE_DAYS} days with the same role. They regain
+          access by signing in with their email address.
         </dd>
         <dt>Resend invitation or Invite again</dt>
         <dd>
@@ -391,16 +368,14 @@ function InviteForm(props: {
   providerText: string;
   loginUrl: string;
 }) {
-  const noLogin =
-    !props.config.login.github && !props.config.login.oidc && !props.config.login.access;
+  const noLogin = !props.config.login.access && !props.config.login.dev;
   return (
     <form method="post" action={SECTION} class="stack">
       <Csrf token={props.csrf} />
       {noLogin ? (
         <p class="banner warning">
           No login provider is configured, so invited people cannot sign in yet. See{' '}
-          <code>docs/configuration.md</code> to set up GitHub, Google, single sign-on or Cloudflare
-          Access.
+          <code>docs/configuration.md</code> to set up Cloudflare Access.
         </p>
       ) : null}
       <Field
@@ -421,8 +396,8 @@ function InviteForm(props: {
         hint="Start with the smallest role that lets them do their work; you can change it later."
       />
       <p class="muted">
-        The invitation is valid for {INVITE_DAYS} days. Nothing is emailed; send them the sign-in
-        page address yourself: <code>{props.loginUrl}</code>
+        The invitation is valid for {INVITE_DAYS} days. Nothing is emailed; send them the admin
+        console address yourself: <code>{props.loginUrl}</code>
       </p>
       <div class="actions">
         <button type="submit">Invite</button>

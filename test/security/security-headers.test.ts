@@ -17,7 +17,7 @@ describe('I-DEPLOY-1: security headers and host pinning', () => {
     expect(CONTENT_SECURITY_POLICY).not.toContain('script-src');
   });
 
-  it.each(['/auth/login', '/admin', '/admin/services', '/admin/nope'])(
+  it.each(['/admin', '/admin/services', '/admin/nope'])(
     'sets headers and no-store on %s',
     async (path) => {
       const app = createTestApp();
@@ -37,8 +37,8 @@ describe('I-DEPLOY-1: security headers and host pinning', () => {
   });
 
   it('omits HSTS on plain http (local development)', async () => {
-    const app = createTestApp();
-    const res = await app.request('/auth/login', { origin: 'http://localhost:8787' });
+    const app2 = createTestApp({ env: { PUBLIC_URL: 'http://localhost:8787' } });
+    const res = await app2.request('/admin', { origin: 'http://localhost:8787' });
     expectBrowserHeaders(res, false);
   });
 
@@ -50,9 +50,9 @@ describe('I-DEPLOY-1: security headers and host pinning', () => {
     expect(res.headers.get('referrer-policy')).toBeNull();
   });
 
-  it('with PUBLIC_URL, /admin and /auth answer 404 on any other origin', async () => {
+  it('with PUBLIC_URL, /admin answers 404 on any other origin', async () => {
     const app = createTestApp({ env: { PUBLIC_URL: 'https://admin.example.com' } });
-    for (const path of ['/auth/login', '/admin', '/admin/services', '/auth/github/start']) {
+    for (const path of ['/admin', '/admin/services', '/admin/users/x']) {
       const res = await app.request(path, {
         origin: 'https://tokengate.acme.workers.dev',
         redirect: 'manual',
@@ -60,23 +60,17 @@ describe('I-DEPLOY-1: security headers and host pinning', () => {
       expect(res.status, path).toBe(404);
       expectBrowserHeaders(res);
     }
-    const pinned = await app.request('/auth/login', { origin: 'https://admin.example.com' });
-    expect(pinned.status).toBe(200);
-    const otherPort = await app.request('/auth/login', {
-      origin: 'https://admin.example.com:8443',
-    });
+    // On the pinned origin the request reaches the Access check (no JWT here: 401).
+    const pinned = await app.request('/admin', { origin: 'https://admin.example.com' });
+    expect(pinned.status).toBe(401);
+    const otherPort = await app.request('/admin', { origin: 'https://admin.example.com:8443' });
     expect(otherPort.status).toBe(404);
   });
 
-  it('percent-encoded /admin and /auth paths are pinned like the plain ones', async () => {
+  it('percent-encoded /admin paths are pinned like the plain ones', async () => {
     // Hono routes on the decoded path, so `/%61dmin` reaches the admin pages.
     const app = createTestApp({ env: { PUBLIC_URL: 'https://admin.example.com' } });
-    for (const path of [
-      '/%61dmin',
-      '/%61dmin/services',
-      '/%61uth/login',
-      '/%41uth/../%61uth/login',
-    ]) {
+    for (const path of ['/%61dmin', '/%61dmin/services', '/%41dmin/../%61dmin/users']) {
       const res = await app.request(path, {
         origin: 'https://tokengate.acme.workers.dev',
         redirect: 'manual',
@@ -84,8 +78,8 @@ describe('I-DEPLOY-1: security headers and host pinning', () => {
       expect(res.status, path).toBe(404);
       expect(res.headers.get('cache-control'), path).toBe('no-store');
     }
-    const pinned = await app.request('/%61uth/login', { origin: 'https://admin.example.com' });
-    expect(pinned.status).toBe(200);
+    const pinned = await app.request('/%61dmin', { origin: 'https://admin.example.com' });
+    expect(pinned.status).toBe(401);
     expect(pinned.headers.get('cache-control')).toBe('no-store');
     expectBrowserHeaders(pinned);
   });
@@ -97,10 +91,9 @@ describe('I-DEPLOY-1: security headers and host pinning', () => {
     expect(res.headers.get('x-tokengate-source')).toBe('gateway');
   });
 
-  it('a malformed PUBLIC_URL closes /admin and /auth everywhere', async () => {
+  it('a malformed PUBLIC_URL closes /admin everywhere', async () => {
     const app = createTestApp({ env: { PUBLIC_URL: 'http://admin.example.com' } });
     for (const origin of ['http://admin.example.com', 'https://gw.test']) {
-      expect((await app.request('/auth/login', { origin })).status).toBe(404);
       expect((await app.request('/admin', { origin, redirect: 'manual' })).status).toBe(404);
     }
   });

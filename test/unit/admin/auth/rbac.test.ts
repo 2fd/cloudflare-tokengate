@@ -42,7 +42,6 @@ const DOCUMENTED_ADMIN_ROUTES = [
   'POST /admin/users/:id',
   'POST /admin/users/:id/reset-login',
   'POST /admin/users/:id/resend-invite',
-  'POST /admin/users/:id/revoke-sessions',
   'GET /admin/settings',
   'POST /admin/settings',
   'POST /admin/settings/rewrap',
@@ -55,7 +54,6 @@ const MATRIX: Record<Permission, Record<Role, boolean>> = {
   'users:write': { viewer: false, admin: false, owner: true },
   'settings:write': { viewer: false, admin: false, owner: true },
   'keyring:rewrap': { viewer: false, admin: false, owner: true },
-  'sessions:revoke': { viewer: false, admin: false, owner: true },
 };
 
 describe('I-RBAC-1: permission matrix and route table', () => {
@@ -89,9 +87,7 @@ describe('I-RBAC-1: permission matrix and route table', () => {
 
   it('owner-only operations', () => {
     expect(routePermission('POST', '/admin/users')?.permission).toBe('users:write');
-    expect(routePermission('POST', '/admin/users/:id/revoke-sessions')?.permission).toBe(
-      'sessions:revoke',
-    );
+    expect(routePermission('POST', '/admin/users/:id/revoke-sessions')).toBeNull();
     expect(routePermission('POST', '/admin/settings')?.permission).toBe('settings:write');
     expect(routePermission('POST', '/admin/settings/rewrap')?.permission).toBe('keyring:rewrap');
   });

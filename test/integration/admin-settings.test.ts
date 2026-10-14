@@ -27,11 +27,7 @@ import {
 
 const T0 = Date.UTC(2026, 9, 13, 12);
 const KEK = toBase64(new Uint8Array(32).fill(7));
-const SECRET_ENV = {
-  TOKENGATE_KEK: KEK,
-  AUTH_GITHUB_CLIENT_ID: 'gh-client',
-  AUTH_GITHUB_CLIENT_SECRET: 'gh-secret-value-do-not-show',
-};
+const SECRET_ENV = { TOKENGATE_KEK: KEK };
 
 let app: AdminTestApp;
 
@@ -46,9 +42,9 @@ async function sessionFor(role: Role): Promise<AdminSession> {
 }
 
 async function auditActions(): Promise<string[]> {
-  const { results } = await env.DB.prepare(
-    "SELECT action FROM audit_log WHERE action <> 'user.login' ORDER BY rowid",
-  ).all<{ action: string }>();
+  const { results } = await env.DB.prepare('SELECT action FROM audit_log ORDER BY rowid').all<{
+    action: string;
+  }>();
   return results.map((row) => row.action);
 }
 
@@ -63,14 +59,12 @@ describe('GET /admin/settings', () => {
     const keyring = await loadKeyring({ TOKENGATE_KEK: KEK });
     if (!keyring.ok) throw new Error(keyring.error);
     expect(html).toContain(keyring.keyring.kcv.k1);
-    expect(html).toContain('GitHub');
+    expect(html).toContain('<dt>Login providers</dt><dd>Cloudflare Access</dd>');
   });
 
   it('never shows secret values from the environment', async () => {
     const html = await (await adminGet(app, await sessionFor('owner'), '/admin/settings')).text();
-    expect(html).not.toContain(SECRET_ENV.AUTH_GITHUB_CLIENT_SECRET);
     expect(html).not.toContain(KEK);
-    expect(html).not.toContain('gh-client');
   });
 
   it('shows owners the settings form with floors and the export form (POST + CSRF)', async () => {

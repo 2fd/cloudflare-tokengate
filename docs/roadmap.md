@@ -14,7 +14,8 @@ These are outside the project's scope. Pull requests that add them are unlikely 
 | Handing credentials to callers | The gateway injects credentials into upstream requests. It never returns them. Callers that need the raw secret should use a secrets manager instead. |
 | Static caller keys or `GITHUB_TOKEN` as caller identity | Callers authenticate with workload identity tokens only ([ADR 0002](adr/0002-workload-identity-tokens-for-callers.md)). |
 | Inspecting or rewriting request and response bodies | Bodies are streamed unchanged, so streaming and compression work. As a result, grant rules see only the request line, and upstream response bodies are not redacted ([threat-model.md](threat-model.md)). |
-| Admin login providers configured from the UI | Login providers come from Worker variables and secrets only ([ADR 0008](adr/0008-login-providers-from-environment.md)). |
+| Admin login providers configured from the UI | The admin login comes from Worker variables only ([ADR 0008](adr/0008-login-providers-from-environment.md)). |
+| Admin sign-in without Cloudflare Access | The gateway does not run its own OAuth or OpenID Connect login or keep sessions. Cloudflare Access does both, and can use GitHub, Google or any OpenID Connect provider as its login method ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). |
 
 ## Future work
 

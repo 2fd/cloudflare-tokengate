@@ -5,8 +5,6 @@ import type { AdminActor } from '../../src/admin/auth/types';
 import { testServiceCredential } from '../../src/admin/ops/services';
 import { updateSettings } from '../../src/admin/ops/settings';
 import { inviteUser } from '../../src/admin/ops/users';
-import { sha256Hex } from '../../src/crypto/hash';
-import { revokeSessionStatement } from '../../src/db/sessions';
 import { CONTEXT, fakeNetwork } from '../../test/unit/admin/ops/helpers';
 import {
   createAdminWorldApp,
@@ -85,7 +83,7 @@ async function credentialTests(actorId: string) {
     .first('n');
 }
 
-describe('I-SESS-1: an admin write commits only while the acting session and role still allow it', () => {
+describe('I-SESS-1: an admin write commits only while the acting identity and role still allow it', () => {
   it('commits when nothing changes while the request is in flight (control)', async () => {
     const w = await world();
     const res = await repoint(w.app, w.adminSession, w.serviceId);
@@ -102,10 +100,6 @@ describe('I-SESS-1: an admin write commits only while the acting session and rol
       'demotes the user to viewer',
       (id: string) => [`/admin/users/${id}`, { role: 'viewer' }] as const,
     ],
-    [
-      'ends the user’s sessions',
-      (id: string) => [`/admin/users/${id}/revoke-sessions`, {}] as const,
-    ],
     ['resets the user’s login', (id: string) => [`/admin/users/${id}/reset-login`, {}] as const],
   ])('writes nothing when an owner %s mid-request', async (_label, ownerAction) => {
     const w = await world();
@@ -119,21 +113,44 @@ describe('I-SESS-1: an admin write commits only while the acting session and rol
     expect(await serviceState(w.serviceId, w.admin.id)).toEqual(before);
   });
 
-  describe('ops without a row guard return a 409 conflict for a revoked session', () => {
+  describe('ops without a row guard return a 409 conflict once the acting identity is unlinked', () => {
     async function revokedOwner(permission: Permission) {
       const w = await world();
-      const sessionIdHash = await sha256Hex(w.ownerSession.sessionId);
       const actor: AdminActor = {
         type: 'user',
         id: w.owner.id,
         email: w.owner.email,
         ip: null,
         userAgent: null,
-        authority: { sessionIdHash, permission },
+        authority: {
+          userId: w.owner.id,
+          loginProvider: 'access',
+          subject: w.ownerSession.subject,
+          permission,
+        },
       };
-      await revokeSessionStatement(env.DB, sessionIdHash, Date.now()).run();
+      await env.DB.prepare('DELETE FROM user_identities WHERE user_id = ?').bind(w.owner.id).run();
       return { w, deps: w.app.deps, actor };
     }
+
+    it('control: the same actor commits while its identity is linked', async () => {
+      const w = await world();
+      const actor: AdminActor = {
+        type: 'user',
+        id: w.owner.id,
+        email: w.owner.email,
+        ip: null,
+        userAgent: null,
+        authority: {
+          userId: w.owner.id,
+          loginProvider: 'access',
+          subject: w.ownerSession.subject,
+          permission: 'users:write',
+        },
+      };
+      const result = await inviteUser(w.app.deps, actor, { email: 'ok@acme.test', role: 'viewer' });
+      expect(result).toMatchObject({ ok: true });
+    });
 
     it('cannot invite', async () => {
       const { deps, actor } = await revokedOwner('users:write');

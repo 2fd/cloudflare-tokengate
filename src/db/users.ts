@@ -3,7 +3,6 @@
 // instead of a second link or a second owner (I-LINK-1, I-BOOT-1).
 import { auditStatement } from './audit';
 import { userFromRow } from './rows';
-import { revokeSessionsForUserStatement } from './sessions';
 import type { AuditEvent, Role, User, UserStatus } from './types';
 
 /** Boolean SQL expression plus its binds, ANDed into every WHERE clause (see admin/ops/shared). */
@@ -122,8 +121,8 @@ export function renewInviteStatements(
 }
 
 /**
- * Role and/or status change. Any change of either revokes the user's sessions, so the next request
- * re-authenticates under the new role. The last-owner trigger aborts the whole batch with
+ * Role and/or status change. Admin requests re-read the user on every request, so the change
+ * applies to the user's next request (I-SESS-1). The last-owner trigger aborts the whole batch with
  * `last_owner` when the change would leave no active owner (I-OWNER-1). With a `guard`, every
  * statement applies only while it holds; the users UPDATE runs last because it may change what the
  * guard reads.
@@ -145,7 +144,6 @@ export function updateUserStatements(
   }
   if (sets.length === 0) return [];
   return [
-    revokeSessionsForUserStatement(db, input.id, input.now, guard),
     db
       .prepare(`UPDATE users SET ${sets.join(', ')}, updated_at = ? WHERE id = ?${andGuard(guard)}`)
       .bind(...binds, input.now, input.id, ...(guard?.binds ?? [])),
@@ -153,8 +151,8 @@ export function updateUserStatements(
 }
 
 /**
- * "Reset login": forget every identity, return the user to `invited` with a fresh expiry and end
- * their sessions. The next login links a new identity through the invite path. With a `guard`,
+ * "Reset login": forget every identity and return the user to `invited` with a fresh expiry. The
+ * next login links a new identity through the invite path. With a `guard`,
  * every statement applies only while it holds; the users UPDATE runs last (see updateUserStatements).
  */
 export function resetLoginStatements(
@@ -166,7 +164,6 @@ export function resetLoginStatements(
     db
       .prepare(`DELETE FROM user_identities WHERE user_id = ?${andGuard(guard)}`)
       .bind(input.id, ...(guard?.binds ?? [])),
-    revokeSessionsForUserStatement(db, input.id, input.now, guard),
     db
       .prepare(
         `UPDATE users SET status = 'invited', invite_expires_at = ?, updated_at = ? WHERE id = ?${andGuard(guard)}`,
@@ -269,14 +266,38 @@ export function bootstrapOwnerStatements(
 }
 
 /**
- * Records a successful login on the user and on the identity used. Both updates apply only while
- * `guard` holds, the same guard as the session insert, so a refused login records nothing (I-SESS-1).
+ * SQL condition: identity (login_provider, subject) is linked to `userId`, that user is active and,
+ * when `roles` is given, holds one of them. Admin writes re-check it inside their batch, so a
+ * disable, demotion or login reset that commits while a request is in flight stops its write
+ * (I-SESS-1).
  */
-export function recordLoginStatements(
+export function liveIdentityGuard(input: {
+  userId: string;
+  loginProvider: string;
+  subject: string;
+  roles?: readonly Role[];
+}): SqlGuard {
+  const roles = input.roles ?? null;
+  const roleSql =
+    roles === null
+      ? ''
+      : ` AND ${roles.length === 0 ? '0' : `u.role IN (${roles.map(() => '?').join(', ')})`}`;
+  return {
+    sql: `EXISTS (SELECT 1 FROM user_identities i JOIN users u ON u.id = i.user_id
+           WHERE i.login_provider = ? AND i.subject = ? AND i.user_id = ? AND u.status = 'active'${roleSql})`,
+    binds: [input.loginProvider, input.subject, input.userId, ...(roles ?? [])],
+  };
+}
+
+/**
+ * Records that the user used the admin UI with this identity. Both updates apply only while the
+ * identity is still linked to the active user, so a refused request records nothing.
+ */
+export function recordSeenStatements(
   db: D1Database,
   input: { userId: string; loginProvider: string; subject: string; now: number },
-  guard: SqlGuard,
 ): D1PreparedStatement[] {
+  const guard = liveIdentityGuard(input);
   return [
     db
       .prepare(`UPDATE users SET last_login_at = ? WHERE id = ?${andGuard(guard)}`)

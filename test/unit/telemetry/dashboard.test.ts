@@ -126,7 +126,6 @@ beforeEach(async () => {
     env.DB.prepare('DELETE FROM settings'),
     env.DB.prepare('DELETE FROM grants'),
     env.DB.prepare('DELETE FROM services'),
-    env.DB.prepare('DELETE FROM sessions'),
     env.DB.prepare('DELETE FROM user_identities'),
   ]);
   await env.TELEMETRY_DB.batch([

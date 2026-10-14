@@ -33,7 +33,7 @@ async function auditCount(): Promise<number> {
   return Number(row?.n ?? 0);
 }
 
-/** Every control-plane row except sessions (login touches them), for "no side effect" checks. */
+/** Every control-plane row except identities (sign-ins touch them), for "no side effect" checks. */
 async function controlPlaneDump(): Promise<string> {
   const tables = ['users', 'caller_providers', 'services', 'grants', 'settings', 'audit_log'];
   const dumps = await Promise.all(tables.map((t) => env.DB.prepare(`SELECT * FROM ${t}`).all()));
@@ -99,12 +99,8 @@ describe('I-RBAC-1: route × role matrix on the real app', () => {
     const body = await res.text();
 
     if (actor === 'anonymous') {
-      if (isGet) {
-        expect(res.status).toBe(302);
-        expect(res.headers.get('location')).toMatch(/^\/auth\/login\?return_to=/);
-      } else {
-        expect(res.status).toBe(401);
-      }
+      // No Access JWT: refused before routing, for every method.
+      expect(res.status).toBe(401);
     } else if (!allowed) {
       expect(res.status).toBe(403);
       expect(body).toContain('Your role does not allow this action.');
@@ -136,7 +132,7 @@ describe('I-RBAC-1: routes outside the table are denied (fail closed)', () => {
     const res = await world.app.request(path, {
       method,
       headers: {
-        cookie: owner.cookie,
+        ...owner.headers,
         'sec-fetch-site': 'same-origin',
         'content-type': 'application/x-www-form-urlencoded',
       },
@@ -150,7 +146,7 @@ describe('I-RBAC-1: routes outside the table are denied (fail closed)', () => {
     const head = (actor: Role) =>
       world.app.request('/admin/services/new', {
         method: 'HEAD',
-        headers: { cookie: sessions[actor].cookie },
+        headers: { ...sessions[actor].headers },
         redirect: 'manual',
       });
     expect((await head('viewer')).status).toBe(403);
@@ -162,7 +158,7 @@ describe('I-RBAC-1: routes outside the table are denied (fail closed)', () => {
     for (const method of ['GET', 'HEAD']) {
       const res = await world.app.request('/admin/export', {
         method,
-        headers: { cookie: sessions.owner.cookie },
+        headers: { ...sessions.owner.headers },
         redirect: 'manual',
       });
       expect(res.status, method).toBe(403);

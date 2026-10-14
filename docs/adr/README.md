@@ -13,13 +13,14 @@ Each ADR uses the format from [0001](0001-record-architecture-decisions.md): Sta
 | [0005](0005-grant-model.md) | Grant model: Conditions, anchor rules, trusted events, tenant pin | Accepted |
 | [0006](0006-no-policy-caching.md) | No policy caching | Accepted |
 | [0007](0007-server-rendered-admin-ui-without-client-javascript.md) | Server-rendered admin UI without client JavaScript | Accepted |
-| [0008](0008-login-providers-from-environment.md) | Login providers from the environment; email linking only for invited users | Accepted |
+| [0008](0008-login-providers-from-environment.md) | Login providers from the environment; email linking only for invited users | Superseded by [0015](0015-cloudflare-access-only-admin-login.md) |
 | [0009](0009-telemetry-design.md) | Telemetry in D1, optional queue and R2 archive, no Analytics Engine | Accepted |
 | [0010](0010-dependency-injection-for-tests.md) | Dependency injection for tests | Accepted |
-| [0011](0011-oauth-state-in-host-cookie.md) | OAuth state in a `__Host-` cookie | Accepted |
+| [0011](0011-oauth-state-in-host-cookie.md) | OAuth state in a `__Host-` cookie | Superseded by [0015](0015-cloudflare-access-only-admin-login.md) |
 | [0012](0012-apache-2-0-license.md) | Apache-2.0 license | Accepted |
 | [0013](0013-operator-variables-outside-wrangler-config.md) | Operator variables outside `wrangler.jsonc` | Accepted |
 | [0014](0014-integrity-rules-in-sql.md) | Integrity rules and audit rows enforced in SQL | Accepted |
+| [0015](0015-cloudflare-access-only-admin-login.md) | Cloudflare Access as the only admin login, without gateway sessions | Proposed |
 
 ## Adding an ADR
 

@@ -8,8 +8,8 @@ For platform engineers who deploy and configure the gateway.
 
 | Page | Covers |
 |---|---|
-| [getting-started.md](getting-started.md) | Quickstart on workers.dev, production on a custom domain, Deploy button, first grant |
-| [configuration.md](configuration.md) | Every variable, secret and binding, settings and their limits, `wrangler.jsonc` notes |
+| [getting-started.md](getting-started.md) | First deployment on a custom domain, Cloudflare Access for the admin UI, Deploy button, first grant |
+| [configuration.md](configuration.md) | Every variable, secret and binding, admin sign-in, settings and their limits, `wrangler.jsonc` notes |
 | [concepts.md](concepts.md) | Glossary and how the parts relate |
 
 ## Operate

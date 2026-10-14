@@ -1,15 +1,11 @@
-// Login flows end to end through the app, with GitHub, OIDC and Access faked via injected fetch.
+// Admin sign-in end to end through the middleware: Cloudflare Access (faked via injected fetch),
+// the loopback-only dev login, the setup page and the RBAC/CSRF gate.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { resetAccessCertsCacheForTests } from '../../src/admin/auth/access';
-import { decodePendingLogins } from '../../src/admin/auth/oauth-state';
-import {
-  DISCOVERY_FAILURE_TTL_MS,
-  resetOidcDiscoveryCacheForTests,
-} from '../../src/admin/auth/oidc';
-import { OAUTH_COOKIE } from '../../src/admin/auth/routes';
-import { SESSION_COOKIE, SESSION_TOUCH_INTERVAL_MS } from '../../src/admin/auth/session';
-import { formData } from '../../src/admin/render';
+import { ACCESS_JWT_HEADER, resetAccessCertsCacheForTests } from '../../src/admin/auth/access';
+import { CSRF_COOKIE } from '../../src/admin/auth/csrf';
+import { SEEN_INTERVAL_MS } from '../../src/admin/auth/middleware';
+import { formData, renderPage } from '../../src/admin/render';
 import {
   adminGet,
   adminPost,
@@ -20,24 +16,10 @@ import {
   setCookies,
   stubAdminPages,
 } from '../helpers/admin-auth';
-import {
-  callback,
-  combineFetch,
-  fakeAccess,
-  fakeGithub,
-  fakeOidc,
-  GITHUB_TEST_TOKEN,
-  startLogin,
-} from '../helpers/login-providers';
-
-const GITHUB_ENV = {
-  AUTH_GITHUB_CLIENT_ID: 'Iv1.testclient',
-  AUTH_GITHUB_CLIENT_SECRET: 'gh-secret-value',
-};
+import { combineFetch, fakeAccess, testAccess } from '../helpers/login-providers';
 
 beforeEach(async () => {
   await resetControlPlane();
-  resetOidcDiscoveryCacheForTests();
   resetAccessCertsCacheForTests();
 });
 
@@ -49,382 +31,79 @@ async function auditActions(): Promise<string[]> {
   return results.map((row) => row.action);
 }
 
-describe('GET /auth/login', () => {
-  it('shows the setup page with exact callback URLs when no login provider is configured', async () => {
-    const app = createAdminTestApp();
-    const res = await app.request('/auth/login');
-    expect(res.status).toBe(200);
+const NO_ACCESS = { AUTH_ACCESS_TEAM_DOMAIN: '', AUTH_ACCESS_AUD: '' };
+
+describe('setup page', () => {
+  it('explains Access setup when no login is configured', async () => {
+    const app = createAdminTestApp({ env: NO_ACCESS, routes: stubAdminPages });
+    const res = await app.request('/admin/services');
+    expect(res.status).toBe(503);
     const html = await res.text();
     expect(html).toContain('Set up sign-in');
-    expect(html).toContain('https://gw.test/auth/github/callback');
-    expect(html).toContain('https://gw.test/auth/oidc/callback');
-    expect(html).toContain('AUTH_GITHUB_CLIENT_ID');
-    expect(html).toContain('BOOTSTRAP_OWNER_EMAILS');
-  });
-
-  it('uses PUBLIC_URL for callback URLs', async () => {
-    const app = createAdminTestApp({ env: { PUBLIC_URL: 'https://admin.example.com' } });
-    const res = await app.request('/auth/login', { origin: 'https://admin.example.com' });
-    expect(await res.text()).toContain('https://admin.example.com/auth/github/callback');
+    expect(html).toContain('AUTH_ACCESS_TEAM_DOMAIN');
+    expect(html).toContain('AUTH_DEV_EMAIL');
+    expect(html).toContain('https://gw.test');
   });
 
   it('names misconfigured variables but never echoes values', async () => {
-    const app = createAdminTestApp({ env: { AUTH_GITHUB_CLIENT_ID: 'leaky-client-id-value' } });
-    const html = await (await app.request('/auth/login')).text();
-    expect(html).toContain('AUTH_GITHUB_CLIENT_SECRET');
-    expect(html).not.toContain('leaky-client-id-value');
-  });
-
-  it('lists configured providers with a sanitized return_to', async () => {
-    const app = createAdminTestApp({ env: GITHUB_ENV });
-    const html = await (
-      await app.request('/auth/login?return_to=https%3A%2F%2Fevil.test%2Fadmin')
-    ).text();
-    expect(html).toContain('href="/auth/github/start?return_to=%2Fadmin"');
-    expect(html).not.toContain('evil.test');
-    expect(html).not.toContain('gh-secret-value');
-  });
-
-  it('redirects a signed-in user to return_to', async () => {
-    const app = createAdminTestApp({ env: GITHUB_ENV });
-    const user = await createUser({ email: 'a@example.com', role: 'owner' });
-    const session = await loginAs(app, user);
-    const res = await adminGet(app, session, '/auth/login?return_to=%2Fadmin%2Fgrants');
-    expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe('/admin/grants');
-  });
-});
-
-describe('GitHub login', () => {
-  it('runs the OAuth App flow with PKCE and bootstraps the first owner', async () => {
-    const github = fakeGithub({ emails: [{ email: 'Owner@Example.com', verified: true }] });
     const app = createAdminTestApp({
-      env: { ...GITHUB_ENV, BOOTSTRAP_OWNER_EMAILS: 'owner@example.com' },
-      fetch: combineFetch(github.handler),
-      routes: stubAdminPages,
+      env: { AUTH_ACCESS_TEAM_DOMAIN: 'leaky-team-value!', AUTH_ACCESS_AUD: 'a'.repeat(64) },
     });
+    const html = await (await app.request('/admin')).text();
+    expect(html).toContain('AUTH_ACCESS_TEAM_DOMAIN');
+    expect(html).not.toContain('leaky-team-value');
+  });
 
-    const started = await startLogin(app.request, 'github', '/admin/services');
-    const authorize = started.authorizeUrl;
-    expect(authorize.origin + authorize.pathname).toBe('https://github.com/login/oauth/authorize');
-    expect(authorize.searchParams.get('client_id')).toBe('Iv1.testclient');
-    expect(authorize.searchParams.get('redirect_uri')).toBe('https://gw.test/auth/github/callback');
-    expect(authorize.searchParams.get('code_challenge_method')).toBe('S256');
-    expect(authorize.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(authorize.searchParams.get('scope')).toBe('read:user user:email');
-    expect(started.state).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    const oauthCookie = setCookies(started.start).get(OAUTH_COOKIE);
-    expect(oauthCookie?.attributes).toEqual(
-      expect.arrayContaining(['Max-Age=600', 'Path=/', 'HttpOnly', 'Secure', 'SameSite=Lax']),
-    );
-    const pending = decodePendingLogins(oauthCookie?.value).at(-1);
-    expect(pending).toMatchObject({
-      state: started.state,
-      login_provider: 'github',
-      return_to: '/admin/services',
-    });
-
-    const res = await callback(
-      app.request,
-      'github',
-      { code: 'gh-code', state: started.state },
-      started.oauthCookie,
-    );
-    expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe('/admin/services');
-    const cookies = setCookies(res);
-    expect(cookies.get(OAUTH_COOKIE)?.attributes).toContain('Max-Age=0');
-    const sessionCookie = cookies.get(SESSION_COOKIE);
-    expect(sessionCookie?.value).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(sessionCookie?.attributes).toEqual(
-      expect.arrayContaining(['Path=/', 'HttpOnly', 'Secure', 'SameSite=Lax']),
-    );
-
-    const tokenRequest = github.tokenRequests[0];
-    expect(tokenRequest?.get('code')).toBe('gh-code');
-    expect(tokenRequest?.get('code_verifier')).toMatch(/^[A-Za-z0-9_-]{43}$/);
-    expect(tokenRequest?.get('client_secret')).toBe('gh-secret-value');
-    expect(github.apiAuthorizations.every((h) => h === `Bearer ${GITHUB_TEST_TOKEN}`)).toBe(true);
-
-    const user = await env.DB.prepare('SELECT * FROM users').first<Record<string, unknown>>();
-    expect(user).toMatchObject({ email: 'owner@example.com', role: 'owner', status: 'active' });
-    const identity = await env.DB.prepare('SELECT * FROM user_identities').first();
-    expect(identity).toMatchObject({ login_provider: 'github', subject: '583231' });
-    expect(await auditActions()).toEqual(['user.bootstrap', 'user.login']);
-
-    // The GitHub access token is not persisted anywhere.
-    for (const table of ['users', 'user_identities', 'sessions', 'audit_log', 'settings']) {
-      const { results } = await env.DB.prepare(`SELECT * FROM ${table}`).all();
-      expect(JSON.stringify(results)).not.toContain(GITHUB_TEST_TOKEN);
+  it('serves no /auth routes', async () => {
+    const app = createAdminTestApp({ routes: stubAdminPages });
+    for (const path of ['/auth/login', '/auth/github/start', '/auth/access/start']) {
+      expect((await app.request(path)).status, path).toBe(404);
     }
-
-    const page = await adminGet(
-      app,
-      { sessionId: '', csrfToken: '', cookie: `${SESSION_COOKIE}=${sessionCookie?.value}` },
-      '/admin/services',
-    );
-    expect(page.status).toBe(200);
-    expect(await page.text()).toBe('ok owner');
-  });
-
-  it('requests read:org and enforces active membership in an allowed org', async () => {
-    for (const [orgs, status] of [
-      [{ acme: 'active' as const }, 302],
-      [{ acme: 'pending' as const }, 403],
-      [{ other: 'active' as const }, 403],
-    ] as const) {
-      await resetControlPlane();
-      const github = fakeGithub({ orgs });
-      const app = createAdminTestApp({
-        env: {
-          ...GITHUB_ENV,
-          AUTH_GITHUB_ALLOWED_ORGS: 'acme',
-          BOOTSTRAP_OWNER_EMAILS: 'octocat@example.com',
-        },
-        fetch: combineFetch(github.handler),
-      });
-      const started = await startLogin(app.request, 'github');
-      expect(started.authorizeUrl.searchParams.get('scope')).toBe('read:user user:email read:org');
-      const res = await callback(
-        app.request,
-        'github',
-        { code: 'c', state: started.state },
-        started.oauthCookie,
-      );
-      expect(res.status, JSON.stringify(orgs)).toBe(status);
-      if (status === 403) expect(await res.text()).toContain('not an active member');
-    }
-  });
-
-  it('fails closed on a 200 token response carrying an error', async () => {
-    const github = fakeGithub({
-      tokenResponse: () =>
-        Response.json({ error: 'bad_verification_code', error_description: 'expired' }),
-    });
-    const app = createAdminTestApp({
-      env: { ...GITHUB_ENV, BOOTSTRAP_OWNER_EMAILS: 'octocat@example.com' },
-      fetch: combineFetch(github.handler),
-    });
-    const started = await startLogin(app.request, 'github');
-    const res = await callback(
-      app.request,
-      'github',
-      { code: 'c', state: started.state },
-      started.oauthCookie,
-    );
-    expect(res.status).toBe(400);
-    expect(setCookies(res).has(SESSION_COOKIE)).toBe(false);
-    expect(github.apiAuthorizations).toEqual([]);
-    expect(await env.DB.prepare('SELECT count(*) AS n FROM users').first('n')).toBe(0);
-  });
-
-  it('reports a provider error when the user denies access', async () => {
-    const app = createAdminTestApp({ env: GITHUB_ENV, fetch: combineFetch(fakeGithub().handler) });
-    const started = await startLogin(app.request, 'github');
-    const res = await callback(
-      app.request,
-      'github',
-      { error: 'access_denied', state: started.state },
-      started.oauthCookie,
-    );
-    expect(res.status).toBe(400);
-  });
-
-  it('answers 404 for unconfigured or unknown providers', async () => {
-    const app = createAdminTestApp();
-    expect((await app.request('/auth/github/start')).status).toBe(404);
-    expect((await app.request('/auth/oidc/callback?code=x&state=y')).status).toBe(404);
-    expect((await app.request('/auth/saml/start')).status).toBe(404);
-    expect((await app.request('/auth/access/start')).status).toBe(404);
-  });
-});
-
-describe('OIDC login', () => {
-  const ISSUER = 'https://idp.example.test';
-  const OIDC_ENV = {
-    AUTH_OIDC_ISSUER: ISSUER,
-    AUTH_OIDC_CLIENT_ID: 'tokengate-client',
-    AUTH_OIDC_CLIENT_SECRET: 'oidc-secret',
-    AUTH_OIDC_NAME: 'Acme SSO',
-  };
-
-  it('discovers, uses PKCE + state + nonce and links an invited user', async () => {
-    const idp = await fakeOidc({ issuer: ISSUER, clientId: 'tokengate-client' });
-    const app = createAdminTestApp({ env: OIDC_ENV, fetch: combineFetch(idp.handler) });
-    const invited = await createUser({ email: 'dev@acme.com', role: 'viewer', status: 'invited' });
-
-    const loginHtml = await (await app.request('/auth/login')).text();
-    expect(loginHtml).toContain('Sign in with Acme SSO');
-
-    const started = await startLogin(app.request, 'oidc');
-    const authorize = started.authorizeUrl;
-    expect(authorize.origin + authorize.pathname).toBe(`${ISSUER}/authorize`);
-    expect(authorize.searchParams.get('response_type')).toBe('code');
-    expect(authorize.searchParams.get('scope')).toBe('openid email profile');
-    expect(authorize.searchParams.get('code_challenge_method')).toBe('S256');
-    expect(started.nonce).toMatch(/^[A-Za-z0-9_-]{43}$/);
-
-    const code = idp.issueCode({
-      sub: 'idp-user-1',
-      nonce: started.nonce,
-      email: 'dev@acme.com',
-      email_verified: true,
-      name: 'Dev',
-    });
-    const res = await callback(
-      app.request,
-      'oidc',
-      { code, state: started.state },
-      started.oauthCookie,
-    );
-    expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe('/admin');
-    expect(idp.tokenRequests[0]?.get('code_verifier')).toMatch(/^[A-Za-z0-9_-]{43}$/);
-
-    const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?').bind(invited.id).first();
-    expect(user).toMatchObject({ status: 'active', invite_expires_at: null, name: 'Dev' });
-    const identity = await env.DB.prepare('SELECT * FROM user_identities').first();
-    expect(identity).toMatchObject({ login_provider: 'oidc', subject: `${ISSUER}|idp-user-1` });
-    expect(await auditActions()).toEqual(['user.link', 'user.login']);
-  });
-
-  it('rejects an ID token with the wrong nonce', async () => {
-    const idp = await fakeOidc({ issuer: ISSUER, clientId: 'tokengate-client' });
-    const app = createAdminTestApp({ env: OIDC_ENV, fetch: combineFetch(idp.handler) });
-    await createUser({ email: 'dev@acme.com', status: 'invited' });
-    const started = await startLogin(app.request, 'oidc');
-    const code = idp.issueCode({
-      sub: 's',
-      nonce: 'other',
-      email: 'dev@acme.com',
-      email_verified: true,
-    });
-    const res = await callback(
-      app.request,
-      'oidc',
-      { code, state: started.state },
-      started.oauthCookie,
-    );
-    expect(res.status).toBe(400);
-    expect(await env.DB.prepare('SELECT count(*) AS n FROM user_identities').first('n')).toBe(0);
-  });
-
-  it('rejects an ID token for another audience', async () => {
-    const idp = await fakeOidc({ issuer: ISSUER, clientId: 'someone-else' });
-    const app = createAdminTestApp({ env: OIDC_ENV, fetch: combineFetch(idp.handler) });
-    await createUser({ email: 'dev@acme.com', status: 'invited' });
-    const started = await startLogin(app.request, 'oidc');
-    const code = idp.issueCode({
-      sub: 's',
-      nonce: started.nonce,
-      email: 'dev@acme.com',
-      email_verified: true,
-    });
-    const res = await callback(
-      app.request,
-      'oidc',
-      { code, state: started.state },
-      started.oauthCookie,
-    );
-    expect(res.status).toBe(400);
-  });
-
-  it('shows provider_unavailable when discovery fails', async () => {
-    const app = createAdminTestApp({
-      env: OIDC_ENV,
-      fetch: async () => {
-        throw new TypeError('network down');
-      },
-    });
-    const res = await app.request('/auth/oidc/start', { redirect: 'manual' });
-    expect(res.status).toBe(502);
-    expect(setCookies(res).has(OAUTH_COOKIE)).toBe(false);
-  });
-
-  it('caches a discovery failure briefly: an IdP outage is not one outbound fetch per /start', async () => {
-    const idp = await fakeOidc({ issuer: ISSUER, clientId: 'tokengate-client' });
-    let clock = 1_800_000_000_000;
-    let idpUp = false;
-    let fetches = 0;
-    const app = createAdminTestApp({
-      env: OIDC_ENV,
-      now: () => clock,
-      fetch: async (input, init) => {
-        fetches++;
-        if (!idpUp) throw new TypeError('network down');
-        return combineFetch(idp.handler)(input, init);
-      },
-    });
-    const start = () => app.request('/auth/oidc/start', { redirect: 'manual' });
-    for (let i = 0; i < 5; i++) expect((await start()).status).toBe(502);
-    expect(fetches).toBe(1);
-
-    idpUp = true;
-    clock += DISCOVERY_FAILURE_TTL_MS - 1;
-    expect((await start()).status).toBe(502);
-    expect(fetches).toBe(1);
-    clock += 1;
-    expect((await start()).status).toBe(302);
-    expect(fetches).toBe(2);
+    expect((await app.request('/auth/logout', { method: 'POST' })).status).toBe(404);
   });
 });
 
 describe('Cloudflare Access login', () => {
-  async function accessApp() {
-    const access = await fakeAccess();
-    const app = createAdminTestApp({
-      env: {
-        PUBLIC_URL: 'https://gw.test',
-        AUTH_ACCESS_TEAM_DOMAIN: 'acme',
-        AUTH_ACCESS_AUD: access.aud,
-        BOOTSTRAP_OWNER_EMAILS: 'ops@acme.com',
-      },
-      fetch: combineFetch(access.handler),
+  function accessApp(extraEnv: Record<string, string> = {}) {
+    return createAdminTestApp({
+      env: { BOOTSTRAP_OWNER_EMAILS: 'ops@acme.com', ...extraEnv },
       routes: stubAdminPages,
     });
-    return { access, app };
   }
 
-  it('signs in from the Access JWT and re-validates it on every admin request', async () => {
-    const { access, app } = await accessApp();
-    const jwt = await access.sign({ sub: 'access-user-1', email: 'ops@acme.com' });
-    const res = await app.request('/auth/access/start?return_to=%2Fadmin%2Fservices', {
-      headers: { 'cf-access-jwt-assertion': jwt },
-      redirect: 'manual',
+  it('bootstraps the first owner on the first request and links the Access identity', async () => {
+    const access = await testAccess();
+    const app = accessApp();
+    const jwt = await access.sign({ sub: 'access-user-1', email: 'ops@acme.com', name: 'Ops' });
+    const res = await app.request('/admin/services', { headers: { [ACCESS_JWT_HEADER]: jwt } });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('ok owner');
+    const identity = await env.DB.prepare(
+      'SELECT login_provider, subject FROM user_identities',
+    ).first();
+    expect(identity).toEqual({
+      login_provider: 'access',
+      subject: `${access.teamDomain}|access-user-1`,
     });
-    expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe('/admin/services');
-    const sessionId = setCookies(res).get(SESSION_COOKIE)?.value ?? '';
-    const session = { sessionId, csrfToken: '', cookie: `${SESSION_COOKIE}=${sessionId}` };
-    const identity = await env.DB.prepare('SELECT subject FROM user_identities').first('subject');
-    expect(identity).toBe(`${access.teamDomain}|access-user-1`);
-
-    const ok = await adminGet(app, session, '/admin', { 'cf-access-jwt-assertion': jwt });
-    expect(ok.status).toBe(200);
-
-    const otherJwt = await access.sign({ sub: 'access-user-2', email: 'ops@acme.com' });
-    const mismatch = await adminGet(app, session, '/admin', {
-      'cf-access-jwt-assertion': otherJwt,
-    });
-    expect(mismatch.status).toBe(302);
-    expect(mismatch.headers.get('location')).toMatch(/^\/auth\/login\?/);
-    // The session was revoked: even the original JWT no longer works with it.
-    const after = await adminGet(app, session, '/admin', { 'cf-access-jwt-assertion': jwt });
-    expect(after.status).toBe(302);
+    expect(await auditActions()).toEqual(['user.bootstrap']);
   });
 
-  it('revokes the session when the Access JWT is missing', async () => {
-    const { access, app } = await accessApp();
-    const jwt = await access.sign({ sub: 'access-user-1', email: 'ops@acme.com' });
-    const res = await app.request('/auth/access/start', {
-      headers: { 'cf-access-jwt-assertion': jwt },
-      redirect: 'manual',
-    });
-    const sessionId = setCookies(res).get(SESSION_COOKIE)?.value ?? '';
-    const session = { sessionId, csrfToken: '', cookie: `${SESSION_COOKIE}=${sessionId}` };
-    expect((await adminGet(app, session, '/admin')).status).toBe(302);
-    const revoked = await env.DB.prepare('SELECT revoked_at FROM sessions').first('revoked_at');
-    expect(revoked).not.toBeNull();
+  it('keeps no session: each request is authorized by its own JWT', async () => {
+    const app = accessApp();
+    const owner = await createUser({ email: 'o@acme.com', role: 'owner' });
+    const viewer = await createUser({ email: 'v@acme.com', role: 'viewer' });
+    const o = await loginAs(app, owner);
+    const v = await loginAs(app, viewer);
+    const first = await adminGet(app, o, '/admin');
+    expect(await first.text()).toBe('ok owner');
+    // Only the CSRF cookie is ever set; nothing identifies the user.
+    expect([...setCookies(first).keys()]).toEqual([]);
+    // Same browser (cookie), another person's JWT: the JWT decides.
+    const swapped = await adminGet(app, o, '/admin', { [ACCESS_JWT_HEADER]: v.assertion });
+    expect(await swapped.text()).toBe('ok viewer');
+    // Without a JWT the cookie alone grants nothing.
+    const bare = await app.request('/admin', { headers: { cookie: o.cookie } });
+    expect(bare.status).toBe(401);
   });
 
   it.each([
@@ -435,55 +114,123 @@ describe('Cloudflare Access login', () => {
       { sub: 'u', email: 'ops@acme.com' },
       { iss: 'https://evil.cloudflareaccess.com' },
     ],
-  ])('rejects %s', async (_name, claims, options) => {
-    const { access, app } = await accessApp();
+    [
+      'expired',
+      { sub: 'u', email: 'ops@acme.com' },
+      { now: Date.now() - 3600_000, ttlSeconds: 60 },
+    ],
+  ])('rejects %s with 401 and creates nothing', async (_name, claims, options) => {
+    const access = await testAccess();
+    const app = accessApp();
     const jwt = await access.sign(claims, options);
-    const res = await app.request('/auth/access/start', {
-      headers: { 'cf-access-jwt-assertion': jwt },
-      redirect: 'manual',
-    });
+    const res = await app.request('/admin', { headers: { [ACCESS_JWT_HEADER]: jwt } });
     expect(res.status).toBe(401);
-    expect(setCookies(res).has(SESSION_COOKIE)).toBe(false);
+    expect(await res.text()).toContain('did not present a valid user identity');
+    expect(await env.DB.prepare('SELECT count(*) AS n FROM users').first('n')).toBe(0);
   });
 
-  it('revokes an Access session once Access login is no longer configured', async () => {
-    const { access, app } = await accessApp();
-    const jwt = await access.sign({ sub: 'access-user-1', email: 'ops@acme.com' });
-    const res = await app.request('/auth/access/start', {
-      headers: { 'cf-access-jwt-assertion': jwt },
-      redirect: 'manual',
-    });
-    const sessionId = setCookies(res).get(SESSION_COOKIE)?.value ?? '';
-    const session = { sessionId, csrfToken: '', cookie: `${SESSION_COOKIE}=${sessionId}` };
-    const withoutAccess = createAdminTestApp({
-      env: { PUBLIC_URL: 'https://gw.test' },
-      fetch: combineFetch(access.handler),
-      routes: stubAdminPages,
-    });
-    const after = await adminGet(withoutAccess, session, '/admin', {
-      'cf-access-jwt-assertion': jwt,
-    });
-    expect(after.status).toBe(302);
-    const revoked = await env.DB.prepare('SELECT revoked_at FROM sessions').first('revoked_at');
-    expect(revoked).not.toBeNull();
+  it('rejects a JWT signed by another team key', async () => {
+    const other = await fakeAccess('tokengate-test');
+    const app = accessApp();
+    const jwt = await other.sign({ sub: 'u', email: 'ops@acme.com' });
+    const res = await app.request('/admin', { headers: { [ACCESS_JWT_HEADER]: jwt } });
+    expect(res.status).toBe(401);
   });
 
   it('rejects a request without the Access header', async () => {
-    const { app } = await accessApp();
-    expect((await app.request('/auth/access/start')).status).toBe(401);
+    const app = accessApp();
+    expect((await app.request('/admin')).status).toBe(401);
+    expect((await adminPost(app, null, '/admin/services', {})).status).toBe(401);
+  });
+
+  it('answers 503 when the Access certs cannot be fetched', async () => {
+    const access = await fakeAccess('certs-down');
+    const app = createAdminTestApp({
+      env: { AUTH_ACCESS_TEAM_DOMAIN: 'certs-down' },
+      fetch: async () => {
+        throw new Error('network down');
+      },
+      routes: stubAdminPages,
+    });
+    const jwt = await access.sign({ sub: 'u', email: 'ops@acme.com' });
+    const res = await app.request('/admin', { headers: { [ACCESS_JWT_HEADER]: jwt } });
+    expect(res.status).toBe(503);
+  });
+
+  it('a different team configured later does not accept the old team tokens', async () => {
+    const acme = await fakeAccess('acme-two');
+    const app = createAdminTestApp({
+      env: { AUTH_ACCESS_TEAM_DOMAIN: 'acme-two' },
+      fetch: combineFetch(acme.handler),
+      routes: stubAdminPages,
+    });
+    const owner = await createUser({ email: 'o@acme.com', role: 'owner' });
+    const session = await loginAs(app, owner);
+    expect((await adminGet(app, session, '/admin')).status).toBe(401);
+  });
+
+  it('links "Sign out" to the Access logout endpoint', async () => {
+    const app = createAdminTestApp({
+      routes: (a) => a.get('/admin/users', (c) => renderPage(c, { title: 'Users' }, 'body')),
+    });
+    const owner = await createUser({ email: 'o@acme.com', role: 'owner' });
+    const html = await (await adminGet(app, await loginAs(app, owner), '/admin/users')).text();
+    expect(html).toContain('<a href="/cdn-cgi/access/logout">Sign out</a>');
+  });
+});
+
+describe('dev login', () => {
+  const DEV_ORIGIN = 'http://localhost:8787';
+  const DEV_ENV = {
+    ...NO_ACCESS,
+    PUBLIC_URL: DEV_ORIGIN,
+    AUTH_DEV_EMAIL: 'dev@example.com',
+    BOOTSTRAP_OWNER_EMAILS: 'dev@example.com',
+  };
+
+  it('signs every request in as AUTH_DEV_EMAIL on a loopback PUBLIC_URL', async () => {
+    const app = createAdminTestApp({ env: DEV_ENV, routes: stubAdminPages });
+    const res = await app.request('/admin', { origin: DEV_ORIGIN });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('ok owner');
+    const identity = await env.DB.prepare(
+      'SELECT login_provider, subject FROM user_identities',
+    ).first();
+    expect(identity).toEqual({ login_provider: 'dev', subject: 'dev@example.com' });
+  });
+
+  it('is unreachable on any other origin (host pinning)', async () => {
+    const app = createAdminTestApp({ env: DEV_ENV, routes: stubAdminPages });
+    expect((await app.request('/admin', { origin: 'https://gw.test' })).status).toBe(404);
+    expect(await env.DB.prepare('SELECT count(*) AS n FROM users').first('n')).toBe(0);
+  });
+
+  it('is refused when PUBLIC_URL is not loopback, even for a localhost request', async () => {
+    const app = createAdminTestApp({
+      env: { ...DEV_ENV, PUBLIC_URL: '' },
+      routes: stubAdminPages,
+    });
+    const res = await app.request('/admin', { origin: DEV_ORIGIN });
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain('AUTH_DEV_EMAIL requires PUBLIC_URL');
+    expect(await env.DB.prepare('SELECT count(*) AS n FROM users').first('n')).toBe(0);
+  });
+
+  it('is ignored when Access is configured', async () => {
+    const app = createAdminTestApp({
+      env: {
+        PUBLIC_URL: 'https://localhost',
+        AUTH_DEV_EMAIL: 'dev@example.com',
+        BOOTSTRAP_OWNER_EMAILS: 'dev@example.com',
+      },
+      routes: stubAdminPages,
+    });
+    const res = await app.request('/admin', { origin: 'https://localhost' });
+    expect(res.status).toBe(401);
   });
 });
 
 describe('admin middleware', () => {
-  it('redirects unauthenticated GETs to login and rejects other methods', async () => {
-    const app = createAdminTestApp({ routes: stubAdminPages });
-    const get = await adminGet(app, null, '/admin/services?x=1');
-    expect(get.status).toBe(302);
-    expect(get.headers.get('location')).toBe('/auth/login?return_to=%2Fadmin%2Fservices%3Fx%3D1');
-    const post = await adminPost(app, null, '/admin/services', {});
-    expect(post.status).toBe(401);
-  });
-
   it('denies routes missing from the RBAC table and method-agnostic routes', async () => {
     const app = createAdminTestApp({ routes: stubAdminPages });
     const owner = await createUser({ email: 'o@example.com', role: 'owner' });
@@ -519,29 +266,48 @@ describe('admin middleware', () => {
     const app = createAdminTestApp({ routes: stubAdminPages });
     const viewer = await createUser({ email: 'v@example.com', role: 'viewer' });
     const session = await loginAs(app, viewer);
-    const res = await app.request('/admin/services', {
-      method: 'HEAD',
-      headers: { cookie: session.cookie },
-    });
+    const res = await app.request('/admin/services', { method: 'HEAD', headers: session.headers });
     expect(res.status).toBe(200);
   });
 
-  it('slides the idle expiry at most once per touch interval', async () => {
+  it('records last-seen times at most once per interval', async () => {
     let now = Date.UTC(2026, 9, 13, 12);
     const app = createAdminTestApp({ routes: stubAdminPages, now: () => now });
     const user = await createUser({ email: 'o@example.com', role: 'owner' }, now);
     const session = await loginAs(app, user);
-    const lastSeen = () =>
-      env.DB.prepare('SELECT last_seen_at FROM sessions').first('last_seen_at');
+    const lastSeen = async () => ({
+      user: await env.DB.prepare('SELECT last_login_at FROM users').first('last_login_at'),
+      identity: await env.DB.prepare('SELECT last_used_at FROM user_identities').first(
+        'last_used_at',
+      ),
+    });
     const start = now;
-
-    now += SESSION_TOUCH_INTERVAL_MS - 1;
     await adminGet(app, session, '/admin');
-    expect(await lastSeen()).toBe(start);
+    expect(await lastSeen()).toEqual({ user: start, identity: start });
+
+    now += SEEN_INTERVAL_MS - 1;
+    await adminGet(app, session, '/admin');
+    expect(await lastSeen()).toEqual({ user: start, identity: start });
 
     now += 1;
     await adminGet(app, session, '/admin');
-    expect(await lastSeen()).toBe(now);
+    expect(await lastSeen()).toEqual({ user: now, identity: now });
+  });
+
+  it('issues the CSRF cookie once, as a __Host- Strict HttpOnly cookie', async () => {
+    const app = createAdminTestApp({ routes: stubAdminPages });
+    const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
+    const fresh = await app.request('/admin', {
+      headers: { [ACCESS_JWT_HEADER]: session.assertion },
+    });
+    const cookie = setCookies(fresh).get(CSRF_COOKIE);
+    expect(cookie?.value).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(cookie?.attributes).toEqual(
+      expect.arrayContaining(['Path=/', 'Secure', 'HttpOnly', 'SameSite=Strict']),
+    );
+    expect(cookie?.attributes.join(';')).not.toMatch(/Domain=|Max-Age|Expires/i);
+    // A browser that already has one keeps it.
+    expect(setCookies(await adminGet(app, session, '/admin')).has(CSRF_COOKIE)).toBe(false);
   });
 
   it('denies methods with no registered route even with a valid CSRF token', async () => {
@@ -551,7 +317,7 @@ describe('admin middleware', () => {
       const res = await app.request('/admin/services/svc_1', {
         method,
         headers: {
-          cookie: session.cookie,
+          ...session.headers,
           'sec-fetch-site': 'same-origin',
           'content-type': 'application/x-www-form-urlencoded',
         },
@@ -586,26 +352,5 @@ describe('admin middleware', () => {
       tags: ['a', 'b'],
       constructor: 'undefined',
     });
-  });
-});
-
-describe('POST /auth/logout', () => {
-  it('revokes the session and clears the cookie', async () => {
-    const app = createAdminTestApp({ routes: stubAdminPages });
-    const user = await createUser({ email: 'o@example.com', role: 'owner' });
-    const session = await loginAs(app, user);
-    const res = await adminPost(app, session, '/auth/logout');
-    expect(res.status).toBe(303);
-    expect(res.headers.get('location')).toBe('/auth/login?notice=signed_out');
-    expect(setCookies(res).get(SESSION_COOKIE)?.attributes).toContain('Max-Age=0');
-    expect((await adminGet(app, session, '/admin')).status).toBe(302);
-    const notice = await (await app.request('/auth/login?notice=signed_out')).text();
-    expect(notice).toContain('You have signed out.');
-  });
-
-  it('without a session just clears the cookie', async () => {
-    const app = createAdminTestApp();
-    const res = await adminPost(app, null, '/auth/logout');
-    expect(res.status).toBe(303);
   });
 });

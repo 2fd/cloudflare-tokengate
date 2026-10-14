@@ -1,9 +1,9 @@
 // Commit path and result shape shared by admin ops. Each op writes its change and exactly one audit
 // row in one db.batch (I-AUDIT-1); a guarded change and its audit row depend on the same predicate.
-// An admin request's batch also re-checks the acting session and role at commit (I-SESS-1).
+// An admin request's batch also re-checks the acting identity and role at commit (I-SESS-1).
 import { type AuditInput, auditStatement, buildAuditEvent, emitAuditLine } from '../../db/audit';
-import { liveSessionGuard } from '../../db/sessions';
 import type { Actor, AuditEvent } from '../../db/types';
+import { liveIdentityGuard } from '../../db/users';
 import type { Deps } from '../../deps';
 import type { Condition, Rule } from '../../policy/types';
 import { rolesWith } from '../auth/rbac';
@@ -50,10 +50,10 @@ export interface CommitOutcome {
   results: D1Result[];
 }
 
-/** Thrown by commitAudited when the acting session or role no longer allows the write. */
+/** Thrown by commitAudited when the acting user, identity or role no longer allows the write. */
 export class ActorNotAuthorizedError extends Error {
   constructor() {
-    super('the session ended or the role changed before the change was saved');
+    super('the user lost access or the role changed before the change was saved');
     this.name = 'ActorNotAuthorizedError';
   }
 }
@@ -68,10 +68,10 @@ const ACTOR_CHECK_MARKER = 'tokengate:actor_not_authorized';
  * The audit line is emitted to Workers Logs only after the batch commits.
  *
  * When `actor` carries an authority (every admin request, see AdminActor), an actor check runs
- * first in the same batch. Unless the request's session is still live and its user's current role
- * still holds the route's permission, the check raises an SQL error, the whole batch rolls back
- * and ActorNotAuthorizedError is thrown. So a disable, demotion, login reset or session revocation
- * that commits while the request is in flight (e.g. during a credential check) stops its write.
+ * first in the same batch. Unless the request's login identity is still linked to its active user
+ * and that user's current role still holds the route's permission, the check raises an SQL error,
+ * the whole batch rolls back and ActorNotAuthorizedError is thrown. So a disable, demotion or login
+ * reset that commits while the request is in flight (e.g. during a credential check) stops its write.
  */
 export async function commitAudited(
   deps: Pick<Deps, 'env' | 'now' | 'random'>,
@@ -84,7 +84,7 @@ export async function commitAudited(
   const event = buildAuditEvent(deps, actor, audit);
   const batch = [auditStatement(db, event, guard ?? undefined), ...statements];
   const authority = actorAuthority(actor);
-  if (authority) batch.unshift(actorCheckStatement(db, authority, deps.now()));
+  if (authority) batch.unshift(actorCheckStatement(db, authority));
   let results: D1Result[];
   try {
     results = await db.batch(batch);
@@ -104,14 +104,11 @@ export async function commitAudited(
  * Selects nothing while the authority holds; otherwise evaluates json_extract with an invalid
  * path, which raises and aborts the batch (D1 has no RAISE() outside triggers).
  */
-function actorCheckStatement(
-  db: D1Database,
-  authority: ActorAuthority,
-  now: number,
-): D1PreparedStatement {
-  const live = liveSessionGuard({
-    idHash: authority.sessionIdHash,
-    now,
+function actorCheckStatement(db: D1Database, authority: ActorAuthority): D1PreparedStatement {
+  const live = liveIdentityGuard({
+    userId: authority.userId,
+    loginProvider: authority.loginProvider,
+    subject: authority.subject,
     roles: rolesWith(authority.permission),
   });
   return db
@@ -121,7 +118,7 @@ function actorCheckStatement(
 
 function actorAuthority(actor: Actor): ActorAuthority | null {
   const authority = (actor as { authority?: ActorAuthority }).authority;
-  return authority && typeof authority.sessionIdHash === 'string' ? authority : null;
+  return authority && typeof authority.subject === 'string' ? authority : null;
 }
 
 function errorText(error: unknown): string {
@@ -132,7 +129,7 @@ function errorText(error: unknown): string {
 /** Failure for ActorNotAuthorizedError (HTTP 409): nothing was written. */
 export function actorNotAuthorized(): OpFailure {
   return opFailure('conflict', [
-    'nothing was saved: your session ended or your role changed while the request ran; sign in again',
+    'nothing was saved: your access or your role changed while the request ran; reload the page',
   ]);
 }
 

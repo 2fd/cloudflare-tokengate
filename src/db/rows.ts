@@ -3,7 +3,7 @@
 import type { ProfileId } from '../identity/types';
 import { parseJson } from '../lib/json';
 import type { Condition, Injection, Rule, VerifyCheck } from '../policy/types';
-import type { CallerProvider, Grant, Role, Service, Session, User, UserStatus } from './types';
+import type { CallerProvider, Grant, Role, Service, User, UserStatus } from './types';
 
 type Row = Record<string, unknown>;
 
@@ -28,23 +28,6 @@ export function userFromRow(row: Row): User {
     created_at: num(row.created_at),
     updated_at: num(row.updated_at),
     last_login_at: numOrNull(row.last_login_at),
-  };
-}
-
-export function sessionFromRow(row: Row): Session {
-  return {
-    id_hash: str(row.id_hash),
-    user_id: str(row.user_id),
-    login_provider: str(row.login_provider),
-    identity_subject: str(row.identity_subject),
-    csrf_token: str(row.csrf_token),
-    created_at: num(row.created_at),
-    last_seen_at: num(row.last_seen_at),
-    expires_at: num(row.expires_at),
-    idle_expires_at: num(row.idle_expires_at),
-    ip: strOrNull(row.ip),
-    user_agent: strOrNull(row.user_agent),
-    revoked_at: numOrNull(row.revoked_at),
   };
 }
 

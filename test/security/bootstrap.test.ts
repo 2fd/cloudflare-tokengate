@@ -22,7 +22,7 @@ async function owners(): Promise<string[]> {
 describe('I-BOOT-1: bootstrap creates at most one owner, once', () => {
   it('creates an active owner with identity, marker and audit row', async () => {
     const result = await resolveLogin(deps(), {
-      loginProvider: 'github',
+      loginProvider: 'access',
       subject: '1',
       emails: ['first@acme.com'],
       name: 'First',
@@ -50,19 +50,19 @@ describe('I-BOOT-1: bootstrap creates at most one owner, once', () => {
     const d = deps();
     const results = await Promise.all([
       resolveLogin(d, {
-        loginProvider: 'github',
+        loginProvider: 'access',
         subject: '1',
         emails: ['first@acme.com'],
         name: null,
       }),
       resolveLogin(d, {
-        loginProvider: 'oidc',
+        loginProvider: 'dev',
         subject: 'x|2',
         emails: ['second@acme.com'],
         name: null,
       }),
       resolveLogin(d, {
-        loginProvider: 'github',
+        loginProvider: 'access',
         subject: '3',
         emails: ['first@acme.com'],
         name: null,
@@ -82,7 +82,7 @@ describe('I-BOOT-1: bootstrap creates at most one owner, once', () => {
   it('is ignored once an owner exists', async () => {
     await createUser({ email: 'existing@acme.com', role: 'owner' });
     const result = await resolveLogin(deps(), {
-      loginProvider: 'github',
+      loginProvider: 'access',
       subject: '1',
       emails: ['first@acme.com'],
       name: null,
@@ -95,7 +95,7 @@ describe('I-BOOT-1: bootstrap creates at most one owner, once', () => {
   it('is ignored once bootstrap_completed_at is set, even with no owner left', async () => {
     await putSettingStatement(env.DB, 'bootstrap_completed_at', 1, 1, null).run();
     const result = await resolveLogin(deps(), {
-      loginProvider: 'github',
+      loginProvider: 'access',
       subject: '1',
       emails: ['first@acme.com'],
       name: null,
@@ -106,14 +106,14 @@ describe('I-BOOT-1: bootstrap creates at most one owner, once', () => {
 
   it('requires an authoritative email listed in BOOTSTRAP_OWNER_EMAILS', async () => {
     const result = await resolveLogin(deps(), {
-      loginProvider: 'github',
+      loginProvider: 'access',
       subject: '1',
       emails: ['someone@acme.com'],
       name: null,
     });
     expect(result).toEqual({ ok: false, reason: 'not_invited' });
     const none = await resolveLogin(deps(''), {
-      loginProvider: 'github',
+      loginProvider: 'access',
       subject: '1',
       emails: ['first@acme.com'],
       name: null,
@@ -125,13 +125,13 @@ describe('I-BOOT-1: bootstrap creates at most one owner, once', () => {
   it('a second login of the bootstrapped owner resolves by identity', async () => {
     const d = deps();
     await resolveLogin(d, {
-      loginProvider: 'github',
+      loginProvider: 'access',
       subject: '1',
       emails: ['first@acme.com'],
       name: null,
     });
     const again = await resolveLogin(d, {
-      loginProvider: 'github',
+      loginProvider: 'access',
       subject: '1',
       emails: ['first@acme.com'],
       name: null,

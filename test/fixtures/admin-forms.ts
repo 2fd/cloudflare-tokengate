@@ -13,7 +13,7 @@ import { insertRequestRecordsStatements } from '../../src/db/requests';
 import type { CallerProvider } from '../../src/db/types';
 import { newId } from '../../src/lib/ids';
 import type { RequestRecord } from '../../src/telemetry/types';
-import { createUser, loginAs, resetControlPlane } from '../helpers/admin-auth';
+import { createUser, resetControlPlane } from '../helpers/admin-auth';
 import { createTestApp, type TestApp } from '../helpers/app';
 import {
   ACTOR,
@@ -311,15 +311,6 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
     return {
       path: `/admin/users/${target.id}/resend-invite`,
       action: 'user.resend_invite',
-      fields: {},
-    };
-  },
-  'POST /admin/users/:id/revoke-sessions': async (w) => {
-    const target = await createUser({ email: `${unique('revoked')}@example.com`, role: 'admin' });
-    await loginAs(w.app, target);
-    return {
-      path: `/admin/users/${target.id}/revoke-sessions`,
-      action: 'user.revoke_sessions',
       fields: {},
     };
   },

@@ -1,5 +1,6 @@
-// Admin auth fixtures: user rows, logged-in sessions, cookie handling and an app with stub admin
-// pages so the middleware (session, RBAC, CSRF) can be exercised without the real pages.
+// Admin auth fixtures: user rows, signed-in browsers (an Access JWT plus a CSRF cookie), cookie
+// handling and an app with stub admin pages so the middleware (identity, RBAC, CSRF) can be
+// exercised without the real pages.
 //
 //   await resetControlPlane();
 //   const owner = await createUser({ email: 'o@example.com', role: 'owner' });
@@ -8,8 +9,9 @@
 //   const res = await adminPost(app, session, '/admin/settings', { retention: '30' });
 import { env } from 'cloudflare:workers';
 import { type Context, Hono } from 'hono';
-import { registerAuthRoutes } from '../../src/admin/auth/routes';
-import { issueSession, SESSION_COOKIE } from '../../src/admin/auth/session';
+import { ACCESS_JWT_HEADER, accessSubject } from '../../src/admin/auth/access';
+import { CSRF_COOKIE } from '../../src/admin/auth/csrf';
+import { registerAdminMiddleware } from '../../src/admin/auth/middleware';
 import type { App, AppContext } from '../../src/app';
 import { userFromRow } from '../../src/db/rows';
 import type { Role, User, UserStatus } from '../../src/db/types';
@@ -17,9 +19,10 @@ import type { Deps } from '../../src/deps';
 import type { AppEnv } from '../../src/env';
 import { applySecurityMiddleware } from '../../src/http/security';
 import { newId } from '../../src/lib/ids';
-import { TEST_ORIGIN } from './app';
+import { TEST_ACCESS_ENV, TEST_ORIGIN } from './app';
+import { testAccess, withTestAccessCerts } from './login-providers';
 
-export { TEST_ORIGIN };
+export { TEST_ACCESS_ENV, TEST_ORIGIN };
 
 /**
  * Empties the control-plane tables, grants before the services and caller providers they
@@ -36,7 +39,6 @@ export async function resetControlPlane(): Promise<void> {
   if (!trigger) throw new Error('users_last_owner_delete trigger missing');
   await db.batch([
     db.prepare('DROP TRIGGER users_last_owner_delete'),
-    db.prepare('DELETE FROM sessions'),
     db.prepare('DELETE FROM user_identities'),
     db.prepare('DELETE FROM audit_log'),
     db.prepare('DELETE FROM settings'),
@@ -91,45 +93,70 @@ export async function createUser(seed: UserSeed, now: number = Date.now()): Prom
 }
 
 export interface AdminSession {
-  sessionId: string;
+  /** Access JWT sent in `Cf-Access-Jwt-Assertion`. */
+  assertion: string;
   csrfToken: string;
-  /** `Cookie` request header value. */
+  /** `Cookie` request header value (the CSRF cookie). */
   cookie: string;
+  /** Both headers a signed-in browser behind Access sends. */
+  headers: Record<string, string>;
+  /** Stored identity subject (`<team domain>|<sub>`). */
+  subject: string;
 }
 
 /**
- * Issues a real session (as a login would) for `user`. Sessions only live while their login
- * identity is linked to the user (I-SESS-1): the user's existing identity for the login provider
- * is reused, otherwise one is linked first. Throws when no session is issued.
+ * A browser signed in to Access as `user`: links an `access` identity for the user (reusing an
+ * existing one) and signs an Access JWT for it with the test team's key. Throws for a user that is
+ * not active, since the middleware would refuse it anyway.
  */
 export async function loginAs(
   app: { deps: Deps },
   user: User,
-  options: { loginProvider?: string; subject?: string } = {},
+  options: { sub?: string; email?: string } = {},
 ): Promise<AdminSession> {
-  const loginProvider = options.loginProvider ?? 'github';
+  const access = await testAccess();
+  const row = await env.DB.prepare('SELECT status FROM users WHERE id = ?')
+    .bind(user.id)
+    .first<{ status: string }>();
+  if (row?.status !== 'active') throw new Error(`loginAs: ${user.email} is not active`);
   const linked = await env.DB.prepare(
-    'SELECT subject FROM user_identities WHERE user_id = ? AND login_provider = ? LIMIT 1',
+    "SELECT subject FROM user_identities WHERE user_id = ? AND login_provider = 'access' LIMIT 1",
   )
-    .bind(user.id, loginProvider)
+    .bind(user.id)
     .first<{ subject: string }>();
-  const subject = options.subject ?? linked?.subject ?? `subject-${user.id}`;
+  const prefix = `${access.teamDomain}|`;
+  const sub =
+    options.sub ??
+    (linked?.subject.startsWith(prefix) ? linked.subject.slice(prefix.length) : `sub-${user.id}`);
+  const subject = accessSubject(access.teamDomain, sub);
   await env.DB.prepare(
     `INSERT OR IGNORE INTO user_identities (login_provider, subject, user_id, email, created_at)
-     VALUES (?, ?, ?, ?, ?)`,
+     VALUES ('access', ?, ?, ?, ?)`,
   )
-    .bind(loginProvider, subject, user.id, user.email, app.deps.now())
+    .bind(subject, user.id, user.email, app.deps.now())
     .run();
-  const issued = await issueSession(app.deps, {
-    user,
-    loginProvider,
-    identitySubject: subject,
-    previousSessionId: null,
-    meta: { ip: null, userAgent: null },
-  });
-  if (!issued) throw new Error(`loginAs: no session for ${user.email} (user not active?)`);
-  const { sessionId, session } = issued;
-  return { sessionId, csrfToken: session.csrf_token, cookie: `${SESSION_COOKIE}=${sessionId}` };
+  const assertion = await access.sign(
+    { sub, email: options.email ?? user.email },
+    { now: app.deps.now() },
+  );
+  const csrfToken = randomCsrfToken();
+  const cookie = `${CSRF_COOKIE}=${csrfToken}`;
+  return {
+    assertion,
+    csrfToken,
+    cookie,
+    headers: { cookie, [ACCESS_JWT_HEADER]: assertion },
+    subject,
+  };
+}
+
+/** A token in the shape the middleware writes (base64url of 32 bytes). */
+export function randomCsrfToken(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes))
+    .replaceAll('+', '-')
+    .replaceAll('/', '_')
+    .replace(/=+$/, '');
 }
 
 export interface AdminTestApp {
@@ -147,18 +174,19 @@ export interface AdminTestAppOptions {
 }
 
 /**
- * The auth-relevant slice of the real app (security middleware, auth routes, admin middleware)
+ * The auth-relevant slice of the real app (security middleware, admin middleware)
  * plus a stub proxy route registered before the security middleware, as in src/app.ts.
  */
 export function createAdminTestApp(options: AdminTestAppOptions = {}): AdminTestApp {
-  const testEnv = { ...env, ...options.env } as unknown as Env;
+  const testEnv = { ...env, ...TEST_ACCESS_ENV, ...options.env } as unknown as Env;
   const deps: Deps = {
     env: testEnv as unknown as AppEnv,
-    fetch:
+    fetch: withTestAccessCerts(
       options.fetch ??
-      (async (input) => {
-        throw new Error(`unexpected outbound fetch in test: ${String(input)}`);
-      }),
+        (async (input) => {
+          throw new Error(`unexpected outbound fetch in test: ${String(input)}`);
+        }),
+    ),
     now: options.now ?? (() => Date.now()),
     random: (length) => crypto.getRandomValues(new Uint8Array(length)),
     waitUntil: () => {},
@@ -170,7 +198,7 @@ export function createAdminTestApp(options: AdminTestAppOptions = {}): AdminTest
   });
   app.all('/proxy/*', (c) => c.text('proxied'));
   applySecurityMiddleware(app);
-  registerAuthRoutes(app);
+  registerAdminMiddleware(app);
   options.routes?.(app);
   const ctx = {
     waitUntil: () => {},
@@ -205,7 +233,7 @@ export function stubAdminPages(app: App): void {
   app.all('/admin/any-method', ok);
 }
 
-/** GET with the session cookie. */
+/** GET as a signed-in browser (Access JWT and CSRF cookie). */
 export function adminGet(
   app: Pick<AdminTestApp, 'request'>,
   session: AdminSession | null,
@@ -213,13 +241,13 @@ export function adminGet(
   headers: Record<string, string> = {},
 ): Promise<Response> {
   return app.request(path, {
-    headers: { ...(session ? { cookie: session.cookie } : {}), ...headers },
+    headers: { ...(session ? session.headers : {}), ...headers },
     redirect: 'manual',
   });
 }
 
 /**
- * Form POST as a same-origin browser would send it: session cookie, `Sec-Fetch-Site: same-origin`
+ * Form POST as a same-origin browser would send it: Access JWT, CSRF cookie, `Sec-Fetch-Site: same-origin`
  * and the `_csrf` field (override with `csrf: null` to omit, or `headers` to replace metadata).
  */
 export function adminPost(
@@ -239,7 +267,7 @@ export function adminPost(
     'content-type': 'application/x-www-form-urlencoded',
     'sec-fetch-site': 'same-origin',
   });
-  if (session) headers.set('cookie', session.cookie);
+  for (const [name, value] of Object.entries(session?.headers ?? {})) headers.set(name, value);
   for (const [name, value] of Object.entries(options.headers ?? {})) {
     if (value === null) headers.delete(name);
     else headers.set(name, value);

@@ -20,6 +20,8 @@ The proxy does not cache policy. `loadProxyContext` in `src/db/proxy-context.ts`
 
 Caches that do not decide authorization are allowed: JWKS per `jwks_uri`, OIDC discovery for admin login, the schema status and the `/readyz` answer ([architecture.md](../architecture.md#why-no-policy-caching)).
 
+> Note (2026-10-14): since [0015](0015-cloudflare-access-only-admin-login.md) there is no OIDC discovery for admin login. The Cloudflare Access team keys are cached instead, the same way as JWKS.
+
 ## Consequences
 
 - Disabling or deleting a grant, service or caller provider takes effect on the next request. The same holds for grant expiry.

@@ -236,8 +236,6 @@ let foreignIssuer: TestIssuer;
 let impostorIssuer: TestIssuer;
 let owner: AdminSession;
 
-const OAUTH_CLIENT_SECRET = credentialCanary('oauthsecret');
-
 /** Signs a caller token whose payload carries a unique canary claim; tracks token and claim. */
 async function callerToken(
   overrides: Record<string, unknown> = {},
@@ -299,8 +297,6 @@ beforeEach(async () => {
       REQUEST_ARCHIVE: {
         send: async (records: ArchiveRecord[]) => void archived.push(...structuredClone(records)),
       },
-      AUTH_GITHUB_CLIENT_ID: 'Iv1.tokengatetestclient',
-      AUTH_GITHUB_CLIENT_SECRET: OAUTH_CLIENT_SECRET,
     } as never,
   });
   // setupProxy always creates one service; it gets a grant and a canary like the others.
@@ -619,7 +615,8 @@ describe('I-CRED-1 / I-LOG-1 / I-TOK-1: no credential or caller token reaches an
       ...credentials,
       ...tokens,
       { label: 'KEK', value: TEST_KEK },
-      { label: 'oauth client secret', value: OAUTH_CLIENT_SECRET },
+      // The admin's Access JWT is a bearer credential for the console (I-SESS-1).
+      { label: 'admin Access JWT', value: owner.assertion },
     ];
     const hits: Hit[] = [];
     for (const response of responses)

@@ -17,6 +17,8 @@ Most security behavior depends on side effects:
 - randomness for ids, tokens and sampling;
 - `waitUntil` for background work.
 
+> Note (2026-10-14): since [0015](0015-cloudflare-access-only-admin-login.md) there are no gateway sessions and no OIDC discovery or GitHub login. Tests inject `fetch` for the Cloudflare Access team keys instead.
+
 Tests must run these paths exactly as in production: in the Workers runtime, with real D1, and with attacker-controlled upstream responses. Global mocks (HTTP interception libraries, patched `globalThis.fetch`, fake timers) are fragile in workerd. They can also hide a code path that bypasses the mock.
 
 ## Decision
