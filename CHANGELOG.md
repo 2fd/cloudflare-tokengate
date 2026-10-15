@@ -17,6 +17,11 @@ The admin UI has four sections: Monitoring, Users, Service tokens and Service co
 - **Operation presets.** Service templates offer named operations, for example "Post messages: POST /chat.postMessage", instead of one starter rule list. The grant form still prefills the default operations as rule text.
 
 <!-- WP1 -->
+- **Monitoring › Overview.** One page answers "is everything OK?" for the last 24 hours, 7 days or 30 days: a health panel with every alert (each with links to the objects it concerns and, for the roles that can, the fix; owners approve pending people and re-encrypt secrets in place) and every check, the four getting-started steps, request counts that link to the matching Requests list, a bar chart with a table of the numbers, "Tokens in use" (which consumer accesses can use each token, with traffic and last use), the top denied callers with "Create access" and the last 5 changes. It replaces the Dashboard and its banners.
+- **Monitoring › Requests.** Time range and outcome tabs, token, consumer and reason lists, a repository field with suggestions from stored labels only, filter chips, and table cells that set filters. "Find a request" on every Monitoring page opens a record from a pasted request ID or log line. Invalid filters are dropped with a message, and the other results still show. The query parameter `service` is now `token` (no alias). A record says what to do for its reason, with links for the roles that can act, and always re-checks against the current consumer accesses (`?reevaluate=1` is gone). "Create grant from this request" is now "Give access from this request".
+- **Monitoring › Audit log.** Range and category tabs, and lists of objects and people, replace the target type and free-text filters (`target_type` and `target_id` are removed; use `target=<id>`). Changes show as a Before and After table.
+- **Monitoring › Data retention.** The settings are grouped, the numbers have suggestions, the sample rate is a choice of presets, and summary retention can no longer be shorter than request record retention.
+- **Request log indexes.** `migrations-telemetry/0001_initial.sql` gains two `request_log` indexes for the Monitoring pages (problem rows, and rows per consumer access). Local databases made before this change must be recreated: run `pnpm run setup`.
 <!-- WP2 -->
 <!-- WP3 -->
 <!-- WP4 -->

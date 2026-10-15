@@ -331,9 +331,14 @@ Caps the requests one grant can make, to limit the damage of a compromised workf
 
 ## Runtime settings
 
-Owners edit these under Settings > Data retention and sampling, then select "Save settings". Admins and
-viewers see them read-only. Each save that changes a value writes one audit event
-([I-AUDIT-1](threat-model.md#i-audit-1)).
+Owners edit these under Monitoring › Data retention (`/admin/retention`), then select "Save". Every
+other role sees them read-only. The page groups them as "Request records" (the first, fourth and
+fifth row below), "Hourly summaries" and "Audit log". The numbers are prefilled and have suggestion
+lists; the sample rate is a choice of 100 %, 50 %, 10 %, 1 % or 0 %. "Traffic summary retention" must
+be at least "Request log retention", because the summaries back the Overview and "last used" for
+every stored record. Each save that changes a value writes one audit event
+([I-AUDIT-1](threat-model.md#i-audit-1)). The form sends every value, so when two owners save at
+the same time, the last save wins for all five values.
 
 | Label | Key | Default | Min | Max |
 |---|---|---|---|---|
@@ -349,7 +354,7 @@ viewers see them read-only. Each save that changes a value writes one audit even
   older than their limits.
 - `allowed_sample_rate` applies to allowed requests only. Denied and error records are always kept,
   except pre-trust failures (see [observability.md](observability.md)). With 0.1, about one allowed
-  request in ten is recorded, and dashboard counts are scaled up. With 0, no allowed request is recorded.
+  request in ten is recorded, and Overview counts are scaled up. With 0, no allowed request is recorded.
   The settings page recommends 0 on the Workers Free plan, to stay within the daily D1 write limit.
 
 ### `request_log_max_rows`

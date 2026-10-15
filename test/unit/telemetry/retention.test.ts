@@ -4,7 +4,7 @@ import { HOUR_MS } from '../../../src/db/rollups';
 import { SETTING_DEFAULTS, type Settings } from '../../../src/db/settings';
 import type { AppEnv } from '../../../src/env';
 import { idLowerBound } from '../../../src/lib/ids';
-import { purge } from '../../../src/telemetry/retention';
+import { purge, ROWS_ESTIMATE_SQL } from '../../../src/telemetry/retention';
 
 const DAY = 86_400_000;
 const NOW = Date.UTC(2026, 9, 13, 12, 7);
@@ -146,5 +146,21 @@ describe('purge: database independence', () => {
         settings(),
       ),
     ).rejects.toBeInstanceOf(AggregateError);
+  });
+});
+
+describe('ROWS_ESTIMATE_SQL (Data retention "Stored now")', () => {
+  it('sums the rollups from the hour of the oldest stored record: an upper estimate', async () => {
+    const hour = NOW - (NOW % 3_600_000) - 5 * 3_600_000;
+    await seedRequests(hour + 1000, 3);
+    await env.TELEMETRY_DB.prepare(
+      `INSERT INTO request_rollup_hourly (hour, service_id, grant_id, outcome, status_class, requests, upstream_auth_fail, duration_sum_ms)
+       VALUES (?, '', '', 'allowed', 2, 3, 0, 0), (?, '', '', 'allowed', 2, 100, 0, 0)`,
+    )
+      .bind(hour, hour - 3_600_000)
+      .run();
+    const row = await env.TELEMETRY_DB.prepare(ROWS_ESTIMATE_SQL).first<{ n: number }>();
+    // The rollup of the hour before the oldest record is not counted.
+    expect(row?.n).toBe(3);
   });
 });

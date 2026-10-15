@@ -1,10 +1,10 @@
 # Observability
 
-This page explains what the gateway records and how to watch it: the request log, rollups, dashboard
-banners, health endpoints, the audit log, log lines for a SIEM and the optional R2 archive. It is for
+This page explains what the gateway records and how to watch it: the request log, rollups, the
+Monitoring pages of the admin UI (Overview, Requests, Audit log, Data retention), health endpoints, the audit log, log lines for a SIEM and the optional R2 archive. It is for
 platform engineers who operate a deployment.
 
-![Request records: each proxy request writes one record, either directly to request_log in TELEMETRY_DB or through the optional REQUEST_LOG_QUEUE (batched insert); optionally the record also goes to a Pipelines stream that writes Parquet files to an R2 archive for DuckDB or Basin SQL. An hourly cron turns request_log into hourly rollups, which feed the dashboard.](diagrams/telemetry.svg)
+![Request records: each proxy request writes one record, either directly to request_log in TELEMETRY_DB or through the optional REQUEST_LOG_QUEUE (batched insert); optionally the record also goes to a Pipelines stream that writes Parquet files to an R2 archive for DuckDB or Basin SQL. An hourly cron turns request_log into hourly rollups, which feed the Overview.](diagrams/telemetry.svg)
 
 <sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
@@ -67,8 +67,9 @@ The request log is therefore not a complete record of anonymous probing
 
 ### Retention, sampling and size
 
-Owners change these under Settings > Data retention and sampling. Defaults, bounds and the exact
-behavior of `request_log_max_rows` are in [configuration.md](configuration.md#runtime-settings).
+Owners change these under Monitoring › Data retention (`/admin/retention`); every other role sees
+the values. Defaults, bounds and the exact behavior of `request_log_max_rows` are in
+[configuration.md](configuration.md#runtime-settings).
 
 - The hourly job deletes records older than "Request log retention (days)" (default 14), oldest
   first.
@@ -83,16 +84,37 @@ behavior of `request_log_max_rows` are in [configuration.md](configuration.md#ru
 
 ### Requests page
 
-Admin > Requests lists records newest first, 50 per page. Filters: Service, Outcome, Repository
-(exact `owner/name`) and service slug.
+Monitoring › Requests (`/admin/requests`) lists records newest first, 50 per page, with Newest,
+Newer and Older links.
 
-- Service alone and Repository alone use indexes and search the whole log.
-- Outcome or service slug filters, and service and Repository together, search 10,000 requests at a
-  time, so one page reads at most about 20,000 rows. Select "Older entries" to search further back.
-- Open a record to see its stored claims and policy trace. "Re-evaluate against current grants"
-  re-runs authorization with the stored claims only; claims that were not stored fail closed.
-- For a denied, verified record with reason `no_matching_grant` or `event_not_trusted`, admins and
-  owners see "Create grant from this request".
+- **Find a request:** every Monitoring page has this box under the tabs. Paste the
+  `x-tokengate-request-id` value, or the whole log line that holds it, in any case. The page opens
+  that record, or says it does not exist (records are kept for "Request log retention (days)").
+- **Tabs:** Time range (1 hour, 24 hours, 7 days, 30 days, All) and Outcome (All, Allowed, Denied,
+  Errors). "Errors" are gateway errors plus allowed requests the upstream answered with 5xx, the
+  same count as the Overview. A time range starts at the start of an hour (UTC), so the page states
+  the actual start ("since …").
+- **Filter form:** it shows when a filter is active or the page has more than 10 rows. Token,
+  Service consumer and Reason are lists; Repository is the only typed
+  filter (exact `owner/name`). Its suggestions are the repository labels stored on consumers and
+  accesses, never values from the request log. "Refused before a token was chosen" and "No
+  consumer" select the records without a token or consumer.
+- **Cells are filters:** select a token, repository, consumer, access or reason in a row to filter
+  by it. Each active filter is a chip; select it to remove that filter.
+- **Index use:** the token, the repository or the consumer access alone, and the Denied and Errors
+  tabs alone, use indexes and search the whole log (the Denied and Errors tabs use the partial
+  index `request_log_problems`). Other filters and combinations search 10,000 requests at a time, so
+  one page reads at most about 20,000 rows; "Search older" searches the next 10,000.
+- **A record:** the page says what to do for its reason, with at most two links (for example "Give
+  access from this request" or "Set the secret again"), each shown only to the roles that can do
+  it. It always re-runs authorization against the current consumer accesses with the stored claims
+  only ("Check against current access"); claims that were not stored fail closed, and nothing is
+  changed. A disabled consumer or token, or a tenant pin that fails, refuses the request before any
+  access applies, so the check then says "Would still be refused" even when an access matches.
+- "Give access from this request" is offered for a denied, verified record with reason
+  `no_matching_grant` or `event_not_trusted`, to access managers, admins and owners, until the
+  re-check says the request would now be allowed. Records of tokens that were not verified never
+  prefill a form ([I-LOG-2](threat-model.md#i-log-2)).
 
 There is no filter for `jti` or `run_id`. Use SQL instead
 ([incident response](operations/incident-response.md#investigate-the-request-log)).
@@ -121,7 +143,7 @@ cannot shrink the summaries. Re-running a recompute is idempotent.
 - Counts are sums of `weight`, so they estimate real traffic when sampling is on.
 - `upstream_auth_fail` counts allowed requests the upstream answered with 401 or 403.
 - Each row has a histogram of `duration_ms` in buckets ≤ 50, ≤ 100, ≤ 250, ≤ 500, ≤ 1000,
-  ≤ 2500, ≤ 5000 and > 5000 ms (`LATENCY_BUCKETS` in `src/db/rollups.ts`). The dashboard uses only
+  ≤ 2500, ≤ 5000 and > 5000 ms (`LATENCY_BUCKETS` in `src/db/rollups.ts`). The Overview uses only
   the rows of allowed requests for p50 and p95.
 - Rollups are kept for "Traffic summary retention (days)" (default 400).
 
@@ -135,7 +157,7 @@ Limits:
   holds more requests than the stored row. Otherwise the stored row stays and the late records are
   not added.
 - After a long outage, each run closes about 23 hours of the gap (24 caught up, 1 new hour).
-  Until the gap is closed, the dashboard undercounts the missing hours.
+  Until the gap is closed, the Overview undercounts the missing hours.
 - If the queue consumer cannot roll up a late batch, it retries the whole batch (log line
   `telemetry.late_rollup_failed`). The records are already stored, so the retry does not duplicate
   them.
@@ -159,41 +181,85 @@ pnpm wrangler d1 execute DB --remote --command "INSERT OR REPLACE INTO settings 
 Stored rollups are never lowered by either method. A manual recompute adds requests that are still
 in the request log but missing from the summaries.
 
-## Dashboard
+## Overview
 
-Admin > Dashboard (`src/telemetry/dashboard.ts`) shows:
+Monitoring › Overview (`/admin`, `src/telemetry/dashboard.ts`) answers "is everything OK?" on one
+page. Nothing refreshes by itself: the page says when it was built and has a Refresh link.
 
-- **Last 24 hours:** stored rollups for the closed hours, plus a live aggregate of the request log
-  for the current hour (and the previous hour, until the job has succeeded in the current hour).
-  Errors are gateway 5xx answers plus allowed requests the upstream answered with 5xx. p50 and p95
-  are interpolated from the latency buckets; a value in the last bucket is shown as a lower bound.
-- **Services:** the same numbers per service.
-- **Recent denials:** the 20 newest denied requests of the last 24 hours.
+- **Range:** 24 hours, 7 days or 30 days (`?range=24h|7d|30d`). The page states the start. Buckets
+  are UTC-aligned: 24 one-hour, 28 six-hour or 30 one-day bars, the last one partial ("so far")
+  (`src/telemetry/ranges.ts`). Requests uses the same rule, so a count and the list it links to
+  cover the same window.
+- **Data:** stored rollups for the closed hours, plus a live aggregate of the request log for each
+  hour not rolled up yet (the current hour, and the previous hour until the job has succeeded in the
+  current hour).
+- **Health:** every alert (below), then "All checks": the two database schemas, the hourly job
+  (last success, last error, next run), encryption keys, sign-in, admin hosts, the optional
+  bindings and configuration problems by variable name, never by value.
+- **Get started:** the four first steps (add a service token, add a service consumer, give a
+  consumer access, make the first call), shown until all four are done. Each step links to its
+  form, or says whom to ask.
+- **Traffic:** Requests, Allowed, Denied, Errors (count and share), p50 and p95, each count a link
+  to the matching Requests list; then a bar chart with a "Show the numbers" table. **Errors** are
+  gateway errors plus allowed requests the upstream answered with 5xx, the same as the Requests
+  Errors tab. p50 and p95 are interpolated from the latency buckets of allowed requests; a value in
+  the last bucket is shown as a lower bound.
+- **Tokens in use:** one row per token with its status, the consumer accesses that can use it
+  ("Used by"), its requests, denied and errors in the range, p95 and last use. Tokens with a
+  problem come first; tokens without traffic or problems are folded under "N idle tokens".
+  "Refused before a token was chosen" counts requests to unknown slugs and earlier failures.
+- **Top denials:** the 10 largest groups of denied requests in the range, by consumer, token,
+  reason and repository (or the unverified issuer), from the newest 2,000 denials. The action is
+  "Create access" (a verified `no_matching_grant` or `event_not_trusted` group, for access
+  managers, admins and owners), "Add a service consumer" (`issuer_unknown`), or "See requests".
+- **Recent changes:** the last 5 audit events.
 
-### Banners
+When `allowed_sample_rate` is below 1 the page says counts are estimates; at 0 it says allowed
+requests and "last used" are not recorded.
 
-Banners are sorted by severity. The texts below are abbreviated.
+### Health and alerts
+
+Alerts are a static list (no `role=alert`): errors, then warnings, then notes. One item per kind
+names every affected object. Each item links to the objects it concerns for every role; the fix
+link is shown only to the roles that can make the fix, and everyone else is told whom to ask. Owners
+can approve pending people and re-encrypt secrets from the item itself. Schema and hourly-job alerts
+link to their row of "All checks" (`/admin#check-schema`, `#check-telemetry-schema`,
+`#check-maintenance`), which is open while a check fails. Every page except the
+Overview also shows a one-line health strip for errors that are cheap to check (keys not loaded,
+missing migrations, configuration problems). The texts below are abbreviated.
 
 | Level | Condition | What to do |
 |---|---|---|
-| error | "Keyring unavailable (`<error>`)" | Set or fix `TOKENGATE_KEK` / `TOKENGATE_KEYRING` ([key rotation](operations/key-rotation.md)) |
-| error | Credentials sealed with key ids missing from the keyring | Add the key back ([key rotation](operations/key-rotation.md#remove-the-old-key)) |
-| error | Key id(s) now hold a different key (key check value changed) | [Recover a replaced key](operations/key-rotation.md#recover-from-a-replaced-key) |
-| error | Stored credential(s) are not valid sealed values | Enter those credentials again |
+| error | "Encryption keys are not loaded (`<error>`)" | Set or fix `TOKENGATE_KEK` / `TOKENGATE_KEYRING` ([key rotation](operations/key-rotation.md)) |
+| error | Tokens use a key the keyring no longer has | Add the key back ([key rotation](operations/key-rotation.md#remove-the-old-key)) |
+| error | A key id now holds a different key (key check value changed) | [Recover a replaced key](operations/key-rotation.md#recover-from-a-replaced-key) |
+| error | Stored secrets are damaged (not valid sealed values) | Check the base URL out of band, then set the secret again |
+| error / warning | A secret has expired / expires within 14 days | [Rotate the secret](operations/credential-rotation.md) |
+| warning | A token with consumer accesses has no secret | Add the secret on the token page |
+| warning | The upstream rejected a token | At least 5 and at least 50% of forwarded requests got 401/403 in the last 15 minutes. [Rotate the secret](operations/credential-rotation.md) |
+| warning | Tokens point at hosts that Allowed hosts refuses | Change the token or Service tokens › Allowed hosts |
 | error | "Database `<binding>` is missing migration ..." | `pnpm wrangler d1 migrations apply <binding> --remote` ([upgrades](operations/upgrades.md)) |
 | warning | Database has migrations newer than this deployment | Expected after a rollback ([upgrades](operations/upgrades.md#roll-back)) |
 | warning | Could not read the applied migrations | Check the D1 binding |
-| error | The hourly maintenance job failed | Read the message; see [troubleshooting](operations/troubleshooting.md#admin-ui-and-maintenance) |
-| warning | The hourly maintenance job last succeeded more than 2 hours ago | Same |
-| info | The hourly maintenance job has not run yet | Normal for up to an hour after the first deploy |
-| warning | Upstream rejected the credential of a service | At least 5 and at least 50% of forwarded requests got 401/403 in the last 15 minutes. [Rotate the credential](operations/credential-rotation.md) |
-| warning / error | A Credential expires within 14 days / has expired | [Rotate the credential](operations/credential-rotation.md) |
-| info | Credentials are sealed with a key other than the active key | Run the re-encryption in Settings ([key rotation](operations/key-rotation.md)) |
+| error | Configuration problem (variable name and message) | [configuration.md](configuration.md) |
+| error | The hourly job failed | Read the message; see [troubleshooting](operations/troubleshooting.md#admin-ui-and-maintenance) |
+| warning | The hourly job last succeeded more than 2 hours ago | Same |
+| info | The hourly job has not run yet | Normal for up to an hour after the first deploy |
+| warning | A consumer access expires within 14 days | Extend it on the access page |
+| warning | People need a decision (pending approval or a refused sign-in) | Users › People |
+| info | Secrets use a key other than the active key | Re-encrypt them ([key rotation](operations/key-rotation.md)) |
 | info | There is only one active owner | Invite a second owner ([break-glass](operations/break-glass.md)) |
 
-Settings > System status shows the database schema state, the hourly job, the admin hosts, Login
-providers, the upstream host allowlist, each optional binding and whether the first owner exists, plus any
-configuration problems by variable name.
+### Data retention
+
+Monitoring › Data retention (`/admin/retention`) groups the runtime settings: "Request records"
+(retention, the share of allowed requests to record, the row cap), "Hourly summaries" (summary
+retention) and "Audit log" (audit retention). It shows an upper estimate of the stored records and
+the records kept a day in the last 7 days, and suggests a row cap from that rate. The sample rate is
+a choice of 100 %, 50 %, 10 %, 1 % or 0 %; a stored value that is not one of these is kept as its
+own "(current)" choice. Summary retention cannot be shorter than request record retention. Only
+owners can save; a save writes one `settings.update` audit row, and a save without changes writes
+none.
 
 ## Health endpoints
 
@@ -227,8 +293,13 @@ the hourly job, also write rows. Other admin requests write none: the gateway ke
 replaced with `[redacted]` in diffs ([I-CRED-1](threat-model.md#i-cred-1)). Saving a form without
 changes writes nothing.
 
-Admin > Audit log lists events newest first, with filters Target type, Target ID and Actor (email
-or user id). Retention is "Audit log retention (days)": default 365, never less than 90.
+Monitoring › Audit log (`/admin/audit`) lists events newest first. The tabs filter by time range
+(24 hours, 7 days, 30 days, 90 days, All) and category (Tokens, Consumers, Access, Users, Sign-ins,
+System); the lists (shown when a filter is active or the page has more than 10 events) filter
+by object (`?target=<id>`, `settings` or `keyring`) and by who made the
+change (`?actor=<user id>`, an email, or `system`). Every object page has a History link to its
+events. Each event shows the changed fields as a Before and After table. Retention is "Audit log
+retention (days)": default 365, never less than 90.
 
 | Area | Actions |
 |---|---|
@@ -299,14 +370,14 @@ Keep `head_sampling_rate` at `1`. Workers Logs billing moves to Cloudflare Obser
 `REQUEST_LOG_QUEUE` batches request-log writes: the consumer writes up to 100 records in one D1
 batch, which lowers D1 query contention at high request rates. It does not lower D1 rows written, and
 it adds queue operations to the bill ([cost](operations/cost.md)). Records reach D1 up to 30 seconds
-later, so the dashboard's live hour lags. Setup and consumer settings:
+later, so the Overview's live hour lags. Setup and consumer settings:
 [configuration.md](configuration.md#request_log_queue).
 
 Batches that fail 10 times go to `tokengate-request-log-dlq`, which nothing consumes. To replay them,
 add a second entry to `queues.consumers` for `tokengate-request-log-dlq` with the same settings and
 run `pnpm run deploy`. The Worker's queue handler writes any batch it receives, and inserts are
 `INSERT OR IGNORE`, so a replay cannot duplicate records. Replayed records are usually older than
-the hourly job's 3-hour window, so the consumer also rolls up their hours, and the dashboard counts
+the hourly job's 3-hour window, so the consumer also rolls up their hours, and the Overview counts
 them ([rollups](#rollups)). Remove the entry afterwards.
 
 ## Optional: R2 archive
@@ -340,7 +411,7 @@ sampling and the pre-trust budget. Basin Pipelines requires Workers Paid.
    pnpm wrangler r2 bucket lifecycle add <r2-bucket> expire-tokengate_requests requests/ --expire-days 90
    ```
 
-7. Check Settings > System status: "Request archive (REQUEST_ARCHIVE)" shows "bound".
+7. Check Monitoring › Overview › Health › All checks: "REQUEST_ARCHIVE" shows "Bound.".
 
 Files are written every 300 seconds under `<prefix>/year=YYYY/month=MM/day=DD/`. Lifecycle rules
 count days from each file's creation and delete within about a day after expiry

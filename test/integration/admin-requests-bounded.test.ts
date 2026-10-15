@@ -2,7 +2,7 @@
 // so a viewer cannot make one page load read the whole request_log.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { REQUEST_SCAN_ROWS, searchRequests } from '../../src/db/requests';
+import { PROBLEMS_TERM, REQUEST_SCAN_ROWS, searchRequests } from '../../src/db/requests';
 import { idLowerBound } from '../../src/lib/ids';
 import { adminGet, createUser, loginAs, resetControlPlane } from '../helpers/admin-auth';
 import { createTestApp } from '../helpers/app';
@@ -51,12 +51,43 @@ describe('request list filters are bounded', () => {
 
   it('an outcome filter is bounded the same way', async () => {
     const page = await searchRequests(db(), { outcome: 'allowed' });
-    expect(page).toEqual({ records: [], olderBefore: expect.any(String) });
+    expect(page).toEqual({ records: [], olderBefore: expect.any(String), newerAfter: null });
   });
 
   it('an index-served filter needs no window', async () => {
     const page = await searchRequests(db(), { repository: 'acme/rare' });
-    expect(page).toEqual({ records: [expect.objectContaining({ id: rareId })], olderBefore: null });
+    expect(page).toEqual({
+      records: [expect.objectContaining({ id: rareId })],
+      olderBefore: null,
+      newerAfter: null,
+    });
+  });
+
+  it('the denied and error classes take the partial index, with no window', async () => {
+    const denied = await searchRequests(db(), { outcomeClass: 'denied', limit: 5 });
+    expect(denied.records).toHaveLength(5);
+    expect(denied.olderBefore).toBeNull();
+    const errors = await searchRequests(db(), { outcomeClass: 'error' });
+    expect(errors).toEqual({ records: [], olderBefore: null, newerAfter: null });
+    const { results } = await db()
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT * FROM request_log WHERE ${PROBLEMS_TERM} AND outcome = 'denied' ORDER BY id DESC LIMIT 5`,
+      )
+      .all<{ detail: string }>();
+    expect(results.map((row) => row.detail).join('\n')).toContain('request_log_problems');
+  });
+
+  it('a time bound that the window passes covers the whole range', async () => {
+    const page = await searchRequests(db(), { slug: 'rare', since: TEST_EPOCH_MS - 500 });
+    expect(page).toEqual({ records: [], olderBefore: null, newerAfter: null });
+  });
+
+  it('paging towards newer rows is bounded the same way', async () => {
+    const page = await searchRequests(db(), { slug: 'busy', after: rareId, limit: 3 });
+    expect(page.records).toHaveLength(3);
+    const none = await searchRequests(db(), { slug: 'nothing', after: rareId });
+    expect(none.records).toEqual([]);
+    expect(none.newerAfter).toEqual(expect.any(String));
   });
 
   it('the page links to the next window', async () => {

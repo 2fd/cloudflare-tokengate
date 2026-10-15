@@ -8,8 +8,11 @@ import type { AppEnv } from '../../../src/env';
 import { toBase64 } from '../../../src/lib/encoding';
 import { newId } from '../../../src/lib/ids';
 import {
-  dashboardBanners,
-  loadDashboard,
+  type AlertData,
+  alertsFor,
+  loadAlertData,
+  loadOverview,
+  overviewAlerts,
   percentile,
   trafficStats,
 } from '../../../src/telemetry/dashboard';
@@ -125,6 +128,8 @@ beforeEach(async () => {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM settings'),
     env.DB.prepare('DELETE FROM grants'),
+    env.DB.prepare('DELETE FROM claim_labels'),
+    env.DB.prepare('DELETE FROM caller_providers'),
     env.DB.prepare('DELETE FROM services'),
     env.DB.prepare('DELETE FROM user_identities'),
   ]);
@@ -186,7 +191,7 @@ describe('trafficStats', () => {
   });
 });
 
-describe('loadDashboard', () => {
+describe('loadOverview', () => {
   it('merges 23 hours of rollups with the live current hour when the cron ran this hour', async () => {
     await insertService('svc_A', 'alpha', null, null);
     await setCronSuccess(H + 7 * 60_000);
@@ -207,13 +212,14 @@ describe('loadDashboard', () => {
     await insertRequest(H + 60_000, { duration_ms: 70 });
     await insertRequest(H + 61_000, { outcome: 'error', status: 502, upstream_status: null });
 
-    const data = await loadDashboard(deps());
+    const data = await loadOverview(deps(), '24h');
     expect(data.window).toEqual({ from: H - 23 * HOUR_MS, liveFrom: H });
     expect(data.totals).toMatchObject({ requests: 9, allowed: 5, denied: 3, errors: 1 });
-    expect(data.services.map((s) => [s.serviceId, s.slug, s.name, s.requests])).toEqual([
-      ['svc_A', 'alpha', 'alpha API', 8],
-      ['', null, null, 1],
+    expect(data.tokens.map((t) => [t.serviceId, t.requests])).toEqual([
+      ['svc_A', 8],
+      ['', 1],
     ]);
+    expect(data.accessRequests.get('grt_A')).toBe(8);
   });
 
   it('aggregates the previous hour live until the cron has rolled it up', async () => {
@@ -224,19 +230,27 @@ describe('loadDashboard', () => {
     await insertRequest(H - 1, {});
     await insertRequest(H + 1000, {});
 
-    const data = await loadDashboard(deps());
+    const data = await loadOverview(deps(), '24h');
     expect(data.window.liveFrom).toBe(H - HOUR_MS);
     expect(data.totals.requests).toBe(3);
+    // Each live hour is its own bucket.
+    expect(data.series.at(-2)).toMatchObject({ start: H - HOUR_MS, allowed: 2 });
+    expect(data.series.at(-1)).toMatchObject({ start: H, allowed: 1, partial: true });
   });
 
-  it('lists recent denials of the last 24 hours, newest first', async () => {
+  it('groups the denials of the range by caller, token and reason, largest first', async () => {
     await insertRequest(NOW - 2 * DAY, { outcome: 'denied', status: 403, reason: 'old' });
-    const first = await insertRequest(NOW - 2000, {
+    await insertRequest(NOW - 3000, {
       outcome: 'denied',
       status: 403,
       reason: 'no_matching_grant',
     });
-    const second = await insertRequest(NOW - 1000, {
+    const latest = await insertRequest(NOW - 2000, {
+      outcome: 'denied',
+      status: 403,
+      reason: 'no_matching_grant',
+    });
+    await insertRequest(NOW - 1000, {
       outcome: 'denied',
       status: 401,
       reason: 'tenant_mismatch',
@@ -244,13 +258,17 @@ describe('loadDashboard', () => {
     });
     await insertRequest(NOW - 500, {});
 
-    const data = await loadDashboard(deps());
-    expect(data.recentDenials.map((d) => [d.id, d.reason])).toEqual([
-      [second, 'tenant_mismatch'],
-      [first, 'no_matching_grant'],
+    const data = await loadOverview(deps(), '24h');
+    expect(data.denials.bounded).toBe(false);
+    expect(data.denials.groups.map((g) => [g.reason, g.service_id, g.requests])).toEqual([
+      ['no_matching_grant', 'svc_A', 2],
+      ['tenant_mismatch', '', 1],
     ]);
+    expect(data.denials.groups[0]).toMatchObject({ latest_id: latest, latest_verified_id: latest });
   });
+});
 
+describe('loadAlertData', () => {
   it('flags services whose upstream rejects the credential (>= 5 and >= 50% in 15 minutes)', async () => {
     for (let i = 0; i < 5; i++)
       await insertRequest(NOW - 60_000 + i, { status: 401, upstream_status: 401 });
@@ -274,10 +292,22 @@ describe('loadDashboard', () => {
         service_slug: 'gamma',
       });
 
-    const data = await loadDashboard(deps());
-    expect(data.alerts.upstreamAuthFailures).toEqual([
+    const data = await loadAlertData(deps());
+    expect(data.upstreamAuthFailures).toEqual([
       { service_id: 'svc_A', service_slug: 'alpha', forwarded: 9, auth_failures: 5 },
     ]);
+    const [alert] = overviewAlerts(data).filter((a) => a.code === 'upstream_auth');
+    expect(alert?.title).toBe(
+      'The upstream rejected token alpha: 5 of 9 requests got 401/403 in 15 min.',
+    );
+    expect(alert?.fix).toMatchObject({
+      href: '/admin/tokens/svc_A#secret',
+      permission: 'tokens:write',
+    });
+    expect(alert?.objects).toContainEqual({
+      href: '/admin/requests?token=svc_A&outcome=allowed&range=1h',
+      label: 'Requests to alpha',
+    });
   });
 
   it('reports expiring credentials, keyring problems, cron state, schema and owner count', async () => {
@@ -289,18 +319,8 @@ describe('loadDashboard', () => {
     await insertService('svc_D', 'delta', null, NOW + DAY);
     await insertOwner('usr_1', 'owner@example.com');
 
-    const data = await loadDashboard(deps());
-    expect(data.alerts.expiringCredentials).toEqual([
-      { serviceId: 'svc_B', slug: 'beta', name: 'beta API', expiresAt: NOW - 1, expired: true },
-      {
-        serviceId: 'svc_A',
-        slug: 'alpha',
-        name: 'alpha API',
-        expiresAt: NOW + 3 * DAY,
-        expired: false,
-      },
-    ]);
-    expect(data.alerts.keyring).toEqual({
+    const data = await loadAlertData(deps());
+    expect(data.keyring).toEqual({
       ok: false,
       error: null,
       activeKid: 'k1',
@@ -309,22 +329,41 @@ describe('loadDashboard', () => {
       notActiveCount: 1,
       malformedCount: 1,
     });
-    expect(data.alerts.cron).toMatchObject({ lastSuccessAt: null, stale: true, failing: false });
-    expect(data.alerts.schema).toEqual({ DB: 'ok', TELEMETRY_DB: 'ok' });
-    expect(data.alerts.activeOwners).toBe(1);
+    expect(data.cron).toMatchObject({ lastSuccessAt: null, stale: true, failing: false });
+    expect(data.schema).toEqual({ DB: 'ok', TELEMETRY_DB: 'ok' });
+    expect(data.activeOwners).toBe(1);
 
-    const banners = dashboardBanners(data);
-    expect(banners.map((b) => b.level)).toEqual([
-      'error', // missing kid
-      'error', // malformed credential
-      'error', // beta expired
-      'warning', // alpha expiring
-      'info', // cron never ran
-      'info', // credential under a non-active key
-      'info', // single owner
+    const alerts = overviewAlerts(data);
+    expect(alerts.map((a) => [a.level, a.code])).toEqual([
+      ['error', 'key_missing'],
+      ['error', 'credential_expired'],
+      ['error', 'credential_malformed'],
+      ['warning', 'credential_expiring'],
+      ['info', 'key_not_active'],
+      ['info', 'cron_never'],
+      ['info', 'single_owner'],
     ]);
-    expect(banners[0]?.text).toContain('k0');
-    expect(banners.some((b) => b.text.includes('TOKENGATE_KEK'))).toBe(false);
+    const byCode = new Map(alerts.map((a) => [a.code, a]));
+    // key_missing names the tokens that use the missing key, each as a link.
+    expect(byCode.get('key_missing')?.title).toBe(
+      '1 token uses key k0, which the keyring no longer has: beta API.',
+    );
+    expect(byCode.get('key_missing')?.objects).toContainEqual({
+      href: '/admin/tokens/svc_B',
+      label: 'beta API',
+    });
+    expect(byCode.get('credential_expiring')?.title).toBe(
+      'The secret of alpha API expires on 2026-10-16 (in 3 days).',
+    );
+    expect(byCode.get('credential_malformed')?.fix).toMatchObject({
+      href: '/admin/tokens/svc_C?open=destination#destination',
+      permission: 'tokens:write',
+    });
+    expect(byCode.get('key_not_active')?.form).toEqual({ kind: 'rewrap', count: 1 });
+    expect(byCode.get('single_owner')?.fix).toMatchObject({ permission: 'users:write' });
+    // Cron alerts link to their row of the Overview's "All checks" table.
+    expect(byCode.get('cron_never')?.objects[0]?.href).toBe('/admin#check-maintenance');
+    expect(JSON.stringify(alerts)).not.toContain('TOKENGATE_KEK=');
   });
 
   it('reports a missing keyring and a failing cron', async () => {
@@ -334,22 +373,73 @@ describe('loadDashboard', () => {
       putSettingStatement(env.DB, 'cron_last_error', 'purge: Error: D1 overloaded', at, null),
       putSettingStatement(env.DB, 'cron_last_error_at', at, at, null),
     ]);
-    const data = await loadDashboard(deps({ TOKENGATE_KEK: '' }));
-    expect(data.alerts.keyring).toMatchObject({
-      ok: false,
-      error: 'keyring_absent',
-      activeKid: null,
-    });
-    expect(data.alerts.cron).toMatchObject({ failing: true, stale: false });
-    const texts = dashboardBanners(data).map((b) => `${b.level}: ${b.text}`);
-    expect(texts[0]).toMatch(/^error: Keyring unavailable \(keyring_absent\)/);
+    const data = await loadAlertData(deps({ TOKENGATE_KEK: '' }));
+    expect(data.keyring).toMatchObject({ ok: false, error: 'keyring_absent', activeKid: null });
+    expect(data.cron).toMatchObject({ failing: true, stale: false });
+    const texts = overviewAlerts(data).map((a) => `${a.level}: ${a.title}`);
+    expect(texts[0]).toMatch(/^error: Encryption keys are not loaded \(keyring_absent\)/);
     expect(texts).toContain(
-      `error: The hourly maintenance job failed at ${new Date(at).toISOString()}: purge: Error: D1 overloaded`,
+      'error: The hourly job failed at 2026-10-13 11:50:00 UTC: purge: Error: D1 overloaded.',
     );
+  });
+
+  it('groups same-code alerts into one item that names every object', async () => {
+    await insertService('svc_A', 'alpha', null, null);
+    await insertService('svc_B', 'beta', null, null);
+    await env.DB.prepare(
+      `INSERT INTO caller_providers (id, name, profile, issuer, jwks_uri, audience, allowed_algs,
+         max_token_age_seconds, tenant_pin, anchor_claims, enabled, created_at, updated_at)
+       VALUES ('cpr_A', 'gh', 'github-actions', 'https://iss.example', 'https://iss.example/jwks',
+         'tokengate-test-audience', '["RS256"]', 300, '[]', '[]', 1, 0, 0)`,
+    ).run();
+    for (const [id, service, expires] of [
+      ['grt_A', 'svc_A', NOW + 2 * DAY],
+      ['grt_B', 'svc_B', NOW + 5 * DAY],
+    ] as const) {
+      await env.DB.prepare(
+        `INSERT INTO grants (id, name, caller_provider_id, service_id, conditions, rules, enabled,
+           expires_at, created_at, updated_at)
+         VALUES (?, ?, 'cpr_A', ?, '[]', '[]', 1, ?, 0, 0)`,
+      )
+        .bind(id, `Access ${id}`, service, expires)
+        .run();
+    }
+    const alerts = overviewAlerts(await loadAlertData(deps()));
+    const missing = alerts.filter((a) => a.code === 'credential_missing_used');
+    expect(missing).toHaveLength(1);
+    expect(missing[0]?.title).toBe(
+      '2 tokens have no secret, so their accesses cannot work: alpha API (1 access), beta API (1 access).',
+    );
+    const expiring = alerts.filter((a) => a.code === 'access_expiring');
+    expect(expiring).toHaveLength(1);
+    expect(expiring[0]?.objects.map((o) => o.href)).toEqual([
+      '/admin/access/grt_A',
+      '/admin/access/grt_B',
+    ]);
+    expect(expiring[0]?.fix).toMatchObject({
+      href: '/admin/access/grt_A?open=edit#edit',
+      permission: 'access:write',
+    });
+  });
+
+  it('alertsFor gives an object page only its own alerts', async () => {
+    const sealed = (kid: string) =>
+      JSON.stringify({ v: 1, kid, iv: '', wdek: '', dek_iv: '', ct: '' });
+    await insertService('svc_A', 'alpha', sealed('k1'), NOW + 3 * DAY);
+    await insertService('svc_B', 'beta', sealed('k0'), null);
+    const data: AlertData = await loadAlertData(deps());
+    expect(alertsFor(data, { tokenId: 'svc_A' }).map((a) => a.code)).toEqual([
+      'credential_expiring',
+    ]);
+    expect(alertsFor(data, { tokenId: 'svc_B' }).map((a) => a.code)).toEqual([
+      'key_missing',
+      'key_not_active',
+    ]);
+    expect(alertsFor(data, { consumerId: 'cpr_none' })).toEqual([]);
   });
 });
 
-describe('loadDashboard: keyring key check values', () => {
+describe('loadAlertData: keyring key check values', () => {
   const sealed = (kid: string) =>
     JSON.stringify({ v: 1, kid, iv: '', wdek: '', dek_iv: '', ct: '' });
   const recordKcv = (map: Record<string, string>) =>
@@ -358,12 +448,16 @@ describe('loadDashboard: keyring key check values', () => {
   it('flags a kid whose key material changed since credentials were sealed', async () => {
     await insertService('svc_A', 'alpha', sealed('k1'), null);
     await recordKcv({ k1: '0000000000000000' });
-    const data = await loadDashboard(deps());
-    expect(data.alerts.keyring).toMatchObject({ ok: false, changedKids: ['k1'] });
-    const [first] = dashboardBanners(data);
-    expect(first).toMatchObject({ level: 'error' });
-    expect(first?.text).toContain('k1');
-    expect(first?.text).not.toContain(KEK);
+    const data = await loadAlertData(deps());
+    expect(data.keyring).toMatchObject({ ok: false, changedKids: ['k1'] });
+    const [first] = overviewAlerts(data);
+    expect(first).toMatchObject({
+      level: 'error',
+      code: 'key_changed',
+      fix: { href: '/admin/tokens/keys#rewrap', permission: 'keyring:rewrap' },
+    });
+    expect(first?.title).toContain('k1');
+    expect(JSON.stringify(first)).not.toContain(KEK);
   });
 
   it('accepts the recorded key check value and ignores kids without credentials', async () => {
@@ -371,21 +465,21 @@ describe('loadDashboard: keyring key check values', () => {
     const loaded = await loadKeyring(deps().env);
     if (!loaded.ok) throw new Error(loaded.error);
     await recordKcv({ k1: loaded.keyring.kcv.k1 as string, retired: 'ffffffffffffffff' });
-    const data = await loadDashboard(deps());
-    expect(data.alerts.keyring).toMatchObject({ ok: true, changedKids: [], missingKids: [] });
+    const data = await loadAlertData(deps());
+    expect(data.keyring).toMatchObject({ ok: true, changedKids: [], missingKids: [] });
   });
 
-  it('ignores a malformed keyring_kcv value instead of failing the dashboard', async () => {
+  it('ignores a malformed keyring_kcv value instead of failing the Overview', async () => {
     await insertService('svc_A', 'alpha', sealed('k1'), null);
     await env.DB.prepare(
       "INSERT INTO settings (key, value, updated_at) VALUES ('keyring_kcv', 'not json', 0)",
     ).run();
-    expect((await loadDashboard(deps())).alerts.keyring.ok).toBe(true);
+    expect((await loadAlertData(deps())).keyring.ok).toBe(true);
   });
 });
 
-describe('I-CRED-1: dashboard data never carries stored credential material', () => {
-  it('exposes neither sealed values nor key material in data or banners', async () => {
+describe('I-CRED-1: Overview data never carries stored credential material', () => {
+  it('exposes neither sealed values nor key material in data or alerts', async () => {
     const canary = 'CANARY_SEALED_c2VjcmV0';
     await insertService(
       'svc_A',
@@ -399,8 +493,11 @@ describe('I-CRED-1: dashboard data never carries stored credential material', ()
       status: 403,
       reason: 'no_matching_grant',
     });
-    const data = await loadDashboard(deps());
-    const rendered = JSON.stringify({ data, banners: dashboardBanners(data) });
+    const data = await loadOverview(deps(), '30d');
+    const rendered = JSON.stringify({
+      data: { ...data, accessRequests: [...data.accessRequests] },
+      alerts: overviewAlerts(data.alertData),
+    });
     expect(rendered).not.toContain(canary);
     expect(rendered).not.toContain(KEK);
   });

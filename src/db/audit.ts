@@ -1,7 +1,7 @@
 // Audit log writes and reads (I-AUDIT-1). Every admin mutation adds `auditStatement(...)` to the
 // same db.batch() as the change, so a change without its audit row cannot be committed.
 import type { Deps } from '../deps';
-import { newId } from '../lib/ids';
+import { idLowerBound, newId } from '../lib/ids';
 import { parseJson } from '../lib/json';
 import type { Actor, AuditEvent } from './types';
 
@@ -94,39 +94,77 @@ export function emitAuditLine(event: AuditEvent): void {
   console.info(JSON.stringify({ type: 'audit.event', ...event }));
 }
 
+/** Actions as exact names and `service.`-style prefixes (each prefix is an index range). */
+export interface AuditActionSet {
+  prefixes: readonly string[];
+  exact: readonly string[];
+}
+
 export interface AuditQuery {
   targetType?: string;
   targetId?: string;
-  actor?: string;
+  /** Events by this user id (index audit_log_actor). */
+  actorId?: string;
+  /** Events written by the system (the hourly job). Ignored when actorId is set. */
+  systemActor?: boolean;
+  /** Only these actions (index audit_log_action). An empty set matches nothing. */
+  actions?: AuditActionSet;
+  /** Only events at or after this time (ms); an id bound, like the list order. */
+  since?: number;
   before?: string;
+  /** Keyset pagination towards newer events; wins over `before`. */
+  after?: string;
   limit?: number;
 }
 
+/** The first string after every string that starts with `prefix` ('service.' → 'service/'). */
+export function prefixSuccessor(prefix: string): string {
+  const last = prefix.charCodeAt(prefix.length - 1);
+  return `${prefix.slice(0, -1)}${String.fromCharCode(last + 1)}`;
+}
+
+/** Newest first; with `after`, the oldest `limit` events above it, still newest first. */
 export async function listAuditEvents(db: D1Database, query: AuditQuery): Promise<AuditEvent[]> {
   const where: string[] = [];
   const binds: unknown[] = [];
-  if (query.targetType) {
-    where.push('target_type = ?');
-    binds.push(query.targetType);
+  const add = (sql: string, ...values: unknown[]) => {
+    where.push(sql);
+    binds.push(...values);
+  };
+  if (query.targetType) add('target_type = ?', query.targetType);
+  if (query.targetId) add('target_id = ?', query.targetId);
+  if (query.actorId) add('actor_id = ?', query.actorId);
+  else if (query.systemActor) where.push("actor_type = 'system'");
+  if (query.actions) {
+    const terms = [
+      ...query.actions.prefixes.map((prefix) => {
+        binds.push(prefix, prefixSuccessor(prefix));
+        return '(action >= ? AND action < ?)';
+      }),
+      ...(query.actions.exact.length > 0
+        ? [
+            `action IN (${query.actions.exact
+              .map((action) => {
+                binds.push(action);
+                return '?';
+              })
+              .join(', ')})`,
+          ]
+        : []),
+    ];
+    where.push(terms.length > 0 ? `(${terms.join(' OR ')})` : '0');
   }
-  if (query.targetId) {
-    where.push('target_id = ?');
-    binds.push(query.targetId);
-  }
-  if (query.actor) {
-    where.push('(actor_email = ? OR actor_id = ?)');
-    binds.push(query.actor, query.actor);
-  }
-  if (query.before) {
-    where.push('id < ?');
-    binds.push(query.before);
-  }
-  const sql = `SELECT * FROM audit_log ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`;
+  if (query.since !== undefined) add('id >= ?', idLowerBound('aud', query.since));
+  if (query.after) add('id > ?', query.after);
+  else if (query.before) add('id < ?', query.before);
+  const order = query.after ? 'ASC' : 'DESC';
+  const sql = `SELECT * FROM audit_log ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id ${order} LIMIT ?`;
   const { results } = await db
     .prepare(sql)
     .bind(...binds, query.limit ?? 50)
     .all<Record<string, unknown>>();
-  return results.map(auditFromRow);
+  const events = results.map(auditFromRow);
+  return query.after ? events.reverse() : events;
 }
 
 /** One audit event by id (a primary-key read). */

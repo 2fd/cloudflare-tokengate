@@ -51,3 +51,22 @@ export function relativeTime(ms: number, now: number): string {
         : [Math.floor(abs / 86_400_000), abs < 2 * 86_400_000 ? 'day' : 'days'];
   return diff >= 0 ? `${amount} ${unit} ago` : `in ${amount} ${unit}`;
 }
+
+/** relativeTime under the name the Monitoring views use. */
+export function formatRelative(ms: number, now: number): string {
+  return relativeTime(ms, now);
+}
+
+/** "13 Oct 15:00 UTC": a short UTC time for "since …" lines. */
+export function formatShortTime(ms: number): string {
+  const date = new Date(ms);
+  const month = date.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+  const hh = String(date.getUTCHours()).padStart(2, '0');
+  const mm = String(date.getUTCMinutes()).padStart(2, '0');
+  return `${date.getUTCDate()} ${month} ${hh}:${mm} UTC`;
+}
+
+/** "2026-10-20": the UTC date of `ms`. */
+export function formatDate(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}

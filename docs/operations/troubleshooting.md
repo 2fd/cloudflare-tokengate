@@ -31,7 +31,7 @@ The Cloudflare edge answered before the Worker ran, or the request did not reach
 | 429 with a Cloudflare page | A zone rate limiting rule | Raise its threshold ([zone settings](cloudflare-zone-settings.md#rate-limiting)) |
 | Redirect to `<team>.cloudflareaccess.com` | An Access application covers `/proxy/` | Limit the application to `/admin` ([zone settings](cloudflare-zone-settings.md#cloudflare-access)) |
 | 1xxx error page, DNS or TLS error | The hostname is not routed to the Worker | Check Workers & Pages > tokengate > Settings > Domains & Routes |
-| `404 Not Found` as plain text on `/admin` | The hostname is on `workers.dev` or not in the admin hosts, the request uses http on a hostname that is not a loopback host, or the stored admin hosts are not valid and close `/admin` everywhere ([I-DEPLOY-1](../threat-model.md#i-deploy-1)) | Use a listed hostname over https. Settings > System status lists the admin hosts. If no hostname works, see [lost admin host](break-glass.md#lost-admin-host) |
+| `404 Not Found` as plain text on `/admin` | The hostname is on `workers.dev` or not in the admin hosts, the request uses http on a hostname that is not a loopback host, or the stored admin hosts are not valid and close `/admin` everywhere ([I-DEPLOY-1](../threat-model.md#i-deploy-1)) | Use a listed hostname over https. Monitoring › Overview › Health › All checks lists the admin hosts. If no hostname works, see [lost admin host](break-glass.md#lost-admin-host) |
 
 ## Caller errors
 
@@ -58,7 +58,7 @@ The Cloudflare edge answered before the Worker ran, or the request did not reach
 | `credential_unavailable`, `credential_missing` | The service has no credential | Set it on the service page. If the service had one, check the base URL and injection out of band first ([why](incident-response.md#a-service-destination-was-changed-outside-the-admin-ui)) |
 | `credential_unavailable`, `keyring_missing_key` | The credential was sealed with a key id that is no longer in the keyring | Add the key back ([key rotation](key-rotation.md#remove-the-old-key)) |
 | `credential_unavailable` on every service with a credential, after a change of `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` or `AUTH_ACCESS_DEVELOPMENT` | The keyring is bound to these variables ([I-CRED-3](../threat-model.md#i-cred-3)). Any change, also `acme` to `acme.cloudflareaccess.com` or a change of email case, changes the keys. Settings shows every key check value as changed | Restore the earlier values exactly. If you cannot, enter every credential again ([login binding](../configuration.md#login-binding)) |
-| `credential_unavailable`, `credential_binding_mismatch` | The key behind the key id changed, the login variables changed ([I-CRED-3](../threat-model.md#i-cred-3)), or the service row was edited in D1 ([I-CRED-2](../threat-model.md#i-cred-2)) | If the dashboard shows the changed-key banner: [recover the key](key-rotation.md#recover-from-a-replaced-key). Else treat it as tampering: [check the destination out of band](incident-response.md#a-service-destination-was-changed-outside-the-admin-ui) before you enter the credential again |
+| `credential_unavailable`, `credential_binding_mismatch` | The key behind the key id changed, the login variables changed ([I-CRED-3](../threat-model.md#i-cred-3)), or the service row was edited in D1 ([I-CRED-2](../threat-model.md#i-cred-2)) | If the Overview shows the changed-key alert: [recover the key](key-rotation.md#recover-from-a-replaced-key). Else treat it as tampering: [check the destination out of band](incident-response.md#a-service-destination-was-changed-outside-the-admin-ui) before you enter the credential again |
 | `credential_unavailable`, `sealed_malformed`, `injection_invalid`, `credential_invalid` | Stored data is damaged or invalid, possibly by an edit in D1 | Check the base URL and injection against an out-of-band source, then enter the credential again under "Change credential or destination" ([why](incident-response.md#a-service-destination-was-changed-outside-the-admin-ui)) |
 | `not_configured`, `keyring_absent`, `keyring_malformed`, `active_kid_missing`, `key_not_32_bytes`, `both_kek_and_keyring_set` | The keyring secret is missing or invalid | Settings > Encryption keys names the problem ([key rotation](key-rotation.md)) |
 | `not_configured`, `dev_placeholder_key` | The keyring holds the public development key from `.dev.vars.example`, and an Access variable is set or `AUTH_ACCESS_DEVELOPMENT` is not set | Generate a key of your own and set it as `TOKENGATE_KEK` ([development key](../configuration.md#development-key)) |
@@ -76,7 +76,7 @@ status and body come from the upstream.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| 401 or 403 on every call; dashboard banner "Upstream rejected the credential" | The credential was revoked, expired or lacks a scope | [Rotate the credential](credential-rotation.md) |
+| 401 or 403 on every call; Overview alert "The upstream rejected token …" | The credential was revoked, expired or lacks a scope | [Rotate the credential](credential-rotation.md) |
 | 404 from the upstream | Wrong path under the base URL, or the token lacks access to the resource | Compare the path with the upstream API docs; the gateway appends the path to the base URL |
 | `x-tokengate-redirect-blocked: 1` | The upstream redirected outside the base URL; the gateway dropped the `Location` ([I-REDIR-1](../threat-model.md#i-redir-1)) | Call the final URL directly, if a service covers it |
 | A header is missing; `x-tokengate-redacted` lists it | The header contained the credential and was dropped ([I-RESP-1](../threat-model.md#i-resp-1)) | Expected |
@@ -102,11 +102,11 @@ status and body come from the upstream.
 | "Your role does not allow this action." | The role lacks the permission ([I-RBAC-1](../threat-model.md#i-rbac-1)) | Ask an owner |
 | "nothing was saved: your access or your role changed while the request ran; reload the page" (409) | While the request ran, your user was suspended or its login reset, or your role lost the permission ([I-SESS-1](../threat-model.md#i-sess-1)) | Reload the page. If your role changed or you lost access, ask an owner |
 | Owner cannot be suspended or demoted | Last active owner ([I-OWNER-1](../threat-model.md#i-owner-1)) | Invite and activate a second owner first |
-| Dashboard: "Database ... is missing migration" | Code deployed without `pnpm run deploy` | `pnpm wrangler d1 migrations apply DB --remote` and `pnpm wrangler d1 migrations apply TELEMETRY_DB --remote` ([upgrades](upgrades.md)) |
-| Dashboard: "The hourly maintenance job has not run yet." | First hour after deploy | Wait for the run at 7 minutes past the hour |
-| Dashboard: "The hourly maintenance job failed at ...: `<step>`: ..." | A step (`rollup`, `purge`, `credential_expiry`, `heartbeat`) threw | Read the message and the `cron.failed` log line; `/readyz` reports `cron: false` |
-| Dashboard: last success more than 2 hours ago | The cron trigger was removed, or every run fails before it records an error | Check that `triggers.crons` in `wrangler.jsonc` is `["7 * * * *"]`, run `pnpm run deploy`, and read the `cron.failed` log lines |
-| Dashboard totals too low after a `TELEMETRY_DB` outage, missed cron runs or a dead-letter queue replay | The rollup catch-up is still running (at most 24 hours per run), or "Maximum request log rows" or retention deleted rows before they were rolled up | Wait for the next runs, or [recompute rollups manually](../observability.md#recompute-rollups-manually). Purged rows cannot be counted again |
+| Overview or health strip: "Database ... is missing migration" | Code deployed without `pnpm run deploy` | `pnpm wrangler d1 migrations apply DB --remote` and `pnpm wrangler d1 migrations apply TELEMETRY_DB --remote` ([upgrades](upgrades.md)) |
+| Overview: "The hourly job has not run yet; it starts within the hour." | First hour after deploy | Wait for the run at 7 minutes past the hour |
+| Overview: "The hourly job failed at ...: `<step>`: ..." | A step (`rollup`, `purge`, `credential_expiry`, `heartbeat`) threw | Read the message and the `cron.failed` log line; `/readyz` reports `cron: false` |
+| Overview: "The hourly job last succeeded … ago" | The cron trigger was removed, or every run fails before it records an error | Check that `triggers.crons` in `wrangler.jsonc` is `["7 * * * *"]`, run `pnpm run deploy`, and read the `cron.failed` log lines |
+| Overview totals too low after a `TELEMETRY_DB` outage, missed cron runs or a dead-letter queue replay | The rollup catch-up is still running (at most 24 hours per run), or "Maximum request log rows" or retention deleted rows before they were rolled up | Wait for the next runs, or [recompute rollups manually](../observability.md#recompute-rollups-manually). Purged rows cannot be counted again |
 | Settings: "Key ... is not the key that encrypted its credentials" | The key behind a key id changed, or the `AUTH_ACCESS_*` variables changed ([I-CRED-3](../threat-model.md#i-cred-3)) | [Recover a replaced key](key-rotation.md#recover-from-a-replaced-key), or restore the earlier login variables |
 | Saving a credential fails with a credential check error | The check request failed with the new credential | Fix the credential, or select "Save the credential even though the check failed" |
 
@@ -114,7 +114,7 @@ status and body come from the upstream.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Allowed calls are missing | "Share of allowed requests to record" is below 1 | Expected; dashboard counts are scaled up |
+| Allowed calls are missing | "Share of allowed requests to record" is below 1 | Expected; Overview counts are scaled up |
 | Anonymous or pre-trust failures are missing | Pre-trust budget of 10 per minute per isolate; `telemetry.pretrust_records_dropped` in the logs | Expected ([observability](../observability.md#pre-trust-records)) |
 | Records appear up to 30 seconds late | `REQUEST_LOG_QUEUE` batches records before writing them | Expected |
 | No records at all; `telemetry.sink_failed` with `request_log_insert_failed` | `TELEMETRY_DB` is unavailable, full or missing its migration | `pnpm wrangler d1 info tokengate-telemetry`; apply migrations; lower retention or "Maximum request log rows" |
@@ -127,7 +127,7 @@ status and body come from the upstream.
 - The request id and the full response headers.
 - The record from `/admin/requests/<request-id>`, including the policy trace. It holds only allowlisted
   claims, never tokens or credentials ([I-LOG-1](../threat-model.md#i-log-1)).
-- `/readyz` output and the dashboard banners.
+- `/readyz` output and the alerts of the Overview health panel.
 - The code version: `git describe --tags` in your clone.
 
 Report suspected vulnerabilities privately ([SECURITY.md](../../SECURITY.md)), not in a public issue.

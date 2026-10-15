@@ -1,5 +1,6 @@
 // request_log reads and writes (TELEMETRY_DB). Inserts are INSERT OR IGNORE keyed by the request
 // id, so queue redelivery and the queue-to-direct fallback never duplicate a record.
+import { idLowerBound } from '../lib/ids';
 import { type Outcome, REQUEST_RECORD_COLUMNS, type RequestRecord } from '../telemetry/types';
 
 /** D1 allows at most 100 bound parameters per statement. */
@@ -26,15 +27,35 @@ export function insertRequestRecordsStatements(
   return statements;
 }
 
+/** The outcome classes of the Monitoring pages; `error` uses the same definition as trafficStats. */
+export type OutcomeClass = 'allowed' | 'denied' | 'error';
+
 export interface RequestFilter {
-  service_id?: string;
+  /** A token id; null for requests refused before a token was resolved. */
+  service_id?: string | null;
+  /** A consumer id; null for requests with no resolved consumer. */
+  caller_provider_id?: string | null;
+  grant_id?: string;
+  /** Exact stored outcome. */
   outcome?: Outcome;
+  /**
+   * allowed: outcome allowed. denied: outcome denied. error: gateway errors plus allowed
+   * requests answered with 5xx (the Overview "Errors" count). Denied and error use the partial
+   * index request_log_problems.
+   */
+  outcomeClass?: OutcomeClass;
+  /** Exact recorded reason code. */
+  reason?: string;
   /** Exact caller_repository. */
   repository?: string;
   /** Exact service_slug. */
   slug?: string;
+  /** Only requests at or after this time (ms); an id bound, so the primary key serves it. */
+  since?: number;
   /** Keyset pagination: only ids lower (older) than this. */
   before?: string;
+  /** Keyset pagination: only ids higher (newer) than this; wins over `before`. */
+  after?: string;
   /** Page size, 1..200 (default 50). */
   limit?: number;
 }
@@ -42,20 +63,22 @@ export interface RequestFilter {
 export const DEFAULT_REQUEST_PAGE_SIZE = 50;
 const MAX_REQUEST_PAGE_SIZE = 200;
 /**
- * Rows one filtered page may examine when no index serves the filter (outcome, service slug, or
- * service and repository together). Bounds the D1 rows read per page load to about twice this,
+ * Rows one filtered page may examine when no index serves the filter (requestFilterIndexed: the
+ * allowed class, consumer, reason, slug, or any two filters together). Bounds the D1 rows read per page load to about twice this,
  * whatever the table size.
  */
 export const REQUEST_SCAN_ROWS = 10_000;
 
 export interface RequestPage {
-  /** Newest first. */
+  /** Newest first, at most `limit`. With `after`, the oldest `limit` rows above it. */
   records: RequestRecord[];
   /**
    * Set when the scan window ended before the page filled: older matches may exist below this
    * id. Pass it as `before` to search the next window.
    */
   olderBefore: string | null;
+  /** The same for `after`: newer matches may exist above this id. Pass it as `after`. */
+  newerAfter: string | null;
 }
 
 /** Newest first. Filters no index serves examine at most REQUEST_SCAN_ROWS rows (see searchRequests). */
@@ -66,10 +89,40 @@ export async function listRequests(
   return (await searchRequests(db, filter)).records;
 }
 
+/** The WHERE term of the partial index request_log_problems, repeated literally so it is used. */
+export const PROBLEMS_TERM = "(outcome <> 'allowed' OR status >= 500)";
+
 /**
- * One page of request records, newest first. The service and repository filters use their
- * indexes; any other filter is applied within a window of the REQUEST_SCAN_ROWS newest rows below
- * `before`, so a filter that matches nothing cannot walk the whole table.
+ * True when one index serves the whole filter: the token, the repository or the consumer access
+ * on its own (each has an `(x, id)` index), or the denied or error class (request_log_problems).
+ * Time bounds and keyset cursors are id ranges and keep a filter indexed.
+ */
+export function requestFilterIndexed(filter: RequestFilter): boolean {
+  const terms = [
+    filter.service_id !== undefined,
+    filter.caller_provider_id !== undefined,
+    filter.grant_id !== undefined,
+    filter.outcome !== undefined,
+    filter.outcomeClass !== undefined,
+    filter.reason !== undefined,
+    filter.repository !== undefined,
+    filter.slug !== undefined,
+  ].filter(Boolean).length;
+  if (terms === 0) return true;
+  if (terms > 1) return false;
+  return (
+    filter.service_id !== undefined ||
+    filter.repository !== undefined ||
+    filter.grant_id !== undefined ||
+    filter.outcomeClass === 'denied' ||
+    filter.outcomeClass === 'error'
+  );
+}
+
+/**
+ * One page of request records, newest first. Filters an index serves read only matching rows;
+ * any other filter is applied within a window of the REQUEST_SCAN_ROWS rows next to the cursor
+ * (below `before`, or above `after`), so a filter that matches nothing cannot walk the whole table.
  */
 export async function searchRequests(
   db: D1Database,
@@ -77,42 +130,65 @@ export async function searchRequests(
 ): Promise<RequestPage> {
   const where: string[] = [];
   const binds: unknown[] = [];
-  const add = (sql: string, value: unknown) => {
+  const add = (sql: string, ...values: unknown[]) => {
     where.push(sql);
-    binds.push(value);
+    binds.push(...values);
   };
-  if (filter.service_id) add('service_id = ?', filter.service_id);
+  if (filter.service_id === null) where.push('service_id IS NULL');
+  else if (filter.service_id !== undefined) add('service_id = ?', filter.service_id);
+  if (filter.caller_provider_id === null) where.push('caller_provider_id IS NULL');
+  else if (filter.caller_provider_id !== undefined) {
+    add('caller_provider_id = ?', filter.caller_provider_id);
+  }
+  if (filter.grant_id !== undefined) add('grant_id = ?', filter.grant_id);
   if (filter.outcome) add('outcome = ?', filter.outcome);
-  if (filter.repository) add('caller_repository = ?', filter.repository);
-  if (filter.slug) add('service_slug = ?', filter.slug);
-  if (filter.before) add('id < ?', filter.before);
+  if (filter.outcomeClass === 'allowed') where.push("outcome = 'allowed'");
+  if (filter.outcomeClass === 'denied') where.push(PROBLEMS_TERM, "outcome = 'denied'");
+  if (filter.outcomeClass === 'error') {
+    where.push(PROBLEMS_TERM, "(outcome = 'error' OR (outcome = 'allowed' AND status >= 500))");
+  }
+  if (filter.reason !== undefined) add('reason = ?', filter.reason);
+  if (filter.repository !== undefined) add('caller_repository = ?', filter.repository);
+  if (filter.slug !== undefined) add('service_slug = ?', filter.slug);
+  const sinceId = filter.since === undefined ? null : idLowerBound('req', filter.since);
+  if (sinceId !== null) add('id >= ?', sinceId);
+  const after = filter.after;
+  if (after) add('id > ?', after);
+  else if (filter.before) add('id < ?', filter.before);
   const requested = Number.isFinite(filter.limit) ? Math.floor(filter.limit as number) : NaN;
   const limit = Number.isNaN(requested)
     ? DEFAULT_REQUEST_PAGE_SIZE
     : Math.min(MAX_REQUEST_PAGE_SIZE, Math.max(1, requested));
 
-  const unindexed = Boolean(
-    filter.outcome || filter.slug || (filter.service_id && filter.repository),
-  );
-  let floor: string | null = null;
-  if (unindexed) {
-    // Primary-key walk of at most REQUEST_SCAN_ROWS entries; null when fewer rows remain.
+  // Primary-key walk of at most REQUEST_SCAN_ROWS entries from the cursor; null when fewer remain.
+  let bound: string | null = null;
+  if (!requestFilterIndexed(filter)) {
+    const cursor = after ? 'id > ?' : filter.before ? 'id < ?' : null;
     const row = await db
       .prepare(
-        `SELECT id FROM request_log ${filter.before ? 'WHERE id < ?' : ''} ORDER BY id DESC LIMIT 1 OFFSET ?`,
+        `SELECT id FROM request_log ${cursor ? `WHERE ${cursor}` : ''}
+         ORDER BY id ${after ? 'ASC' : 'DESC'} LIMIT 1 OFFSET ?`,
       )
-      .bind(...(filter.before ? [filter.before] : []), REQUEST_SCAN_ROWS - 1)
+      .bind(...(cursor ? [after || filter.before] : []), REQUEST_SCAN_ROWS - 1)
       .first<{ id: string }>();
-    floor = row?.id ?? null;
-    if (floor !== null) add('id >= ?', floor);
+    bound = row?.id ?? null;
+    if (bound !== null) add(after ? 'id <= ?' : 'id >= ?', bound);
   }
-  const sql = `SELECT * FROM request_log ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id DESC LIMIT ?`;
+  const sql = `SELECT * FROM request_log ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY id ${after ? 'ASC' : 'DESC'} LIMIT ?`;
   const { results } = await db
     .prepare(sql)
     .bind(...binds, limit)
     .all<Record<string, unknown>>();
   const records = results.map(requestFromRow);
-  return { records, olderBefore: floor !== null && records.length < limit ? floor : null };
+  if (after) records.reverse();
+  const short = bound !== null && records.length < limit;
+  return {
+    records,
+    // A window that ends below the time bound already covered the whole range.
+    olderBefore:
+      !after && short && (sinceId === null || (bound !== null && bound > sinceId)) ? bound : null,
+    newerAfter: after && short ? bound : null,
+  };
 }
 
 export async function getRequest(db: D1Database, id: string): Promise<RequestRecord | null> {

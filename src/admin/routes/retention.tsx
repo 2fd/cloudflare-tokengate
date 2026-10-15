@@ -1,9 +1,16 @@
-// Admin page: data retention (Monitoring). Retention periods, the allowed-request sample rate and
-// the request log row cap. Owners edit them (settings:write); everyone else sees the values.
+// Monitoring › Data retention (`/admin/retention`): how long request records, hourly summaries and
+// the audit log are kept, the share of allowed requests recorded, and the request record cap.
+// Owners edit them (settings:write); everyone else sees the same groups as a list. Every value is
+// prefilled and the numbers have suggestion lists; the sample rate is a pick from presets.
+import type { Child } from 'hono/jsx';
 import type { App } from '../../app';
+import { HOUR_MS, outcomeTotalsStatement } from '../../db/rollups';
 import { getSettings, SETTING_BOUNDS, type Settings } from '../../db/settings';
-import { can } from '../auth/rbac';
+import { ROWS_ESTIMATE_SQL } from '../../telemetry/retention';
+import { hourStart } from '../../telemetry/rollup';
+import { type NoticeTable, resolveNotice } from '../notice';
 import { EDITABLE_SETTINGS, SETTING_LABELS, updateSettings } from '../ops/settings';
+import type { FieldError } from '../ops/shared';
 import { paths } from '../paths';
 import {
   type AdminContext,
@@ -12,35 +19,57 @@ import {
   formData,
   redirectWithNotice,
   renderPage,
+  type ViewContext,
 } from '../render';
-import { Csrf, Details, Messages } from '../views/legacy';
+import { AskSomeone, Details, Field, PostForm, RadioCards } from '../views/components';
+import { formatCount, formatPercent } from '../views/format';
+import { FindRequestForm } from '../views/monitoring';
 
 const PAGE = paths.retention();
 
-const NOTICES = {
-  saved: 'Settings saved. The hourly maintenance job applies retention changes on its next run.',
-  unchanged: 'Nothing changed: the submitted values are the current ones.',
-} as const;
-type NoticeKey = keyof typeof NOTICES;
-
-const SETTING_HINTS: Record<keyof Settings, string> = {
-  request_log_retention_days:
-    'How long each proxied request record is kept before the hourly job deletes it.',
-  audit_log_retention_days: 'How long the record of admin changes (the audit log) is kept.',
-  rollup_retention_days:
-    'How long the hourly traffic totals behind the dashboard charts are kept. They are small; keep them longer than the request log.',
-  allowed_sample_rate:
-    'A number from 0 to 1. 1 records every allowed request; 0.1 records about one in ten (dashboard counts are scaled up). Denied requests and errors are always recorded. On the Workers Free plan, use 0 to stay within the daily database write limit.',
-  request_log_max_rows:
-    'Soft upper limit on stored request records, checked every hour. When exceeded, the oldest records are deleted first, even if newer than the retention period. The last few hours are kept for the rollups, so the table can exceed this by a few hours of traffic.',
+const NOTICES: NoticeTable = {
+  saved: () => ({
+    text: 'Settings saved. The hourly maintenance job applies retention changes on its next run.',
+  }),
+  unchanged: () => ({ text: 'Nothing changed: the submitted values are the current ones.' }),
 };
+
+/** Suggestions of the number fields (a pick instead of typing). */
+const SUGGESTIONS: Partial<Record<keyof Settings, number[]>> = {
+  request_log_retention_days: [7, 14, 30, 90, 180, 365],
+  request_log_max_rows: [100_000, 1_000_000, 5_000_000, 20_000_000],
+  rollup_retention_days: [30, 90, 400, 730],
+  audit_log_retention_days: [90, 365, 730, 1825],
+};
+
+const SAMPLE_PRESETS: ReadonlyArray<{ value: number; title: string; description?: string }> = [
+  { value: 1, title: '100 % (all)' },
+  { value: 0.5, title: '50 %' },
+  { value: 0.1, title: '10 %' },
+  { value: 0.01, title: '1 %' },
+  { value: 0, title: '0 % (none)', description: 'Recommended on the Workers Free plan.' },
+];
+
+const GROUPS: ReadonlyArray<{ legend: string; keys: ReadonlyArray<keyof Settings> }> = [
+  {
+    legend: 'Request records',
+    keys: ['request_log_retention_days', 'allowed_sample_rate', 'request_log_max_rows'],
+  },
+  { legend: 'Hourly summaries', keys: ['rollup_retention_days'] },
+  { legend: 'Audit log', keys: ['audit_log_retention_days'] },
+];
 
 type SettingValues = Partial<Record<keyof Settings, string>>;
 
+interface Usage {
+  /** Upper estimate of the stored request records. */
+  stored: number | null;
+  /** Records a day kept in the last 7 days at the current sample rate. */
+  perDay: number | null;
+}
+
 export function registerRetentionRoutes(app: App): void {
-  app.get('/admin/retention', (c) =>
-    retentionPage(c, { notice: noticeKey(c.req.query('notice')) }),
-  );
+  app.get('/admin/retention', (c) => retentionPage(c, { notice: c.req.query('notice') }));
 
   app.post('/admin/retention', async (c) => {
     const form = await formData(c);
@@ -54,8 +83,11 @@ export function registerRetentionRoutes(app: App): void {
     }
     const result = await updateSettings(c.get('deps'), adminActor(c), input);
     if (!result.ok) {
-      const status = result.reason === 'conflict' ? 409 : 400;
-      return retentionPage(c, { errors: result.errors, submitted, status });
+      return retentionPage(c, {
+        errors: result.fieldErrors ?? result.errors.map((message) => ({ field: null, message })),
+        submitted,
+        status: result.reason === 'conflict' ? 409 : 400,
+      });
     }
     return redirectWithNotice(c, PAGE, result.changed.length > 0 ? 'saved' : 'unchanged');
   });
@@ -64,77 +96,211 @@ export function registerRetentionRoutes(app: App): void {
 async function retentionPage(
   c: AdminContext,
   options: {
-    notice?: NoticeKey | null;
-    errors?: string[];
+    notice?: string;
+    errors?: FieldError[];
     submitted?: SettingValues;
     status?: 400 | 409;
   },
 ) {
   const deps = c.get('deps');
-  const viewer = c.get('viewer');
-  const settings = await getSettings(deps.env.DB);
+  const telemetry = deps.env.TELEMETRY_DB;
+  const now = deps.now();
+  const [settings, usage] = await Promise.all([
+    getSettings(deps.env.DB),
+    telemetry
+      .batch([
+        telemetry.prepare(ROWS_ESTIMATE_SQL),
+        outcomeTotalsStatement(telemetry, hourStart(now) - 7 * 24 * HOUR_MS),
+      ])
+      .then(([stored, totals]) => {
+        const row = (totals?.results[0] ?? {}) as { allowed?: number; other?: number };
+        return {
+          stored: Number((stored?.results[0] as { n?: number } | undefined)?.n ?? 0),
+          allowed: Number(row.allowed ?? 0),
+          other: Number(row.other ?? 0),
+        };
+      })
+      .catch(() => null),
+  ]);
+  // Rollups count requests (weights undo sampling), so the records kept are the denied and error
+  // ones plus the allowed ones at the current sample rate.
+  const kept: Usage = usage
+    ? {
+        stored: usage.stored,
+        perDay: (usage.other + usage.allowed * settings.allowed_sample_rate) / 7,
+      }
+    : { stored: null, perDay: null };
   return renderPage(
     c,
     {
       title: 'Data retention',
       section: 'monitoring',
       subsection: 'retention',
-      notice: options.notice ? { text: NOTICES[options.notice] } : null,
+      notice: resolveNotice(NOTICES, options.notice, null),
+      errors: options.errors,
       status: options.status,
+      subnavExtra: <FindRequestForm />,
     },
-    () => (
+    (ctx) => (
       <>
-        <Messages errors={options.errors} />
-        {can(viewer.user.role, 'settings:write') ? (
-          <SettingsForm csrf={viewer.csrfToken} settings={settings} submitted={options.submitted} />
+        <p>
+          How long the gateway keeps what it records, and how much of it. The hourly maintenance job
+          deletes older data.
+        </p>
+        <UsageLine usage={kept} />
+        {ctx.can('settings:write') ? (
+          <SettingsForm
+            ctx={ctx}
+            settings={settings}
+            submitted={options.submitted}
+            errors={options.errors ?? []}
+            usage={kept}
+          />
         ) : (
-          <>
-            <Details
-              rows={EDITABLE_SETTINGS.map((key) => [SETTING_LABELS[key], String(settings[key])])}
-            />
-            <p class="muted">Only owners can change these settings.</p>
-          </>
+          <ReadOnly ctx={ctx} settings={settings} />
         )}
       </>
     ),
   );
 }
 
-function SettingsForm(props: { csrf: string; settings: Settings; submitted?: SettingValues }) {
+function UsageLine(props: { usage: Usage }) {
+  const { usage } = props;
+  if (usage.stored === null) return <p class="muted">The request log could not be read.</p>;
+  const perDay = usage.perDay;
   return (
-    <form method="post" action={PAGE} class="stack">
-      <Csrf token={props.csrf} />
-      {EDITABLE_SETTINGS.map((key) => {
-        const { min, max } = SETTING_BOUNDS[key];
-        const value = props.submitted?.[key] ?? String(props.settings[key]);
-        const fraction = key === 'allowed_sample_rate';
-        return (
-          <label class="field">
-            <span>{SETTING_LABELS[key]}</span>
-            <input
-              type="number"
-              name={key}
-              value={value}
-              min={min}
-              max={max}
-              step={fraction ? 'any' : 1}
-              required
-            />
-            <small>
-              {SETTING_HINTS[key]} Allowed: {min} to {max}.
-            </small>
-          </label>
-        );
-      })}
-      <div class="actions">
-        <button type="submit">Save settings</button>
-      </div>
-    </form>
+    <p>
+      Stored now: up to about {compact(usage.stored)} records (upper estimate).
+      {perDay !== null
+        ? ` Last 7 days: about ${compact(perDay)} records a day kept after sampling.`
+        : ''}
+    </p>
   );
 }
 
-function noticeKey(raw: string | undefined): NoticeKey | null {
-  return raw !== undefined && Object.hasOwn(NOTICES, raw) ? (raw as NoticeKey) : null;
+/** 1.2 M, 85 k, 312: rounded counts for estimates. */
+function compact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')} M`;
+  if (n >= 10_000) return `${Math.round(n / 1000)} k`;
+  return formatCount(n);
+}
+
+function sampleText(rate: number): string {
+  const preset = SAMPLE_PRESETS.find((p) => p.value === rate);
+  return preset ? preset.title : formatPercent(rate);
+}
+
+function hintFor(key: keyof Settings, settings: Settings, usage: Usage): Child {
+  switch (key) {
+    case 'request_log_retention_days':
+      return 'How long request records are kept. 1 to 3650 days. Older records are deleted every hour.';
+    case 'allowed_sample_rate':
+      return "Denied and error records are always kept. Below 100 %, counts are estimates. At 0 %, 'last used' is not available.";
+    case 'request_log_max_rows': {
+      const perDay = usage.perDay;
+      const base =
+        '10,000 to 50,000,000. Upper limit on stored request records, checked every hour.';
+      if (perDay === null || perDay <= 0) return base;
+      const days = settings.request_log_retention_days;
+      return `${base} At last week's rate (about ${formatCount(perDay)} a day), ${days} days needs about ${formatCount(perDay * days)} rows.`;
+    }
+    case 'rollup_retention_days':
+      return "Hourly summaries for the Overview and 'last used'. 30 to 3650 days, and at least as long as the request record retention.";
+    case 'audit_log_retention_days':
+      return '90 to 3650 days. The 90-day floor protects the audit trail.';
+  }
+}
+
+function SettingsForm(props: {
+  ctx: ViewContext;
+  settings: Settings;
+  submitted?: SettingValues;
+  errors: FieldError[];
+  usage: Usage;
+}) {
+  const { settings } = props;
+  const error = (key: string) => props.errors.find((e) => e.field === key)?.message ?? null;
+  const value = (key: keyof Settings) => props.submitted?.[key] ?? String(settings[key]);
+  return (
+    <PostForm action={PAGE} csrf={props.ctx.csrf} class="stack">
+      {GROUPS.map((group) => (
+        <fieldset>
+          <legend>{group.legend}</legend>
+          {group.keys.map((key) => {
+            if (key === 'allowed_sample_rate') {
+              const current = settings.allowed_sample_rate;
+              const chosen = value(key);
+              const presets = SAMPLE_PRESETS.some((p) => p.value === current)
+                ? SAMPLE_PRESETS
+                : [...SAMPLE_PRESETS, { value: current, title: formatPercent(current) }];
+              return (
+                <RadioCards
+                  name={key}
+                  legend={SETTING_LABELS[key]}
+                  value={chosen}
+                  hint={hintFor(key, settings, props.usage)}
+                  error={error(key)}
+                  options={presets.map((preset) => ({
+                    value: String(preset.value),
+                    title: preset.value === current ? `${preset.title} (current)` : preset.title,
+                    ...('description' in preset && preset.description
+                      ? { description: preset.description }
+                      : {}),
+                  }))}
+                />
+              );
+            }
+            const { min, max } = SETTING_BOUNDS[key];
+            return (
+              <Field
+                name={key}
+                type="number"
+                label={SETTING_LABELS[key]}
+                value={value(key)}
+                example={String(settings[key])}
+                hint={hintFor(key, settings, props.usage)}
+                error={error(key)}
+                inputmode="numeric"
+                step={1}
+                min={min}
+                max={max}
+                required
+                autocomplete="off"
+                suggestions={(SUGGESTIONS[key] ?? []).map((n) => ({ value: String(n) }))}
+              />
+            );
+          })}
+        </fieldset>
+      ))}
+      <div class="actions">
+        <button type="submit" class="primary">
+          Save
+        </button>
+      </div>
+    </PostForm>
+  );
+}
+
+function ReadOnly(props: { ctx: ViewContext; settings: Settings }) {
+  const { settings } = props;
+  return (
+    <>
+      {GROUPS.map((group) => (
+        <section aria-labelledby={`g-${group.legend.replace(/\s+/g, '-').toLowerCase()}`}>
+          <h2 id={`g-${group.legend.replace(/\s+/g, '-').toLowerCase()}`}>{group.legend}</h2>
+          <Details
+            rows={group.keys.map((key) => [
+              SETTING_LABELS[key],
+              key === 'allowed_sample_rate'
+                ? sampleText(settings[key])
+                : formatCount(settings[key]),
+            ])}
+          />
+        </section>
+      ))}
+      <AskSomeone permission="settings:write" ctx={props.ctx} verb="change these settings" />
+    </>
+  );
 }
 
 function text(form: FormFields, name: string): string | undefined {

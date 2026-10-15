@@ -48,7 +48,9 @@ describe('GET /admin/retention', () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('<title>Data retention – Monitoring – tokengate</title>');
-    expect(html).toContain('Only owners can change these settings.');
+    expect(html).toContain('Ask an owner to change these settings');
+    expect(html).toContain('<dt>Request log retention (days)</dt><dd>14</dd>');
+    expect(html).toContain('<dt>Share of allowed requests to record</dt><dd>100 % (all)</dd>');
     expect(html).not.toContain('name="request_log_retention_days"');
   });
 
@@ -62,7 +64,21 @@ describe('GET /admin/retention', () => {
     expect(html).toContain('action="/admin/retention"');
     expect(html).toContain('name="audit_log_retention_days"');
     expect(html).toContain('min="90"');
-    expect(html).toContain('Soft upper limit on stored request records, checked every hour.');
+    expect(html).toContain('Upper limit on stored request records, checked every hour.');
+    for (const legend of ['Request records', 'Hourly summaries', 'Audit log']) {
+      expect(html).toContain(`<legend>${legend}</legend>`);
+    }
+    // Numbers are prefilled, bounded and have a suggestion list.
+    expect(html).toMatch(
+      /<input id="f-request_log_retention_days" name="request_log_retention_days" type="number" value="14" placeholder="14" required="" min="1" max="3650" step="1" inputmode="numeric" autocomplete="off" list="f-request_log_retention_days-list"/,
+    );
+    expect(html).toContain('<option value="30">30</option>');
+    // The sample rate is a pick, the current value marked.
+    expect(html).toContain(
+      'type="radio" id="f-allowed_sample_rate" name="allowed_sample_rate" value="1" checked=""',
+    );
+    expect(html).toContain('100 % (all) (current)');
+    expect(html).toContain('Stored now: up to about 0 records (upper estimate).');
   });
 });
 
@@ -136,5 +152,54 @@ describe('POST /admin/retention', () => {
     });
     expect(res.status).toBe(400);
     expect(await res.text()).toContain('must be a whole number');
+  });
+});
+
+describe('Data retention form details', () => {
+  it('offers a stored non-preset sample rate as its own "(current)" choice', async () => {
+    await env.DB.prepare(
+      "INSERT INTO settings (key, value, updated_at) VALUES ('allowed_sample_rate', '0.25', 0)",
+    ).run();
+    const html = await (await adminGet(app, await sessionFor('owner'), '/admin/retention')).text();
+    expect(html).toContain('value="0.25" checked=""');
+    expect(html).toContain('25.0% (current)');
+  });
+
+  it('refuses summaries kept for less time than request records, at the field', async () => {
+    const res = await adminPost(app, await sessionFor('owner'), '/admin/retention', {
+      request_log_retention_days: '60',
+      rollup_retention_days: '30',
+    });
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    expect(html).toContain('<title>Error: Data retention – Monitoring – tokengate</title>');
+    expect(html).toContain(
+      '<a href="#f-rollup_retention_days">Traffic summary retention (days) must be at least the request record retention (60 days). Enter 60 or more.</a>',
+    );
+    expect(html).toMatch(/id="f-rollup_retention_days"[^>]*aria-invalid="true"/);
+    expect(await auditActions()).toEqual([]);
+  });
+
+  it('shows the per-field bound errors next to their field', async () => {
+    const res = await adminPost(app, await sessionFor('owner'), '/admin/retention', {
+      audit_log_retention_days: '10',
+    });
+    const html = await res.text();
+    expect(html).toContain('id="f-audit_log_retention_days-error"');
+  });
+
+  it("suggests a row cap from last week's traffic", async () => {
+    const hour = T0 - 2 * 3_600_000;
+    await env.TELEMETRY_DB.prepare('DELETE FROM request_rollup_hourly').run();
+    await env.TELEMETRY_DB.prepare(
+      `INSERT INTO request_rollup_hourly (hour, service_id, grant_id, outcome, status_class, requests, upstream_auth_fail, duration_sum_ms)
+       VALUES (?, 'svc_A', 'grt_A', 'allowed', 2, 70000, 0, 0), (?, 'svc_A', '', 'denied', 4, 700, 0, 0)`,
+    )
+      .bind(hour, hour)
+      .run();
+    const html = await (await adminGet(app, await sessionFor('owner'), '/admin/retention')).text();
+    expect(html).toContain('Last 7 days: about 10 k records a day kept after sampling.');
+    expect(html).toContain('rate (about 10,100 a day), 14 days needs about 141,400 rows.');
+    await env.TELEMETRY_DB.prepare('DELETE FROM request_rollup_hourly').run();
   });
 });

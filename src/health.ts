@@ -2,6 +2,7 @@
 // cron checks the admin dashboard reuses. /readyz is unauthenticated: it returns booleans only
 // (no kids, counts or errors) and caches its answer briefly so it cannot be used to load D1.
 import type { App } from './app';
+import type { Config, ConfigFeature } from './config';
 import { type KeyringError, type LoadKeyringResult, loadKeyring } from './crypto/keyring';
 import { schemaStatus } from './db/migrations';
 import type { Deps } from './deps';
@@ -208,4 +209,48 @@ export async function cronHealth(deps: Pick<Deps, 'env' | 'now'>): Promise<CronH
     value: string;
   }>();
   return cronHealthFrom(results, deps.now());
+}
+
+/**
+ * The sealed kid of every token with a stored credential (the CASE of sealedKidCountsStatement),
+ * so alerts can name the affected tokens. `kid` is NULL for a value that is not sealed JSON.
+ */
+export function sealedKidByServiceStatement(db: D1Database): D1PreparedStatement {
+  return db.prepare(
+    `SELECT id, slug, name, CASE WHEN json_valid(credential_sealed) THEN
+              CASE WHEN json_type(credential_sealed, '$.kid') = 'text'
+                   THEN json_extract(credential_sealed, '$.kid') END
+            END AS kid
+     FROM services WHERE credential_sealed IS NOT NULL ORDER BY name, id`,
+  );
+}
+
+/** A configuration problem as the health panel and the alerts show it: names, never values. */
+export interface ConfigProblem {
+  variable: string;
+  message: string;
+  /** Anchor in docs/configuration.md. */
+  anchor: string;
+}
+
+const CONFIG_ANCHORS: Readonly<Record<ConfigFeature, string>> = {
+  'login.access': 'cloudflare-access-login-auth_access_',
+  'login.dev': 'local-development-login-auth_access_development',
+};
+
+/** parseConfig errors, one per variable and message (an error can concern two features). */
+export function configErrorsForStatus(config: Pick<Config, 'errors'>): ConfigProblem[] {
+  const seen = new Set<string>();
+  const problems: ConfigProblem[] = [];
+  for (const error of config.errors) {
+    const key = `${error.variable}\n${error.message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    problems.push({
+      variable: error.variable,
+      message: error.message,
+      anchor: CONFIG_ANCHORS[error.feature],
+    });
+  }
+  return problems;
 }

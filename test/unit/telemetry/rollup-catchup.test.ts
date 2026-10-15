@@ -8,7 +8,7 @@ import type { AppEnv } from '../../../src/env';
 import { toBase64 } from '../../../src/lib/encoding';
 import { newId } from '../../../src/lib/ids';
 import { runCron } from '../../../src/telemetry/cron';
-import { loadDashboard } from '../../../src/telemetry/dashboard';
+import { loadOverview } from '../../../src/telemetry/dashboard';
 import { consumeRequestLogBatch } from '../../../src/telemetry/queue-consumer';
 import {
   ROLLUP_CATCHUP_HOURS_PER_RUN,
@@ -135,7 +135,7 @@ describe('rollup catch-up', () => {
     expect(await rolledUp(at(7))).toBe(1);
 
     await runCron(makeDeps(at(12, 7)));
-    const dashboard = await loadDashboard(makeDeps(at(12, 20)));
+    const dashboard = await loadOverview(makeDeps(at(12, 20)), '24h');
     expect(dashboard.totals.requests).toBe(1);
   });
 

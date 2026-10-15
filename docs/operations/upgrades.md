@@ -90,10 +90,10 @@ The running code compares each database's applied migrations (wrangler's `d1_mig
 
 | State | Shown as | Meaning | Action |
 |---|---|---|---|
-| ok | "up to date" | The newest migration of this build is applied | None |
-| behind | Error banner "Database `<binding>` is missing migration ..." | The code expects a migration that is not applied | `pnpm wrangler d1 migrations apply <binding> --remote` |
-| ahead | Warning banner "has migrations newer than this deployment (rolled back?)" | A newer release's migration is applied | Expected after a rollback |
-| unknown | "could not be read" | The migrations table could not be read | Check the D1 binding |
+| ok | "Up to date." | The newest migration of this build is applied | None |
+| behind | Error alert "Database `<binding>` is missing migration ..." | The code expects a migration that is not applied | `pnpm wrangler d1 migrations apply <binding> --remote` |
+| ahead | Warning alert "has migrations newer than this deployment (rolled back?)" | A newer release's migration is applied | Expected after a rollback |
+| unknown | "Could not be read." | The migrations table could not be read | Check the D1 binding |
 
 `/readyz` reports `schema: false` only for behind and unknown. A behind state is re-checked every
 minute, so applying the migration clears it without a redeploy.
