@@ -395,6 +395,31 @@ describe('consumers: page', () => {
     });
     expect(bad.status).toBe(422);
     expect(await bad.text()).toContain('id="f-pin-0-value-error"');
+    // Rows are ANDed: a second row on the same claim is refused, not saved as an intersection.
+    const twice = await adminPost(world.app, admin(), `/admin/consumers/${provider.id}`, {
+      intent: 'trust',
+      pin_rows: '1',
+      'pin.0.claim': 'org_id',
+      'pin.0.value': '77',
+      'pin.1.claim': 'org_id',
+      'pin.1.value': '78',
+    });
+    expect(twice.status).toBe(422);
+    expect(await twice.text()).toContain('Put every value of org_id in one row');
+    // The trust fields suggest the anchor and pin claims of the presets.
+    expect(page).toMatch(/<option value="pipeline_id">/);
+    expect(page).toMatch(/<option value="organization_id">/);
+  });
+
+  it('shows no trust confirmation where neither the issuer nor the keys can change', async () => {
+    const provider = await seedGithubProvider(world.app.deps);
+    const serviceId = await seedService(world.app.deps);
+    await seedGrant(world.app.deps, provider.id, serviceId);
+    const page = await (
+      await adminGet(world.app, admin(), `/admin/consumers/${provider.id}?open=trust`)
+    ).text();
+    expect(page).toMatch(/<details id="trust" open/);
+    expect(page).not.toContain('name="confirm_trust_change"');
   });
 
   it('disables with an Undo, then enables again', async () => {

@@ -231,11 +231,40 @@ describe('consumer access markup (WCAG 2.2 AA)', () => {
       expires: 'never',
     });
     const location = res.headers.get('location') ?? '';
+    // A rows-mode access with warnings: its edit form (closed details) shows the risks up front.
+    const rows = {
+      consumer_id: provider.id,
+      token_id: token,
+      editor: 'rows',
+      'cond.0.claim': 'repository_owner_id',
+      'cond.0.values': '4242',
+      'cond.1.claim': 'repository_id',
+      'cond.1.values': '5',
+      'cond.2.claim': 'ref',
+      'cond.2.match': 'glob',
+      'cond.2.values': 'refs/heads/*',
+      'cond.3.claim': 'actor',
+      'cond.3.values': 'octocat',
+      'rule.0.m': 'GET',
+      'rule.0.path': '/x',
+      expires: 'never',
+    };
+    const first = await adminPost(world.app, session(), '/admin/access', rows);
+    const digest = /name="warnings_digest" value="([0-9a-f]+)"/.exec(await first.text())?.[1] ?? '';
+    const risky = await adminPost(world.app, session(), '/admin/access', {
+      ...rows,
+      warnings_digest: digest,
+      acknowledge_warnings: '1',
+    });
+    const riskyPath = (risky.headers.get('location') ?? '').split('?')[0] ?? '';
+    const riskyPage = await (await adminGet(world.app, session(), riskyPath)).text();
+    expect(riskyPage).toContain('<fieldset class="ack">');
     for (const path of [
       '/admin/access',
       '/admin/access?view=list',
       location.split('?')[0] ?? '',
       `${location.split('?')[0]}?open=edit`,
+      riskyPath,
     ]) {
       await checkPage(await (await adminGet(world.app, session(), path)).text(), path);
     }

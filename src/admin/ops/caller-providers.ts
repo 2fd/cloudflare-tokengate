@@ -130,15 +130,21 @@ function derivedNameOf(
   );
 }
 
-/** Values of the exact, non-negated pin conditions on `claim`, in order. */
+/**
+ * The values of `claim` the pin admits, in order. Pin conditions are ANDed (tenantPinHolds,
+ * I-TEN-1), so with several conditions on one claim only the values every one of them lists are
+ * admitted; a condition that is not exact and non-negated admits nothing (it fails closed).
+ * Rewriting the claim as one condition with these values keeps the pin's meaning.
+ */
 export function pinValues(pin: readonly Condition[], claim: string): string[] {
-  return [
-    ...new Set(
-      pin
-        .filter((c) => c.claim === claim && c.match === 'exact' && c.negate !== true)
-        .flatMap((c) => c.values),
-    ),
-  ];
+  const onClaim = pin.filter((c) => c.claim === claim);
+  const [first, ...rest] = onClaim;
+  if (first === undefined) return [];
+  const admits = (c: Condition, value: string) =>
+    c.match === 'exact' && c.negate !== true && c.values.includes(value);
+  return [...new Set(first.values)].filter(
+    (value) => admits(first, value) && rest.every((c) => admits(c, value)),
+  );
 }
 
 /** `base`, or `base (2)`, `base (3)`… : the first name no other consumer uses. */
@@ -642,7 +648,10 @@ export async function removeTenantValue(
   );
 }
 
-/** The pin with the exact conditions on `claim` replaced by one holding `values` (none: removed). */
+/**
+ * The pin with every condition on `claim` replaced by one holding `values` (none: removed).
+ * Callers pass values derived with pinValues (intersection), so the rewrite never widens the pin.
+ */
 function withPinValues(pin: readonly Condition[], claim: string, values: string[]): Condition[] {
   const others = pin.filter((c) => c.claim !== claim);
   const index = pin.findIndex((c) => c.claim === claim);
@@ -715,6 +724,17 @@ export async function createOrMergeConsumer(
             (provider) => provider.profile === input.profile && provider.issuer === issuer,
           ) ?? null);
     if (existing && claim !== null) {
+      // The enterprise pin is per consumer: a merge never drops or changes it silently.
+      const enterprise = pinValues(existing.tenant_pin, 'enterprise_id');
+      if (
+        input.profile === 'github-actions' &&
+        input.enterprise_id &&
+        !(enterprise.length === 1 && enterprise[0] === input.enterprise_id)
+      ) {
+        return opFailure('invalid', [
+          `${existing.name} already exists ${enterprise.length > 0 ? `with enterprise ID ${enterprise.join(', ')}` : 'without an enterprise ID'}, and saving adds to it: leave Enterprise ID empty, or change the enterprise ID of ${existing.name} under its Advanced trust settings first.`,
+        ]);
+      }
       const merged = await addTenantValue(deps, actor, existing.id, {
         claim,
         entries: input.tenants,

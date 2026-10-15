@@ -484,6 +484,38 @@ describe('any-ref risk of stored conditions (A7.7)', () => {
     );
   });
 
+  it('an exact claim that names the job ref or commit constrains it; a reusable workflow pin does not', () => {
+    const sub = (value: string, match: Condition['match'] = 'exact'): Condition[] => [
+      ...anchor,
+      { claim: 'sub', match, values: [value] },
+    ];
+    expect(isAnyRef(sub('repo:acme/api:environment:production'), github)).toBe(false);
+    expect(isAnyRef(sub('repo:acme/api:ref:refs/heads/main'), github)).toBe(false);
+    expect(isAnyRef(sub('repo:acme/api:pull_request'), github)).toBe(false);
+    expect(
+      isAnyRef(
+        [
+          ...anchor,
+          { claim: 'sub', match: 'exact', values: ['project_path:g/app:ref_type:branch:ref:main'] },
+        ],
+        gitlab,
+      ),
+    ).toBe(false);
+    // A customized GitHub sub without the ref, and a glob, leave the ref open.
+    expect(isAnyRef(sub('repository_owner_id:4242:repository_id:987654321'), github)).toBe(true);
+    expect(isAnyRef(sub('repo:acme/api:*', 'glob'), github)).toBe(true);
+    for (const claim of ['workflow_ref', 'sha', 'head_ref']) {
+      expect(isAnyRef([...anchor, { claim, match: 'exact', values: ['x'] }], github), claim).toBe(
+        false,
+      );
+    }
+    for (const claim of ['job_workflow_ref', 'ci_config_ref_uri']) {
+      expect(isAnyRef([...anchor, { claim, match: 'exact', values: ['x'] }], github), claim).toBe(
+        true,
+      );
+    }
+  });
+
   it('adds any_ref once to the validator details', () => {
     expect(accessWarningDetails([], anchor, github).map((d) => d.code)).toEqual(['any_ref']);
     const once = accessWarningDetails([{ code: 'any_ref', message: 'm' }], anchor, github);

@@ -3,13 +3,14 @@
 // reveal. Everything else (name, issuer, JWKS, algorithms, token age, audience) is derived. Every
 // input sits in a reveal, so none carries native validation (A7.6); the server checks them.
 import type { Child } from 'hono/jsx';
-import type { CallerProvider } from '../../db/types';
+import { labelFor } from '../../db/claim-labels';
+import type { CallerProvider, ClaimLabel } from '../../db/types';
 import { GITHUB_ACTIONS_ISSUER } from '../../identity/profiles/github-actions';
 import { GITLAB_COM_ISSUER } from '../../identity/profiles/gitlab-ci';
 import type { ProfileId } from '../../identity/types';
 import { CLAIM_NAME_MAX_LENGTH } from '../../policy/conditions';
-import { type Fields, ownerFindCommand, parseOwnerList, text } from '../consumer-access';
-import type { ConsumerInput } from '../ops/caller-providers';
+import { type Fields, idText, ownerFindCommand, parseOwnerList, text } from '../consumer-access';
+import { type ConsumerInput, pinValues, tenantClaimOf } from '../ops/caller-providers';
 import type { FieldError } from '../ops/shared';
 import { paths } from '../paths';
 import { Field, IdWithLabelField, RadioCards } from './components';
@@ -26,7 +27,7 @@ const TYPE_INFO: Readonly<Record<ProfileId, { title: string; description: string
 };
 
 /** Known generic issuers: anchor and pin claims to use when the fields are left empty. */
-const GENERIC_PRESETS: ReadonlyArray<{ host: string; anchor: string; pin: string }> = [
+export const GENERIC_PRESETS: ReadonlyArray<{ host: string; anchor: string; pin: string }> = [
   { host: 'agent.buildkite.com', anchor: 'pipeline_id', pin: 'organization_id' },
   {
     host: 'oidc.circleci.com',
@@ -34,6 +35,28 @@ const GENERIC_PRESETS: ReadonlyArray<{ host: string; anchor: string; pin: string
     pin: 'oidc.circleci.com/org-id',
   },
 ];
+
+/** Anchor claim suggestions: those of the existing generic consumers, the presets, then `sub`. */
+export function genericAnchorSuggestions(consumers: readonly CallerProvider[]): string[] {
+  return [
+    ...new Set([
+      ...consumers
+        .filter((consumer) => consumer.profile === 'generic')
+        .flatMap((consumer) => consumer.anchor_claims),
+      ...GENERIC_PRESETS.map((preset) => preset.anchor),
+      'sub',
+    ]),
+  ];
+}
+
+/** "acme (1234567), acme-labs (7654321)": the organizations or groups a consumer already has. */
+function alreadyAdded(provider: CallerProvider, labels: readonly ClaimLabel[]): string {
+  const claim = tenantClaimOf(provider.profile);
+  if (claim === null) return '';
+  return pinValues(provider.tenant_pin, claim)
+    .map((value) => idText(value, labelFor(labels, claim, value)))
+    .join(', ');
+}
 
 export const GENERIC_ISSUER_EXAMPLES: readonly string[] = [
   'https://agent.buildkite.com',
@@ -225,6 +248,8 @@ export function AddConsumerFields(props: {
   errors: readonly FieldError[];
   /** Existing consumers: a GitHub or GitLab add merges into the one of the same issuer. */
   existing: readonly CallerProvider[];
+  /** Labels of the existing consumers, for the organizations and groups they already have. */
+  labels?: readonly ClaimLabel[];
   /** Existing generic anchor claims, offered as suggestions. */
   anchorSuggestions?: readonly string[];
   jobs?: Partial<Record<ProfileId, Child>>;
@@ -241,6 +266,8 @@ export function AddConsumerFields(props: {
     (provider) => provider.profile === 'gitlab-ci' && provider.issuer === GITLAB_COM_ISSUER,
   );
   const genericIssuers = props.existing.filter((provider) => provider.profile === 'generic');
+  const labelsOf = (provider: CallerProvider) =>
+    (props.labels ?? []).filter((label) => label.caller_provider_id === provider.id);
   return (
     <RadioCards
       name={`${prefix}type`}
@@ -270,7 +297,8 @@ export function AddConsumerFields(props: {
                 {github ? (
                   <p class="hint">
                     <a href={paths.consumer(github.id)}>{github.name}</a> already exists. Saving
-                    adds these organizations to it{github.enabled ? '' : ' (disabled)'}.
+                    adds these organizations to it{github.enabled ? '' : ' (disabled)'}. Already
+                    added: {alreadyAdded(github, labelsOf(github)) || 'none'}.
                   </p>
                 ) : null}
                 <details
@@ -340,7 +368,8 @@ export function AddConsumerFields(props: {
                 {gitlab ? (
                   <p class="hint">
                     <a href={paths.consumer(gitlab.id)}>{gitlab.name}</a> already exists. Saving
-                    adds these groups to it{gitlab.enabled ? '' : ' (disabled)'}.
+                    adds these groups to it{gitlab.enabled ? '' : ' (disabled)'}. Already added:{' '}
+                    {alreadyAdded(gitlab, labelsOf(gitlab)) || 'none'}.
                   </p>
                 ) : null}
                 <details open={form.gitlab_url !== '' || error('gitlab_url') !== null}>
@@ -391,13 +420,9 @@ export function AddConsumerFields(props: {
                   optional
                   value={form.generic_anchor_claims}
                   example="pipeline_id"
-                  suggestions={[
-                    ...new Set([
-                      ...(props.anchorSuggestions ?? []),
-                      ...GENERIC_PRESETS.map((preset) => preset.anchor),
-                      'sub',
-                    ]),
-                  ].map((value) => ({ value }))}
+                  suggestions={(
+                    props.anchorSuggestions ?? genericAnchorSuggestions(props.existing)
+                  ).map((value) => ({ value }))}
                   hint="Claims that identify one workload exactly, comma-separated. Buildkite: pipeline_id. CircleCI: oidc.circleci.com/project-id. Kubernetes: sub. Empty: the issuer's usual claim, else sub."
                   error={error('generic_anchor_claims')}
                   autocomplete="off"

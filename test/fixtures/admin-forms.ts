@@ -374,11 +374,21 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
       expires: 'keep',
     },
   }),
-  'POST /admin/access/:id/copy': async (w) => ({
-    path: `/admin/access/${w.grantId}/copy`,
-    action: 'grant.duplicate',
-    fields: { repository: 'acme/web (987654322)', token_id: w.serviceId },
-  }),
+  'POST /admin/access/:id/copy': async (w) => {
+    // A source with a stored repository name: without one, its literal operations (which may name
+    // the repository) are reviewed in the form first instead of copied in one submit.
+    await env.DB.prepare(
+      `INSERT INTO claim_labels (caller_provider_id, claim, value, label, updated_at, updated_by)
+       VALUES (?, 'repository_id', ?, 'acme/api', 1, NULL) ON CONFLICT DO NOTHING`,
+    )
+      .bind(w.provider.id, REPOSITORY_ID)
+      .run();
+    return {
+      path: `/admin/access/${w.grantId}/copy`,
+      action: 'grant.duplicate',
+      fields: { repository: 'acme/web (987654322)', token_id: w.serviceId },
+    };
+  },
   'POST /admin/access/:id/toggle': async (w) => ({
     path: `/admin/access/${w.grantId}/toggle`,
     action: 'grant.disable',

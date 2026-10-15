@@ -338,7 +338,9 @@ describe('consumer access: the page', () => {
     const page = await (await adminGet(world.app, admin(), `/admin/access/${id}?open=edit`)).text();
     expect(page).toMatch(/<details id="edit" open/);
     expect(page).toMatch(/name="context" value="branch" checked/);
-    expect(page).toMatch(/name="expires" value="keep" checked/);
+    // Never expires: no "Keep" card repeating "Never"; Never is preselected.
+    expect(page).toMatch(/name="expires" value="never" checked/);
+    expect(page).not.toContain('value="keep"');
     const same = await adminPost(world.app, admin(), `/admin/access/${id}`, {
       ...structured({ expires: 'keep' }),
       intent: 'save',
@@ -568,7 +570,9 @@ describe('I-LOG-2: give access from a request, verified records only', () => {
       '/admin/access/new?from_request=req_01JTESTREQUEST00000000000E',
     );
     expect(res.status).toBe(400);
-    expect(await res.text()).toContain('Cannot give access from this request');
+    const html = await res.text();
+    expect(html).toContain('<title>Error: Cannot give access from this request');
+    expect(html).toContain('This request cannot prefill the form.');
   });
 });
 

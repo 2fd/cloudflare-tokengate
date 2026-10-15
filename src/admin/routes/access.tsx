@@ -7,7 +7,7 @@
 import type { Child } from 'hono/jsx';
 import type { App } from '../../app';
 import { sha256Hex } from '../../crypto/hash';
-import { labelFor } from '../../db/claim-labels';
+import { labelFor, parseIdWithLabel } from '../../db/claim-labels';
 import { getGrant } from '../../db/grants';
 import { getRequest } from '../../db/requests';
 import {
@@ -59,12 +59,14 @@ import {
   withAnyRefFlags,
   withTypedLabels,
 } from '../consumer-access';
+import { parseValueList } from '../grant-text';
 import { type Notice, type NoticeContext, type NoticeTable, resolveNotice } from '../notice';
 import {
   addTenantValue,
   type ConsumerInput,
   consumerIssuer,
   createOrMergeConsumer,
+  pinValues,
   tenantClaimOf,
 } from '../ops/caller-providers';
 import {
@@ -183,6 +185,15 @@ const NOTICES: NoticeTable<NoticeContext & AccessNoticeData> = {
   deleted: () => ({ text: 'Access deleted.' }),
   copy_review: () => ({
     text: 'This token has other operations: review them, then save the copy.',
+  }),
+  copy_review_rows: () => ({
+    text: 'These constraints need the conditions editor: review them, then save the copy.',
+  }),
+  copy_review_paths: () => ({
+    text: 'Some operations name the source repository: review their paths under Other operations, then save the copy.',
+  }),
+  copy_review_expired: () => ({
+    text: 'The source access has expired: choose when the copy expires, then save it.',
   }),
   consumer_created: ({ consumer }) => ({
     text: `Consumer ${consumer?.name ?? ''} created. Now give it access to a token.${consumerRisks(consumer)}`,
@@ -670,6 +681,8 @@ interface FormSeed {
   /** The repository's organization or group to add (new_owner), for the chosen branch. */
   unknownOwner?: string | null;
   hidden?: Record<string, string>;
+  /** The prefill query (`copy`, `repository`) that "Change token" keeps. */
+  prefill?: { copy?: string; repository?: string };
 }
 
 function labelsOf(connections: Connections, consumerId: string): ClaimLabel[] {
@@ -717,9 +730,10 @@ function pendingConsumer(
     claim !== null ? existing.find((p) => p.profile === type && p.issuer === issuer) : undefined;
   const pin: Condition[] = [];
   if (claim !== null) {
+    // The merge adds to the values the stored pin admits (its conditions are ANDed).
     const values = [
       ...new Set([
-        ...(match?.tenant_pin.filter((c) => c.claim === claim).flatMap((c) => c.values) ?? []),
+        ...(match ? pinValues(match.tenant_pin, claim) : []),
         ...(input?.tenants.map((t) => t.value) ?? []),
       ]),
     ];
@@ -946,8 +960,15 @@ async function buildFormModel(
     token = {
       kind: 'fixed',
       branch: await tokenBranch(c, data, selectedToken, '', seed, true),
+      // Keeps the copied constraints and the repository; only the token is chosen again.
       changeHref:
-        tokens.length > 1 ? paths.accessNew({ consumer: seed.consumerId || undefined }) : null,
+        tokens.length > 1
+          ? paths.accessNew({
+              consumer: seed.consumerId || undefined,
+              copy: seed.prefill?.copy,
+              repository: seed.prefill?.repository,
+            })
+          : null,
     };
   } else if (tokens.length <= MAX_CARDS) {
     const branches: TokenBranch[] = [];
@@ -1094,10 +1115,13 @@ async function newPage(c: AdminContext) {
   const fromRequest = query('from_request');
   if (fromRequest) return prefillFromRequest(c, data, fromRequest);
   let consumerId = query('consumer');
-  let tokenId = query('token');
+  // Only an explicit `?token=` fixes the token; a copy's token is preselected among the choices.
+  const explicitToken = query('token');
+  let tokenId = explicitToken;
   let jobs: JobsForm | null = null;
   let ops: OpsForm | null = null;
   let banner: Child | null = null;
+  let hidden: Record<string, string> = {};
   const copyId = query('copy');
   if (copyId) {
     const source = await getGrant(c.get('deps').env.DB, copyId);
@@ -1108,14 +1132,11 @@ async function newPage(c: AdminContext) {
     if (source && sourceConsumer && profile) {
       consumerId = sourceConsumer.id;
       tokenId = tokenId || source.service_id;
+      hidden = { copy: source.id };
       const labels = labelsOf(data.connections, sourceConsumer.id);
       jobs = accessFormFromGrant(source, profile, labels);
-      const repository = query('repository');
-      if (repository && jobs.editor === 'structured') {
-        const claims = anchorClaims(profile);
-        const label = claims ? labelFor(labels, claims.repository, repository) : null;
-        jobs.repository = idText(repository, label);
-      }
+      const repository = prefillRepository(query('repository'), profile, labels);
+      const retargeted = repository !== null && retarget(jobs, profile, repository);
       const target = data.tokens.find((token) => token.id === tokenId);
       const sourceToken = data.tokens.find((token) => token.id === source.service_id);
       if (target && sourceToken && sameOperationSource(target, sourceToken)) {
@@ -1128,7 +1149,12 @@ async function newPage(c: AdminContext) {
           repositoryLabelOf(source, labels, profile),
         );
       }
-      banner = <p>Copied the constraints of “{source.name}”.</p>;
+      banner = (
+        <p>
+          Copied the constraints of “{source.name}”
+          {retargeted && repository ? <> for {idText(repository.id, repository.label)}</> : null}.
+        </p>
+      );
     } else {
       banner = <p>That access no longer exists; nothing was copied.</p>;
     }
@@ -1145,10 +1171,8 @@ async function newPage(c: AdminContext) {
         shapes,
         consumerSuggestions(shapes, provider).environments,
       );
-      jobs.repository = idText(
-        query('repository'),
-        labelFor(labels, claims.repository, query('repository')),
-      );
+      const repository = prefillRepository(query('repository'), profile, labels);
+      if (repository) jobs.repository = idText(repository.id, repository.label);
     }
   }
   if (query('mode') === 'rows' && consumerId && consumerId !== 'new') {
@@ -1177,11 +1201,16 @@ async function newPage(c: AdminContext) {
         ? (data.tokens[0]?.id ?? '')
         : '',
     consumerView: consumerId === 'new' ? 'new' : knownConsumer ? 'fixed' : 'auto',
-    tokenView: data.tokens.some((token) => token.id === tokenId) ? 'fixed' : 'auto',
+    tokenView: data.tokens.some((token) => token.id === explicitToken) ? 'fixed' : 'auto',
     jobs,
     ops,
     errors: [],
     ack: null,
+    hidden,
+    prefill: {
+      copy: hidden.copy,
+      repository: query('repository').slice(0, 300) || undefined,
+    },
   };
   // Prefilled risky values need an explicit acknowledgement on this render (A7.7 rule 4).
   if (copyId && jobs) seed.ack = await prefillAck(c, data, seed);
@@ -1190,6 +1219,50 @@ async function newPage(c: AdminContext) {
     ...(banner ? { banner } : {}),
     notice: notice(c, { grant: null, consumer: consumerForNotice }),
   });
+}
+
+/**
+ * `?repository=` of a prefill: `name (ID)` keeps the typed name (a copy to a repository with no
+ * stored name yet), a bare ID takes its stored name. The name is written only when the form is
+ * saved. Null when the value is not a repository at all.
+ */
+function prefillRepository(
+  raw: string,
+  profile: IssuerProfile,
+  labels: readonly ClaimLabel[],
+): { id: string; label: string | null } | null {
+  const input = raw.trim().slice(0, 300);
+  if (input === '' || anchorClaims(profile) === null) return null;
+  const parsed = parseRepositoryInput(input, profile, labels);
+  if (parsed.ok) return parsed.value;
+  const bare = parseIdWithLabel(input);
+  return bare ? { id: bare.id, label: null } : null;
+}
+
+/**
+ * Points copied jobs at another repository: the structured repository input, or the one exact
+ * repository condition of the rows editor. False when the rows have no single such condition.
+ */
+function retarget(
+  jobs: JobsForm,
+  profile: IssuerProfile,
+  repository: { id: string; label: string | null },
+): boolean {
+  const claims = anchorClaims(profile);
+  if (claims === null) return false;
+  if (jobs.editor === 'structured') {
+    jobs.repository = idText(repository.id, repository.label);
+    return true;
+  }
+  const rows = jobs.cond.filter((row) => {
+    if (row.claim !== claims.repository || row.match !== 'exact' || row.not) return false;
+    const values = parseValueList(row.values);
+    return values.ok && values.values.length === 1;
+  });
+  const [row] = rows;
+  if (rows.length !== 1 || !row) return false;
+  row.values = repository.id;
+  return true;
 }
 
 function repositoryLabelOf(
@@ -1213,6 +1286,29 @@ function sameOperationSource(target: Service, source: Service): boolean {
   return a !== null && b !== null && a.id === b.id;
 }
 
+/**
+ * True when copied literal operations (custom rows and "used by other accesses" sets; presets are
+ * re-targeted through {repo}) may name the source repository: its name, its URL-encoded name
+ * (GitLab) or its ID. Without a stored name, any literal operation counts.
+ */
+function namesRepository(
+  ops: OpsForm,
+  sets: ReturnType<typeof ruleSetsOf>,
+  label: string | null,
+  id: string | null,
+): boolean {
+  const paths_ = [
+    ...ops.rule.map((row) => row.path),
+    ...sets.filter((set) => ops.op.includes(set.id)).flatMap((set) => set.rules.map((r) => r.path)),
+  ].map((path) => path.toLowerCase());
+  if (paths_.length === 0) return false;
+  if (label === null) return true;
+  const needles = [label, encodeURIComponent(label), ...(id ? [id] : [])].map((n) =>
+    n.toLowerCase(),
+  );
+  return paths_.some((path) => needles.some((needle) => path.includes(needle)));
+}
+
 /** The acknowledgement a prefilled form needs on its first render, or null. */
 async function prefillAck(
   c: AdminContext,
@@ -1220,8 +1316,79 @@ async function prefillAck(
   seed: FormSeed,
 ): Promise<FormSeed['ack']> {
   const evaluation = await evaluateForm(c, data, { ...seed, fields: null }, null);
-  if (!evaluation.ok || evaluation.risks.messages.length === 0) return null;
-  return { digest: evaluation.risks.digest, warnings: evaluation.risks.messages };
+  return ackOf(evaluation.ok ? evaluation.risks : await placeholderRisks(c, data, seed));
+}
+
+function ackOf(risks: Risks | null): FormSeed['ack'] {
+  if (!risks || risks.messages.length === 0) return null;
+  return { digest: risks.digest, warnings: risks.messages };
+}
+
+/**
+ * The risks of a prefilled (or re-rendered) form whose repository does not parse yet: no stored
+ * name, or an organization still to add. Anchors never change the risks (the warnings name refs,
+ * environments, events and methods only), so a placeholder repository and organization stand in,
+ * and the digest is the one the form has once the repository parses (A7.7 rule 4).
+ */
+async function placeholderRisks(
+  c: AdminContext,
+  data: FormData,
+  seed: FormSeed,
+): Promise<Risks | null> {
+  const chosen = chosenBranch(data, seed);
+  if (!chosen || 'error' in chosen) return null;
+  const profile = getProfile(chosen.provider.profile);
+  const token = data.tokens.find((item) => item.id === seed.tokenId);
+  if (!profile || !token) return null;
+  const jobs = seed.fields ? readJobsForm(seed.fields, chosen.prefix, profile) : seed.jobs;
+  if (!jobs) return null;
+  const claims = anchorClaims(profile);
+  let provider = chosen.provider;
+  let labels: ClaimLabel[] = [];
+  let form = jobs;
+  if (jobs.editor === 'structured' && claims) {
+    provider = {
+      ...provider,
+      tenant_pin: [{ claim: claims.owner, match: 'exact', values: ['1'] }],
+    };
+    labels = withTypedLabels([], provider.id, [
+      { claim: claims.owner, value: '1', label: 'placeholder' },
+    ]);
+    form = {
+      ...jobs,
+      repository: jobs.repository.trim() === '' ? '' : 'placeholder/repository (2)',
+      new_owner: '',
+      owner_id: '1',
+    };
+  }
+  const parsed = parseJobs(form, { profile, provider, labels, prefix: chosen.prefix });
+  if (!parsed.conditions) return null;
+  const tokenFixed = data.tokens.length === 1 || seed.tokenView === 'fixed';
+  const opsPrefix = tokenFixed ? '' : `${token.id}.`;
+  const sets = ruleSetsOf(await tokenAccessShapes(c.get('deps').env.DB, token.id));
+  const template = templateForService(token);
+  const ops = seed.fields
+    ? readOpsForm(seed.fields, opsPrefix)
+    : (seed.ops ?? defaultOpsForm(template, sets));
+  const rules =
+    parseOps(ops, {
+      token,
+      template,
+      ruleSets: sets,
+      repositoryLabel: parsed.repository?.label ?? null,
+      prefix: opsPrefix,
+    }).rules ?? [];
+  const validation = validateGrant(
+    { conditions: parsed.conditions, rules },
+    profile,
+    provider,
+    token,
+  );
+  return risksOf(
+    accessWarningDetails(validation.warningDetails, parsed.conditions, profile),
+    parsed.risks,
+    parsed.presetWarnings,
+  );
 }
 
 /** `?from_request=`: an access matching exactly the caller of a denied, verified request. */
@@ -1252,17 +1419,18 @@ async function prefillFromRequest(c: AdminContext, data: FormData, requestId: st
         section: 'consumers',
         subsection: 'access',
         status: 400,
+        errors: [
+          {
+            field: null,
+            message:
+              'This request cannot prefill the form. Only requests that were denied with “no matching access” or “event not trusted”, whose token was verified, and whose consumer and token still exist can.',
+          },
+        ],
       },
       () => (
-        <>
-          <p>
-            Only requests that were denied with “no matching access” or “event not trusted”, whose
-            token was verified, and whose consumer and token still exist can prefill the form.
-          </p>
-          <p>
-            <a href={paths.accessNew()}>Give a consumer access from scratch</a>
-          </p>
-        </>
+        <p>
+          <a href={paths.accessNew()}>Give a consumer access from scratch</a>
+        </p>
       ),
     );
   }
@@ -1278,13 +1446,15 @@ async function prefillFromRequest(c: AdminContext, data: FormData, requestId: st
   const seed: FormSeed = {
     fields: null,
     consumerId: provider.id,
+    // The request's token is preselected; another one is a click away (its default operations).
     tokenId: token.id,
     consumerView: 'fixed',
-    tokenView: 'fixed',
+    tokenView: 'auto',
     jobs,
     ops,
     errors: [],
     ack: null,
+    hidden: { from_request: record.id },
   };
   seed.ack = await prefillAck(c, data, seed);
   return renderForm(c, data, seed, {
@@ -1577,10 +1747,7 @@ async function evaluateForm(
         {
           claim: claims.owner,
           match: 'exact',
-          values: [
-            ...provider.tenant_pin.filter((c) => c.claim === claims.owner).flatMap((c) => c.values),
-            parsedJobs.newOwner.id,
-          ],
+          values: [...pinValues(provider.tenant_pin, claims.owner), parsedJobs.newOwner.id],
         },
       ],
     };
@@ -1690,14 +1857,26 @@ function grantErrorMessage(message: string): string {
   return message;
 }
 
-/** A7.7: is the risk set of this result accepted by the selection or by the digest and the box? */
+/**
+ * A form prefilled from a copy or a request (its hidden marker): every save of it goes through the
+ * digest and the box while it has risks, so a prefilled selection never accepts one.
+ */
+function isPrefilled(fields: Fields): boolean {
+  return text(fields, 'copy') !== '' || text(fields, 'from_request') !== '';
+}
+
+/**
+ * A7.7: is the risk set of this result accepted by the selection or by the digest and the box? A
+ * prefilled form's selection was not made by the admin, so it covers nothing (rule 4).
+ */
 async function acceptance(
   fields: Fields,
   evaluation: Extract<Evaluation, { ok: true }>,
 ): Promise<
   { ok: true } | { ok: false; error: FieldError; ack: { digest: string; warnings: string[] } }
 > {
-  const { risks, covered } = evaluation;
+  const { risks } = evaluation;
+  const covered = isPrefilled(fields) ? new Set<WarningCode>() : evaluation.covered;
   const ack = { digest: risks.digest, warnings: risks.messages };
   const submittedDigest = text(fields, 'warnings_digest');
   if (submittedDigest !== '') {
@@ -1750,6 +1929,13 @@ function seedFromFields(data: FormData, fields: Fields): FormSeed {
     tokenView: text(fields, 'token_view') === 'fixed' ? 'fixed' : 'auto',
     errors: [],
     ack: null,
+    // The prefill marker stays on every re-render of the form.
+    hidden: Object.fromEntries(
+      (['copy', 'from_request'] as const)
+        .map((name) => [name, text(fields, name).slice(0, 100)])
+        .filter(([, value]) => value !== ''),
+    ),
+    prefill: { copy: text(fields, 'copy').slice(0, 100) || undefined },
   };
 }
 
@@ -1767,10 +1953,12 @@ async function create(c: AdminContext) {
   const evaluation = await evaluateForm(c, data, seed, null);
   if (!evaluation.ok) {
     if (evaluation.refresh) return renderForm(c, data, { ...seed, action: 'refresh' });
+    // A prefilled form keeps showing the risks it carries while another input is fixed.
+    const ack = isPrefilled(fields) ? ackOf(await placeholderRisks(c, data, seed)) : null;
     return renderForm(
       c,
       data,
-      { ...seed, errors: evaluation.errors, unknownOwner: evaluation.unknownOwner },
+      { ...seed, errors: evaluation.errors, unknownOwner: evaluation.unknownOwner, ack },
       { status: 422 },
     );
   }
@@ -1984,9 +2172,10 @@ async function renderAccessPage(c: AdminContext, loaded: LoadedAccess, state: Pa
         consumer: { kind: 'fixed', branch: consumerBranchModel, changeHref: null, newHref: null },
         token: { kind: 'fixed', branch: tokenBranchModel, changeHref: null },
         existingConsumers: data.consumers,
+        // "Keep" exists only for a stored date; an access that never expires starts on Never.
         expiry: editing?.fields
           ? readExpiryForm(editing.fields)
-          : { expires: 'keep', expires_on: '' },
+          : { expires: grant.expires_at === null ? 'never' : 'keep', expires_on: '' },
         keep: grant.expires_at,
         now: deps.now(),
         ack: editSeed.ack,
@@ -2225,17 +2414,40 @@ async function copy(c: AdminContext) {
     );
   }
   const jobs = accessFormFromGrant(grant, profile, labels);
-  // Another operation source, or constraints only the rows editor can show: review them first.
-  if (!sameOperationSource(target, sourceToken) || jobs.editor !== 'structured') {
+  const sameSource = sameOperationSource(target, sourceToken);
+  const sets = ruleSetsOf(await tokenAccessShapes(deps.env.DB, target.id));
+  const ops = opsFormFromRules(grant.rules, templateForService(target), sets, sourceRepository);
+  // Review first, with nothing written: another operation source; constraints only the rows
+  // editor shows; literal operations that may still name the source repository (a copy for
+  // another repository would call it); or an expired source (choose the copy's expiry).
+  const review = !sameSource
+    ? 'copy_review'
+    : jobs.editor !== 'structured'
+      ? 'copy_review_rows'
+      : repository.id !== sourceRepositoryId &&
+          namesRepository(ops, sets, sourceRepository, sourceRepositoryId)
+        ? 'copy_review_paths'
+        : grant.expires_at !== null && grant.expires_at <= deps.now()
+          ? 'copy_review_expired'
+          : null;
+  if (review) {
     return redirectWithNotice(
       c,
-      paths.accessNew({ copy: grant.id, token: target.id, repository: repository.id }),
-      'copy_review',
+      paths.accessNew({
+        copy: grant.id,
+        token: target.id,
+        // The typed name travels with the ID: the repository may have no stored name yet.
+        repository: idText(repository.id, repository.label),
+      }),
+      review,
     );
   }
   jobs.repository = idText(repository.id, repository.label);
-  const sets = ruleSetsOf(await tokenAccessShapes(deps.env.DB, target.id));
-  const ops = opsFormFromRules(grant.rules, templateForService(target), sets, sourceRepository);
+  const banner = (
+    <p>
+      Copied the constraints of “{grant.name}” for {jobs.repository}.
+    </p>
+  );
   const seed: FormSeed = {
     fields: null,
     consumerId: consumer.id,
@@ -2246,15 +2458,23 @@ async function copy(c: AdminContext) {
     ops,
     errors: [],
     ack: null,
+    hidden: { copy: grant.id },
+    prefill: { copy: grant.id, repository: jobs.repository },
   };
   const evaluation = await evaluateForm(c, data, seed, null);
   if (!evaluation.ok) {
-    // An unknown organization (new_owner) or another problem: the prefilled create form.
+    // An unknown organization (new_owner) or another problem: the prefilled create form, with
+    // the risks the copy carries (A7.7 rule 4).
     return renderForm(
       c,
       data,
-      { ...seed, errors: evaluation.errors, unknownOwner: evaluation.unknownOwner },
-      { status: 422, banner: <p>Copied the constraints of “{grant.name}”.</p> },
+      {
+        ...seed,
+        errors: evaluation.errors,
+        unknownOwner: evaluation.unknownOwner,
+        ack: await prefillAck(c, data, seed),
+      },
+      { status: 422, banner },
     );
   }
   const sourceCodes = new Set<WarningCode>(
@@ -2286,7 +2506,7 @@ async function copy(c: AdminContext) {
         ],
         ack: { digest: evaluation.risks.digest, warnings: evaluation.risks.messages },
       },
-      { status: 422, banner: <p>Copied the constraints of “{grant.name}”.</p> },
+      { status: 422, banner },
     );
   }
   const result = await duplicateGrant(deps, adminActor(c), grant.id, {

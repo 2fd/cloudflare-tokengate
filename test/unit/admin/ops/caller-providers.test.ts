@@ -413,6 +413,57 @@ describe('createOrMergeConsumer, addTenantValue, removeTenantValue', () => {
     ).toMatchObject({ ok: false });
   });
 
+  it('reads a pin with two conditions on the claim as their intersection (I-TEN-1)', async () => {
+    const deps = opsDeps({ fetch: network().fetch });
+    const provider = await seedGithubProvider(deps);
+    // Stored before the UI kept one row per claim: effective organizations {2}.
+    await env.DB.prepare('UPDATE caller_providers SET tenant_pin = ? WHERE id = ?')
+      .bind(
+        JSON.stringify([
+          { claim: 'repository_owner_id', match: 'exact', values: ['1', '2'] },
+          { claim: 'repository_owner_id', match: 'exact', values: ['2', '3'] },
+        ]),
+        provider.id,
+      )
+      .run();
+    expect(
+      await removeTenantValue(deps, ACTOR, provider.id, {
+        claim: 'repository_owner_id',
+        value: '1',
+      }),
+    ).toMatchObject({ ok: false, reason: 'invalid' });
+    const added = await addTenantValue(deps, ACTOR, provider.id, {
+      claim: 'repository_owner_id',
+      entries: [{ value: '4', label: 'other' }],
+    });
+    expect(added.ok).toBe(true);
+    // Organizations 1 and 3 stay out: only the admitted value plus the added one.
+    expect((await getCallerProvider(env.DB, provider.id))?.tenant_pin).toEqual([
+      { claim: 'repository_owner_id', match: 'exact', values: ['2', '4'] },
+    ]);
+  });
+
+  it('refuses a merge whose enterprise ID differs from the existing consumer', async () => {
+    const deps = opsDeps({ fetch: network().fetch });
+    const first = await createOrMergeConsumer(deps, ACTOR, {
+      profile: 'github-actions',
+      issuer: '',
+      tenants: [{ value: OWNER_ID, label: 'acme' }],
+    });
+    if (!first.ok) throw new Error('create failed');
+    const merged = await createOrMergeConsumer(deps, ACTOR, {
+      profile: 'github-actions',
+      issuer: '',
+      tenants: [{ value: '7654321', label: 'acme-labs' }],
+      enterprise_id: '12345',
+    });
+    expect(merged).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(!merged.ok && merged.errors[0]).toContain('without an enterprise ID');
+    expect((await getCallerProvider(env.DB, first.callerProvider.id))?.tenant_pin).toEqual([
+      { claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID] },
+    ]);
+  });
+
   it('takes the generic algorithms from discovery within ALLOWED_ALGS', async () => {
     const base = network();
     const fetchImpl: typeof fetch = async (input, init) => {

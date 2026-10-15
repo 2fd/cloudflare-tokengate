@@ -16,15 +16,22 @@ import {
   contextsFor,
   type ExpiryForm,
   hasCheckboxes,
+  isNumericId,
   isPathInjected,
   type JobsForm,
   type OpsForm,
   ownerFindCommand,
+  pinOwnerValues,
   repositoryFindCommand,
+  repositoryFindCommandForId,
 } from '../consumer-access';
 import type { FieldError } from '../ops/shared';
 import { REPO_PLACEHOLDER, type ServiceTemplate } from '../service-templates';
-import { AddConsumerFields, type ConsumerForm } from './add-consumer-fields';
+import {
+  AddConsumerFields,
+  type ConsumerForm,
+  genericAnchorSuggestions,
+} from './add-consumer-fields';
 import {
   Checkbox,
   CheckboxGroup,
@@ -156,7 +163,8 @@ export function AccessForm(props: { model: AccessFormModel }) {
             name="acknowledge_warnings"
             label="I have read these risks and want to save this access anyway"
             hint="If you change the constraints or operations, the list may change and you are asked again."
-            required
+            // The edit form sits in a <details> closed by default (A7.6): the server enforces it.
+            required={model.mode === 'create'}
             error={err('acknowledge_warnings')}
           />
         </fieldset>
@@ -233,13 +241,10 @@ function consumerDescription(branch: ConsumerBranch): string {
   const tenants =
     claims === null
       ? []
-      : branch.provider.tenant_pin
-          .filter((c) => c.claim === claims.owner)
-          .flatMap((c) => c.values)
-          .map((value) => {
-            const label = branch.labels.find((l) => l.claim === claims.owner && l.value === value);
-            return label ? `${label.label} (${value})` : value;
-          });
+      : pinOwnerValues(branch.provider, claims.owner).map((value) => {
+          const label = branch.labels.find((l) => l.claim === claims.owner && l.value === value);
+          return label ? `${label.label} (${value})` : value;
+        });
   return [
     branch.profile.label,
     ...(tenants.length > 0 ? [tenants.join(', ')] : []),
@@ -343,12 +348,16 @@ function NewConsumerFields(props: {
       <JobsFieldset branch={branch} errors={props.model.errors} focus={props.model.focus} />,
     ]),
   ) as Partial<Record<ProfileId, Child>>;
+  // Each type's branch holds the labels of the consumer a save would merge into.
+  const labels = Object.values(props.branch.jobs).flatMap((branch) => branch.labels);
   return (
     <AddConsumerFields
       prefix="new."
       form={props.branch.form}
       errors={props.model.errors}
       existing={props.model.existingConsumers}
+      labels={labels}
+      anchorSuggestions={genericAnchorSuggestions(props.model.existingConsumers)}
       jobs={jobs}
       legend={props.legend}
     />
@@ -408,13 +417,10 @@ export function JobsFieldset(props: {
   const owners =
     claims === null
       ? []
-      : branch.provider.tenant_pin
-          .filter((c) => c.claim === claims.owner && c.negate !== true)
-          .flatMap((c) => c.values)
-          .map((value) => ({
-            value,
-            label: branch.labels.find((l) => l.claim === claims.owner && l.value === value)?.label,
-          }));
+      : pinOwnerValues(branch.provider, claims.owner).map((value) => ({
+          value,
+          label: branch.labels.find((l) => l.claim === claims.owner && l.value === value)?.label,
+        }));
   const firstOwner = owners.find((owner) => owner.label)?.label;
   const gitlab = profile.id === 'gitlab-ci';
   const exampleRepo = gitlab
@@ -457,10 +463,15 @@ export function JobsFieldset(props: {
         label={gitlab ? 'Project' : 'Repository'}
         value={jobs.repository}
         example={exampleRepo}
-        findCommand={repositoryFindCommand(
-          profile,
-          gitlab ? `${firstOwner ?? 'acme-group'}/app` : `${firstOwner ?? 'acme'}/api`,
-        )}
+        findCommand={
+          // A prefilled bare ID without a stored name: the command that prints its name.
+          isNumericId(jobs.repository.trim())
+            ? repositoryFindCommandForId(profile, jobs.repository.trim())
+            : repositoryFindCommand(
+                profile,
+                gitlab ? `${firstOwner ?? 'acme-group'}/app` : `${firstOwner ?? 'acme'}/api`,
+              )
+        }
         suggestions={branch.repositoryOptions}
         error={err('repository')}
         autocomplete="off"
@@ -659,6 +670,7 @@ function ConditionRows(props: {
     ]),
   ].map((value) => ({ value }));
   const rows = branch.jobs.cond.length > 0 ? branch.jobs.cond : starterRows(branch);
+  const anchors = new Set(branch.profile.anchorRules(branch.provider).flat());
   return (
     <fieldset class="jobs rows-editor">
       <legend>Which jobs: conditions</legend>
@@ -680,19 +692,27 @@ function ConditionRows(props: {
         focusIndex={props.focus?.group === group ? props.focus.index : undefined}
         render={(index, row, rowPrefix) => (
           <>
-            <Field
-              name={`${rowPrefix}claim`}
-              label={`Claim ${index + 1}`}
-              value={row.claim ?? ''}
-              example="repository_id"
-              suggestions={claimOptions}
-              hint={CLAIM_HINT}
-              error={errorFor(errors, `${rowPrefix}claim`)}
-              autocomplete="off"
-              spellcheck={false}
-              autocapitalize="none"
-              conditional
-            />
+            {anchors.has(row.claim ?? '') ? (
+              // An anchor claim's name is fixed (I-AUTHZ-2): only its values are typed.
+              <p class="fixed" id={fieldId(`${rowPrefix}claim`)}>
+                <span class="label">Claim {index + 1}:</span> <code>{row.claim}</code>
+                <input type="hidden" name={`${rowPrefix}claim`} value={row.claim ?? ''} />
+              </p>
+            ) : (
+              <Field
+                name={`${rowPrefix}claim`}
+                label={`Claim ${index + 1}`}
+                value={row.claim ?? ''}
+                example="repository_id"
+                suggestions={claimOptions}
+                hint={CLAIM_HINT}
+                error={errorFor(errors, `${rowPrefix}claim`)}
+                autocomplete="off"
+                spellcheck={false}
+                autocapitalize="none"
+                conditional
+              />
+            )}
             <Select
               name={`${rowPrefix}match`}
               label={`Match ${index + 1}`}
@@ -946,16 +966,17 @@ const DAY_MS = 86_400_000;
 
 function ExpiryFieldset(props: { model: AccessFormModel }) {
   const { model } = props;
-  const keep = model.mode === 'edit' && model.keep !== undefined;
+  // "Keep" only for a stored date: for an access that never expires it would repeat "Never".
+  const keep = model.mode === 'edit' && model.keep !== undefined && model.keep !== null;
   const keepText =
     model.keep === null || model.keep === undefined
-      ? 'Keep: never expires'
+      ? ''
       : `Keep: ${formatTime(model.keep)} (in ${Math.max(0, Math.ceil((model.keep - model.now) / DAY_MS))} days)`;
   return (
     <RadioCards
       name="expires"
       legend="Expires"
-      value={model.expiry.expires}
+      value={!keep && model.expiry.expires === 'keep' ? 'never' : model.expiry.expires}
       error={errorFor(model.errors, 'expires')}
       options={[
         ...(keep ? [{ value: 'keep', title: keepText }] : []),
@@ -972,6 +993,7 @@ function ExpiryFieldset(props: { model: AccessFormModel }) {
               label="Last day of access"
               type="date"
               value={model.expiry.expires_on}
+              example="2027-01-31"
               hint="Access stops at the end of this day (UTC)."
               error={errorFor(model.errors, 'expires_on')}
               autocomplete="off"

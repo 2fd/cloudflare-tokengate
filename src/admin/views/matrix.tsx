@@ -172,24 +172,22 @@ function AccessLine(props: { edge: AccessEdge; subject: string }) {
     shortContext(edge.context),
     operationsText(edge.operations.length),
     ...(credentialExpired ? ['credential expired'] : []),
-    ...(unused ? ['unused 30 d'] : []),
+    ...(unused ? ['unused 30 days'] : []),
   ];
   const tokenName = edge.token?.name ?? 'a deleted token';
+  // The visible words are the accessible name, in order (WCAG 2.5.3 Label in Name); the hidden
+  // text only adds the subject and the token around them.
   return (
     <a class="access-line" href={paths.accessItem(edge.grant.id)}>
-      <span aria-hidden="true">
-        <span class={`badge ${status.tone}`}>
-          {status.glyph ? `${status.glyph} ` : ''}
-          {words}
-        </span>{' '}
-        {parts.join(' · ')}
-      </span>
       <span class="vh">
-        {props.subject} can use {tokenName}: {words}, {edge.context},{' '}
-        {operationsText(edge.operations.length)}
-        {credentialExpired ? ', credential expired' : ''}
-        {unused ? ', unused for 30 days' : ''}. Open access.
+        {props.subject} can use {tokenName}:{' '}
       </span>
+      <span class={`badge ${status.tone}`}>
+        {status.glyph ? <span aria-hidden="true">{status.glyph} </span> : null}
+        {words}
+      </span>{' '}
+      {parts.join(' · ')}
+      <span class="vh">. Open access.</span>
     </a>
   );
 }

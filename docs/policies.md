@@ -324,8 +324,10 @@ access saves in one submit, and the audit row records the accepted risk codes an
 
 The server computes the accepted codes from the submitted choice of the chosen consumer branch, never
 from a list the browser sends. A choice in another, hidden branch covers nothing. The admin UI also
-finds these risks in the conditions themselves: rows that constrain no ref, environment, protection
-or event carry `any_ref`, and rows on a ref or environment without `ref_protected exact true` carry
+finds these risks in the conditions themselves: rows that constrain no ref, environment, protection,
+commit or event carry `any_ref` (an exact `sub` that names the ref or environment, `workflow_ref`,
+`sha` or `head_ref` constrains it; `job_workflow_ref` and `ci_config_ref_uri` do not, because they
+can name a reusable workflow or a configuration in another repository), and rows on a ref or environment without `ref_protected exact true` carry
 `unprotected_ref`. Without the structured choice, they need the box below, and the access page lists
 them under "Accepted risks". The default context is never a risky one.
 
@@ -333,7 +335,8 @@ Every other warning (the codes `broad_glob`, `event_glob`, `pwn_request`, `inher
 `untrusted_event` and `path_injection_non_post` of [Warnings](#warnings)) needs the box "I have read
 these risks and want to save this access anyway". The box is bound to a digest of exactly the risks
 shown: if an edit changes them, the form asks again. The box shows on the first render when prefilled
-values (a copy, a request record) or the rows editor already carry risks.
+values (a copy, a request record) or the rows editor already carry risks. A prefilled form never
+accepts a risk by its prefilled choice: until the risks are gone, it saves only with the box ticked.
 
 ## Warnings
 
@@ -351,7 +354,7 @@ accepted is in [Risks and their acceptance](#risks-and-their-acceptance). The ac
 | `pull_request` | GitHub `pull_request` is opted in | `pull_request` jobs run the code proposed in the pull request |
 | `untrusted_event` | Another untrusted event is opted in | The access accepts an event that is refused by default |
 | `path_injection_non_post` | The token uses `path` injection and the access allows a method other than `POST` | Webhook APIs such as Discord return the credential in the response body for `GET` and `PATCH` on the webhook URL, and response bodies are not redacted |
-| `any_ref` | (structured form only) Any branch, tag or environment | Anyone with write access to the repository gets the token |
+| `any_ref` | The choice "Any branch, tag or environment", or GitHub or GitLab conditions that constrain no ref, environment, protection, commit or event (computed by the admin UI, not by `validateGrant`) | Anyone with write access to the repository gets the token |
 
 About `ref_protected`: GitHub reports a ref as protected only when branch protections or rulesets are
 configured for it (see `GITHUB_REF_PROTECTED` in

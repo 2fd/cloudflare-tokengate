@@ -160,3 +160,68 @@ export function locationOf(response: Response): string {
 export function idFromLocation(location: string): string {
   return location.split('?')[0]?.split('/').at(-1) ?? '';
 }
+
+function decodeEntities(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+/**
+ * The fields a browser submits for the form `formId` as rendered, without the CSRF token (the
+ * test helpers add it): inputs (checked radios and checkboxes only, no buttons) and selects.
+ */
+export async function formFields(
+  html: string,
+  formId: string,
+): Promise<Record<string, string | string[]>> {
+  const out: Record<string, string | string[]> = {};
+  const add = (name: string, value: string) => {
+    if (name === '_csrf') return;
+    const current = out[name];
+    out[name] =
+      current === undefined ? value : [...(Array.isArray(current) ? current : [current]), value];
+  };
+  let select: { name: string; value: string | null; first: string | null } | null = null;
+  await new HTMLRewriter()
+    .on(`form#${formId} input`, {
+      element(element) {
+        const name = element.getAttribute('name');
+        const type = element.getAttribute('type') ?? 'text';
+        if (!name || element.hasAttribute('disabled')) return;
+        if (['submit', 'button', 'reset'].includes(type)) return;
+        if ((type === 'radio' || type === 'checkbox') && !element.hasAttribute('checked')) return;
+        add(
+          name,
+          decodeEntities(element.getAttribute('value') ?? (type === 'checkbox' ? 'on' : '')),
+        );
+      },
+    })
+    .on(`form#${formId} select`, {
+      element(element) {
+        const name = element.getAttribute('name');
+        if (!name) return;
+        const current = { name, value: null as string | null, first: null as string | null };
+        select = current;
+        element.onEndTag(() => {
+          add(current.name, current.value ?? current.first ?? '');
+          select = null;
+        });
+      },
+    })
+    .on(`form#${formId} select option`, {
+      element(element) {
+        const current = select as { value: string | null; first: string | null } | null;
+        if (!current) return;
+        const value = decodeEntities(element.getAttribute('value') ?? '');
+        if (current.first === null) current.first = value;
+        if (element.hasAttribute('selected')) current.value = value;
+      },
+    })
+    .transform(new Response(html))
+    .text();
+  return out;
+}

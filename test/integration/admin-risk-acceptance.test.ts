@@ -9,6 +9,7 @@ import { adminGet, adminPost } from '../helpers/admin-auth';
 import {
   type ConsumersWorld,
   consumersWorld,
+  formFields,
   idFromLocation,
   inputValue,
   lastAudit,
@@ -18,6 +19,7 @@ import {
   OWNER_ID,
   REPOSITORY_ID,
   seedGithubProvider,
+  seedGrant,
   seedService,
 } from '../unit/admin/ops/helpers';
 
@@ -174,6 +176,45 @@ describe('I-AUTHZ-3: risky access needs explicit acceptance', () => {
     });
     expect(without.status).toBe(422);
     expect(await listGrants(env.DB)).toHaveLength(1);
+  });
+
+  it('a copy of an access whose repository has no stored name asks for the acknowledgement too', async () => {
+    // Created by the ops (or before WP4): owner and repository conditions, no labels: any_ref.
+    const source = await seedGrant(world.app.deps, provider.id, serviceId);
+    const html = await (
+      await adminGet(world.app, session(), `/admin/access/new?copy=${source.id}`)
+    ).text();
+    expect(html).toContain('<fieldset class="ack">');
+    expect(html).toMatch(/name="acknowledge_warnings"[^>]*required/);
+    // The bare ID has no name yet: the hint names the command that prints it.
+    expect(html).toContain(`gh api repositories/${REPOSITORY_ID}`);
+    const fields = await formFields(html, 'access-form');
+    const repository = `acme/api (${REPOSITORY_ID})`;
+    // Typing the name alone does not accept the prefilled risky choice.
+    const unticked = await adminPost(world.app, session(), '/admin/access', {
+      ...fields,
+      repository,
+    });
+    expect(unticked.status).toBe(422);
+    const { warnings_digest: _digest, ...withoutDigest } = fields;
+    const noDigest = await adminPost(world.app, session(), '/admin/access', {
+      ...withoutDigest,
+      repository,
+    });
+    expect(noDigest.status).toBe(422);
+    expect(await noDigest.text()).toMatch(/name="acknowledge_warnings"[^>]*required/);
+    // A 422 for another input keeps the acknowledgement on the page.
+    const missing = await adminPost(world.app, session(), '/admin/access', withoutDigest);
+    expect(missing.status).toBe(422);
+    expect(await missing.text()).toContain('<fieldset class="ack">');
+    expect(await listGrants(env.DB)).toHaveLength(1);
+    const ticked = await adminPost(world.app, session(), '/admin/access', {
+      ...fields,
+      repository,
+      acknowledge_warnings: '1',
+    });
+    expect(ticked.status).toBe(303);
+    expect((await lastAudit('grant.create'))?.accepted_risks).toEqual(['any_ref']);
   });
 
   it('a decoy choice in another branch covers nothing', async () => {

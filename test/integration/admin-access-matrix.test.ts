@@ -59,14 +59,17 @@ describe('consumer access matrix', () => {
       .run();
     await seedGrant(world.app.deps, provider.id, openai, 'no credential');
     const html = await matrix();
-    expect(html).toContain('✓ Active');
-    expect(html).toContain('⏸ Disabled');
-    expect(html).toContain('✕ Expired');
+    expect(html).toContain('<span aria-hidden="true">✓ </span>Active');
+    expect(html).toContain('<span aria-hidden="true">⏸ </span>Disabled');
+    expect(html).toContain('<span aria-hidden="true">✕ </span>Expired');
     expect(html).toContain('Inactive: token has no credential');
-    expect(html).toContain('acme/api can use Slack: Active, any ref, 1 operation. Open access.');
+    // WCAG 2.5.3: the visible words are the accessible name, in order, inside the hidden context.
+    expect(html).toContain(
+      '<span class="vh">acme/api can use Slack: </span><span class="badge ok"><span aria-hidden="true">✓ </span>Active</span> any ref · 1 operation<span class="vh">. Open access.</span>',
+    );
     expect(html).toContain(`href="/admin/access/${active.id}"`);
-    // Created just now: never "unused 30 d".
-    expect(html).not.toContain('unused 30 d');
+    // Created just now: never "unused 30 days".
+    expect(html).not.toContain('unused 30 days');
   });
 
   it('offers "+" with a prefilled copy to access managers and "—" to viewers', async () => {

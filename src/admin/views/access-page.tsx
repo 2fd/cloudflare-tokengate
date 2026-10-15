@@ -7,7 +7,7 @@ import type { CallerProvider, ClaimLabel, Grant, Service } from '../../db/types'
 import type { IssuerProfile } from '../../identity/types';
 import type { WarningDetail } from '../../policy/validate';
 import type { AccessEdge } from '../connections';
-import { anchorClaims, repositoryFindCommand } from '../consumer-access';
+import { anchorClaims, pinOwnerValues, repositoryFindCommand } from '../consumer-access';
 import { eventSummary, formatConditions } from '../grant-text';
 import { paths } from '../paths';
 import type { ViewContext } from '../render';
@@ -27,7 +27,7 @@ import {
   Time,
   VersionField,
 } from './components';
-import { ConsumerSnippet } from './consumer-snippet';
+import { ConsumerSnippet, snippetCall } from './consumer-snippet';
 import { formatCount, relativeTime } from './format';
 import { anchorsOf, shortContext } from './matrix';
 
@@ -229,6 +229,7 @@ export function AccessPage(props: { model: AccessPageModel; ctx: ViewContext }) 
           origin={model.origin}
           slugs={[token.slug]}
           environment={environment}
+          call={snippetCall(grant.rules)}
         />
       </section>
 
@@ -389,9 +390,31 @@ function CopySection(props: {
 }) {
   const { model, ctx } = props;
   const gitlab = model.profile.id === 'gitlab-ci';
-  const repositoryLabel = props.repositoryId;
   const anchors = anchorsOf(model.edge, model.labels);
-  if (anchorClaims(model.profile) === null || repositoryLabel === null) {
+  const claims = anchorClaims(model.profile);
+  // The placeholder names the consumer's first labelled organization or group (A7.8).
+  const firstOwner =
+    claims === null
+      ? null
+      : (pinOwnerValues(model.consumer, claims.owner)
+          .map((value) => labelFor(model.labels, claims.owner, value))
+          .find((label) => label !== null) ?? null);
+  const example = gitlab
+    ? `${firstOwner ?? 'acme-group'}/app (4567890)`
+    : `${firstOwner ?? 'acme'}/api (89012345)`;
+  const expiresAt = model.grant.expires_at;
+  const expiry =
+    expiresAt === null ? null : expiresAt > ctx.now ? (
+      <p>
+        The copy expires with this access: <Time ms={expiresAt} />.
+      </p>
+    ) : (
+      <p>
+        This access has expired: Create copy opens the form so that you choose when the copy
+        expires.
+      </p>
+    );
+  if (claims === null || props.repositoryId === null) {
     return (
       <section id="copy" aria-labelledby="copy-h">
         <h2 id="copy-h">Copy to another token</h2>
@@ -412,7 +435,7 @@ function CopySection(props: {
           id="f-copy-repository"
           label={gitlab ? 'Project' : 'Repository'}
           value={model.copy.repository}
-          example={gitlab ? 'acme-group/app (4567890)' : 'acme/api (89012345)'}
+          example={example}
           findCommand={repositoryFindCommand(model.profile, anchors[0]?.subject)}
           suggestions={model.repositoryOptions}
           error={model.copy.error.repository ?? null}
@@ -436,6 +459,7 @@ function CopySection(props: {
             ? 'The copy has no accepted risks.'
             : `The copy keeps these accepted risks: ${model.warningDetails.map((w) => w.message).join('; ')}.`}
         </p>
+        {expiry}
         <div class="actions">
           <button type="submit" class="primary">
             Create copy

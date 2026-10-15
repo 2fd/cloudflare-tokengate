@@ -27,6 +27,7 @@ import type { WarningCode, WarningDetail } from '../policy/validate';
 import { accessSummary } from './access-summary';
 import type { Connections } from './connections';
 import { formatValueList, parseValueList } from './grant-text';
+import { pinValues } from './ops/caller-providers';
 import type { GrantLabel } from './ops/grants';
 import type { FieldError } from './ops/shared';
 import {
@@ -135,6 +136,15 @@ export function repositoryFindCommand(profile: Pick<IssuerProfile, 'id'>, name?:
   return `gh api repos/${repo} --jq '"\\(.full_name) (\\(.id))"'`;
 }
 
+/** `gh`/`glab` command whose output is the repository input format, for a known numeric ID. */
+export function repositoryFindCommandForId(profile: Pick<IssuerProfile, 'id'>, id: string): string {
+  const value = DIGITS_RE.test(id) ? id : '89012345';
+  if (profile.id === 'gitlab-ci') {
+    return `glab api projects/${value} | jq -r '"\\(.path_with_namespace) (\\(.id))"'`;
+  }
+  return `gh api repositories/${value} --jq '"\\(.full_name) (\\(.id))"'`;
+}
+
 /** `gh`/`glab` command whose output is the organization or group input format. */
 export function ownerFindCommand(profile: Pick<IssuerProfile, 'id'>, name?: string): string {
   if (profile.id === 'gitlab-ci') {
@@ -177,7 +187,7 @@ export function parseRepositoryInput(
   if (label === null) {
     return {
       ok: false,
-      message: `Enter the ${noun} name too, like ${example}: ID ${parsed.id} has no name here yet.`,
+      message: `Enter the ${noun} name too, like ${example}: ID ${parsed.id} has no name here yet. Find it with: ${repositoryFindCommandForId(profile, parsed.id)}`,
     };
   }
   const shape = profile.id === 'gitlab-ci' ? GITLAB_PROJECT_LABEL : GITHUB_REPO_LABEL;
@@ -253,18 +263,12 @@ export function deriveOwner(
   return null;
 }
 
-/** Values of the owner claim in the consumer's pin. */
+/** Values of the owner claim the consumer's pin admits (pin conditions are ANDed). */
 export function pinOwnerValues(
   provider: Pick<CallerProvider, 'tenant_pin'>,
   claim: string,
 ): string[] {
-  return [
-    ...new Set(
-      provider.tenant_pin
-        .filter((c) => c.claim === claim && c.match === 'exact' && c.negate !== true)
-        .flatMap((c) => c.values),
-    ),
-  ];
+  return pinValues(provider.tenant_pin, claim);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1037,10 +1041,30 @@ const JOB_CLAIMS: readonly string[] = [
 ];
 
 /**
- * True when GitHub or GitLab conditions constrain no ref, environment, protection or event, so
- * every job of the repository matches: the `any_ref` risk (A7.7). validateGrant does not emit it
- * (the ops accept such grants without acknowledgement), so the pages add it from the conditions,
- * the same way for the structured form, the rows editor and stored accesses.
+ * Claims whose exact value names the job's own ref or commit: `sub` (GitHub
+ * `repo:acme/api:environment:production`, GitLab `project_path:…:ref:main`), the calling
+ * workflow file at its ref, the commit and the pull request's head branch. `job_workflow_ref` and
+ * `ci_config_ref_uri` are not here: they name the ref of a reusable workflow or of a pipeline
+ * configuration that may live in another repository, so the caller's ref stays open.
+ */
+const EXACT_REF_CLAIMS: readonly string[] = ['sub', 'workflow_ref', 'sha', 'head_ref'];
+
+/**
+ * A GitHub repository can customize its `sub` template to leave the ref out, so a `sub` value
+ * constrains the ref only when it names one (or the environment, or the pull_request context).
+ */
+const SUB_NAMES_REF = /:(?:ref|environment):|:pull_request(?::|$)/;
+
+function constrainsRef(c: Condition): boolean {
+  if (c.match !== 'exact' || !EXACT_REF_CLAIMS.includes(c.claim)) return false;
+  return c.claim !== 'sub' || c.values.every((value) => SUB_NAMES_REF.test(value));
+}
+
+/**
+ * True when GitHub or GitLab conditions constrain no ref, environment, protection, commit or event,
+ * so every job of the repository matches: the `any_ref` risk (A7.7). validateGrant does not emit
+ * it (the ops accept such grants without acknowledgement), so the pages add it from the
+ * conditions, the same way for the structured form, the rows editor and stored accesses.
  */
 export function isAnyRef(
   conditions: readonly Condition[],
@@ -1051,6 +1075,7 @@ export function isAnyRef(
     (c) =>
       c.negate !== true &&
       (JOB_CLAIMS.includes(c.claim) ||
+        constrainsRef(c) ||
         (profile.eventClaim !== undefined && c.claim === profile.eventClaim)),
   );
 }

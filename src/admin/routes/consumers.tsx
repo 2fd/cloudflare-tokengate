@@ -54,6 +54,8 @@ import {
   AddConsumerFields,
   blankConsumerForm,
   type ConsumerForm,
+  GENERIC_PRESETS,
+  genericAnchorSuggestions,
   parseConsumerForm,
   readConsumerForm,
 } from '../views/add-consumer-fields';
@@ -152,7 +154,7 @@ async function renderList(
   const deps = c.get('deps');
   const connections = withAnyRefFlags(await loadConnections(deps));
   const consumers = connections.consumers;
-  const anchorClaims = consumerAnchorSuggestions(consumers);
+  const anchorClaims = genericAnchorSuggestions(consumers);
   return renderPage(
     c,
     {
@@ -177,6 +179,7 @@ async function renderList(
               form={failed?.form ?? blankConsumerForm()}
               errors={failed?.errors ?? []}
               existing={consumers}
+              labels={connections.labels}
               anchorSuggestions={anchorClaims}
             />
           </details>
@@ -212,21 +215,12 @@ async function renderList(
   );
 }
 
-function consumerAnchorSuggestions(consumers: readonly CallerProvider[]): string[] {
-  return [
-    ...new Set(
-      consumers
-        .filter((consumer) => consumer.profile === 'generic')
-        .flatMap((consumer) => consumer.anchor_claims),
-    ),
-  ];
-}
-
 function AddConsumerForm(props: {
   ctx: ViewContext;
   form: ConsumerForm;
   errors: FieldError[];
   existing: readonly CallerProvider[];
+  labels: readonly ClaimLabel[];
   anchorSuggestions: readonly string[];
 }) {
   return (
@@ -236,6 +230,7 @@ function AddConsumerForm(props: {
         form={props.form}
         errors={props.errors}
         existing={props.existing}
+        labels={props.labels}
         anchorSuggestions={props.anchorSuggestions}
       />
       <div class="actions">
@@ -381,7 +376,8 @@ async function renderNew(
         form={form}
         errors={errors}
         existing={connections.consumers}
-        anchorSuggestions={consumerAnchorSuggestions(connections.consumers)}
+        labels={connections.labels}
+        anchorSuggestions={genericAnchorSuggestions(connections.consumers)}
       />
     ),
   );
@@ -400,6 +396,9 @@ function consumerErrorField(form: ConsumerForm, message: string, prefix = ''): s
   }
   if (form.type === 'github-actions' && lower.includes('discovery')) {
     return `${prefix}github_enterprise_slug`;
+  }
+  if (form.type === 'github-actions' && lower.includes('enterprise id')) {
+    return `${prefix}github_enterprise_id`;
   }
   if (
     form.type === 'github-actions' &&
@@ -755,6 +754,13 @@ function TenantsSection(props: {
         ? 'Groups'
         : 'Tenant pin';
   if (claim === null) {
+    // The presets' pin claims, then the claims this pin already uses.
+    const pinClaimSuggestions = [
+      ...new Set([
+        ...GENERIC_PRESETS.map((preset) => preset.pin),
+        ...provider.tenant_pin.map((condition) => condition.claim),
+      ]),
+    ].map((value) => ({ value }));
     const rows =
       state.pin ??
       provider.tenant_pin.map((condition) => ({
@@ -796,6 +802,8 @@ function TenantsSection(props: {
                       label={`Claim ${index + 1}`}
                       value={row.claim ?? ''}
                       example="organization_id"
+                      suggestions={pinClaimSuggestions}
+                      hint="Literal top-level claim name that every token of your organization carries."
                       error={err(`${prefix}claim`)}
                       autocomplete="off"
                       spellcheck={false}
@@ -1074,6 +1082,9 @@ function TrustSection(props: {
             label="Anchor claims"
             value={value('anchor_claims', provider.anchor_claims.join(', '))}
             example="pipeline_id"
+            suggestions={genericAnchorSuggestions(props.tokens.consumers).map((claim) => ({
+              value: claim,
+            }))}
             hint="Claims that identify one workload exactly, comma-separated. Every access needs an exact condition on one of them."
             error={err('anchor_claims')}
             autocomplete="off"
@@ -1082,7 +1093,9 @@ function TrustSection(props: {
             conditional
           />
         ) : null}
-        {enabledGrants.length > 0 ? (
+        {/* Only the issuer (editable here) or the JWKS URI (generic) can need the confirmation. */}
+        {enabledGrants.length > 0 &&
+        (issuerEditable(provider) || provider.profile === 'generic') ? (
           <div class="confirm-trust">
             <Checkbox
               name="confirm_trust_change"
@@ -1322,6 +1335,13 @@ async function savePin(
       errors.push({ field: `pin.${index}.value`, message: values.error });
     } else if (values.values.length === 0) {
       errors.push({ field: `pin.${index}.value`, message: `Enter the value of ${claim}.` });
+    } else if (pin.some((condition) => condition.claim === claim)) {
+      // Rows are ANDed: two rows on one claim admit only their common values, which reads as
+      // either. One row per claim keeps the pin what it looks like (I-TEN-1).
+      errors.push({
+        field: `pin.${index}.claim`,
+        message: `Put every value of ${claim} in one row, separated by commas.`,
+      });
     } else {
       pin.push({ claim, match: 'exact', values: values.values });
     }
