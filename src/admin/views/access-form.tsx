@@ -874,7 +874,10 @@ export function OpsFieldset(props: {
   const withBoxes = hasCheckboxes(branch);
   const group = `${prefix}rule`;
   const rows = branch.ops.rule;
-  const firstPath = presets[0]?.rules[0]?.path.replaceAll(REPO_PLACEHOLDER, repo) ?? '/v1/resource';
+  // The placeholder is an exact example, so {repo} becomes a real-looking name, never ‹repository›.
+  const firstPath =
+    presets[0]?.rules[0]?.path.replaceAll(REPO_PLACEHOLDER, props.repositoryLabel ?? 'acme/api') ??
+    '/v1/resource';
   const otherOpen =
     rows.length > 0 ||
     !withBoxes ||

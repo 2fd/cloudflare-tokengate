@@ -23,7 +23,12 @@ import type { IssuerProfile, ProfileId } from '../../identity/types';
 import { parseJson } from '../../lib/json';
 import { claimText } from '../../policy/conditions';
 import type { Condition, Rule } from '../../policy/types';
-import { validateGrant, type WarningCode, type WarningDetail } from '../../policy/validate';
+import {
+  validateCallerProvider,
+  validateGrant,
+  type WarningCode,
+  type WarningDetail,
+} from '../../policy/validate';
 import { type AccessEdge, type Connections, loadConnections } from '../connections';
 import {
   accessFormFromGrant,
@@ -178,12 +183,21 @@ const NOTICES: NoticeTable<NoticeContext & AccessNoticeData> = {
     text: 'This token has other operations: review them, then save the copy.',
   }),
   consumer_created: ({ consumer }) => ({
-    text: `Consumer ${consumer?.name ?? ''} created. Now give it access to a token.`,
+    text: `Consumer ${consumer?.name ?? ''} created. Now give it access to a token.${consumerRisks(consumer)}`,
   }),
   tenant_added: ({ consumer }) => ({
     text: `Added to ${consumer?.name ?? 'the consumer'}. Now give it access to a token.`,
   }),
 };
+
+/** " Risk: …" for each standing warning of a consumer (a generic one without a pin), or "". */
+function consumerRisks(consumer: CallerProvider | null): string {
+  const profile = consumer ? getProfile(consumer.profile) : null;
+  if (!consumer || !profile) return '';
+  return validateCallerProvider(consumer, profile, consumer)
+    .warnings.map((warning) => ` Risk: ${warning}.`)
+    .join('');
+}
 
 function notice(c: AdminContext, data: AccessNoticeData) {
   return resolveNotice(NOTICES, c.req.query('notice'), null, data);
@@ -877,7 +891,7 @@ async function buildFormModel(
   if (
     consumers.length === 0 ||
     seed.consumerView === 'new' ||
-    (seed.consumerId === 'new' && consumers.length === 1)
+    (seed.consumerId === 'new' && (consumers.length === 1 || consumers.length > MAX_CARDS))
   ) {
     consumer = {
       kind: 'new',

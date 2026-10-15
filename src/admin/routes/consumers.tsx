@@ -71,7 +71,7 @@ import {
 } from '../views/components';
 import { ConsumerSnippet } from '../views/consumer-snippet';
 import { relativeTime } from '../views/format';
-import { anchorsOf, shortContext } from '../views/matrix';
+import { anchorsOf } from '../views/matrix';
 import { RepeatingRows } from '../views/rows';
 import { statusLabel } from '../views/status';
 
@@ -260,8 +260,8 @@ function accessChip(edge: AccessEdge, labelSubject = true): ChipProps {
   return {
     href: paths.accessItem(edge.grant.id),
     text: labelSubject
-      ? `${token} · ${edge.subject} · ${shortContext(edge.context)}`
-      : `${token} · ${shortContext(edge.context)}`,
+      ? `${token} · ${edge.subject} · ${edge.context}`
+      : `${token} · ${edge.context}`,
     status: edge.status,
     ...(edge.statusDetail === undefined ? {} : { statusDetail: edge.statusDetail }),
     srText: `${edge.subject} in ${edge.context} can use ${token}: ${status}`,
