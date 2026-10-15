@@ -464,7 +464,7 @@ export function JobsFieldset(props: {
         suggestions={branch.repositoryOptions}
         error={err('repository')}
         autocomplete="off"
-        required={!conditional}
+        // Not required: an empty repository is valid with a workflow pin (More constraints).
         conditional={conditional}
       />
       {branch.unknownOwner !== null ? (

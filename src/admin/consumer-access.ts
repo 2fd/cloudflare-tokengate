@@ -7,6 +7,7 @@ import { labelFor, parseIdWithLabel, parseIdWithLabelList } from '../db/claim-la
 import type { RuleSet } from '../db/suggestions';
 import type { AccessShape } from '../db/suggestions';
 import type { CallerProvider, ClaimLabel, LabelledClaim, Service } from '../db/types';
+import { getProfile } from '../identity/profiles';
 import type { IssuerProfile } from '../identity/types';
 import { globError } from '../policy/glob';
 import {
@@ -18,11 +19,13 @@ import {
   gitlabPresetFromConditions,
   type PresetResult,
   PROTECTABLE_CONTEXTS,
+  RISK_WARNINGS,
   type RiskCode,
 } from '../policy/presets';
 import { type Condition, PROXY_METHODS, type Rule } from '../policy/types';
-import type { WarningCode } from '../policy/validate';
+import type { WarningCode, WarningDetail } from '../policy/validate';
 import { accessSummary } from './access-summary';
+import type { Connections } from './connections';
 import { formatValueList, parseValueList } from './grant-text';
 import type { GrantLabel } from './ops/grants';
 import type { FieldError } from './ops/shared';
@@ -693,7 +696,10 @@ function partialConditions(
   return out;
 }
 
-/** The context the consumer's accesses use most, else environment (A14.7.3 default). */
+/** Contexts whose selection accepts a risk; prefill never picks one silently (A7.7.4). */
+const RISKY_CONTEXTS: ReadonlySet<AccessContext> = new Set<AccessContext>(['pull_request', 'any']);
+
+/** The safe context the consumer's accesses use most, else environment (A14.7.3 default). */
 export function mostUsedContext(
   shapes: readonly AccessShape[],
   profile: Pick<IssuerProfile, 'id'>,
@@ -711,6 +717,8 @@ export function mostUsedContext(
   let best: AccessContext = 'environment';
   let bestCount = 0;
   for (const context of contextsFor(profile)) {
+    // A risky context is never the default: its selection accepts the risk (A7.7).
+    if (RISKY_CONTEXTS.has(context)) continue;
     const count = counts.get(context) ?? 0;
     if (count > bestCount) {
       best = context;
@@ -1013,4 +1021,66 @@ export function withTypedLabels(
 /** True when `value` is a numeric ID (claim values of labelled claims). */
 export function isNumericId(value: string): boolean {
   return DIGITS_RE.test(value);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Risks of stored conditions
+
+/** Claims that narrow which jobs of a repository match (ref, environment, protection, PR base). */
+const JOB_CLAIMS: readonly string[] = [
+  'ref',
+  'ref_path',
+  'environment',
+  'ref_type',
+  'ref_protected',
+  'base_ref',
+];
+
+/**
+ * True when GitHub or GitLab conditions constrain no ref, environment, protection or event, so
+ * every job of the repository matches: the `any_ref` risk (A7.7). validateGrant does not emit it
+ * (the ops accept such grants without acknowledgement), so the pages add it from the conditions,
+ * the same way for the structured form, the rows editor and stored accesses.
+ */
+export function isAnyRef(
+  conditions: readonly Condition[],
+  profile: Pick<IssuerProfile, 'id' | 'eventClaim'>,
+): boolean {
+  if (profile.id !== 'github-actions' && profile.id !== 'gitlab-ci') return false;
+  return !conditions.some(
+    (c) =>
+      c.negate !== true &&
+      (JOB_CLAIMS.includes(c.claim) ||
+        (profile.eventClaim !== undefined && c.claim === profile.eventClaim)),
+  );
+}
+
+/** The validator's warning details plus `any_ref` when the conditions carry it. */
+export function accessWarningDetails(
+  details: readonly WarningDetail[],
+  conditions: readonly Condition[],
+  profile: Pick<IssuerProfile, 'id' | 'eventClaim'>,
+): WarningDetail[] {
+  if (!isAnyRef(conditions, profile) || details.some((d) => d.code === 'any_ref')) {
+    return [...details];
+  }
+  return [...details, { code: 'any_ref', message: RISK_WARNINGS.any_ref }];
+}
+
+/** Connections whose any-ref accesses also carry the risk_accepted flag (the access page agrees). */
+export function withAnyRefFlags(connections: Connections): Connections {
+  return {
+    ...connections,
+    accesses: connections.accesses.map((edge) => {
+      const profile = edge.consumer ? getProfile(edge.consumer.profile) : null;
+      if (
+        !profile ||
+        edge.flags.some((f) => f.status === 'risk_accepted') ||
+        !isAnyRef(edge.grant.conditions, profile)
+      ) {
+        return edge;
+      }
+      return { ...edge, flags: [...edge.flags, { status: 'risk_accepted' }] };
+    }),
+  };
 }

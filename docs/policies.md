@@ -323,7 +323,11 @@ access saves in one submit, and the audit row records the accepted risk codes an
 | Any branch, tag or environment | `any_ref` | anyone with write access to the repository gets the token |
 
 The server computes the accepted codes from the submitted choice of the chosen consumer branch, never
-from a list the browser sends. A choice in another, hidden branch covers nothing.
+from a list the browser sends. A choice in another, hidden branch covers nothing. The admin UI also
+finds these risks in the conditions themselves: rows that constrain no ref, environment, protection
+or event carry `any_ref`, and rows on a ref or environment without `ref_protected exact true` carry
+`unprotected_ref`. Without the structured choice, they need the box below, and the access page lists
+them under "Accepted risks". The default context is never a risky one.
 
 Every other warning (the codes `broad_glob`, `event_glob`, `pwn_request`, `inherited_trust_event`,
 `untrusted_event` and `path_injection_non_post` of [Warnings](#warnings)) needs the box "I have read

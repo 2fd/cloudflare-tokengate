@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   accessFormFromGrant,
+  accessWarningDetails,
   blankJobsForm,
   coveredRiskCodes,
   defaultOpsForm,
@@ -8,7 +9,9 @@ import {
   deriveOwner,
   type JobsContext,
   type JobsForm,
+  isAnyRef,
   jobsToRows,
+  mostUsedContext,
   opsFormFromRules,
   ownerPrefix,
   parseExpiry,
@@ -22,6 +25,7 @@ import { getServiceTemplate } from '../../../src/admin/service-templates';
 import { ruleSets } from '../../../src/db/suggestions';
 import type { CallerProvider, ClaimLabel } from '../../../src/db/types';
 import { PROFILES } from '../../../src/identity/profiles';
+import type { Condition } from '../../../src/policy/types';
 import { provider as policyProvider } from '../policy/fixtures';
 
 const github = PROFILES['github-actions'];
@@ -181,6 +185,20 @@ describe('parseJobs', () => {
     });
     expect(JSON.stringify(parsed.conditions)).not.toContain('decoy');
     expect(JSON.stringify(parsed.conditions)).not.toContain('evil');
+  });
+
+  it('reads only the release tag for a release: a decoy tag in the hidden Tag card is ignored', () => {
+    const parsed = parseJobs(
+      jobs({ context: 'release', release_tag: 'v*', tag: 'decoy-*' }),
+      ctx(),
+    );
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.conditions).toContainEqual({
+      claim: 'event_name',
+      match: 'exact',
+      values: ['release'],
+    });
+    expect(JSON.stringify(parsed.conditions)).not.toContain('decoy');
   });
 
   it('maps pattern errors to the input of the chosen context', () => {
@@ -435,5 +453,57 @@ describe('deriveAccessName', () => {
       'Slack for acme/api (environment production)',
     );
     expect(deriveAccessName('x'.repeat(120), conditions, LABELS)).toHaveLength(100);
+  });
+});
+
+describe('any-ref risk of stored conditions (A7.7)', () => {
+  const anchor = [
+    { claim: 'repository_owner_id', match: 'exact' as const, values: ['1000'] },
+    { claim: 'repository_id', match: 'exact' as const, values: ['2000'] },
+  ];
+
+  it('flags conditions that constrain no ref, environment, protection or event', () => {
+    expect(isAnyRef(anchor, github)).toBe(true);
+    expect(isAnyRef([...anchor, { claim: 'actor', match: 'exact', values: ['x'] }], github)).toBe(
+      true,
+    );
+    expect(
+      isAnyRef([...anchor, { claim: 'ref_protected', match: 'exact', values: ['true'] }], github),
+    ).toBe(false);
+    expect(
+      isAnyRef([...anchor, { claim: 'event_name', match: 'exact', values: ['push'] }], github),
+    ).toBe(false);
+    expect(
+      isAnyRef(
+        [...anchor, { claim: 'environment', match: 'exact', values: ['prod'], negate: true }],
+        github,
+      ),
+    ).toBe(true);
+    expect(isAnyRef([{ claim: 'sub', match: 'exact', values: ['x'] }], PROFILES.generic)).toBe(
+      false,
+    );
+  });
+
+  it('adds any_ref once to the validator details', () => {
+    expect(accessWarningDetails([], anchor, github).map((d) => d.code)).toEqual(['any_ref']);
+    const once = accessWarningDetails([{ code: 'any_ref', message: 'm' }], anchor, github);
+    expect(once).toHaveLength(1);
+  });
+});
+
+describe('mostUsedContext', () => {
+  const shape = (conditions: Condition[]) => ({ conditions, rules: [] });
+  const anchor: Condition[] = [
+    { claim: 'repository_owner_id', match: 'exact', values: ['1000'] },
+    { claim: 'repository_id', match: 'exact', values: ['2000'] },
+  ];
+
+  it('never defaults to a risky context, however often it is used', () => {
+    const any = shape(anchor);
+    const branch = shape(
+      parseJobs(jobs({ context: 'branch', branch: 'main' }), ctx()).conditions ?? [],
+    );
+    expect(mostUsedContext([any, any, any], github)).toBe('environment');
+    expect(mostUsedContext([any, any, branch], github)).toBe('branch');
   });
 });

@@ -116,6 +116,30 @@ describe('I-AUTHZ-3: risky access needs explicit acceptance', () => {
     expect((await lastAudit('grant.create'))?.accepted_risks).toEqual(['unprotected_ref']);
   });
 
+  it('rows that constrain no ref, environment or event carry the any-ref risk too', async () => {
+    const anyRef = rows({ 'cond.2.claim': '', 'cond.2.match': '', 'cond.2.values': '' });
+    const first = await adminPost(world.app, session(), '/admin/access', anyRef);
+    expect(first.status).toBe(422);
+    const html = await first.text();
+    expect(html).toContain('anyone with write access to the repository');
+    expect(await listGrants(env.DB)).toEqual([]);
+    const second = await adminPost(world.app, session(), '/admin/access', {
+      ...anyRef,
+      warnings_digest: inputValue(html, 'warnings_digest') ?? '',
+      acknowledge_warnings: '1',
+    });
+    expect(second.status).toBe(303);
+    expect((await lastAudit('grant.create'))?.accepted_risks).toEqual(['any_ref']);
+    // The access page and the Risk accepted filter agree with the acceptance.
+    const id = idFromLocation(locationOf(second));
+    const page = await (await adminGet(world.app, session(), `/admin/access/${id}`)).text();
+    expect(page).toContain('anyone with write access to the repository');
+    const risky = await (
+      await adminGet(world.app, session(), '/admin/access?view=list&status=risk')
+    ).text();
+    expect(risky).toContain(`/admin/access/${id}"`);
+  });
+
   it('a digest of other risks does not count', async () => {
     const first = await adminPost(world.app, session(), '/admin/access', rows());
     const digest = inputValue(await first.text(), 'warnings_digest') ?? '';

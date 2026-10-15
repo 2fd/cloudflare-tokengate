@@ -33,6 +33,7 @@ import { type AccessEdge, type Connections, loadConnections } from '../connectio
 import {
   accessFormFromGrant,
   anchorClaims,
+  accessWarningDetails,
   blankJobsForm,
   condRows,
   coveredRiskCodes,
@@ -55,6 +56,7 @@ import {
   readJobsForm,
   readOpsForm,
   text,
+  withAnyRefFlags,
   withTypedLabels,
 } from '../consumer-access';
 import { type Notice, type NoticeContext, type NoticeTable, resolveNotice } from '../notice';
@@ -208,7 +210,7 @@ function notice(c: AdminContext, data: AccessNoticeData) {
 
 async function listPage(c: AdminContext) {
   const deps = c.get('deps');
-  const connections = await loadConnections(deps);
+  const connections = withAnyRefFlags(await loadConnections(deps));
   const query = (name: string) => c.req.query(name) ?? '';
   const notes: string[] = [];
   let consumerId = query('consumer');
@@ -638,7 +640,7 @@ interface FormData {
 }
 
 async function loadFormData(c: AdminContext): Promise<FormData> {
-  const connections = await loadConnections(c.get('deps'));
+  const connections = withAnyRefFlags(await loadConnections(c.get('deps')));
   const consumers = [...connections.consumers].sort(
     (a, b) => Number(b.enabled) - Number(a.enabled) || a.name.localeCompare(b.name),
   );
@@ -1118,20 +1120,13 @@ async function newPage(c: AdminContext) {
       const sourceToken = data.tokens.find((token) => token.id === source.service_id);
       if (target && sourceToken && sameOperationSource(target, sourceToken)) {
         const sets = ruleSetsOf(await tokenAccessShapes(c.get('deps').env.DB, target.id));
+        // Reverse-match against the source's repository; {repo} is re-substituted on submit.
         ops = opsFormFromRules(
           source.rules,
           templateForService(target),
           sets,
           repositoryLabelOf(source, labels, profile),
         );
-        if (repository) {
-          ops = opsFormFromRules(
-            source.rules,
-            templateForService(target),
-            sets,
-            repositoryLabelOf(source, labels, profile),
-          );
-        }
       }
       banner = <p>Copied the constraints of “{source.name}”.</p>;
     } else {
@@ -1628,7 +1623,11 @@ async function evaluateForm(
       unknownOwner: parsedJobs.unknownOwner,
     };
   }
-  const risks = await risksOf(checked.warningDetails, parsedJobs.risks, parsedJobs.presetWarnings);
+  const risks = await risksOf(
+    accessWarningDetails(checked.warningDetails, parsedJobs.conditions, profile),
+    parsedJobs.risks,
+    parsedJobs.presetWarnings,
+  );
   return {
     ok: true,
     provider,
@@ -1971,6 +1970,9 @@ async function renderAccessPage(c: AdminContext, loaded: LoadedAccess, state: Pa
     action: editing?.action,
     unknownOwner: editing?.unknownOwner ?? null,
   };
+  // The rows editor shows the stored warnings with their acknowledgement up front (A7.7 rule 4).
+  if (!editSeed.ack && editJobs?.editor === 'rows')
+    editSeed.ack = await prefillAck(c, data, editSeed);
   const consumerBranchModel = await consumerBranch(c, data, consumer, '', editSeed, true);
   const tokenBranchModel = await tokenBranch(c, data, token, '', editSeed, true);
   const edit: AccessFormModel | null = consumerBranchModel
@@ -2013,7 +2015,7 @@ async function renderAccessPage(c: AdminContext, loaded: LoadedAccess, state: Pa
     tokens: data.tokens,
     template,
     labels,
-    warningDetails: validation.warningDetails,
+    warningDetails: accessWarningDetails(validation.warningDetails, grant.conditions, profile),
     overlaps,
     origin: new URL(c.req.url).origin,
     requests30d: data.connections.usageAvailable
@@ -2256,12 +2258,16 @@ async function copy(c: AdminContext) {
     );
   }
   const sourceCodes = new Set<WarningCode>(
-    validateGrant(
-      { conditions: grant.conditions, rules: grant.rules },
+    accessWarningDetails(
+      validateGrant(
+        { conditions: grant.conditions, rules: grant.rules },
+        profile,
+        consumer,
+        sourceToken,
+      ).warningDetails,
+      grant.conditions,
       profile,
-      consumer,
-      sourceToken,
-    ).warningDetails.map((d) => d.code),
+    ).map((d) => d.code),
   );
   const newRisk = evaluation.risks.codes.some(
     (code) => !sourceCodes.has(code) && !evaluation.covered.has(code),

@@ -16,7 +16,15 @@ import type { IssuerProfile, ProfileId } from '../../identity/types';
 import type { Condition } from '../../policy/types';
 import { ALLOWED_ALGS, validateCallerProvider } from '../../policy/validate';
 import { type AccessEdge, type Connections, loadConnections } from '../connections';
-import { all, type Fields, flag, ownerFindCommand, parseOwnerList, text } from '../consumer-access';
+import {
+  all,
+  type Fields,
+  flag,
+  ownerFindCommand,
+  parseOwnerList,
+  text,
+  withAnyRefFlags,
+} from '../consumer-access';
 import { formatValueList, parseValueList } from '../grant-text';
 import { loadDone, type NoticeContext, type NoticeTable, resolveNotice } from '../notice';
 import {
@@ -142,7 +150,7 @@ async function renderList(
   failed: { form: ConsumerForm; errors: FieldError[] } | null,
 ) {
   const deps = c.get('deps');
-  const connections = await loadConnections(deps);
+  const connections = withAnyRefFlags(await loadConnections(deps));
   const consumers = connections.consumers;
   const anchorClaims = consumerAnchorSuggestions(consumers);
   return renderPage(
@@ -353,7 +361,7 @@ async function renderNew(
   errors: FieldError[],
   status: 200 | 409 | 422,
 ) {
-  const connections = await loadConnections(c.get('deps'));
+  const connections = withAnyRefFlags(await loadConnections(c.get('deps')));
   return renderPage(
     c,
     {
@@ -505,7 +513,7 @@ async function renderDetail(
 ) {
   const deps = c.get('deps');
   const [connections, labels, grants] = await Promise.all([
-    loadConnections(deps, { consumerId: provider.id }),
+    loadConnections(deps, { consumerId: provider.id }).then(withAnyRefFlags),
     listClaimLabels(deps.env.DB, provider.id),
     listGrants(deps.env.DB, { caller_provider_id: provider.id }),
   ]);
@@ -1078,7 +1086,11 @@ function TrustSection(props: {
           <div class="confirm-trust">
             <Checkbox
               name="confirm_trust_change"
-              label={`I understand that these ${enabledGrants.length} enabled ${enabledGrants.length === 1 ? 'access' : 'accesses'} will trust the new issuer or keys`}
+              label={
+                enabledGrants.length === 1
+                  ? 'I understand that this enabled access will trust the new issuer or keys'
+                  : `I understand that these ${enabledGrants.length} enabled accesses will trust the new issuer or keys`
+              }
               hint="Needed only when the issuer or the JWKS URI changes."
               checked={trust ? flag(trust, 'confirm_trust_change') : false}
               error={err('confirm_trust_change')}

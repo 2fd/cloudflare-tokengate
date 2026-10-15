@@ -106,7 +106,7 @@ export const GITLAB_CONFIG_REF_RE =
 
 const GITHUB_BRANCH_EVENTS = ['push', 'workflow_dispatch', 'schedule'];
 
-const RISK_WARNINGS: Readonly<Record<RiskCode, string>> = {
+export const RISK_WARNINGS: Readonly<Record<RiskCode, string>> = {
   unprotected_ref:
     'protected refs are not required: anyone who can push a matching branch or tag is admitted',
   pull_request: 'pull_request jobs run the code proposed in the pull request',
