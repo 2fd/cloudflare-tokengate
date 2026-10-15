@@ -386,6 +386,52 @@ describe('POST /admin/users (invite)', () => {
     expect(html).toContain(`href="/admin/users#user-${owner.id}"`);
   });
 
+  it('offers a suspended person’s Reactivate after the invite form, never nested in it', async () => {
+    const gone = await linked('gone@example.com', { status: 'suspended' });
+    const res = await adminPost(app, await sessionFor('owner'), '/admin/users', {
+      email: 'gone@example.com',
+      role: 'viewer',
+    });
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    const form = slice(html, 'id="invite-form"', '</form>');
+    expect(form).not.toContain('<form');
+    expect(/<button type="submit"[^>]*>/.exec(form)?.[0] ?? '').toContain('value="viewer"');
+    expect(form).toContain('value="admin"');
+    const existing = slice(html, 'id="invite-existing"', '</div>');
+    expect(html.indexOf('id="invite-existing"')).toBeGreaterThan(
+      html.indexOf('</form>', html.indexOf('id="invite-form"')),
+    );
+    expect(existing).toContain(`href="/admin/users#user-${gone.id}"`);
+    expect(existing).toContain(`<form method="post" action="/admin/users/${gone.id}"`);
+    expect(existing).toContain('name="status" value="active"');
+    expect(existing).toContain('Reactivate');
+    expect(html).toMatch(/id="f-email"[^>]*aria-describedby="[^"]*invite-existing"/);
+  });
+
+  it('points a pending person’s refused invite at their decision card', async () => {
+    const pending = await createUser(
+      {
+        email: 'wait@example.com',
+        role: 'viewer',
+        status: 'pending',
+        identity: { loginProvider: 'access', subject: 'team|wait@example.com' },
+      },
+      T0,
+    );
+    const res = await adminPost(app, await sessionFor('owner'), '/admin/users', {
+      email: 'wait@example.com',
+      role: 'viewer',
+    });
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    expect(html).toContain('wait@example.com already signed in with an account');
+    expect(slice(html, 'id="invite-existing"', '</div>')).toContain(
+      `href="#decide-${pending.id}-h"`,
+    );
+    expect(html).toContain(`id="decide-${pending.id}-h"`);
+  });
+
   it.each([
     ['an expired invitation', { status: 'invited' as const, inviteExpiresAt: T0 - 1 }],
     ['a cancelled invitation', { status: 'suspended' as const }],
@@ -572,14 +618,49 @@ describe('reset sign-in, renew and cancel an invitation', () => {
     expect(await auditActions()).toEqual(['user.reset_login', 'user.resend_invite']);
   });
 
-  it('"Invite again" needs no dialog for a user who never signed in', async () => {
+  it('"Invite again" names the role and needs no dialog for a user who never signed in', async () => {
     const cancelled = await createUser({ email: 'c@example.com', status: 'suspended' }, T0);
     const session = await sessionFor('owner');
     const html = await page(session);
-    expect(slice(html, `id="user-${cancelled.id}"`, '</tr>')).toContain('Invite again');
+    expect(slice(html, `id="user-${cancelled.id}"`, '</tr>')).toContain(
+      'Invite again as Admin<span class="vh"> c@example.com</span>',
+    );
     const res = await adminPost(app, session, `/admin/users/${cancelled.id}/reset-login`);
     expect(res.status).toBe(303);
     expect((await getUser(env.DB, cancelled.id))?.status).toBe('invited');
+  });
+
+  it('inviting a cancelled Owner again goes through a dialog the server requires', async () => {
+    const cancelled = await createUser(
+      { email: 'boss@example.com', role: 'owner', status: 'suspended' },
+      T0 - 3_600_000,
+    );
+    await refusedAt(cancelled.id, T0 - 60_000);
+    const session = await sessionFor('owner');
+    const html = await page(session);
+    const card = slice(html, `id="decide-${cancelled.id}-h"`, '</article>');
+    expect(card).toContain('but their invitation as Owner was cancelled.');
+    expect(card).toContain(`commandfor="dlg-card-again-${cancelled.id}"`);
+    expect(card).toContain('Invite again as Owner…');
+    // The only reset-login form is the dialog's, which carries confirm=1.
+    const dialog = slice(card, `id="dlg-card-again-${cancelled.id}"`, '</dialog>');
+    expect(dialog).toContain(`action="/admin/users/${cancelled.id}/reset-login"`);
+    expect(dialog).toContain('name="confirm" value="1"');
+    expect(card.split(`/reset-login"`)).toHaveLength(2);
+    expect(slice(html, `id="user-${cancelled.id}"`, '</tr>')).toContain(
+      `commandfor="dlg-row-again-${cancelled.id}"`,
+    );
+    const unconfirmed = await adminPost(app, session, `/admin/users/${cancelled.id}/reset-login`);
+    expect(unconfirmed.status).toBe(422);
+    expect(await unconfirmed.text()).toContain(
+      'Confirm inviting boss@example.com again as Owner in the dialog.',
+    );
+    expect((await getUser(env.DB, cancelled.id))?.status).toBe('suspended');
+    const res = await adminPost(app, session, `/admin/users/${cancelled.id}/reset-login`, {
+      confirm: '1',
+    });
+    expect(res.status).toBe(303);
+    expect(await getUser(env.DB, cancelled.id)).toMatchObject({ status: 'invited', role: 'owner' });
   });
 
   it('cancelling an invitation deletes the row, after the dialog', async () => {
@@ -620,6 +701,9 @@ describe('reset sign-in, renew and cancel an invitation', () => {
     const row = slice(html, `id="user-${late.id}"`, '</tr>');
     expect(row).toContain('Invitation expired');
     expect(row).toContain('Renew invitation<span class="vh"> for late@example.com</span>');
+    // The email link of an expired invitation does not claim it is still valid.
+    expect(row).toContain('href="mailto:late@example.com?');
+    expect(row).not.toContain('valid%20until');
   });
 });
 
@@ -757,5 +841,12 @@ describe('Needs your decision', () => {
     );
     expect(res.status).toBe(409);
     expect((await getUser(env.DB, user.id))?.last_refused_at).toBe(T0 - 30_000);
+    // The error is at the card's Dismiss, and the summary links to it.
+    const html = await res.text();
+    expect(html).toContain(`<a href="#f-dismiss-${user.id}">`);
+    expect(slice(html, `id="decide-${user.id}-h"`, '</article>')).toContain(
+      `id="f-dismiss-${user.id}"`,
+    );
+    expect(html).not.toContain(`id="f-user-${user.id}"`);
   });
 });

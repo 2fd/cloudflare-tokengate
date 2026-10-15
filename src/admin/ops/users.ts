@@ -253,11 +253,7 @@ export async function updateUser(
   if (stale) return stale;
   // A pending sign-in is decided with a role in one step (user.approve / user.reject), never
   // through a plain role or status change.
-  if (existing.status === 'pending') {
-    return opFailure('invalid', [
-      `${existing.email} is waiting for approval. Approve them with a role, or reject them, under "Needs your decision".`,
-    ]);
-  }
+  if (existing.status === 'pending') return pendingFailure(existing);
   return changeUser(deps, actor, existing, input, 'user.update');
 }
 
@@ -325,6 +321,13 @@ async function changeUser(
   };
 }
 
+/** A pending user is decided only by approve or reject (user.approve / user.reject). */
+function pendingFailure(user: User): OpFailure {
+  return opFailure('invalid', [
+    `${user.email} is waiting for approval. Approve them with a role, or reject them, under "Needs your decision".`,
+  ]);
+}
+
 /**
  * "Reset sign-in": removes every login identity and returns the user to `invited` with a fresh
  * expiry. The next sign-in with an authoritative email links again. For a user without an
@@ -341,6 +344,9 @@ export async function resetLogin(
   if (actor.id === id) return opFailure('invalid', [SELF_MESSAGE]);
   const stale = staleUser(existing, expectedUpdatedAt);
   if (stale) return stale;
+  // Resetting a pending user would make them `invited`, and their next sign-in would activate
+  // them with no decision. The guard pins the status, so a concurrent change cannot slip past.
+  if (existing.status === 'pending') return pendingFailure(existing);
 
   const now = deps.now();
   const inviteExpiresAt = now + INVITE_TTL_MS;

@@ -60,6 +60,7 @@ import {
   type DecisionCard,
   DecisionCards,
   decisionKind,
+  DismissError,
   InviteSection,
   PersonChange,
   signInMailto,
@@ -124,7 +125,10 @@ const NOTICES: NoticeTable<Ctx> = {
       user.invite_expires_at === null ? '' : ` until ${formatTime(user.invite_expires_at)}`;
     return {
       text: `Invited ${user.email}${again} as ${roleLabel(user.role)}${until}. Nothing was sent.`,
-      next: { href: signInMailto(user, ctx.host), label: `Email ${user.email} the sign-in link` },
+      next: {
+        href: signInMailto(user, ctx.host, ctx.view.now),
+        label: `Email ${user.email} the sign-in link`,
+      },
     };
   },
   updated: (ctx) => {
@@ -176,7 +180,10 @@ const NOTICES: NoticeTable<Ctx> = {
     if (!user) return { text: 'Sign-in reset. Their next sign-in links their account again.' };
     return {
       text: `Reset the sign-in of ${user.email}. The next sign-in through Access with ${user.email} links the account again. Nothing was sent.`,
-      next: { href: signInMailto(user, ctx.host), label: `Email ${user.email} the sign-in link` },
+      next: {
+        href: signInMailto(user, ctx.host, ctx.view.now),
+        label: `Email ${user.email} the sign-in link`,
+      },
     };
   },
   resent: (ctx) => {
@@ -184,7 +191,10 @@ const NOTICES: NoticeTable<Ctx> = {
     if (!user) return { text: 'Invitation renewed. Nothing was sent.' };
     return {
       text: `Renewed the invitation of ${user.email}. Nothing was sent.`,
-      next: { href: signInMailto(user, ctx.host), label: `Email ${user.email} the sign-in link` },
+      next: {
+        href: signInMailto(user, ctx.host, ctx.view.now),
+        label: `Email ${user.email} the sign-in link`,
+      },
     };
   },
   deleted: (ctx) => {
@@ -204,10 +214,17 @@ interface InviteValues {
   existingId?: string;
 }
 
+/** A failed row action. `dismiss` errors show at the Dismiss button, others at "Change". */
+interface RowError {
+  userId: string;
+  message: string;
+  target?: 'dismiss';
+}
+
 interface PageOptions {
   errors?: FieldError[];
   /** The row a failed row action belongs to, and its message. */
-  rowError?: { userId: string; message: string };
+  rowError?: RowError;
   invite?: InviteValues;
   status?: 400 | 404 | 409 | 422;
 }
@@ -299,15 +316,24 @@ export function registerUsersRoutes(app: App): void {
     const back = returnOf(form);
     const deps = c.get('deps');
     // Removing sign-in accounts cannot be undone, so it is confirmed. Without any, this is
-    // "Invite again" and nothing is removed.
+    // "Invite again" and nothing is removed; inviting again as Owner is an escalation, so that
+    // is confirmed too (the stored role is kept).
     const target = await getUserEntry(deps.env.DB, id);
-    if (target && target.identity_count > 0 && text(form, 'confirm') !== '1') {
-      return rowFailure(c, back, id, {
-        reason: 'confirmation_required',
-        errors: [
-          `Confirm the reset of ${target.email} in the dialog: it removes their sign-in accounts.`,
-        ],
-      });
+    if (target && text(form, 'confirm') !== '1') {
+      if (target.identity_count > 0) {
+        return rowFailure(c, back, id, {
+          reason: 'confirmation_required',
+          errors: [
+            `Confirm the reset of ${target.email} in the dialog: it removes their sign-in accounts.`,
+          ],
+        });
+      }
+      if (target.role === 'owner') {
+        return rowFailure(c, back, id, {
+          reason: 'confirmation_required',
+          errors: [`Confirm inviting ${target.email} again as Owner in the dialog.`],
+        });
+      }
     }
     const result = await resetLogin(
       deps,
@@ -365,7 +391,7 @@ export function registerUsersRoutes(app: App): void {
       id,
       raw === undefined || raw.trim() === '' ? undefined : Number(raw),
     );
-    if (!result.ok) return rowFailure(c, back, id, result);
+    if (!result.ok) return rowFailure(c, back, id, result, 'dismiss');
     return redirectWithNotice(c, backPath(back, id), 'dismissed', {
       done: result.auditId ?? undefined,
       fragment: back === 'list' ? 'decide' : undefined,
@@ -402,10 +428,11 @@ function rowFailure(
   back: UserReturn,
   id: string,
   failure: Pick<OpFailure, 'reason' | 'errors'>,
+  target?: RowError['target'],
 ) {
   const message = failure.errors.join(' ');
   const options: PageOptions = {
-    rowError: { userId: id, message },
+    rowError: { userId: id, message, ...(target ? { target } : {}) },
     status: statusOf(failure),
   };
   return back === 'detail' ? personPage(c, id, options) : peoplePage(c, options);
@@ -475,14 +502,25 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
         host: new URL(c.req.url).hostname,
         back: 'list',
       });
+  // The summary links only to an error that is rendered: a failed Dismiss at its card, anything
+  // else (or a Dismiss whose card is gone) at the row's "Change"; otherwise a plain item.
   const rowError = options.rowError;
-  const rowInTable = rowError ? shown.some((user) => user.id === rowError.userId) : false;
+  const ownerViewer = viewer.user.role === 'owner';
+  const atCard =
+    rowError?.target === 'dismiss' &&
+    ownerViewer &&
+    cards.some((card) => card.user.id === rowError.userId);
+  const atRow =
+    rowError !== undefined &&
+    !atCard &&
+    ownerViewer &&
+    shown.some((user) => user.id === rowError.userId);
   const errors =
     options.errors ??
     (rowError
       ? [
           fieldError(
-            rowInTable && viewer.user.role === 'owner' ? `user-${rowError.userId}` : null,
+            atCard ? `dismiss-${rowError.userId}` : atRow ? `user-${rowError.userId}` : null,
             rowError.message,
           ),
         ]
@@ -521,7 +559,7 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
               </p>
             </div>
           ) : null}
-          <DecisionCards cards={cards} ctx={ctx} />
+          <DecisionCards cards={cards} ctx={ctx} dismissError={atCard ? rowError : null} />
           {owner ? (
             <InviteSection
               ctx={ctx}
@@ -546,7 +584,7 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
             changes={changes}
             policy={policy}
             filtered={filtered}
-            rowError={rowError}
+            rowError={atRow ? rowError : undefined}
           />
           <p>
             New people who sign in: <strong>{policy}</strong>.{' '}
@@ -824,13 +862,20 @@ async function personPage(c: AdminContext, id: string, options: PageOptions) {
         host: new URL(c.req.url).hostname,
         back: 'detail',
       });
-  const errors = options.rowError
-    ? [
-        fieldError(
-          viewer.user.role === 'owner' && viewer.user.id !== id ? `user-${id}` : null,
-          options.rowError.message,
-        ),
-      ]
+  // As on People: link the summary only to an error this page renders. A failed Dismiss shows at
+  // the Dismiss button; anything else at "Change", which a pending person (ApproveForm) and the
+  // viewer's own page do not have.
+  const rowError = options.rowError;
+  const ownerViewer = viewer.user.role === 'owner';
+  const atDismiss = rowError?.target === 'dismiss' && ownerViewer && user.last_refused_at !== null;
+  const atChange =
+    rowError !== undefined &&
+    !atDismiss &&
+    ownerViewer &&
+    viewer.user.id !== id &&
+    user.status !== 'pending';
+  const errors = rowError
+    ? [fieldError(atDismiss ? `dismiss-${id}` : atChange ? `user-${id}` : null, rowError.message)]
     : options.errors;
   const status = userStatus(user, now);
   return renderPage(
@@ -877,7 +922,7 @@ async function personPage(c: AdminContext, id: string, options: PageOptions) {
                   ctx={ctx}
                   returnTo="detail"
                   joinPolicy={policy}
-                  error={options.rowError?.message ?? null}
+                  error={atChange ? rowError.message : null}
                   bare
                 />
               </>
@@ -891,6 +936,7 @@ async function personPage(c: AdminContext, id: string, options: PageOptions) {
                 <Time ms={user.last_refused_at} />) with Access user ID{' '}
                 <code>{accessUserId(user.last_refused_subject)}</code>.
               </p>
+              {atDismiss ? <DismissError userId={id} message={rowError.message} /> : null}
               {owner ? <DismissButton user={user} ctx={ctx} /> : null}
             </section>
           ) : null}

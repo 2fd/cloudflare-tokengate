@@ -50,13 +50,17 @@ export function accessUserId(subject: string | null): string {
   return bar === -1 ? subject : subject.slice(bar + 1);
 }
 
-/** `mailto:` with the console address: tokengate sends no email itself. */
+/**
+ * `mailto:` with the console address: tokengate sends no email itself. The validity sentence is
+ * left out once the invitation expired.
+ */
 export function signInMailto(
   user: Pick<User, 'email' | 'invite_expires_at'>,
   host: string,
+  now: number,
 ): string {
   const expires =
-    user.invite_expires_at === null
+    user.invite_expires_at === null || user.invite_expires_at <= now
       ? ''
       : ` The invitation is valid until ${formatTime(user.invite_expires_at)}.`;
   const body = `Sign in to tokengate at https://${host}/admin with your Cloudflare Access account (${user.email}).${expires}`;
@@ -117,11 +121,11 @@ function version(user: { updated_at: number }): Record<string, string> {
 }
 
 /** A link styled as a secondary button. */
-function MailLink(props: { user: UserListEntry; host: string; primary?: boolean }) {
+function MailLink(props: { user: UserListEntry; ctx: ViewContext; primary?: boolean }) {
   return (
     <a
       class={props.primary ? 'button' : 'button secondary'}
-      href={signInMailto(props.user, props.host)}
+      href={signInMailto(props.user, props.ctx.host, props.ctx.now)}
     >
       Email sign-in link<span class="vh"> to {props.user.email}</span>
     </a>
@@ -144,11 +148,56 @@ function Opener(props: { dialog: string; danger?: boolean; children: Child }) {
   );
 }
 
+/**
+ * "Invite again as <role>" for a user who never signed in (reset-login keeps the stored role). An
+ * Owner invitation is an escalation: it goes through a dialog, and the server requires `confirm=1`.
+ */
+function InviteAgain(props: {
+  user: UserListEntry;
+  ctx: ViewContext;
+  returnTo: UserReturn;
+  /** Suffix of the dialog id, unique on the page. */
+  dialogId: string;
+}) {
+  const { user, ctx } = props;
+  const label = `Invite again as ${ROLE_INFO[user.role].label}`;
+  if (user.role === 'owner') {
+    return (
+      <ConfirmDialog
+        id={props.dialogId}
+        trigger={`${label}…`}
+        triggerContext={user.email}
+        title={`Invite ${user.email} again as Owner?`}
+        body={`Owner: ${ROLE_INFO.owner.description}`}
+        confirmLabel={`Invite ${user.email} again as Owner`}
+        variant="standalone"
+        action={`${base(user)}/reset-login`}
+        csrf={ctx.csrf}
+        fields={version(user)}
+        returnTo={props.returnTo}
+      />
+    );
+  }
+  return (
+    <ActionButton
+      action={`${base(user)}/reset-login`}
+      csrf={ctx.csrf}
+      label={label}
+      context={user.email}
+      tone="primary"
+      fields={version(user)}
+      returnTo={props.returnTo}
+    />
+  );
+}
+
 /** The one action a row shows outside "Change", when its state has one (1 click). */
 export function StateButton(props: {
   user: UserListEntry;
   ctx: ViewContext;
   returnTo: UserReturn;
+  /** Prefix of dialog ids, so two renders of one person on a page stay unique. */
+  scope?: string;
 }) {
   const { user, ctx } = props;
   switch (rowState(user, ctx.now)) {
@@ -166,18 +215,15 @@ export function StateButton(props: {
       );
     case 'suspended_unlinked':
       return (
-        <ActionButton
-          action={`${base(user)}/reset-login`}
-          csrf={ctx.csrf}
-          label="Invite again"
-          context={user.email}
-          tone="primary"
-          fields={version(user)}
+        <InviteAgain
+          user={user}
+          ctx={ctx}
           returnTo={props.returnTo}
+          dialogId={`${props.scope ?? 'row'}-again-${user.id}`}
         />
       );
     case 'invited':
-      return <MailLink user={user} host={ctx.host} primary />;
+      return <MailLink user={user} ctx={ctx} primary />;
     case 'invite_expired':
       return (
         <ActionButton
@@ -349,7 +395,7 @@ export function PersonChange(props: {
     ),
     invite_expired: (
       <>
-        <MailLink user={user} host={ctx.host} />
+        <MailLink user={user} ctx={ctx} />
         <ConfirmDialog {...cancel} />
       </>
     ),
@@ -408,8 +454,22 @@ export function decisionKind(user: UserListEntry): DecisionCard['kind'] {
   return 'other_account';
 }
 
+/** The inline error of a failed Dismiss (`f-dismiss-<id>`, the ErrorSummary link target). */
+export function DismissError(props: { userId: string; message: string }) {
+  return (
+    <p class="field-error" id={`f-dismiss-${props.userId}`}>
+      <span class="vh">Error:</span> {props.message}
+    </p>
+  );
+}
+
 /** "Needs your decision (N)": pending people and refused sign-ins only an owner can fix. */
-export function DecisionCards(props: { cards: DecisionCard[]; ctx: ViewContext }) {
+export function DecisionCards(props: {
+  cards: DecisionCard[];
+  ctx: ViewContext;
+  /** A failed Dismiss, shown at its card. */
+  dismissError?: { userId: string; message: string } | null;
+}) {
   const { cards, ctx } = props;
   if (cards.length === 0) return null;
   const owner = ctx.can('users:write');
@@ -424,6 +484,9 @@ export function DecisionCards(props: { cards: DecisionCard[]; ctx: ViewContext }
               <h3 id={`decide-${card.user.id}-h`}>{card.user.email}</h3>
               {card.user.name ? <p class="muted">{card.user.name}</p> : null}
               <CardBody card={card} ctx={ctx} owner={owner} />
+              {owner && props.dismissError?.userId === card.user.id ? (
+                <DismissError userId={card.user.id} message={props.dismissError.message} />
+              ) : null}
             </article>
           </li>
         ))}
@@ -478,7 +541,7 @@ function CardBody(props: { card: DecisionCard; ctx: ViewContext; owner: boolean 
               tone="primary"
               returnTo="list"
             />
-            <MailLink user={user} host={ctx.host} />
+            <MailLink user={user} ctx={ctx} />
             {dismiss}
           </div>
         ) : null}
@@ -489,19 +552,12 @@ function CardBody(props: { card: DecisionCard; ctx: ViewContext; owner: boolean 
     return (
       <>
         <p>
-          {user.email} tried to sign in {when}, but their invitation was cancelled.
+          {user.email} tried to sign in {when}, but their invitation as {ROLE_INFO[user.role].label}{' '}
+          was cancelled.
         </p>
         {owner ? (
           <div class="actions">
-            <ActionButton
-              action={`${base(user)}/reset-login`}
-              csrf={ctx.csrf}
-              label="Invite again"
-              context={user.email}
-              tone="primary"
-              fields={version(user)}
-              returnTo="list"
-            />
+            <InviteAgain user={user} ctx={ctx} returnTo="list" dialogId={`card-again-${user.id}`} />
             {dismiss}
           </div>
         ) : null}
@@ -560,6 +616,7 @@ export function InviteSection(props: {
   joinPolicy: string;
 }) {
   const { ctx } = props;
+  const existing = props.existing ?? null;
   const owner: ConfirmDialogProps = {
     id: 'invite-owner',
     trigger: 'Owner…',
@@ -591,15 +648,8 @@ export function InviteSection(props: {
           example={props.emailExample}
           hint="The email of their Cloudflare Access account. Press Enter to invite as Viewer. Nothing is sent: you get a link to email them."
           error={props.error}
+          describedBy={existing ? ['invite-existing'] : undefined}
         />
-        {props.existing ? (
-          <div class="actions">
-            <a href={paths.users({ hash: `user-${props.existing.id}` })}>
-              Go to {props.existing.email}
-            </a>
-            <StateButton user={props.existing} ctx={ctx} returnTo="list" />
-          </div>
-        ) : null}
         <fieldset class="submits" id="f-role" data-invalid={props.roleError ? 'true' : undefined}>
           <legend>Invite as</legend>
           {props.roleError ? (
@@ -633,6 +683,22 @@ export function InviteSection(props: {
           </div>
         </fieldset>
       </PostForm>
+      {existing ? (
+        // After `</form>`: the state button is a form of its own and must not nest in this one.
+        <div class="actions" id="invite-existing">
+          {/* A pending person has no table row: their card under "Needs your decision" (same page). */}
+          <a
+            href={
+              existing.status === 'pending'
+                ? `#decide-${existing.id}-h`
+                : paths.users({ hash: `user-${existing.id}` })
+            }
+          >
+            Go to {existing.email}
+          </a>
+          <StateButton user={existing} ctx={ctx} returnTo="list" scope="invite" />
+        </div>
+      ) : null}
       <ConfirmBox {...owner} />
       <details id="compare-roles">
         <summary>Compare roles</summary>

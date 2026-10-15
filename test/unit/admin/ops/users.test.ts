@@ -442,6 +442,16 @@ describe('decidePending', () => {
     expect(await audits()).toEqual([]);
   });
 
+  it('a reset sign-in never decides a pending user (it would activate them on next sign-in)', async () => {
+    const pending = await pendingUser();
+    const result = await resetLogin(deps(), actorFor(owner), pending.id, pending.updated_at);
+    expect(result).toMatchObject({ ok: false, reason: 'invalid' });
+    if (!result.ok) expect(result.errors.join()).toMatch(/waiting for approval/);
+    expect(await getUser(env.DB, pending.id)).toMatchObject({ status: 'pending', role: 'viewer' });
+    expect(await listIdentities(env.DB, pending.id)).toHaveLength(1);
+    expect(await audits()).toEqual([]);
+  });
+
   it('a decision that loses the race to another owner writes nothing', async () => {
     const pending = await pendingUser();
     const racing = racingDeps("UPDATE users SET status = 'suspended' WHERE id = ?", pending.id);

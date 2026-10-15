@@ -167,7 +167,7 @@ The gateway keeps no session of its own. "Sign out" ends the Access session for 
 
 To give someone a role before their first sign-in, enter their email under "Invite someone" and select the role. The role button is the submit, and Enter invites as Viewer. The notice after the invite has an "Email … the sign-in link" link that opens your mail program. The person must sign in with the invited email address within 7 days. The gateway links a login to an invited user only through the email address in the Access token ([I-LINK-1](threat-model.md#i-link-1)).
 
-When someone is refused (an expired invitation, a cancelled invitation, a different Access account for a known email), the gateway records the attempt. Owners see it under "Needs your decision", with the action that fixes it: "Renew invitation", "Invite again" or "Reset sign-in…", plus "Dismiss".
+When someone is refused (an expired invitation, a cancelled invitation, a different Access account for a known email), the gateway records the attempt. Owners see it under "Needs your decision", with the action that fixes it: "Renew invitation", "Invite again as <role>" (a dialog for Owner) or "Reset sign-in…", plus "Dismiss".
 
 ## 12. Add a service consumer
 

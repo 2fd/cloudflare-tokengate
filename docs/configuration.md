@@ -422,8 +422,11 @@ It uses two recent HTML features, each with a fallback:
 
 - **Confirmation dialogs** open with invoker commands (`commandfor`, Chrome 135, Safari 26.2,
   Firefox 144). Older browsers open the same dialog as a popover. Without either, the dialog content
-  is shown inline on the page and its trigger is hidden. The server always requires the confirmation
-  value, so a dialog is never the only guard.
+  is shown inline on the page and its trigger is hidden. For these actions the server also requires
+  the confirmation, so a crafted request without it is refused: delete, reset sign-in, suspend an
+  owner, invite a cancelled owner again, remove an admin host, and the join policies that let
+  everyone Access admits change something. Owner role changes (invite, approve or make someone
+  Owner, or demote an owner) are confirmed by their dialog only.
 - **One open row at a time** (`<details name>`, Chrome 120, Safari 17.2, Firefox 130). Older browsers
   let several rows stay open.
 

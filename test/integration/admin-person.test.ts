@@ -146,7 +146,60 @@ describe('GET /admin/users/:id', () => {
       _return: 'detail',
     });
     expect(res.status).toBe(400);
+    const failed = await res.text();
+    expect(failed).toContain('is waiting for approval.');
+    // No "Change" controls here, so the summary item links nowhere rather than to a missing id.
+    expect(failed).not.toContain(`href="#f-user-${pending.id}"`);
+  });
+
+  it('a confirmed Reset sign-in never decides a pending person', async () => {
+    const pending = await createUser(
+      {
+        email: 'wait@example.com',
+        status: 'pending',
+        identity: { loginProvider: 'access', subject: `${TEAM}|w1` },
+      },
+      T0 - 1000,
+    );
+    const res = await adminPost(app, session, `/admin/users/${pending.id}/reset-login`, {
+      confirm: '1',
+      expected_updated_at: String(pending.updated_at),
+      _return: 'detail',
+    });
+    expect(res.status).toBe(400);
     expect(await res.text()).toContain('is waiting for approval.');
+    const after = await env.DB.prepare(
+      'SELECT u.status, (SELECT COUNT(*) FROM user_identities i WHERE i.user_id = u.id) AS ids FROM users u WHERE u.id = ?',
+    )
+      .bind(pending.id)
+      .first<{ status: string; ids: number }>();
+    expect(after).toEqual({ status: 'pending', ids: 1 });
+  });
+
+  it('a stale Dismiss of a pending person shows the error at the Dismiss button', async () => {
+    const pending = await createUser(
+      {
+        email: 'wait@example.com',
+        status: 'pending',
+        identity: { loginProvider: 'access', subject: `${TEAM}|w1` },
+      },
+      T0 - 3_600_000,
+    );
+    await env.DB.prepare(
+      'UPDATE users SET last_refused_at = ?, last_refused_subject = ? WHERE id = ?',
+    )
+      .bind(T0 - 30_000, `${TEAM}|w1`, pending.id)
+      .run();
+    const res = await adminPost(app, session, `/admin/users/${pending.id}/dismiss-attempt`, {
+      expected_refused_at: String(T0 - 60_000),
+      _return: 'detail',
+    });
+    expect(res.status).toBe(409);
+    const html = await res.text();
+    const href = /<div class="error-summary"[\s\S]*?<a href="#([^"]+)">/.exec(html)?.[1];
+    expect(href).toBe(`f-dismiss-${pending.id}`);
+    const refused = html.slice(html.indexOf('id="refused-h"'));
+    expect(refused).toContain(`id="f-dismiss-${pending.id}"`);
   });
 
   it('is 404 for an unknown id', async () => {

@@ -69,6 +69,8 @@ const ELEVATED: ReadonlySet<JoinPolicy> = new Set([
   'active:admin',
 ]);
 
+const POLICY_MESSAGE = 'Choose one of the listed options.';
+
 const NOTICES: NoticeTable = {
   policy_saved: (ctx) => {
     const after = ctx.done?.action === 'user.join_defaults' ? ctx.done.diff?.after : null;
@@ -95,13 +97,27 @@ const NOTICES: NoticeTable = {
 export function registerSignInRoutes(app: App): void {
   app.get('/admin/users/sign-in', (c) => signInPage(c, {}));
 
+  // An elevated policy is accepted only from its dialog's confirm button, which submits it as
+  // `confirmed_join_policy`; the plain buttons submit `join_policy`.
   app.post('/admin/users/sign-in/policy', async (c) => {
     const form = await formData(c);
-    const parsed = parseJoinPolicy(form.join_policy);
+    const confirmed = text(form, 'confirmed_join_policy');
+    const raw = confirmed ?? form.join_policy;
+    const parsed = parseJoinPolicy(raw);
     if (!parsed) {
       return signInPage(c, {
-        errors: [fieldError('join_policy', 'Choose one of the listed options.')],
+        errors: [fieldError('join_policy', POLICY_MESSAGE)],
+        policyError: POLICY_MESSAGE,
         status: 400,
+      });
+    }
+    const policy = joinPolicyOf(parsed);
+    if (ELEVATED.has(policy) && confirmed === undefined) {
+      const message = `Confirm in the dialog: ${JOIN_POLICY_LABELS[policy]}.`;
+      return signInPage(c, {
+        errors: [fieldError('join_policy', message)],
+        policyError: message,
+        status: 422,
       });
     }
     const result = await updateJoinDefaults(c.get('deps'), adminActor(c), parsed);
@@ -126,6 +142,13 @@ export function registerSignInRoutes(app: App): void {
     const form = await formData(c);
     const add = text(form, 'add') ?? '';
     const remove = text(form, 'remove') ?? '';
+    // Removing a host can lock people out, so it is confirmed in a dialog (`confirm=1`).
+    if (remove !== '' && text(form, 'confirm') !== '1') {
+      return signInPage(c, {
+        errors: [fieldError(null, `Confirm removing ${remove} in the dialog.`)],
+        status: 422,
+      });
+    }
     const currentHost = new URL(c.req.url).hostname;
     const result = await updateAdminHosts(
       c.get('deps'),
@@ -158,7 +181,8 @@ async function signInPage(
     errors?: FieldError[];
     add?: string;
     addError?: string | null;
-    status?: 400 | 409;
+    policyError?: string | null;
+    status?: 400 | 409 | 422;
   },
 ) {
   const deps = c.get('deps');
@@ -191,7 +215,7 @@ async function signInPage(
           </p>
           <p class="hint">Send people this address. tokengate emails nothing.</p>
         </section>
-        <PolicySection ctx={ctx} policy={joinPolicyOf(defaults)} />
+        <PolicySection ctx={ctx} policy={joinPolicyOf(defaults)} error={options.policyError} />
         <HostsSection
           ctx={ctx}
           hosts={adminHosts}
@@ -205,7 +229,7 @@ async function signInPage(
   );
 }
 
-function PolicySection(props: { ctx: ViewContext; policy: JoinPolicy }) {
+function PolicySection(props: { ctx: ViewContext; policy: JoinPolicy; error?: string | null }) {
   const { ctx, policy } = props;
   const formId = 'policy-form';
   const dialogs: ConfirmDialogProps[] = [];
@@ -219,8 +243,17 @@ function PolicySection(props: { ctx: ViewContext; policy: JoinPolicy }) {
       {ctx.can('users:write') ? (
         <>
           <PostForm action={`${PAGE}/policy`} csrf={ctx.csrf} id={formId}>
-            <fieldset class="submits" id="f-join_policy">
+            <fieldset
+              class="submits"
+              id="f-join_policy"
+              data-invalid={props.error ? 'true' : undefined}
+            >
               <legend>New people who sign in</legend>
+              {props.error ? (
+                <p class="field-error">
+                  <span class="vh">Error:</span> {props.error}
+                </p>
+              ) : null}
               <div class="actions policy-cards">
                 {JOIN_POLICIES.map((option) => {
                   const current = option === policy;
@@ -242,7 +275,7 @@ function PolicySection(props: { ctx: ViewContext; policy: JoinPolicy }) {
                       confirmLabel: label,
                       variant: 'submits',
                       formId,
-                      name: 'join_policy',
+                      name: 'confirmed_join_policy',
                       value: option,
                     });
                     return (

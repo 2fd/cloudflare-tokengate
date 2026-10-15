@@ -89,7 +89,7 @@ describe('GET /admin/users/sign-in', () => {
         html.indexOf(`id="${id}"`),
         html.indexOf('</dialog>', html.indexOf(`id="${id}"`)),
       );
-      expect(dialog).toContain(`form="policy-form" name="join_policy" value="${value}"`);
+      expect(dialog).toContain(`form="policy-form" name="confirmed_join_policy" value="${value}"`);
     }
     expect(html).toContain('Anyone Access admits can let a consumer use any service token.');
     expect(form).toContain('Let them in as Viewer <span class="badge">Current</span>');
@@ -199,6 +199,7 @@ describe('I-DEPLOY-1: POST /admin/users/sign-in/hosts', () => {
     await storeHosts(['gw.test', 'old.example.com']);
     const remove = await adminPost(app, owner, '/admin/users/sign-in/hosts', {
       remove: 'old.example.com',
+      confirm: '1',
     });
     expect(remove.status).toBe(303);
     expect(await getAdminHosts(env.DB)).toEqual(['gw.test']);
@@ -206,17 +207,29 @@ describe('I-DEPLOY-1: POST /admin/users/sign-in/hosts', () => {
     expect(again.headers.get('location')).toBe('/admin/users/sign-in?notice=host_present#hosts');
     const gone = await adminPost(app, owner, '/admin/users/sign-in/hosts', {
       remove: 'old.example.com',
+      confirm: '1',
     });
     expect(gone.headers.get('location')).toBe('/admin/users/sign-in?notice=host_absent#hosts');
     expect(await auditActions()).toEqual(['settings.admin_hosts']);
   });
 
+  it('removing a host needs the dialog confirmation (lockout risk)', async () => {
+    await storeHosts(['gw.test', 'old.example.com']);
+    const res = await adminPost(app, await sessionFor('owner'), '/admin/users/sign-in/hosts', {
+      remove: 'old.example.com',
+    });
+    expect(res.status).toBe(422);
+    expect(await res.text()).toContain('Confirm removing old.example.com in the dialog.');
+    expect(await getAdminHosts(env.DB)).toEqual(['gw.test', 'old.example.com']);
+    expect(await auditActions()).toEqual([]);
+  });
+
   const stored = ['gw.test', 'other.example.com'];
   it.each([
-    ['removing the current host', { remove: 'gw.test' }],
+    ['removing the current host', { remove: 'gw.test', confirm: '1' }],
     ['a workers.dev entry', { add: 'tokengate.acme.workers.dev' }],
     ['no host', { add: ' ' }],
-    ['both add and remove', { add: 'a.example.com', remove: 'other.example.com' }],
+    ['both add and remove', { add: 'a.example.com', remove: 'other.example.com', confirm: '1' }],
   ])('refuses %s and keeps the previous list', async (_, fields) => {
     await storeHosts(stored);
     const res = await adminPost(
@@ -254,7 +267,7 @@ describe('I-LINK-1: POST /admin/users/sign-in/policy', () => {
   it('saves one value with one audit row; the same value again is unchanged', async () => {
     const owner = await sessionFor('owner');
     const res = await adminPost(app, owner, '/admin/users/sign-in/policy', {
-      join_policy: 'active:access_manager',
+      confirmed_join_policy: 'active:access_manager',
     });
     expect(res.headers.get('location')).toMatch(
       /^\/admin\/users\/sign-in\?notice=policy_saved&done=aud_[0-9A-Z]{26}#policy$/,
@@ -263,7 +276,7 @@ describe('I-LINK-1: POST /admin/users/sign-in/policy', () => {
     const html = await (await adminGet(app, owner, res.headers.get('location') ?? '')).text();
     expect(html).toContain('Saved. New people who sign in: Let them in as Access manager.');
     const again = await adminPost(app, owner, '/admin/users/sign-in/policy', {
-      join_policy: 'active:access_manager',
+      confirmed_join_policy: 'active:access_manager',
     });
     expect(again.headers.get('location')).toBe(
       '/admin/users/sign-in?notice=policy_unchanged#policy',
@@ -295,9 +308,33 @@ describe('I-LINK-1: POST /admin/users/sign-in/policy', () => {
       fields,
     );
     expect(res.status).toBe(400);
-    expect(await res.text()).toContain('Choose one of the listed options.');
+    const html = await res.text();
+    expect(html).toContain('<a href="#f-join_policy">Choose one of the listed options.</a>');
+    expect(html).toMatch(
+      /<fieldset class="submits" id="f-join_policy" data-invalid="true"><legend>New people who sign in<\/legend><p class="field-error"><span class="vh">Error:<\/span> Choose one of the listed options.<\/p>/,
+    );
     expect(await getJoinDefaults(env.DB)).toEqual({ role: 'viewer', status: 'active' });
   });
+
+  it.each(['active:token_manager', 'active:access_manager', 'active:admin'])(
+    'accepts the elevated %s only from its dialog',
+    async (policy) => {
+      const owner = await sessionFor('owner');
+      const res = await adminPost(app, owner, '/admin/users/sign-in/policy', {
+        join_policy: policy,
+      });
+      expect(res.status).toBe(422);
+      expect(await res.text()).toMatch(
+        /<a href="#f-join_policy">Confirm in the dialog: Let them in as [^<]+\.<\/a>/,
+      );
+      expect(await getJoinDefaults(env.DB)).toEqual({ role: 'viewer', status: 'active' });
+      const confirmed = await adminPost(app, owner, '/admin/users/sign-in/policy', {
+        confirmed_join_policy: policy,
+      });
+      expect(confirmed.status).toBe(303);
+      expect((await getJoinDefaults(env.DB)).role).toBe(policy.slice('active:'.length));
+    },
+  );
 
   it('is forbidden for admins', async () => {
     const res = await adminPost(app, await sessionFor('admin'), '/admin/users/sign-in/policy', {
