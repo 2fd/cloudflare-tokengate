@@ -300,7 +300,11 @@ export function registerAuditRoutes(app: App): void {
         <>
           <p class="muted">
             Every change made in this admin UI, every sign-in, and events from the hourly
-            maintenance job, newest first. Secrets are never recorded.
+            maintenance job, newest first, each as an{' '}
+            <a href={paths.docs('concepts.md#audit-event')}>
+              audit event<span class="vh"> (glossary)</span>
+            </a>
+            . Secrets are never recorded.
           </p>
           <Tabs
             label="Time range"

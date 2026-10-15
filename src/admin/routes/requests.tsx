@@ -371,8 +371,12 @@ async function requestsPage(
     (ctx) => (
       <>
         <p class="muted">
-          Every call that reached the gateway, newest first. Denied and failed requests are always
-          recorded; allowed requests may be sampled (<a href={paths.retention()}>Data retention</a>
+          Every call that reached the gateway, newest first, as a{' '}
+          <a href={paths.docs('concepts.md#request-record')}>
+            request record<span class="vh"> (glossary)</span>
+          </a>
+          . Denied and failed requests are always recorded; allowed requests may be sampled (
+          <a href={paths.retention()}>Data retention</a>
           ). Open a request to see why it was allowed or denied.
         </p>
         <Tabs

@@ -298,7 +298,8 @@ function HealthSection(props: {
       ) : (
         <AlertList alerts={props.alerts} ctx={props.ctx} />
       )}
-      <details>
+      {/* Open while a check fails, so the alert links to its row (#check-…) land on it. */}
+      <details open={problems > 0}>
         <summary>
           All checks ({checks.length - problems} ok, {problems}{' '}
           {problems === 1 ? 'problem' : 'problems'})

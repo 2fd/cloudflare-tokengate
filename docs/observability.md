@@ -219,7 +219,9 @@ requests and "last used" are not recorded.
 Alerts are a static list (no `role=alert`): errors, then warnings, then notes. One item per kind
 names every affected object. Each item links to the objects it concerns for every role; the fix
 link is shown only to the roles that can make the fix, and everyone else is told whom to ask. Owners
-can approve pending people and re-encrypt secrets from the item itself. Every page except the
+can approve pending people and re-encrypt secrets from the item itself. Schema and hourly-job alerts
+link to their row of "All checks" (`/admin#check-schema`, `#check-telemetry-schema`,
+`#check-maintenance`), which is open while a check fails. Every page except the
 Overview also shows a one-line health strip for errors that are cheap to check (keys not loaded,
 missing migrations, configuration problems). The texts below are abbreviated.
 

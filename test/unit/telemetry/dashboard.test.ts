@@ -361,6 +361,8 @@ describe('loadAlertData', () => {
     });
     expect(byCode.get('key_not_active')?.form).toEqual({ kind: 'rewrap', count: 1 });
     expect(byCode.get('single_owner')?.fix).toMatchObject({ permission: 'users:write' });
+    // Cron alerts link to their row of the Overview's "All checks" table.
+    expect(byCode.get('cron_never')?.objects[0]?.href).toBe('/admin#check-maintenance');
     expect(JSON.stringify(alerts)).not.toContain('TOKENGATE_KEK=');
   });
 

@@ -279,5 +279,8 @@ describe('GET /admin health checks', () => {
     const html = await (await adminGet(a, await loginAs(a, viewer), '/admin')).text();
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+    // A failing check opens "All checks", so the alert's #check-maintenance link lands on its row.
+    expect(html).toContain('href="/admin#check-maintenance"');
+    expect(html).toMatch(/<details open="">\s*<summary>All checks \(\d+ ok, [1-9]\d* problems?\)/);
   });
 });

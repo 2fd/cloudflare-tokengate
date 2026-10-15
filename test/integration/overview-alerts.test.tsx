@@ -188,6 +188,17 @@ describe('the alert catalogue', () => {
     expect(new Set(codes)).toEqual(new Set(ALL_CODES));
   });
 
+  it('links schema and hourly-job alerts to their row of "All checks"', () => {
+    const [broken, keys] = catalogue();
+    const href = (data: AlertData | undefined, code: string) =>
+      data ? overviewAlerts(data).find((alert) => alert.code === code)?.objects[0]?.href : null;
+    expect(href(broken, 'schema_behind')).toBe('/admin#check-schema');
+    expect(href(broken, 'schema_ahead')).toBe('/admin#check-telemetry-schema');
+    expect(href(keys, 'schema_unknown')).toBe('/admin#check-telemetry-schema');
+    expect(href(broken, 'cron_failing')).toBe('/admin#check-maintenance');
+    expect(href(keys, 'cron_stale')).toBe('/admin#check-maintenance');
+  });
+
   it('orders errors, then warnings, then notes', () => {
     for (const data of catalogue()) {
       const levels = overviewAlerts(data).map(

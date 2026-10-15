@@ -199,7 +199,7 @@ export function DenialTable(props: {
               range={range}
               ctx={ctx}
               token={tokenName(g)}
-              caller={g.claims_verified === 1 ? callerText(g) : null}
+              caller={g.claims_verified === 1 ? (g.caller ?? callerText(g)) : null}
             />
           ),
         },

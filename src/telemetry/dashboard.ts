@@ -302,6 +302,14 @@ export function outsideAllowedHosts(baseUrl: string, allowed: string[] | null): 
 
 const LEVEL_ORDER = { error: 0, warning: 1, info: 2 } as const;
 
+/**
+ * The row of one check in the Overview's "All checks" table (`id="check-<name>"`). Same-section
+ * link: paths.overview only types the section fragments, so the check fragment is appended here.
+ */
+export function checkHref(check: 'schema' | 'telemetry-schema' | 'maintenance'): string {
+  return `${paths.overview()}#check-${check}`;
+}
+
 interface Ranked {
   alert: Alert;
   /** Name of the first object the alert concerns, for the order within a level. */
@@ -530,7 +538,10 @@ export function overviewAlerts(data: AlertData): Alert[] {
 
   for (const database of ['DB', 'TELEMETRY_DB'] as const) {
     const state = data.schema[database];
-    const check = { href: paths.overview({ hash: 'health' }), label: 'All checks' };
+    const check = {
+      href: checkHref(database === 'DB' ? 'schema' : 'telemetry-schema'),
+      label: `${database} schema check`,
+    };
     const docs = { href: paths.docs('operations/upgrades.md'), label: 'Upgrade guide' };
     if (state === 'behind') {
       add(database, {
@@ -573,7 +584,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
   }
   const { cron } = data;
   const cronObjects = [
-    { href: paths.overview({ hash: 'health' }), label: 'All checks' },
+    { href: checkHref('maintenance'), label: 'Hourly job check' },
     { href: paths.docs('observability.md#rollups'), label: 'Rollups and retention' },
   ];
   if (cron.failing) {
