@@ -1,14 +1,19 @@
 // Save-time enforcement of threat-model invariants by the admin ops (docs/threat-model.md): invalid trust
 // configuration is refused before any write, any network call and any use of the credential.
 import { env } from 'cloudflare:workers';
-import { beforeEach, describe, expect, it, onTestFinished } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import {
   type CallerProviderCreateInput,
   createCallerProvider,
   updateCallerProvider,
 } from '../../../../src/admin/ops/caller-providers';
 import { createGrant, setGrantEnabled, updateGrant } from '../../../../src/admin/ops/grants';
-import { createService, setServiceCredential } from '../../../../src/admin/ops/services';
+import {
+  checkServiceCredential,
+  createService,
+  rotateServiceSecret,
+  setServiceCredential,
+} from '../../../../src/admin/ops/services';
 import { getGrant } from '../../../../src/db/grants';
 import type { Condition } from '../../../../src/policy/types';
 import { setUpstreamHosts } from '../../../helpers/app';
@@ -247,5 +252,84 @@ describe('I-SSRF-1: base URLs are validated before the credential is used or sto
         CONTEXT,
       ),
     );
+  });
+});
+
+describe('I-SSRF-1 and I-CRED-2: rotation and the destination pre-check send nothing first', () => {
+  afterEach(() => setUpstreamHosts(null));
+
+  it('rotateServiceSecret re-validates the stored base URL against the allowlist without calling it', async () => {
+    const network = fakeNetwork();
+    const deps = opsDeps({ fetch: network.fetch });
+    const id = await seedService(deps, { secret: SECRET, verify: VERIFY });
+    await setUpstreamHosts(['*.openai.com']);
+    await expectRefusedQuietly(network, () =>
+      rotateServiceSecret(deps, ACTOR, id, { secret: `${SECRET}x` }, CONTEXT),
+    );
+  });
+
+  it('rotateServiceSecret refuses a malformed secret before the keyring and the network', async () => {
+    const network = fakeNetwork();
+    const deps = opsDeps({ fetch: network.fetch });
+    const id = await seedService(deps, { secret: SECRET, verify: VERIFY });
+    const broken = opsDeps({ fetch: network.fetch, env: { TOKENGATE_KEK: '' } });
+    await expectRefusedQuietly(network, () =>
+      rotateServiceSecret(broken, ACTOR, id, { secret: 'two\nlines' }, CONTEXT),
+    );
+  });
+
+  it('checkServiceCredential writes and sends nothing; hostAllowed skips only the allowlist', async () => {
+    const network = fakeNetwork();
+    const deps = opsDeps({ fetch: network.fetch });
+    const id = await seedService(deps, { secret: SECRET, verify: VERIFY });
+    await setUpstreamHosts(['*.github.com']);
+    const openai = {
+      base_url: 'https://api.openai.com/v1',
+      injection: { kind: 'bearer' },
+      secret: SECRET,
+    };
+    await expectRefusedQuietly(network, () => checkServiceCredential(deps, id, openai, CONTEXT));
+    const before = await dumpControlPlane();
+    const calls = network.calls.length;
+    expect(await checkServiceCredential(deps, id, openai, CONTEXT, { hostAllowed: true })).toEqual({
+      ok: true,
+      warnings: [],
+    });
+    await expectRefusedQuietly(network, () =>
+      checkServiceCredential(
+        deps,
+        id,
+        { ...openai, base_url: `https://${CONTEXT.requestHost}` },
+        CONTEXT,
+        { hostAllowed: true },
+      ),
+    );
+    expect(await dumpControlPlane()).toBe(before);
+    expect(network.calls.length).toBe(calls);
+  });
+
+  it('checkServiceCredential asks for the host of a token without a stored secret', async () => {
+    const network = fakeNetwork();
+    const deps = opsDeps({ fetch: network.fetch });
+    const id = await seedService(deps, { verify: VERIFY });
+    const input = {
+      base_url: 'https://api.github.com',
+      injection: { kind: 'bearer' },
+      secret: SECRET,
+    };
+    const calls = network.calls.length;
+    expect(await checkServiceCredential(deps, id, input, CONTEXT)).toMatchObject({
+      ok: false,
+      reason: 'confirmation_required',
+    });
+    expect(
+      await checkServiceCredential(
+        deps,
+        id,
+        { ...input, confirm_destination: 'api.github.com' },
+        CONTEXT,
+      ),
+    ).toMatchObject({ ok: true });
+    expect(network.calls.length).toBe(calls);
   });
 });

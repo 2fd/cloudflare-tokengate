@@ -58,6 +58,9 @@ const DAY_MS = 86_400_000;
 
 export type BindingState = StoredBinding | { status: 'unknown' };
 
+/** The `also` query of a token page notice: a second outcome of the same submit. */
+export type TokenAlso = 'host_added' | 'pair_failed' | 'sibling_failed';
+
 /** One token's status in the A9 vocabulary, most severe first. */
 export function tokenStatus(
   service: Pick<Service, 'enabled' | 'credential_sealed' | 'credential_expires_at'>,
@@ -191,7 +194,7 @@ export interface TokenPageData {
   tokens: readonly Service[];
   proxyOrigin: string;
   today: string;
-  also: 'pair_failed' | 'host_added' | null;
+  also: TokenAlso | null;
 }
 
 export interface TokenPageState {
@@ -846,12 +849,14 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
           error={ids.error('allow_host')}
         />
       ) : null}
-      <ExpiryField
-        ids={ids}
-        values={values}
-        min={data.today}
-        hint="Leave empty if it does not expire. GitHub tokens report their expiry when checked."
-      />
+      {template?.expiry_from_check ? null : (
+        <ExpiryField
+          ids={ids}
+          values={values}
+          min={data.today}
+          hint="Leave empty if it does not expire. GitHub tokens report their expiry when checked."
+        />
+      )}
       <SecretSubmits
         label={service.verify ? 'Check and change destination' : 'Change destination'}
         context={`of ${service.name}`}

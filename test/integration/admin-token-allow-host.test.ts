@@ -8,7 +8,7 @@ import type { Role } from '../../src/db/types';
 import { TOKEN_FIXTURE_VARIANTS, expectedActions } from '../fixtures/admin-forms';
 import { adminGet, adminPost, createUser, loginAs, resetControlPlane } from '../helpers/admin-auth';
 import { createTestApp, setUpstreamHosts, type TestApp } from '../helpers/app';
-import { fakeNetwork, KEK_1 } from '../unit/admin/ops/helpers';
+import { fakeNetwork, KEK_1, seedService } from '../unit/admin/ops/helpers';
 
 let app: TestApp;
 let network: ReturnType<typeof fakeNetwork>;
@@ -197,5 +197,23 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
     expect(saved.status).toBe(303);
     expect(saved.headers.get('location')).toContain('also=host_added');
     expect(await getAllowedUpstreamHosts(env.DB)).toEqual(['api.github.com', 'api.example.com']);
+  });
+
+  it('a destination refused for another reason never changes the allowlist', async () => {
+    const owner = await session('owner');
+    // No stored secret: the host must be confirmed first (I-CRED-2), and that is checked first.
+    const id = await seedService(app.deps, { slug: 'bare' });
+    const sent = network.calls.length;
+    const res = await adminPost(app, owner, `/admin/tokens/${id}/destination`, {
+      base_url: 'https://api.example.com',
+      injection_kind: 'bearer',
+      credential: 'ghp_destination0123456789abcdefghijkl',
+      allow_host: 'api.example.com',
+    });
+    expect(res.status).toBe(422);
+    expect(await res.text()).toContain('Confirm destination host');
+    expect(await getAllowedUpstreamHosts(env.DB)).toEqual(['api.github.com']);
+    expect(await actions()).not.toContain('settings.upstream_hosts');
+    expect(network.calls.length).toBe(sent);
   });
 });

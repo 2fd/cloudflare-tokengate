@@ -135,7 +135,14 @@ export async function checkServiceCreate(
   options: { hostAllowed?: boolean } = {},
 ): Promise<{ ok: true; warnings: string[] } | OpFailure> {
   const plan = await planCreate(deps, input, context, options);
-  return plan.ok ? { ok: true, warnings: plan.plan.warnings } : plan;
+  if (!plan.ok) return plan;
+  // A secret is stored only with a keyring (A7.4 step 4), checked before an owner's allow_host
+  // commits.
+  if (plan.plan.credential) {
+    const keyring = await loadKeyring(deps.env);
+    if (!keyring.ok) return keyringUnavailable(keyring.error);
+  }
+  return { ok: true, warnings: plan.plan.warnings };
 }
 
 async function planCreate(
@@ -552,25 +559,40 @@ export interface ServiceCredentialInput {
   confirm_destination?: string;
 }
 
+/** The validated parts of a credential change, before the check sends the secret. */
+interface CredentialPlan {
+  existing: Service;
+  keyring: Keyring;
+  base: string;
+  injection: Injection;
+  injectionJson: string;
+  credential: { value: string; hint: string | null };
+  host: string;
+  /** Why the stored destination is not attested, or null when the stored secret opens. */
+  unattested: OpenCredentialError | 'no_credential' | null;
+  warnings: string[];
+}
+
 /**
- * Replaces the credential and, optionally, the base URL and injection it is bound to. The new
- * value is sealed with the AAD of the new configuration and written with it in one statement,
- * compare-and-swap on the binding fields read here (I-CRED-2).
+ * Every check of a credential change that sends nothing and writes nothing, in the order of A7.4:
+ * field formats and the secret format, then the allowlist (skipped with `hostAllowed`, for a route
+ * that allows the host itself first), then the keyring, then the destination confirmation of an
+ * unattested or absent binding (I-CRED-2).
  */
-export async function setServiceCredential(
-  deps: Deps,
-  actor: Actor,
+async function planCredential(
+  deps: Pick<Deps, 'env'>,
   serviceId: string,
   input: ServiceCredentialInput,
   context: OpContext,
-): Promise<CredentialOpResult> {
+  options: { hostAllowed?: boolean },
+): Promise<{ ok: true; plan: CredentialPlan } | OpFailure> {
   const existing = await getService(deps.env.DB, serviceId);
   if (!existing) return opFailure('not_found', ['service not found']);
 
   const errors: string[] = [];
   const base = validateBaseUrl(input.base_url, {
     gatewayHosts: await gatewayHosts(deps.env.DB, context),
-    allowedUpstreamHosts: await getAllowedUpstreamHosts(deps.env.DB),
+    allowedUpstreamHosts: options.hostAllowed ? null : await getAllowedUpstreamHosts(deps.env.DB),
   });
   if (!base.ok) errors.push(base.error);
   const injection = normalizeInjection(input.injection);
@@ -620,13 +642,61 @@ export async function setServiceCredential(
       fields.warnings,
     );
   }
+  return {
+    ok: true,
+    plan: {
+      existing,
+      keyring: keyring.keyring,
+      base: base.normalized,
+      injection: injection.injection,
+      injectionJson: injection.json,
+      credential: { value: credential.value, hint: credential.hint },
+      host,
+      unattested,
+      warnings: fields.warnings,
+    },
+  };
+}
+
+/**
+ * The checks of setServiceCredential that send nothing and write nothing (planCredential). The
+ * destination route runs it before an owner's `allow_host` commits, so a destination that would be
+ * refused anyway never changes the allowlist.
+ */
+export async function checkServiceCredential(
+  deps: Pick<Deps, 'env'>,
+  serviceId: string,
+  input: ServiceCredentialInput,
+  context: OpContext,
+  options: { hostAllowed?: boolean } = {},
+): Promise<{ ok: true; warnings: string[] } | OpFailure> {
+  const planned = await planCredential(deps, serviceId, input, context, options);
+  return planned.ok ? { ok: true, warnings: planned.plan.warnings } : planned;
+}
+
+/**
+ * Replaces the credential and, optionally, the base URL and injection it is bound to. The new
+ * value is sealed with the AAD of the new configuration and written with it in one statement,
+ * compare-and-swap on the binding fields read here (I-CRED-2).
+ */
+export async function setServiceCredential(
+  deps: Deps,
+  actor: Actor,
+  serviceId: string,
+  input: ServiceCredentialInput,
+  context: OpContext,
+): Promise<CredentialOpResult> {
+  const planned = await planCredential(deps, serviceId, input, context, {});
+  if (!planned.ok) return planned;
+  const { plan } = planned;
+  const { existing, keyring, credential, unattested, host } = plan;
 
   const verify = existing.verify
     ? await runVerifyCheck(
         deps,
         {
-          base_url: base.normalized,
-          injection: injection.injection,
+          base_url: plan.base,
+          injection: plan.injection,
           timeout_ms: existing.timeout_ms,
           verify: existing.verify,
         },
@@ -634,18 +704,18 @@ export async function setServiceCredential(
       )
     : null;
   if (verify && !verify.passed && input.save_anyway !== true) {
-    return verifyFailed(verify, fields.warnings);
+    return verifyFailed(verify, plan.warnings);
   }
 
-  const aad = credentialAad(existing.id, base.normalized, injection.json);
-  const sealed = await sealCredential(keyring.keyring, credential.value, aad, deps.random);
+  const aad = credentialAad(existing.id, plan.base, plan.injectionJson);
+  const sealed = await sealCredential(keyring, credential.value, aad, deps.random);
   const values = {
-    base_url: base.normalized,
-    injection_json: injection.json,
+    base_url: plan.base,
+    injection_json: plan.injectionJson,
     credential_sealed: sealed,
     credential_hint: credential.hint,
     credential_expires_at: input.credential_expires_at ?? verify?.expiresAt ?? null,
-    template_id: templateIdFor(base.normalized, injection.json),
+    template_id: templateIdFor(plan.base, plan.injectionJson),
   };
   const now = deps.now();
   const repointed =
@@ -674,7 +744,7 @@ export async function setServiceCredential(
         before: credentialAuditView(existing),
         after: credentialAuditView({
           ...values,
-          injection: injection.injection,
+          injection: plan.injection,
           credential_updated_at: now,
         }),
         ...(unattested !== null && unattested !== 'no_credential'
@@ -688,7 +758,7 @@ export async function setServiceCredential(
     guard,
     [
       updateServiceCredentialStatement(deps.env.DB, existing.id, values, now, guard),
-      ...kcvStatements(deps, keyring.keyring, true, existing.id),
+      ...kcvStatements(deps, keyring, true, existing.id),
     ],
   );
   if (!outcome.ok) return outcome;
@@ -696,11 +766,11 @@ export async function setServiceCredential(
   const service = serviceView({
     ...existing,
     ...values,
-    injection: injection.injection,
+    injection: plan.injection,
     credential_updated_at: now,
     updated_at: nextVersion(existing.updated_at, now),
   });
-  return { ok: true, service, verify, warnings: fields.warnings };
+  return { ok: true, service, verify, warnings: plan.warnings };
 }
 
 export interface ServiceRotateInput {
@@ -734,6 +804,12 @@ export async function rotateServiceSecret(
 ): Promise<RotateResult> {
   const existing = await getService(deps.env.DB, serviceId);
   if (!existing) return opFailure('not_found', ['service not found']);
+  // The secret format first, against the stored injection (A7.4), then the keyring.
+  const format = normalizeCredential(
+    typeof input.secret === 'string' ? input.secret : '',
+    existing.injection,
+  );
+  if (!format.ok) return opFailure('invalid', serviceFieldErrors([format.error]));
   const keyring = await loadKeyring(deps.env);
   if (!keyring.ok) return keyringUnavailable(keyring.error);
   const old = await openStoredCredential(keyring.keyring, existing);

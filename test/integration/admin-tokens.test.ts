@@ -195,6 +195,15 @@ describe('token list', () => {
     expect(unknown).toContain('Service tokens (1)');
     expect(unknown).not.toContain('<b>x</b>');
   });
+
+  it('opens the accordion with ?open=add once tokens exist', async () => {
+    const admin = await sessionFor('admin');
+    await createOpenAi(admin);
+    const closed = await (await adminGet(app, admin, '/admin/tokens')).text();
+    expect(closed).toMatch(/<details id="add" class="add-token"><summary>Add a token/);
+    const open = await (await adminGet(app, admin, '/admin/tokens?open=add')).text();
+    expect(open).toMatch(/<details id="add" class="add-token" open=""><summary>Add a token/);
+  });
 });
 
 describe('the standalone accordion', () => {
@@ -681,6 +690,28 @@ describe('rotate (POST /admin/tokens/:id/secret)', () => {
     ]);
     expect((await serviceRow('github-uploads'))?.credential_hint).toBe('…ROTA (39 chars)');
     expect((await serviceRow('uploads-other'))?.credential_hint).not.toBe('…ROTA (39 chars)');
+  });
+
+  it('says so when a ticked sibling no longer holds the same secret', async () => {
+    const admin = await sessionFor('admin');
+    const api = idFrom(
+      await adminPost(app, admin, '/admin/tokens', { template: 'github', credential: GH_SECRET }),
+    );
+    const other = idFrom(
+      await adminPost(app, admin, '/admin/tokens', {
+        template: 'github-uploads',
+        credential: `ghp_otherSecret00000000000000000${GH_SECRET.slice(-4)}`,
+      }),
+    );
+    const res = await adminPost(app, admin, `/admin/tokens/${api}/secret`, {
+      credential: 'ghp_rotated000000000000000000000000ROTA',
+      also_replace: other,
+    });
+    expect(res.headers.get('location')).toBe(
+      `/admin/tokens/${api}?notice=secret_verified&also=sibling_failed#secret`,
+    );
+    const html = await (await adminGet(app, admin, res.headers.get('location') ?? '')).text();
+    expect(html).toContain('It was not replaced in every other token that held the same secret');
   });
 });
 

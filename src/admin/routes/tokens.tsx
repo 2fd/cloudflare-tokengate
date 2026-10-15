@@ -19,6 +19,7 @@ import { type NoticeContext, type NoticeTable, resolveNotice } from '../notice';
 import { openCredentialDraft, sealCredentialDraft } from '../ops/credential-draft';
 import {
   checkServiceCreate,
+  checkServiceCredential,
   createService,
   deleteService,
   freeName,
@@ -96,6 +97,7 @@ import {
   TokenPage,
   type TokenPageData,
   type TokenPageState,
+  type TokenAlso,
   typeLabel,
   upstreamHost,
 } from '../views/token-page';
@@ -178,9 +180,13 @@ const TOKEN_NOTICES: NoticeTable<NoticeContext & TokenNoticeData> = {
   created: (ctx) => ({ text: createdText(ctx, ''), ...giveAccessNext(ctx) }),
   updated: () => ({ text: 'Changes saved.' }),
   unchanged: () => ({ text: 'Nothing changed: the submitted values are the current ones.' }),
-  secret_verified: () => ({ text: 'Secret replaced; the check against the upstream passed.' }),
-  secret_unverified: () => ({ text: 'Secret replaced although its check failed.' }),
-  secret_saved: () => ({ text: 'Secret replaced.' }),
+  secret_verified: (ctx) => ({
+    text: `Secret replaced; the check against the upstream passed.${siblingText(ctx)}`,
+  }),
+  secret_unverified: (ctx) => ({
+    text: `Secret replaced although its check failed.${siblingText(ctx)}`,
+  }),
+  secret_saved: (ctx) => ({ text: `Secret replaced.${siblingText(ctx)}` }),
   destination_changed: (ctx) => ({
     text: `Destination saved with the new secret.${
       ctx.also === 'host_added' && ctx.service
@@ -203,6 +209,13 @@ const TOKEN_NOTICES: NoticeTable<NoticeContext & TokenNoticeData> = {
   }),
 };
 
+/** A rotate whose sibling replacement failed: the main token was replaced, a sibling was not. */
+function siblingText(ctx: TokenNoticeData): string {
+  return ctx.also === 'sibling_failed'
+    ? ' It was not replaced in every other token that held the same secret: replace it there too.'
+    : '';
+}
+
 function giveAccessNext(ctx: NoticeContext & TokenNoticeData) {
   return ctx.service && ctx.view.can('access:write')
     ? {
@@ -218,11 +231,15 @@ const LIST_NOTICES: NoticeTable = {
   disabled: () => ({ text: 'Token disabled. Requests through it are refused from now on.' }),
 };
 
-const ALSO_KEYS = new Set(['host_added', 'pair_failed']);
+const ALSO_KEYS: ReadonlySet<string> = new Set<TokenAlso>([
+  'host_added',
+  'pair_failed',
+  'sibling_failed',
+]);
 
-function alsoParam(c: AdminContext): 'host_added' | 'pair_failed' | null {
+function alsoParam(c: AdminContext): TokenAlso | null {
   const raw = c.req.query('also');
-  return raw !== undefined && ALSO_KEYS.has(raw) ? (raw as 'host_added' | 'pair_failed') : null;
+  return raw !== undefined && ALSO_KEYS.has(raw) ? (raw as TokenAlso) : null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -445,6 +462,8 @@ async function listPage(c: AdminContext) {
     byToken.set(edge.grant.service_id, list);
   }
   const done = null;
+  // `?open=add` opens the accordion (A7.1); a bare `#add` fragment never reaches the server.
+  const openAdd = c.req.query('open') === 'add';
   return renderPage(
     c,
     {
@@ -478,7 +497,7 @@ async function listPage(c: AdminContext) {
           </p>
           <ListAlerts ctx={ctx} tokens={tokens} facts={facts} keyringError={cards.keyringError} />
           {canWrite ? (
-            <details id="add" class="add-token" open={empty}>
+            <details id="add" class="add-token" open={empty || openAdd}>
               <summary>{empty ? 'Add your first token' : 'Add a token'}</summary>
               <TokenTypeCards ctx={ctx} data={cards} open={null} failed={null} />
             </details>
@@ -1155,7 +1174,10 @@ async function rotate(c: AdminContext) {
       : result.verify.passed
         ? 'secret_verified'
         : 'secret_unverified';
-  return redirectWithNotice(c, paths.token(service.id), notice, { fragment: 'secret' });
+  return redirectWithNotice(c, paths.token(service.id), notice, {
+    fragment: 'secret',
+    also: result.siblings.some((sibling) => !sibling.ok) ? 'sibling_failed' : undefined,
+  });
 }
 
 async function changeDestination(c: AdminContext) {
@@ -1215,28 +1237,35 @@ async function changeDestination(c: AdminContext) {
     );
   if (errors.length > 0 || secret.secret === null) return fail(errors, 400);
 
+  const input = {
+    base_url: values.base_url,
+    injection,
+    secret: secret.secret,
+    save_anyway: flag(form, 'save_anyway'),
+    // Undefined: the op uses the expiry the check reports (GitHub), else none.
+    credential_expires_at:
+      expiry.ok && !template?.expiry_from_check ? (expiry.value ?? undefined) : undefined,
+    confirm_destination: values.confirm_destination,
+  };
+  const context = opContextFor(new URL(c.req.url));
+  const allowHost = !covered && allowRequested && host !== null;
+  // Everything that sends nothing (formats, keyring, the host confirmation) before the host is
+  // added, so a destination refused anyway never changes the allowlist (A7.4).
+  const checked = await checkServiceCredential(deps, service.id, input, context, {
+    hostAllowed: allowHost,
+  });
+  if (!checked.ok) {
+    if (checked.reason === 'not_found') return notFound(c);
+    return fail(failureErrors(checked), FAILURE_STATUS[checked.reason]);
+  }
   const actor = adminActor(c);
   let hostAdded = false;
-  if (!covered && allowRequested && host !== null) {
+  if (allowHost) {
     const added = await addUpstreamHost(deps, actor, host);
     if (!added.ok) return fail(failureErrors(added), FAILURE_STATUS[added.reason]);
     hostAdded = added.changed;
   }
-  const result = await setServiceCredential(
-    deps,
-    actor,
-    service.id,
-    {
-      base_url: values.base_url,
-      injection,
-      secret: secret.secret,
-      save_anyway: flag(form, 'save_anyway'),
-      // Undefined: the op uses the expiry the check reports (GitHub), else none.
-      credential_expires_at: expiry.ok ? (expiry.value ?? undefined) : undefined,
-      confirm_destination: values.confirm_destination,
-    },
-    opContextFor(new URL(c.req.url)),
-  );
+  const result = await setServiceCredential(deps, actor, service.id, input, context);
   if (!result.ok) {
     if (result.reason === 'not_found') return notFound(c);
     const failure = failureErrors(result);
