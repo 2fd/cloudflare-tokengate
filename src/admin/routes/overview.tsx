@@ -290,6 +290,10 @@ function HealthSection(props: {
 }) {
   const checks = healthChecks(props.alertData, props.adminHosts, props.env);
   const problems = checks.filter((check) => !check.ok).length;
+  // An alert can link to a row that passes (cron_never: the job has not run yet, which is ok).
+  const linksToCheck = props.alerts.some((alert) =>
+    alert.objects.some((object) => object.href.includes('#check-')),
+  );
   return (
     <section id="health" aria-labelledby="health-h">
       <h2 id="health-h">Health</h2>
@@ -298,8 +302,8 @@ function HealthSection(props: {
       ) : (
         <AlertList alerts={props.alerts} ctx={props.ctx} />
       )}
-      {/* Open while a check fails, so the alert links to its row (#check-…) land on it. */}
-      <details open={problems > 0}>
+      {/* Open while a check fails or an alert links to a row (#check-…), so the link lands on it. */}
+      <details open={problems > 0 || linksToCheck}>
         <summary>
           All checks ({checks.length - problems} ok, {problems}{' '}
           {problems === 1 ? 'problem' : 'problems'})
@@ -746,6 +750,9 @@ function TokensInUse(props: { ctx: ViewContext; data: OverviewData; connections:
   );
 }
 
+/** Consumers named in a "Used by" cell; the rest is one link naming the token (2.4.4). */
+const USED_BY_CHIPS = 3;
+
 function tokenColumns(ctx: ViewContext, data: OverviewData, connections: Connections) {
   const range = data.range;
   const currentHour = hourStart(data.generatedAt);
@@ -799,8 +806,9 @@ function tokenColumns(ctx: ViewContext, data: OverviewData, connections: Connect
         ) : (
           <ChipList
             label={`Consumers that can use ${row.token.name}`}
-            max={3}
+            max={USED_BY_CHIPS}
             moreHref={paths.access({ token: row.id })}
+            moreText={`and ${row.accesses.length - USED_BY_CHIPS} more for ${row.token.name}`}
             items={row.accesses.map((edge) => accessChip(edge, row.token as Service))}
           />
         ),

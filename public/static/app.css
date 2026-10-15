@@ -300,7 +300,9 @@ p.empty { color: var(--muted); }
 .blockers { padding: .5rem .75rem .5rem 1.75rem; background: var(--warn-bg); }
 .related { padding-inline-start: 1.25rem; }
 .audit-diff summary { color: var(--accent); }
-.audit-diff pre { margin: .25rem 0; max-block-size: 24rem; overflow: auto; }
+/* No inner scroll box: a pre cannot take focus, so long values wrap instead (WCAG 2.1.1). */
+.audit-diff pre { margin: .25rem 0; max-block-size: none; overflow: visible; white-space: pre-wrap;
+  overflow-wrap: anywhere; }
 @media (max-width: 40rem) {
   .find-request { padding-inline: 1rem; }
 }

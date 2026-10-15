@@ -337,7 +337,8 @@ fifth row below), "Hourly summaries" and "Audit log". The numbers are prefilled 
 lists; the sample rate is a choice of 100 %, 50 %, 10 %, 1 % or 0 %. "Traffic summary retention" must
 be at least "Request log retention", because the summaries back the Overview and "last used" for
 every stored record. Each save that changes a value writes one audit event
-([I-AUDIT-1](threat-model.md#i-audit-1)).
+([I-AUDIT-1](threat-model.md#i-audit-1)). The form sends every value, so when two owners save at
+the same time, the last save wins for all five values.
 
 | Label | Key | Default | Min | Max |
 |---|---|---|---|---|

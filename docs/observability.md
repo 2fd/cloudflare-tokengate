@@ -92,8 +92,10 @@ Newer and Older links.
   that record, or says it does not exist (records are kept for "Request log retention (days)").
 - **Tabs:** Time range (1 hour, 24 hours, 7 days, 30 days, All) and Outcome (All, Allowed, Denied,
   Errors). "Errors" are gateway errors plus allowed requests the upstream answered with 5xx, the
-  same count as the Overview.
-- **Filter form:** Token, Service consumer and Reason are lists; Repository is the only typed
+  same count as the Overview. A time range starts at the start of an hour (UTC), so the page states
+  the actual start ("since …").
+- **Filter form:** it shows when a filter is active or the page has more than 10 rows. Token,
+  Service consumer and Reason are lists; Repository is the only typed
   filter (exact `owner/name`). Its suggestions are the repository labels stored on consumers and
   accesses, never values from the request log. "Refused before a token was chosen" and "No
   consumer" select the records without a token or consumer.
@@ -107,7 +109,8 @@ Newer and Older links.
   access from this request" or "Set the secret again"), each shown only to the roles that can do
   it. It always re-runs authorization against the current consumer accesses with the stored claims
   only ("Check against current access"); claims that were not stored fail closed, and nothing is
-  changed.
+  changed. A disabled consumer or token, or a tenant pin that fails, refuses the request before any
+  access applies, so the check then says "Would still be refused" even when an access matches.
 - "Give access from this request" is offered for a denied, verified record with reason
   `no_matching_grant` or `event_not_trusted`, to access managers, admins and owners, until the
   re-check says the request would now be allowed. Records of tokens that were not verified never
@@ -292,7 +295,8 @@ changes writes nothing.
 
 Monitoring › Audit log (`/admin/audit`) lists events newest first. The tabs filter by time range
 (24 hours, 7 days, 30 days, 90 days, All) and category (Tokens, Consumers, Access, Users, Sign-ins,
-System); the lists filter by object (`?target=<id>`, `settings` or `keyring`) and by who made the
+System); the lists (shown when a filter is active or the page has more than 10 events) filter
+by object (`?target=<id>`, `settings` or `keyring`) and by who made the
 change (`?actor=<user id>`, an email, or `system`). Every object page has a History link to its
 events. Each event shows the changed fields as a Before and After table. Retention is "Audit log
 retention (days)": default 365, never less than 90.

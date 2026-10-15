@@ -191,6 +191,12 @@ describe('request log with records from the proxy', () => {
       await adminGet(fixture.app, viewerSession, `/admin/requests/${allowed.id}`)
     ).text();
     expect(html).toContain('The service consumer is disabled');
+    // A blocker refuses the request on its own: the verdict never says allowed, and comes first.
+    expect(html).not.toContain('Would now be <b>allowed</b>');
+    const verdict = html.indexOf('Would still be <b>refused</b>');
+    expect(verdict).toBeGreaterThan(-1);
+    expect(verdict).toBeLessThan(html.indexOf('<ul class="blockers">'));
+    expect(html).toContain(`Once it passes, access <a href="/admin/access/${fixture.grantId}">`);
   });
 
   it('re-evaluates with the proxy grant set: disabled, expired and other-provider grants never allow', async () => {

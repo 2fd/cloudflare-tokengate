@@ -114,12 +114,14 @@ describe('GET /admin with traffic', () => {
     ).text();
     expect(html).not.toContain('id="get-started"');
     expect(html).toContain('<dl class="kpis">');
-    expect(html).toMatch(/<dt>Requests<\/dt><dd><a href="\/admin\/requests\?range=24h">4<\/a>/);
     expect(html).toMatch(
-      /<dt>Allowed<\/dt><dd><a href="\/admin\/requests\?range=24h&amp;outcome=allowed">3<\/a>/,
+      /<dt>Requests<\/dt><dd><a href="\/admin\/requests\?range=24h">4<span class="vh"> requests, last 24 hours<\/span><\/a>/,
     );
     expect(html).toMatch(
-      /<dt>Denied<\/dt><dd><a href="\/admin\/requests\?range=24h&amp;outcome=denied">1<\/a>/,
+      /<dt>Allowed<\/dt><dd><a href="\/admin\/requests\?range=24h&amp;outcome=allowed">3<span class="vh"> allowed requests, last 24 hours<\/span><\/a>/,
+    );
+    expect(html).toMatch(
+      /<dt>Denied<\/dt><dd><a href="\/admin\/requests\?range=24h&amp;outcome=denied">1<span class="vh"> denied requests, last 24 hours<\/span><\/a>/,
     );
     expect(html).toContain('role="img"');
     expect(html).toContain(`href="/admin/tokens/${fixture.serviceId}"`);
@@ -262,6 +264,17 @@ describe('GET /admin health checks', () => {
     }
     expect(html).toContain('Cloudflare Access.');
     expect(html).not.toContain('First owner');
+  });
+
+  it('opens "All checks" for cron_never although its check passes, so #check-maintenance lands', async () => {
+    // Keys loaded, so every check passes; the job has never run, which is not a problem.
+    const fixture = await setupProxy({ grant: false });
+    const html = await (
+      await adminGet(fixture.app, await loginAs(fixture.app, viewer), '/admin')
+    ).text();
+    expect(html).toContain('The hourly job has not run yet; it starts within the hour.');
+    expect(html).toContain('href="/admin#check-maintenance"');
+    expect(html).toMatch(/<details open="">\s*<summary>All checks \(\d+ ok, 0 problems\)/);
   });
 
   it('escapes stored text such as the last cron error', async () => {

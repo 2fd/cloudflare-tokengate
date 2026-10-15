@@ -330,33 +330,37 @@ export function registerAuditRoutes(app: App): void {
               })),
             ]}
           />
-          <form method="get" action={paths.audit()} class="filters" aria-label="Filter audit log">
-            {params.range ? <input type="hidden" name="range" value={params.range} /> : null}
-            {params.category ? (
-              <input type="hidden" name="category" value={params.category} />
-            ) : null}
-            <Select
-              name="target"
-              label="Object"
-              value={params.target ?? (errors.some((e) => e.field === 'target') ? '' : null)}
-              placeholder="Any object"
-              options={targetOptions}
-              hint="Show the history of one object. Each object page also has a History link."
-              error={errors.find((e) => e.field === 'target')?.message}
-            />
-            <Select
-              name="actor"
-              label="Who"
-              value={params.actor ?? null}
-              placeholder="Anyone"
-              options={actorOptions}
-              hint="Who made the change."
-              error={errors.find((e) => e.field === 'actor')?.message}
-            />
-            <button type="submit" class="secondary">
-              Apply filters
-            </button>
-          </form>
+          {/* A7.1: the form only when it can narrow something: an active filter or cursor, an
+              invalid value to correct, or more than 10 rows. */}
+          {filtered || params.before || params.after || errors.length > 0 || page.length > 10 ? (
+            <form method="get" action={paths.audit()} class="filters" aria-label="Filter audit log">
+              {params.range ? <input type="hidden" name="range" value={params.range} /> : null}
+              {params.category ? (
+                <input type="hidden" name="category" value={params.category} />
+              ) : null}
+              <Select
+                name="target"
+                label="Object"
+                value={params.target ?? (errors.some((e) => e.field === 'target') ? '' : null)}
+                placeholder="Any object"
+                options={targetOptions}
+                hint="Show the history of one object. Each object page also has a History link."
+                error={errors.find((e) => e.field === 'target')?.message}
+              />
+              <Select
+                name="actor"
+                label="Who"
+                value={params.actor ?? null}
+                placeholder="Anyone"
+                options={actorOptions}
+                hint="Who made the change."
+                error={errors.find((e) => e.field === 'actor')?.message}
+              />
+              <button type="submit" class="secondary">
+                Apply filters
+              </button>
+            </form>
+          ) : null}
           <FilterChips items={chips} clearHref={paths.audit()} />
           {page.length === 0 ? (
             filtered || params.before || params.after ? (
@@ -528,7 +532,8 @@ function AuditChanges(props: { event: AuditEvent; name: string | null }) {
         <div class="table-region" role="region" aria-labelledby={`diff-${id}`} tabindex={0}>
           <table>
             <caption id={`diff-${id}`} class="vh">
-              Changed fields
+              Changed fields of {props.name ?? props.event.target_type ?? 'this event'} at{' '}
+              {formatTime(ts)}
             </caption>
             <thead>
               <tr>

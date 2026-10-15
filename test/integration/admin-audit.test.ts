@@ -87,6 +87,13 @@ describe('GET /admin/audit', () => {
     expect(eventIds(html)).toEqual([system, updated, created]);
     expect(html).toContain('System (hourly job)');
     expect(html).toContain('<th scope="col">Before</th>');
+    // Each diff region has its own name: the object and the time.
+    const captions = [...html.matchAll(/<caption id="diff-aud_[^"]+" class="vh">([^<]*)</g)].map(
+      (m) => m[1],
+    );
+    expect(captions.length).toBeGreaterThan(1);
+    expect(new Set(captions).size).toBe(captions.length);
+    expect(captions.every((c) => c?.startsWith('Changed fields of '))).toBe(true);
     // Changed keys only: `rules` did not change.
     expect(html).toContain('Changes: name<span class="vh">');
     expect(html).toContain('<td><code>old</code></td><td><code>new</code></td>');
@@ -113,7 +120,11 @@ describe('GET /admin/audit', () => {
       targetId: SVC_A,
       summary: 'Updated',
     });
-    const html = await (await adminGet(app, session, '/admin/audit')).text();
+    // One event and no filter: the filter form stays hidden (A7.1).
+    const plain = await (await adminGet(app, session, '/admin/audit')).text();
+    expect(plain).not.toContain('aria-label="Filter audit log"');
+    // Any active filter shows it, with every target as an option.
+    const html = await (await adminGet(app, session, '/admin/audit?range=24h')).text();
     expect(html).toContain(`<a href="/admin/tokens/${SVC_A}">Slack bot</a>`);
     expect(html).toContain(`<option value="${SVC_A}">Slack bot</option>`);
   });
@@ -256,7 +267,7 @@ describe('GET /admin/audit', () => {
       targetId: GRT_C,
       summary: 'x',
     });
-    const html = await (await adminGet(app, session, '/admin/audit')).text();
+    const html = await (await adminGet(app, session, '/admin/audit?range=24h')).text();
     expect(html).toContain(`<option value="${gone.id}">gone@example.com (suspended)</option>`);
     expect(html).toContain('gone@example.com (suspended)<span class="vh">');
   });

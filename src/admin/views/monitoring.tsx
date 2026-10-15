@@ -7,7 +7,7 @@ import type { AuditEvent, CallerProvider, Service } from '../../db/types';
 import { PROFILES } from '../../identity/profiles';
 import type { ProfileId } from '../../identity/types';
 import type { Percentile, TrafficStats } from '../../telemetry/dashboard';
-import type { OverviewRange } from '../../telemetry/ranges';
+import { type OverviewRange, RANGE_LABEL } from '../../telemetry/ranges';
 import { paths } from '../paths';
 import type { ViewContext } from '../render';
 import { DataTable, Field, Time } from './components';
@@ -63,11 +63,24 @@ export function percentileText(p: Percentile | null): string {
   return formatDuration(p.ms);
 }
 
+const KPI_NOUN = {
+  allowed: 'allowed requests',
+  denied: 'denied requests',
+  error: 'requests with errors',
+} as const;
+
 /** Requests · Allowed · Denied · Errors (count and %) · p50 · p95; every count links to its list. */
 export function KpiList(props: { totals: TrafficStats; range: OverviewRange }) {
   const { totals: t, range } = props;
+  // The number alone is not a link name (2.4.4): the hidden text names the list it opens.
   const link = (n: number, outcome?: 'allowed' | 'denied' | 'error') => (
-    <a href={paths.requests({ range, outcome })}>{formatCount(n)}</a>
+    <a href={paths.requests({ range, outcome })}>
+      {formatCount(n)}
+      <span class="vh">
+        {' '}
+        {outcome ? KPI_NOUN[outcome] : 'requests'}, last {RANGE_LABEL[range]}
+      </span>
+    </a>
   );
   return (
     <dl class="kpis">
@@ -251,6 +264,7 @@ function DenialAction(props: {
         range: props.range,
         outcome: 'denied',
         token: g.service_id || 'none',
+        consumer: g.caller_provider_id || 'none',
         ...(g.reason ? { reason: g.reason } : {}),
         ...(g.claims_verified === 1 && g.caller_kind === 'repository' && g.caller
           ? { repo: g.caller }

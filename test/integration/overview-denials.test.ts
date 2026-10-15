@@ -89,9 +89,9 @@ describe('I-LOG-2: Top denials', () => {
     expect(html).toContain(`href="/admin/requests/${web[1]?.id}"`);
     expect(html).toContain(`href="/admin/access/new?from_request=${web[1]?.id}"`);
     expect(html).toContain('Create access<span class="vh"> for acme/web on slack</span>');
-    // tenant_mismatch is not fixable by an access: the action is the filtered list.
+    // tenant_mismatch is not fixable by an access: the action is the list of exactly this group.
     expect(html).toContain(
-      'href="/admin/requests?range=24h&amp;outcome=denied&amp;token=svc_01JAAAAAAAAAAAAAAAAAAAAAAA&amp;reason=tenant_mismatch&amp;repo=acme%2Fweb"',
+      'href="/admin/requests?range=24h&amp;outcome=denied&amp;token=svc_01JAAAAAAAAAAAAAAAAAAAAAAA&amp;consumer=cpr_01JAAAAAAAAAAAAAAAAAAAAAAA&amp;reason=tenant_mismatch&amp;repo=acme%2Fweb"',
     );
     expect(html).toContain('href="/admin/requests?range=24h&amp;outcome=denied"');
   });

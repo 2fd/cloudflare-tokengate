@@ -147,12 +147,39 @@ describe('Requests filters', () => {
         record(TEST_EPOCH_MS, { claims_verified: 1, caller_repository: 'acme/only-in-log' }),
       ]),
     );
-    const html = await (await adminGet(app, session, '/admin/requests')).text();
+    // One row and no filter: no filter form (A7.1); the repository is a filter link in the table.
+    const plain = await (await adminGet(app, session, '/admin/requests')).text();
+    expect(plain).not.toContain('aria-label="Filter requests"');
+    expect(plain).toContain('href="/admin/requests?repo=acme%2Fonly-in-log"');
+    // An active filter shows the form; its suggestions come from claim labels only.
+    const html = await (await adminGet(app, session, '/admin/requests?outcome=denied')).text();
     const list = /<datalist id="f-repo-list">[\s\S]*?<\/datalist>/.exec(html)?.[0] ?? '';
     expect(list).toContain('<option value="acme/labelled">acme/labelled</option>');
     expect(list).not.toContain('only-in-log');
-    // The repository shows in the table as a filter link instead.
-    expect(html).toContain('href="/admin/requests?repo=acme%2Fonly-in-log"');
+  });
+
+  it('shows the filter form above 10 rows without any filter', async () => {
+    const rows = Array.from({ length: 11 }, (_, i) => record(TEST_EPOCH_MS + i * 1000));
+    await env.TELEMETRY_DB.batch(insertRequestRecordsStatements(env.TELEMETRY_DB, rows));
+    const html = await (await adminGet(app, session, '/admin/requests')).text();
+    expect(html).toContain('aria-label="Filter requests"');
+  });
+
+  it('states the actual start of a time range', async () => {
+    const html = await (await adminGet(app, session, '/admin/requests?range=24h')).text();
+    expect(html).toMatch(/<p class="since">since <time datetime="[^"]+">/);
+    expect(await (await adminGet(app, session, '/admin/requests')).text()).not.toContain(
+      'class="since"',
+    );
+  });
+
+  it('names the reason filter in plain text in the chip and the title', async () => {
+    const html = await (
+      await adminGet(app, session, '/admin/requests?reason=no_matching_grant')
+    ).text();
+    expect(html).toMatch(/<title>Requests: [^<]*\(no_matching_grant\)/);
+    expect(html).toMatch(/Reason: [^<]+ \(no_matching_grant\)/);
+    expect(html).not.toContain('Reason: no_matching_grant');
   });
 
   it('re-renders an invalid repository with the field error and a 400', async () => {

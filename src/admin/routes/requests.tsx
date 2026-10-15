@@ -345,7 +345,7 @@ async function requestsPage(
     params.consumer ? `consumer ${consumerName(params.consumer, names.consumers)}` : null,
     params.access ? `access ${names.grants.get(params.access) ?? params.access}` : null,
     params.repo ? params.repo : null,
-    params.reason ? params.reason : null,
+    params.reason ? reasonLabel(params.reason) : null,
     params.slug ? `slug ${params.slug}` : null,
   ].filter((part): part is string => part !== null);
   const filtered = Boolean(
@@ -391,6 +391,11 @@ async function requestsPage(
             { key: 'all', href: listLink(params, { range: undefined }), label: 'All' },
           ]}
         />
+        {params.range ? (
+          <p class="since">
+            since <Time ms={rangeStart(params.range, now)} />
+          </p>
+        ) : null}
         <Tabs
           label="Outcome"
           current={params.outcome ?? 'all'}
@@ -403,14 +408,18 @@ async function requestsPage(
             })),
           ]}
         />
-        <RequestFilters
-          params={params}
-          errors={o.errors}
-          services={services}
-          providers={providers}
-          repos={[...new Set(repos.map((r) => r.label))]}
-          rawRepo={o.rawRepo}
-        />
+        {/* A7.1: the form only when it can narrow something: an active filter or cursor, an
+            invalid value to correct, or more than 10 rows. Table cells set filters too. */}
+        {filtered || params.before || params.after || o.errors.length > 0 || rows.length > 10 ? (
+          <RequestFilters
+            params={params}
+            errors={o.errors}
+            services={services}
+            providers={providers}
+            repos={[...new Set(repos.map((r) => r.label))]}
+            rawRepo={o.rawRepo}
+          />
+        ) : null}
         <FilterChips items={filterChips(params, names)} clearHref={paths.requests()} />
         {page.olderBefore ? (
           <p class="note">
@@ -535,7 +544,7 @@ function filterChips(
   if (params.access)
     chips.push(chip('access', `Access: ${names.grants.get(params.access) ?? params.access}`));
   if (params.repo) chips.push(chip('repo', `Repository: ${params.repo}`));
-  if (params.reason) chips.push(chip('reason', `Reason: ${params.reason}`));
+  if (params.reason) chips.push(chip('reason', `Reason: ${reasonLabel(params.reason)}`));
   if (params.slug) chips.push(chip('slug', `Slug: ${params.slug}`));
   return chips;
 }
@@ -795,8 +804,8 @@ interface NextAction {
 
 interface ActionContext {
   record: RequestRecord;
-  /** The re-evaluation says the request would be allowed now. */
-  allowedNow: boolean;
+  /** A current consumer access would allow it (blockers aside: an access cannot fix those). */
+  accessAllowsNow: boolean;
 }
 
 const openToken = ({ record }: ActionContext): NextAction[] =>
@@ -826,8 +835,8 @@ const openConsumer = ({ record }: ActionContext): NextAction[] =>
 
 const openKeys = (): NextAction[] => [{ href: paths.tokenKeys(), label: 'Open encryption keys' }];
 
-const giveAccess = ({ record, allowedNow }: ActionContext): NextAction[] =>
-  record.claims_verified === 1 && !allowedNow
+const giveAccess = ({ record, accessAllowsNow }: ActionContext): NextAction[] =>
+  record.claims_verified === 1 && !accessAllowsNow
     ? [
         {
           href: paths.accessNew({ from_request: record.id }),
@@ -1040,14 +1049,17 @@ export const NEXT_ACTIONS: Readonly<
   },
 };
 
-function WhatToDo(props: { ctx: ViewContext; record: RequestRecord; allowedNow: boolean }) {
+function WhatToDo(props: { ctx: ViewContext; record: RequestRecord; accessAllowsNow: boolean }) {
   const { record, ctx } = props;
   const entry =
     record.reason !== null && Object.hasOwn(NEXT_ACTIONS, record.reason)
       ? NEXT_ACTIONS[record.reason]
       : undefined;
   if (!entry) return null;
-  const actions = (entry.actions?.({ record, allowedNow: props.allowedNow }) ?? []).slice(0, 2);
+  const actions = (entry.actions?.({ record, accessAllowsNow: props.accessAllowsNow }) ?? []).slice(
+    0,
+    2,
+  );
   return (
     <section class="next" aria-labelledby="next-h">
       <h2 id="next-h">What to do</h2>
@@ -1207,7 +1219,7 @@ function RequestDetail(props: {
   const grantNames = new Map(props.grants.map((g) => [g.id, g.name]));
   const claims = storedClaims(r);
   const trace = storedTrace(r);
-  const allowedNow =
+  const accessAllowsNow =
     props.reevaluation?.ok === true && props.reevaluation.decision.decision === 'allow';
   const tokenLabel = service?.slug ?? r.service_slug;
   return (
@@ -1223,7 +1235,7 @@ function RequestDetail(props: {
           </>
         ) : null}
       </p>
-      <WhatToDo ctx={ctx} record={r} allowedNow={allowedNow} />
+      <WhatToDo ctx={ctx} record={r} accessAllowsNow={accessAllowsNow} />
 
       <section aria-labelledby="recheck-h">
         <h2 id="recheck-h">Check against current access</h2>
@@ -1467,28 +1479,46 @@ function Recheck(props: {
       </>
     );
   }
-  const { decision } = result;
+  const { decision, blockers } = result;
+  const checked =
+    result.grantsChecked === 0
+      ? 'No enabled consumer access exists for this consumer and token.'
+      : `${result.grantsChecked} enabled ${result.grantsChecked === 1 ? 'access' : 'accesses'} checked.`;
+  // Verdict first (A11.3 #4). A blocker refuses the request before any access is consulted, so an
+  // allowing access alone never makes the verdict "allowed".
   return (
     <>
       {intro}
-      {result.blockers.length > 0 ? (
-        <ul class="blockers">
-          {result.blockers.map((blocker) => (
-            <li>{blocker}</li>
-          ))}
-        </ul>
-      ) : null}
-      {decision.decision === 'allow' ? (
+      {blockers.length > 0 ? (
+        <>
+          <p>
+            Would still be <b>refused</b>: {blockers.length === 1 ? 'this check' : 'these checks'}{' '}
+            {blockers.length === 1 ? 'fails' : 'fail'} before consumer accesses apply.
+          </p>
+          <ul class="blockers">
+            {blockers.map((blocker) => (
+              <li>{blocker}</li>
+            ))}
+          </ul>
+          {decision.decision === 'allow' ? (
+            <p>
+              Once {blockers.length === 1 ? 'it passes' : 'they pass'}, access{' '}
+              <GrantLink id={decision.grant.id} names={props.grantNames} /> would allow it.
+            </p>
+          ) : (
+            <p>
+              Consumer accesses would also deny it (<code>{decision.code}</code>). {checked}
+            </p>
+          )}
+        </>
+      ) : decision.decision === 'allow' ? (
         <p>
           Would now be <b>allowed</b> by access{' '}
           <GrantLink id={decision.grant.id} names={props.grantNames} />.
         </p>
       ) : (
         <p>
-          Would still be <b>denied</b> (<code>{decision.code}</code>).{' '}
-          {result.grantsChecked === 0
-            ? 'No enabled consumer access exists for this consumer and token.'
-            : `${result.grantsChecked} enabled ${result.grantsChecked === 1 ? 'access' : 'accesses'} checked.`}
+          Would still be <b>denied</b> (<code>{decision.code}</code>). {checked}
         </p>
       )}
       {decision.trace.length > 0 ? (

@@ -68,7 +68,9 @@ describe('Tokens in use', () => {
     const html = section(
       await (await adminGet(fixture.app, await loginAs(fixture.app, viewer), '/admin')).text(),
     );
-    expect(html).toContain(`<a href="/admin/access?token=${fixture.serviceId}">and 2 more</a>`);
+    expect(html).toContain(
+      `<a href="/admin/access?token=${fixture.serviceId}">and 2 more for echo</a>`,
+    );
   });
 
   it('folds tokens without traffic or problems into a details', async () => {
