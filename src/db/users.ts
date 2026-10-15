@@ -115,7 +115,7 @@ export function renewInviteStatements(
   return [
     db
       .prepare(
-        "UPDATE users SET invite_expires_at = ?, updated_at = ? WHERE id = ? AND status = 'invited'",
+        "UPDATE users SET invite_expires_at = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ? AND status = 'invited'",
       )
       .bind(input.inviteExpiresAt, input.now, input.id),
   ];
@@ -146,7 +146,9 @@ export function updateUserStatements(
   if (sets.length === 0) return [];
   return [
     db
-      .prepare(`UPDATE users SET ${sets.join(', ')}, updated_at = ? WHERE id = ?${andGuard(guard)}`)
+      .prepare(
+        `UPDATE users SET ${sets.join(', ')}, updated_at = MAX(?, updated_at + 1) WHERE id = ?${andGuard(guard)}`,
+      )
       .bind(...binds, input.now, input.id, ...(guard?.binds ?? [])),
   ];
 }
@@ -167,7 +169,7 @@ export function resetLoginStatements(
       .bind(input.id, ...(guard?.binds ?? [])),
     db
       .prepare(
-        `UPDATE users SET status = 'invited', invite_expires_at = ?, updated_at = ? WHERE id = ?${andGuard(guard)}`,
+        `UPDATE users SET status = 'invited', invite_expires_at = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ?${andGuard(guard)}`,
       )
       .bind(input.inviteExpiresAt, input.now, input.id, ...(guard?.binds ?? [])),
   ];
@@ -444,4 +446,182 @@ export async function activeUsersWithRoles(
     .bind(...roles, limit)
     .all<Record<string, unknown>>();
   return results.map(userFromRow);
+}
+
+/** Filters of the People list. `expired` is an invitation whose expiry has passed. */
+export interface UserFilter {
+  role?: Role;
+  status?: 'active' | 'invited' | 'expired' | 'suspended';
+  /** Case-insensitive part of the email or the name. */
+  q?: string;
+}
+
+/**
+ * The users that are not pending (pending people are listed apart, as decisions), matching
+ * `filter`, by email. `q` is matched with instr() on bound values, never LIKE, so `%` and `_` in
+ * the search text are plain characters.
+ */
+export async function listUsersFiltered(
+  db: D1Database,
+  filter: UserFilter,
+  now: number,
+): Promise<UserListEntry[]> {
+  const where = ["status <> 'pending'"];
+  const binds: unknown[] = [];
+  if (filter.role) {
+    where.push('role = ?');
+    binds.push(filter.role);
+  }
+  if (filter.status === 'expired') {
+    where.push("status = 'invited' AND invite_expires_at <= ?");
+    binds.push(now);
+  } else if (filter.status === 'invited') {
+    where.push("status = 'invited' AND invite_expires_at > ?");
+    binds.push(now);
+  } else if (filter.status) {
+    where.push('status = ?');
+    binds.push(filter.status);
+  }
+  if (filter.q) {
+    const q = filter.q.toLowerCase();
+    where.push("(instr(lower(email), ?) > 0 OR instr(lower(coalesce(name, '')), ?) > 0)");
+    binds.push(q, q);
+  }
+  const { results } = await db
+    .prepare(
+      `SELECT users.*, (SELECT count(*) FROM user_identities WHERE user_id = users.id) AS identity_count
+       FROM users WHERE ${where.join(' AND ')} ORDER BY email`,
+    )
+    .bind(...binds)
+    .all<Record<string, unknown>>();
+  return results.map((row) => ({
+    ...userFromRow(row),
+    identity_count: Number(row.identity_count),
+  }));
+}
+
+/** A user with its identity count, or null. */
+export async function getUserEntry(db: D1Database, id: string): Promise<UserListEntry | null> {
+  const row = await db
+    .prepare(
+      `SELECT users.*, (SELECT count(*) FROM user_identities WHERE user_id = users.id) AS identity_count
+       FROM users WHERE id = ?`,
+    )
+    .bind(id)
+    .first<Record<string, unknown>>();
+  return row ? { ...userFromRow(row), identity_count: Number(row.identity_count) } : null;
+}
+
+/**
+ * Records a refused sign-in of a known user (time and login subject), so owners see that they
+ * tried. Not audited and never changes `updated_at` (like last_login_at), so version guards keep
+ * holding; links nothing (I-LINK-1). Written at most once per `minIntervalMs`.
+ */
+export function recordRefusedStatements(
+  db: D1Database,
+  input: { userId: string; subject: string; now: number; minIntervalMs: number },
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(
+        `UPDATE users SET last_refused_at = ?, last_refused_subject = ?
+         WHERE id = ? AND (last_refused_at IS NULL OR last_refused_at <= ?)`,
+      )
+      .bind(input.now, input.subject, input.userId, input.now - input.minIntervalMs),
+  ];
+}
+
+/**
+ * Approves a pending user with a role: role and status in one UPDATE that applies only while the
+ * user is still pending and has a login identity (only a linked user can be active).
+ */
+export function approveStatements(
+  db: D1Database,
+  input: { id: string; role: Role; now: number },
+  guard?: SqlGuard,
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(
+        `UPDATE users SET role = ?, status = 'active', updated_at = MAX(?, updated_at + 1)
+         WHERE id = ? AND status = 'pending'
+           AND EXISTS (SELECT 1 FROM user_identities WHERE user_id = ?)${andGuard(guard)}`,
+      )
+      .bind(input.role, input.now, input.id, input.id, ...(guard?.binds ?? [])),
+  ];
+}
+
+/**
+ * Invites again a user who never signed in (invited or suspended, no identity), with a new role and
+ * a fresh expiry. A user who ever linked an identity is never re-invited by email (I-LINK-1).
+ */
+export function reinviteStatements(
+  db: D1Database,
+  input: { id: string; role: Role; now: number; inviteExpiresAt: number },
+  guard?: SqlGuard,
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(
+        `UPDATE users SET role = ?, status = 'invited', invite_expires_at = ?, updated_at = MAX(?, updated_at + 1)
+         WHERE id = ? AND status IN ('invited', 'suspended')
+           AND NOT EXISTS (SELECT 1 FROM user_identities WHERE user_id = ?)${andGuard(guard)}`,
+      )
+      .bind(
+        input.role,
+        input.inviteExpiresAt,
+        input.now,
+        input.id,
+        input.id,
+        ...(guard?.binds ?? []),
+      ),
+  ];
+}
+
+/**
+ * Deletes a user who never signed in (an invitation, or a cancelled one). A user who ever linked an
+ * identity is kept: deleting them would let their next sign-in join anew and undo a suspension.
+ */
+export function deleteUserStatements(
+  db: D1Database,
+  input: { id: string },
+  guard?: SqlGuard,
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(
+        `DELETE FROM users WHERE id = ? AND status IN ('invited', 'suspended')
+           AND NOT EXISTS (SELECT 1 FROM user_identities WHERE user_id = ?)${andGuard(guard)}`,
+      )
+      .bind(input.id, input.id, ...(guard?.binds ?? [])),
+  ];
+}
+
+/** Clears the recorded refused sign-in, only while it is still the one the owner saw. */
+export function dismissRefusedStatements(
+  db: D1Database,
+  input: { id: string; expectedRefusedAt: number },
+): D1PreparedStatement[] {
+  return [
+    db
+      .prepare(
+        'UPDATE users SET last_refused_at = NULL, last_refused_subject = NULL WHERE id = ? AND last_refused_at = ?',
+      )
+      .bind(input.id, input.expectedRefusedAt),
+  ];
+}
+
+/**
+ * Whether a recorded refused sign-in still waits for an owner: within REFUSED_ATTEMPT_TTL_MS, newer
+ * than the last change to the user, and not a deliberately suspended user who has signed in
+ * before. The same rule as countNeedsDecision.
+ */
+export function refusedAttemptOpen(
+  user: Pick<User, 'status' | 'updated_at' | 'last_refused_at'> & { identity_count: number },
+  now: number,
+): boolean {
+  const at = user.last_refused_at;
+  if (at === null) return false;
+  if (!(at > user.updated_at && at > now - REFUSED_ATTEMPT_TTL_MS)) return false;
+  return user.status !== 'suspended' || user.identity_count === 0;
 }

@@ -1,9 +1,14 @@
+// Users › People (`/admin/users`): the decision cards, the invite form, the people table with its
+// row controls, `done` notices with Undo, and the user mutations behind them (I-RBAC-1, I-LINK-1,
+// I-OWNER-1, I-AUDIT-1). No client script: dialogs open with invoker commands.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { ACCESS_JWT_HEADER } from '../../src/admin/auth/access';
+import { routePermission } from '../../src/admin/auth/rbac';
 import { registerUsersRoutes } from '../../src/admin/routes/users';
-import { getJoinDefaults } from '../../src/db/settings';
+import { EMAIL_PATTERN } from '../../src/admin/views/users';
 import type { Role, User } from '../../src/db/types';
-import { getUser, INVITE_TTL_MS } from '../../src/db/users';
+import { countNeedsDecision, getUser, INVITE_TTL_MS } from '../../src/db/users';
 import {
   type AdminSession,
   type AdminTestApp,
@@ -14,6 +19,7 @@ import {
   loginAs,
   resetControlPlane,
 } from '../helpers/admin-auth';
+import { testAccess } from '../helpers/login-providers';
 
 const T0 = Date.UTC(2026, 9, 13, 12);
 
@@ -38,46 +44,217 @@ async function auditActions(): Promise<string[]> {
   return results.map((row) => row.action);
 }
 
+async function page(session: AdminSession, path = '/admin/users'): Promise<string> {
+  const res = await adminGet(app, session, path);
+  expect(res.status, path).toBe(200);
+  return res.text();
+}
+
+/** The page a POST-redirect-GET lands on. */
+async function follow(session: AdminSession, res: Response): Promise<string> {
+  expect(res.status).toBe(303);
+  return page(session, res.headers.get('location') ?? '');
+}
+
+function linked(email: string, extra: Partial<Parameters<typeof createUser>[0]> = {}) {
+  return createUser(
+    {
+      email,
+      role: 'admin',
+      identity: { loginProvider: 'access', subject: `team|${email}` },
+      ...extra,
+    },
+    // An hour ago, so a refused attempt recorded since is newer than the last change.
+    T0 - 3_600_000,
+  );
+}
+
+async function refusedAt(
+  id: string,
+  at: number,
+  subject = 'https://x.cloudflareaccess.com|abcd1234',
+) {
+  await env.DB.prepare(
+    'UPDATE users SET last_refused_at = ?, last_refused_subject = ? WHERE id = ?',
+  )
+    .bind(at, subject, id)
+    .run();
+}
+
+/** The section of `html` from `start` up to the next `end` (or the end). */
+function slice(html: string, start: string, end?: string): string {
+  const from = html.indexOf(start);
+  expect(from, start).toBeGreaterThanOrEqual(0);
+  const rest = html.slice(from);
+  const to = end === undefined ? -1 : rest.indexOf(end, start.length);
+  return to === -1 ? rest : rest.slice(0, to);
+}
+
 describe('GET /admin/users', () => {
-  it('lists users for a viewer without any management controls', async () => {
-    const res = await adminGet(app, await sessionFor('viewer'), '/admin/users');
-    expect(res.status).toBe(200);
-    const html = await res.text();
+  it('lists people for a viewer without any form, and says who decides', async () => {
+    await createUser(
+      {
+        email: 'wait@example.com',
+        status: 'pending',
+        identity: { loginProvider: 'access', subject: 't|w' },
+      },
+      T0,
+    );
+    const html = await page(await sessionFor('viewer'));
+    expect(html).toContain('<title>People – Users – tokengate</title>');
     expect(html).toContain('owner@example.com');
-    expect(html).toContain('Only owners can invite users');
-    expect(html).not.toContain('action="/admin/users"');
-    expect(html).not.toContain('reset-login');
+    expect(html).not.toContain('<form method="post"');
+    expect(html).toContain('Only owners can decide.');
+    expect(html).toContain('wait@example.com');
+    expect(html).not.toContain('id="invite"');
+    expect(html).not.toContain('<script');
   });
 
-  it('shows owners the invite form, row actions, and the single-owner warning', async () => {
-    const admin = await createUser({ email: 'admin@example.com', role: 'admin' }, T0);
-    const res = await adminGet(app, await sessionFor('owner'), '/admin/users');
-    const html = await res.text();
-    expect(html).toContain('action="/admin/users"');
-    expect(html).toContain(`action="/admin/users/${admin.id}/reset-login"`);
+  it('shows owners the invite form, row controls and the single-owner callout', async () => {
+    const admin = await linked('admin@example.com');
+    const html = await page(await sessionFor('owner'));
+    expect(html).toContain('id="invite-form"');
+    expect(html).toContain('You are the only owner.');
+    expect(html).toContain('href="/admin/users#invite"');
+    expect(html).toContain('The email of their Cloudflare Access account');
+    expect(html).toContain('placeholder="alex@example.com"');
+    // Reset sign-in is a dialog whose own form posts the reset.
+    const reset = slice(html, `<dialog id="dlg-reset-${admin.id}"`, '</dialog>');
+    expect(reset).toContain(`<form method="post" action="/admin/users/${admin.id}/reset-login"`);
+    expect(reset).toContain('name="confirm" value="1"');
+    expect(html).toContain(
+      `type="button" class="confirm-trigger danger" commandfor="dlg-reset-${admin.id}" command="show-modal"`,
+    );
     expect(html).not.toContain(`action="/admin/users/${owner.id}/reset-login"`);
-    expect(html).toContain('Only one active owner');
-    expect(html).toContain('verified email address of their Cloudflare Access account');
-    expect(html).toContain('<code>https://gw.test/admin</code>');
-    expect(html).not.toContain('revoke-sessions');
+    expect(html).not.toContain('<script');
+  });
+
+  it('the self row has no controls', async () => {
+    const html = await page(await sessionFor('owner'));
+    const self = slice(html, `id="user-${owner.id}"`, '</tr>');
+    expect(self).toContain('This is you. Another owner can change your account.');
+    expect(self).not.toContain('person-actions');
+  });
+
+  it('has a captioned table with row headers and a Changes link', async () => {
+    const admin = await linked('admin@example.com');
+    const session = await sessionFor('owner');
+    await adminPost(app, session, `/admin/users/${admin.id}`, { role: 'viewer' });
+    const html = await page(session);
+    expect(html).toContain('<caption id="people-cap">People (2 shown of 2)</caption>');
+    expect(html).toMatch(new RegExp(`<th scope="row"><a id="user-${owner.id}"`));
+    expect(html).toContain(`href="/admin/audit?actor=${owner.id}">1 in 30 days`);
   });
 
   it('escapes user-controlled text', async () => {
     await createUser({ email: 'x@example.com', name: '<script>alert(1)</script>' }, T0);
-    const html = await (await adminGet(app, await sessionFor('viewer'), '/admin/users')).text();
+    const html = await page(await sessionFor('viewer'));
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
   });
 
-  it('never echoes unknown notice keys', async () => {
-    const res = await adminGet(app, await sessionFor('viewer'), '/admin/users?notice=%3Cb%3Ehi');
-    expect(await res.text()).not.toContain('<b>hi');
+  it('never echoes unknown notice keys or a forged done id', async () => {
+    const session = await sessionFor('viewer');
+    const html = await page(session, '/admin/users?notice=%3Cb%3Ehi&done=%3Cb%3E');
+    expect(html).not.toContain('<b>hi');
+    expect(html).not.toContain('class="notice"');
+  });
+
+  it('filters with link chips; unknown values are ignored', async () => {
+    await createUser({ email: 'gone@example.com', role: 'viewer', status: 'suspended' }, T0);
+    await createUser({ email: 'late@example.com', status: 'invited', inviteExpiresAt: T0 - 1 }, T0);
+    const session = await sessionFor('viewer');
+    const html = await page(session, '/admin/users?status=suspended');
+    const nav = slice(html, '<nav aria-label="Filter people">', '</nav>');
+    expect(nav).toContain('href="/admin/users?status=suspended" aria-current="true"');
+    expect(nav).toContain('Invitation expired <span class="count">1</span>');
+    expect(nav).toContain('Clear filters');
+    expect(html).toContain('People (1 shown of 4)');
+    expect(html).not.toContain('late@example.com</a>');
+    const ignored = await page(session, '/admin/users?status=bogus&role=root');
+    expect(ignored).toContain('People (4 shown of 4)');
+    const none = await page(session, '/admin/users?role=token_manager');
+    expect(none).toContain('No people match these filters.');
+  });
+
+  it('adds a search with a datalist only above 20 people, matching email and name', async () => {
+    const session = await sessionFor('viewer');
+    expect(await page(session)).not.toContain('role="search"');
+    for (let i = 0; i < 20; i++) {
+      await createUser({ email: `p${i}@example.com`, name: i === 7 ? 'Zoë Q' : null }, T0);
+    }
+    const html = await page(session);
+    expect(html).toContain('role="search"');
+    expect(html).toContain('<option value="p3@example.com">');
+    expect(await page(session, '/admin/users?q=ZOË')).toContain('People (1 shown of 22)');
+    expect(await page(session, '/admin/users?q=P1')).toContain('People (11 shown of 22)');
+    // `%` is a plain character, not a wildcard.
+    expect(await page(session, '/admin/users?q=%25')).toContain('No people match these filters.');
+    const long = await page(session, `/admin/users?q=${'a'.repeat(300)}`);
+    expect(long).toContain('Search text too long; showing everyone');
+  });
+
+  it('renders patterns that compile with the v flag', async () => {
+    const html = await page(await sessionFor('owner'));
+    expect(() => new RegExp(`^(?:${EMAIL_PATTERN})$`, 'v')).not.toThrow();
+    expect(html).toContain('pattern="[^\\s@,;&lt;&gt;&quot;]+@');
+    const pattern = new RegExp(`^(?:${EMAIL_PATTERN})$`, 'v');
+    expect(pattern.test('alex@acme.com')).toBe(true);
+    expect(pattern.test('alex@localhost')).toBe(false);
+  });
+});
+
+describe('dialogs and implicit submission (no client script)', () => {
+  it('Enter in the invite form invites as Viewer; the Owner dialog follows the form', async () => {
+    const html = await page(await sessionFor('owner'));
+    const form = slice(html, 'id="invite-form"', '</form>');
+    const firstSubmit = /<button type="submit"[^>]*>/.exec(form)?.[0] ?? '';
+    expect(firstSubmit).toContain('value="viewer"');
+    expect(form).not.toContain('value="owner"');
+    expect(html.indexOf('id="dlg-invite-owner"')).toBeGreaterThan(
+      html.indexOf('</form>', html.indexOf('id="invite-form"')),
+    );
+    const dialog = slice(html, 'id="dlg-invite-owner"', '</dialog>');
+    expect(dialog).toMatch(
+      /<button type="submit" form="invite-form" name="role" value="owner" formnovalidate/,
+    );
+  });
+
+  it('every invoker is type=button, and no popover opens a dialog', async () => {
+    await linked('admin@example.com');
+    await createUser({ email: 'o2@example.com', role: 'owner' }, T0);
+    await createUser(
+      {
+        email: 'p@example.com',
+        status: 'pending',
+        identity: { loginProvider: 'access', subject: 't|p' },
+      },
+      T0,
+    );
+    const html = await page(await sessionFor('owner'));
+    const invokers = html.match(/<button[^>]*commandfor=[^>]*>/g) ?? [];
+    expect(invokers.length).toBeGreaterThan(5);
+    for (const button of invokers) expect(button).toContain('type="button"');
+    // A dialog is a popover (the fallback); only its own Cancel may target anything from inside.
+    for (const dialog of html.match(/<dialog[\s\S]*?<\/dialog>/g) ?? []) {
+      expect(dialog).not.toContain('command="show-modal"');
+    }
+  });
+
+  it('making someone Owner exists only inside a dialog', async () => {
+    const admin = await linked('admin@example.com');
+    const html = await page(await sessionFor('owner'));
+    const outside = html.replace(/<dialog[\s\S]*?<\/dialog>/g, '');
+    expect(outside).not.toContain('value="owner"');
+    expect(slice(html, `id="dlg-owner-${admin.id}"`, '</dialog>')).toContain(
+      `form="role-${admin.id}" name="role" value="owner"`,
+    );
   });
 });
 
 describe('RBAC on user mutations', () => {
-  it('forbids viewers and admins from inviting or changing users', async () => {
-    for (const role of ['viewer', 'admin'] as const) {
+  it('forbids every role but owner from inviting or changing people', async () => {
+    for (const role of ['viewer', 'token_manager', 'access_manager', 'admin'] as const) {
       const session = await sessionFor(role);
       const invite = await adminPost(app, session, '/admin/users', {
         email: `new-${role}@example.com`,
@@ -90,120 +267,25 @@ describe('RBAC on user mutations', () => {
     expect((await getUser(env.DB, owner.id))?.role).toBe('owner');
     expect(await auditActions()).toEqual([]);
   });
-});
 
-describe('POST /admin/users (invite)', () => {
-  it('invites a user and redirects with a notice naming the login providers', async () => {
+  it('pins the new routes and never mutates on GET', async () => {
+    for (const action of ['delete', 'dismiss-attempt']) {
+      expect(routePermission('POST', `/admin/users/:id/${action}`)?.permission).toBe('users:write');
+    }
+    expect(routePermission('POST', '/admin/users/sign-in/policy')?.permission).toBe('users:write');
+    expect(routePermission('POST', '/admin/users/defaults')).toBeNull();
+    const target = await linked('r2@example.com');
     const session = await sessionFor('owner');
-    const res = await adminPost(app, session, '/admin/users', {
-      email: 'New.Person@Example.com',
-      role: 'admin',
-    });
-    expect(res.status).toBe(303);
-    expect(res.headers.get('location')).toBe('/admin/users?notice=invited');
-    const row = await env.DB.prepare('SELECT * FROM users WHERE email = ?')
-      .bind('new.person@example.com')
-      .first<{ status: string; role: string; invite_expires_at: number }>();
-    expect(row).toMatchObject({
-      status: 'invited',
-      role: 'admin',
-      invite_expires_at: T0 + INVITE_TTL_MS,
-    });
-    expect(await auditActions()).toEqual(['user.invite']);
-
-    const page = await (await adminGet(app, session, '/admin/users?notice=invited')).text();
-    expect(page).toContain('sign in with Cloudflare Access using the invited email address');
-  });
-
-  it('re-renders the form with the submitted values on validation errors', async () => {
-    const res = await adminPost(app, await sessionFor('owner'), '/admin/users', {
-      email: 'not an email',
-      role: 'admin',
-    });
-    expect(res.status).toBe(400);
-    const html = await res.text();
-    expect(html).toContain('Enter a valid email address');
-    expect(html).toContain('value="not an email"');
+    for (const action of ['reset-login', 'resend-invite', 'delete', 'dismiss-attempt']) {
+      const res = await adminGet(app, session, `/admin/users/${target.id}/${action}`);
+      expect(res.status, action).toBeGreaterThanOrEqual(400);
+    }
+    expect((await getUser(env.DB, target.id))?.status).toBe('active');
     expect(await auditActions()).toEqual([]);
   });
 
-  it('reports an existing email address', async () => {
-    const res = await adminPost(app, await sessionFor('owner'), '/admin/users', {
-      email: 'OWNER@example.com',
-      role: 'viewer',
-    });
-    expect(res.status).toBe(400);
-    expect(await res.text()).toContain('A user with this email address already exists;');
-  });
-});
-
-describe('POST /admin/users/:id and actions', () => {
-  it('changes a role, effective on the user’s next request', async () => {
-    const admin = await createUser({ email: 'a1@example.com', role: 'admin' }, T0);
-    const adminSession = await loginAs(app, admin);
-    const res = await adminPost(app, await sessionFor('owner'), `/admin/users/${admin.id}`, {
-      role: 'viewer',
-    });
-    expect(res.status).toBe(303);
-    expect(res.headers.get('location')).toBe('/admin/users?notice=updated');
-    expect((await getUser(env.DB, admin.id))?.role).toBe('viewer');
-    const after = await adminPost(app, adminSession, '/admin/users', { email: 'x@example.com' });
-    expect(after.status).toBe(403);
-    expect(await after.text()).toContain('Your role does not allow this action.');
-    expect(await auditActions()).toEqual(['user.update']);
-  });
-
-  it('refuses changing your own account', async () => {
-    const res = await adminPost(app, await sessionFor('owner'), `/admin/users/${owner.id}`, {
-      status: 'suspended',
-    });
-    expect(res.status).toBe(400);
-    expect(await res.text()).toContain('You cannot change your own account');
-    expect((await getUser(env.DB, owner.id))?.status).toBe('active');
-  });
-
-  it('returns 404 for an unknown user', async () => {
-    const res = await adminPost(app, await sessionFor('owner'), '/admin/users/usr_nope', {
-      role: 'viewer',
-    });
-    expect(res.status).toBe(404);
-  });
-
-  it('resets a login and resends an invitation', async () => {
-    const session = await sessionFor('owner');
-    const admin = await createUser(
-      {
-        email: 'a2@example.com',
-        role: 'admin',
-        identity: { loginProvider: 'access', subject: 'team|99' },
-      },
-      T0,
-    );
-    const reset = await adminPost(app, session, `/admin/users/${admin.id}/reset-login`);
-    expect(reset.headers.get('location')).toBe('/admin/users?notice=reset');
-    expect((await getUser(env.DB, admin.id))?.status).toBe('invited');
-
-    const resend = await adminPost(app, session, `/admin/users/${admin.id}/resend-invite`);
-    expect(resend.headers.get('location')).toBe('/admin/users?notice=resent');
-
-    expect(await auditActions()).toEqual(['user.reset_login', 'user.resend_invite']);
-  });
-
-  it('refuses resending an invitation to an active user', async () => {
-    const admin = await createUser({ email: 'a3@example.com', role: 'admin' }, T0);
-    const res = await adminPost(
-      app,
-      await sessionFor('owner'),
-      `/admin/users/${admin.id}/resend-invite`,
-    );
-    expect(res.status).toBe(400);
-    expect(await res.text()).toContain('is not waiting for an invitation');
-  });
-});
-
-describe('review: CSRF, method safety and input handling', () => {
   it('rejects user changes without the CSRF token or from another site', async () => {
-    const admin = await createUser({ email: 'r1@example.com', role: 'admin' }, T0);
+    const admin = await linked('r1@example.com');
     const session = await sessionFor('owner');
     const noToken = await adminPost(
       app,
@@ -221,42 +303,112 @@ describe('review: CSRF, method safety and input handling', () => {
       { headers: { 'sec-fetch-site': 'cross-site' } },
     );
     expect(crossSite.status).toBe(403);
-    expect((await getUser(env.DB, admin.id))?.status).toBe('active');
     expect(await auditActions()).toEqual([]);
   });
+});
 
-  it('never mutates on GET', async () => {
-    const admin = await createUser(
-      {
-        email: 'r2@example.com',
-        role: 'admin',
-        identity: { loginProvider: 'access', subject: 'team|7' },
-      },
-      T0,
+describe('POST /admin/users (invite)', () => {
+  it('invites, and the notice names the role, the expiry and an email link', async () => {
+    const session = await sessionFor('owner');
+    const res = await adminPost(app, session, '/admin/users', {
+      email: 'New.Person@Example.com',
+      role: 'token_manager',
+    });
+    const row = await env.DB.prepare(
+      'SELECT id, status, role, invite_expires_at FROM users WHERE email = ?',
+    )
+      .bind('new.person@example.com')
+      .first<{ id: string; status: string; role: string; invite_expires_at: number }>();
+    expect(row).toMatchObject({
+      status: 'invited',
+      role: 'token_manager',
+      invite_expires_at: T0 + INVITE_TTL_MS,
+    });
+    expect(res.headers.get('location')).toMatch(
+      new RegExp(`^/admin/users\\?notice=invited&done=aud_[0-9A-Z]{26}#user-${row?.id}$`),
     );
+    expect(await auditActions()).toEqual(['user.invite']);
+    const html = await follow(session, res);
+    expect(html).toContain(
+      'Invited new.person@example.com as Token manager until 2026-10-20 12:00:00 UTC. Nothing was sent.',
+    );
+    expect(html).toContain('href="mailto:new.person@example.com?subject=');
+    expect(html).toContain('Email new.person@example.com the sign-in link');
+    expect(html).toContain('https%3A%2F%2Fgw.test%2Fadmin');
+  });
+
+  it('shows the detail only for the viewer’s own recent audit row', async () => {
     const session = await sessionFor('owner');
-    for (const action of ['reset-login', 'resend-invite']) {
-      const res = await adminGet(app, session, `/admin/users/${admin.id}/${action}`);
-      expect(res.status).toBeGreaterThanOrEqual(400);
-    }
-    expect((await getUser(env.DB, admin.id))?.status).toBe('active');
+    const res = await adminPost(app, session, '/admin/users', {
+      email: 'a@example.com',
+      role: 'viewer',
+    });
+    const location = res.headers.get('location') ?? '';
+    const done = /done=(aud_[0-9A-Z]{26})/.exec(location)?.[1] ?? '';
+    // Another owner following the same link sees the generic text, never the person.
+    const other = await loginAs(
+      app,
+      await createUser({ email: 'o2@example.com', role: 'owner' }, T0),
+    );
+    const theirs = await page(other, location);
+    expect(theirs).toContain('Invitation saved. Nothing was sent.');
+    expect(theirs).not.toContain('Invited a@example.com');
+    // Older than 10 minutes: generic too.
+    const later = createAdminTestApp({ routes: registerUsersRoutes, now: () => T0 + 11 * 60_000 });
+    const old = await (
+      await adminGet(later, session, `/admin/users?notice=invited&done=${done}`)
+    ).text();
+    expect(old).toContain('Invitation saved. Nothing was sent.');
+  });
+
+  it('re-renders the email with the error at the field', async () => {
+    const res = await adminPost(app, await sessionFor('owner'), '/admin/users', {
+      email: 'not an email',
+      role: 'admin',
+    });
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    expect(html).toContain('<title>Error: People – Users – tokengate</title>');
+    expect(html).toContain('<a href="#f-email">Enter an email address like alex@acme.com.</a>');
+    expect(html).toContain('value="not an email"');
+    expect(html).toMatch(/id="f-email"[^>]*aria-invalid="true"/);
     expect(await auditActions()).toEqual([]);
   });
 
-  it('rejects an unknown role or the invited status from the form', async () => {
-    const admin = await createUser({ email: 'r3@example.com', role: 'admin' }, T0);
+  it('refuses an email whose user signed in, offering that person', async () => {
+    const res = await adminPost(app, await sessionFor('owner'), '/admin/users', {
+      email: 'OWNER@example.com',
+      role: 'viewer',
+    });
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    expect(html).toContain('owner@example.com already signed in with an account (Active).');
+    expect(html).toContain(`href="/admin/users#user-${owner.id}"`);
+  });
+
+  it.each([
+    ['an expired invitation', { status: 'invited' as const, inviteExpiresAt: T0 - 1 }],
+    ['a cancelled invitation', { status: 'suspended' as const }],
+  ])('invites %s again instead of refusing it', async (_label, seed) => {
+    await createUser({ email: 'again@example.com', role: 'viewer', ...seed }, T0 - 10);
     const session = await sessionFor('owner');
-    const badRole = await adminPost(app, session, '/admin/users', {
+    const res = await adminPost(app, session, '/admin/users', {
+      email: 'again@example.com',
+      role: 'admin',
+    });
+    expect(await follow(session, res)).toContain('Invited again@example.com again as Admin');
+    expect(await auditActions()).toEqual(['user.invite']);
+  });
+
+  it('refuses an unknown role', async () => {
+    const res = await adminPost(app, await sessionFor('owner'), '/admin/users', {
       email: 'r4@example.com',
       role: 'superuser',
     });
-    expect(badRole.status).toBe(400);
-    const invitedStatus = await adminPost(app, session, `/admin/users/${admin.id}`, {
-      status: 'invited',
-    });
-    expect(invitedStatus.status).toBe(400);
-    expect(await getUser(env.DB, admin.id)).toMatchObject({ role: 'admin', status: 'active' });
-    expect(await auditActions()).toEqual([]);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain(
+      'Choose one of: Viewer, Token manager, Access manager, Admin, Owner.',
+    );
   });
 
   it('escapes a hostile email echoed back into the invite form', async () => {
@@ -269,56 +421,209 @@ describe('review: CSRF, method safety and input handling', () => {
     expect(html).not.toContain('<script>alert(1)</script>');
     expect(html).toContain('&quot;&gt;&lt;script&gt;');
   });
-
-  it('refuses activating an invited user directly (only a sign-in activates)', async () => {
-    const invited = await createUser(
-      { email: 'r5@example.com', role: 'admin', status: 'invited' },
-      T0,
-    );
-    const res = await adminPost(app, await sessionFor('owner'), `/admin/users/${invited.id}`, {
-      status: 'active',
-    });
-    expect(res.status).toBe(400);
-    expect((await getUser(env.DB, invited.id))?.status).toBe('invited');
-  });
 });
 
-describe('review: operator feedback', () => {
-  it('says nothing changed when the submitted role is the current one', async () => {
-    const admin = await createUser({ email: 'u1@example.com', role: 'admin' }, T0);
-    const res = await adminPost(app, await sessionFor('owner'), `/admin/users/${admin.id}`, {
-      role: 'admin',
+describe('POST /admin/users/:id (role and status, one click each)', () => {
+  it('changes a role, effective on the next request, with an Undo', async () => {
+    const admin = await linked('a1@example.com');
+    const adminSession = await loginAs(app, admin);
+    const session = await sessionFor('owner');
+    const res = await adminPost(app, session, `/admin/users/${admin.id}`, {
+      role: 'viewer',
+      expected_updated_at: String(admin.updated_at),
     });
-    expect(res.headers.get('location')).toBe('/admin/users?notice=unchanged');
+    expect(res.headers.get('location')).toMatch(
+      new RegExp(`^/admin/users\\?notice=updated&done=aud_[0-9A-Z]{26}#user-${admin.id}$`),
+    );
+    expect((await getUser(env.DB, admin.id))?.role).toBe('viewer');
+    const after = await adminPost(app, adminSession, '/admin/users', { email: 'x@example.com' });
+    expect(after.status).toBe(403);
+    const html = await follow(session, res);
+    expect(html).toContain('Made a1@example.com Viewer (was Admin).');
+    const notice = slice(html, '<div class="notice"', '</div>');
+    expect(notice).toContain(`action="/admin/users/${admin.id}"`);
+    expect(notice).toContain('name="role" value="admin"');
+    expect(await auditActions()).toEqual(['user.update']);
+  });
+
+  it('suspends a non-owner in one click; Undo reactivates; a stale Undo disappears', async () => {
+    const user = await linked('u@example.com', { role: 'viewer' });
+    const session = await sessionFor('owner');
+    const suspend = await adminPost(app, session, `/admin/users/${user.id}`, {
+      status: 'suspended',
+      expected_updated_at: String(user.updated_at),
+    });
+    const html = await follow(session, suspend);
+    expect(html).toContain(
+      'Suspended u@example.com. Their Access session stays valid, but tokengate refuses every request they make.',
+    );
+    const undo = slice(html, '<div class="notice"', '</div>');
+    expect(undo).toContain('name="status" value="active"');
+    const version = /name="expected_updated_at" value="(\d+)"/.exec(undo)?.[1] ?? '';
+    const back = await adminPost(app, session, `/admin/users/${user.id}`, {
+      status: 'active',
+      expected_updated_at: version,
+    });
+    expect(back.status).toBe(303);
+    expect((await getUser(env.DB, user.id))?.status).toBe('active');
+    // The first notice's row changed again: no Undo any more.
+    const stale = await page(session, suspend.headers.get('location') ?? '');
+    expect(slice(stale, '<div class="notice"', '</div>')).not.toContain('Undo');
+  });
+
+  it('offers no Undo for owner transitions', async () => {
+    const other = await linked('o2@example.com', { role: 'owner' });
+    const session = await sessionFor('owner');
+    const res = await adminPost(app, session, `/admin/users/${other.id}`, { role: 'admin' });
+    const html = await follow(session, res);
+    expect(html).toContain('Made o2@example.com Admin (was Owner).');
+    expect(slice(html, '<div class="notice"', '</div>')).not.toContain('Undo');
+  });
+
+  it('refuses a stale page with 409 and the current state', async () => {
+    const admin = await linked('s@example.com');
+    const session = await sessionFor('owner');
+    const res = await adminPost(app, session, `/admin/users/${admin.id}`, {
+      role: 'viewer',
+      expected_updated_at: String(admin.updated_at - 1),
+    });
+    expect(res.status).toBe(409);
+    const html = await res.text();
+    expect(html).toContain('s@example.com was changed by someone else at');
+    expect(html).toContain(`<a href="#f-user-${admin.id}">`);
+    expect(html).toContain(`id="f-user-${admin.id}"`);
+    expect(html).toMatch(
+      new RegExp(
+        `<details name="person-actions" class="person-actions" open(="")?>\\s*<summary>Change<span class="vh"> s@example.com`,
+      ),
+    );
+    expect((await getUser(env.DB, admin.id))?.role).toBe('admin');
+  });
+
+  it('suspending another owner needs the dialog confirmation', async () => {
+    const other = await linked('o2@example.com', { role: 'owner' });
+    const session = await sessionFor('owner');
+    const res = await adminPost(app, session, `/admin/users/${other.id}`, { status: 'suspended' });
+    expect(res.status).toBe(422);
+    expect((await getUser(env.DB, other.id))?.status).toBe('active');
+    const confirmed = await adminPost(app, session, `/admin/users/${other.id}`, {
+      status: 'suspended',
+      confirm: '1',
+    });
+    expect(confirmed.status).toBe(303);
+    expect((await getUser(env.DB, other.id))?.status).toBe('suspended');
+  });
+
+  it('refuses changing your own account', async () => {
+    const res = await adminPost(app, await sessionFor('owner'), `/admin/users/${owner.id}`, {
+      status: 'suspended',
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain('You cannot change your own account');
+  });
+
+  it('says nothing changed for the current role, and 404s an unknown user', async () => {
+    const admin = await linked('u1@example.com');
+    const session = await sessionFor('owner');
+    const same = await adminPost(app, session, `/admin/users/${admin.id}`, { role: 'admin' });
+    expect(same.headers.get('location')).toBe('/admin/users?notice=unchanged');
+    const missing = await adminPost(app, session, '/admin/users/usr_nope', { role: 'viewer' });
+    expect(missing.status).toBe(404);
     expect(await auditActions()).toEqual([]);
   });
 
-  it('points to the existing row when inviting an address that is already a user', async () => {
-    await createUser({ email: 'gone@example.com', role: 'viewer', status: 'suspended' }, T0);
-    const res = await adminPost(app, await sessionFor('owner'), '/admin/users', {
-      email: 'gone@example.com',
+  it('refuses activating an invited user and the pending or invited status', async () => {
+    const invited = await createUser({ email: 'r5@example.com', status: 'invited' }, T0);
+    const session = await sessionFor('owner');
+    for (const status of ['active', 'pending', 'invited']) {
+      const res = await adminPost(app, session, `/admin/users/${invited.id}`, { status });
+      expect(res.status, status).toBe(400);
+    }
+    expect((await getUser(env.DB, invited.id))?.status).toBe('invited');
+  });
+
+  it('_return=detail goes back to the Person page', async () => {
+    const admin = await linked('d@example.com');
+    const res = await adminPost(app, await sessionFor('owner'), `/admin/users/${admin.id}`, {
       role: 'viewer',
+      _return: 'detail',
     });
-    expect(res.status).toBe(400);
-    expect(await res.text()).toContain('see their row in the list above');
-  });
-
-  it('explains what each row action does', async () => {
-    await createUser({ email: 'u2@example.com', role: 'admin' }, T0);
-    const html = await (await adminGet(app, await sessionFor('owner'), '/admin/users')).text();
-    expect(html).toContain('What the actions do');
-    expect(html).toContain('Reset login');
-  });
-
-  it('tells the owner to resend an expired invitation', async () => {
-    await createUser({ email: 'late@example.com', status: 'invited', inviteExpiresAt: T0 - 1 }, T0);
-    const html = await (await adminGet(app, await sessionFor('owner'), '/admin/users')).text();
-    expect(html).toContain('invitation expired');
-    expect(html).toContain('aria-label="Resend invitation: late@example.com"');
+    expect(res.headers.get('location')).toMatch(
+      new RegExp(`^/admin/users/${admin.id}\\?notice=updated&done=aud_[0-9A-Z]{26}$`),
+    );
   });
 });
 
-describe('pending users', () => {
+describe('reset sign-in, renew and cancel an invitation', () => {
+  it('reset sign-in of a linked user needs the dialog confirmation', async () => {
+    const admin = await linked('a2@example.com');
+    const session = await sessionFor('owner');
+    const unconfirmed = await adminPost(app, session, `/admin/users/${admin.id}/reset-login`);
+    expect(unconfirmed.status).toBe(422);
+    expect((await getUser(env.DB, admin.id))?.status).toBe('active');
+    const reset = await adminPost(app, session, `/admin/users/${admin.id}/reset-login`, {
+      confirm: '1',
+      expected_updated_at: String(admin.updated_at),
+    });
+    expect(await follow(session, reset)).toContain('Reset the sign-in of a2@example.com.');
+    expect((await getUser(env.DB, admin.id))?.status).toBe('invited');
+    const resend = await adminPost(app, session, `/admin/users/${admin.id}/resend-invite`);
+    expect(await follow(session, resend)).toContain('Renewed the invitation of a2@example.com.');
+    expect(await auditActions()).toEqual(['user.reset_login', 'user.resend_invite']);
+  });
+
+  it('"Invite again" needs no dialog for a user who never signed in', async () => {
+    const cancelled = await createUser({ email: 'c@example.com', status: 'suspended' }, T0);
+    const session = await sessionFor('owner');
+    const html = await page(session);
+    expect(slice(html, `id="user-${cancelled.id}"`, '</tr>')).toContain('Invite again');
+    const res = await adminPost(app, session, `/admin/users/${cancelled.id}/reset-login`);
+    expect(res.status).toBe(303);
+    expect((await getUser(env.DB, cancelled.id))?.status).toBe('invited');
+  });
+
+  it('cancelling an invitation deletes the row, after the dialog', async () => {
+    const invited = await createUser({ email: 'i@example.com', status: 'invited' }, T0);
+    const session = await sessionFor('owner');
+    const html = await page(session);
+    const row = slice(html, `id="user-${invited.id}"`, '</tr>');
+    expect(row).toContain('Email sign-in link');
+    expect(row).toContain('Cancel invitation…');
+    expect(row).toContain(
+      'If they sign in later, they are treated like anyone new: Let them in as Viewer.',
+    );
+    expect((await adminPost(app, session, `/admin/users/${invited.id}/delete`)).status).toBe(422);
+    const res = await adminPost(app, session, `/admin/users/${invited.id}/delete`, {
+      confirm: '1',
+    });
+    expect(await follow(session, res)).toContain('Deleted i@example.com.');
+    expect(await getUser(env.DB, invited.id)).toBeNull();
+    expect(await auditActions()).toEqual(['user.delete']);
+  });
+
+  it('refuses deleting someone who signed in', async () => {
+    const user = await linked('l@example.com', { status: 'suspended' });
+    const res = await adminPost(app, await sessionFor('owner'), `/admin/users/${user.id}/delete`, {
+      confirm: '1',
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain('Suspend them instead');
+    expect(await getUser(env.DB, user.id)).not.toBeNull();
+  });
+
+  it('an expired invitation shows Renew invitation as its state button', async () => {
+    const late = await createUser(
+      { email: 'late@example.com', status: 'invited', inviteExpiresAt: T0 - 1 },
+      T0,
+    );
+    const html = await page(await sessionFor('owner'));
+    const row = slice(html, `id="user-${late.id}"`, '</tr>');
+    expect(row).toContain('Invitation expired');
+    expect(row).toContain('Renew invitation<span class="vh"> for late@example.com</span>');
+  });
+});
+
+describe('Needs your decision', () => {
   async function pendingUser(email = 'wait@example.com'): Promise<User> {
     return createUser(
       {
@@ -331,123 +636,126 @@ describe('pending users', () => {
     );
   }
 
-  it('lists pending users in their own section with one-click Approve and Reject', async () => {
+  it('lists pending people as cards with one submit per role, not in the table', async () => {
     const pending = await pendingUser();
-    const html = await (await adminGet(app, await sessionFor('owner'), '/admin/users')).text();
-    const section = html.split('<h2>Waiting for approval</h2>')[1]?.split('<h2>All users</h2>')[0];
-    expect(section).toContain('wait@example.com');
-    expect(section).toContain(`action="/admin/users/${pending.id}/approve"`);
-    expect(section).toContain(`action="/admin/users/${pending.id}/reject"`);
-    const all = html.split('<h2>All users</h2>')[1]?.split('<h2>')[0];
-    expect(all).not.toContain('wait@example.com');
+    const html = await page(await sessionFor('owner'));
+    const decide = slice(html, '<section id="decide"', '</section>');
+    expect(decide).toContain('Needs your decision (1)');
+    expect(decide).toContain('wait@example.com');
+    expect(decide).toContain(`action="/admin/users/${pending.id}/approve"`);
+    expect(decide).toContain(`action="/admin/users/${pending.id}/reject"`);
+    for (const role of ['viewer', 'token_manager', 'access_manager', 'admin']) {
+      expect(decide).toContain(`name="role" value="${role}"`);
+    }
+    expect(slice(html, '<table id="people"', '</table>')).not.toContain('wait@example.com');
   });
 
-  it('shows viewers the pending list without decision buttons', async () => {
-    await pendingUser();
-    const html = await (await adminGet(app, await sessionFor('viewer'), '/admin/users')).text();
-    expect(html).toContain('wait@example.com');
-    expect(html).not.toContain('/approve"');
-  });
-
-  it('approve activates and reject suspends, each with one audit row', async () => {
-    const owner = await sessionFor('owner');
+  it('approve with a role is user.approve, reject is user.reject', async () => {
+    const session = await sessionFor('owner');
     const a = await pendingUser('a@example.com');
     const b = await pendingUser('b@example.com');
-    const approve = await adminPost(app, owner, `/admin/users/${a.id}/approve`);
-    expect(approve.headers.get('location')).toBe('/admin/users?notice=approved');
-    const reject = await adminPost(app, owner, `/admin/users/${b.id}/reject`);
-    expect(reject.headers.get('location')).toBe('/admin/users?notice=rejected');
-    expect((await getUser(env.DB, a.id))?.status).toBe('active');
+    const approve = await adminPost(app, session, `/admin/users/${a.id}/approve`, {
+      role: 'access_manager',
+    });
+    expect(await follow(session, approve)).toContain('Approved a@example.com as Access manager.');
+    const reject = await adminPost(app, session, `/admin/users/${b.id}/reject`);
+    expect(await follow(session, reject)).toContain('Rejected b@example.com.');
+    expect(await getUser(env.DB, a.id)).toMatchObject({ status: 'active', role: 'access_manager' });
     expect((await getUser(env.DB, b.id))?.status).toBe('suspended');
-    expect(await auditActions()).toEqual(['user.update', 'user.update']);
+    expect(await auditActions()).toEqual(['user.approve', 'user.reject']);
   });
 
-  it('refuses to approve a user who is no longer pending', async () => {
-    const owner = await sessionFor('owner');
-    const suspended = await createUser(
-      {
-        email: 's@example.com',
-        status: 'suspended',
-        identity: { loginProvider: 'access', subject: 'team|s' },
-      },
-      T0,
-    );
-    const res = await adminPost(app, owner, `/admin/users/${suspended.id}/approve`);
-    expect(res.status).toBe(409);
-    expect(await res.text()).toContain('no longer waiting for approval');
-    expect((await getUser(env.DB, suspended.id))?.status).toBe('suspended');
-  });
-});
-
-describe('role and status in the user list', () => {
-  it('changes role and status in one save', async () => {
-    const owner = await sessionFor('owner');
-    const user = await createUser(
-      {
-        email: 'u@example.com',
-        role: 'viewer',
-        identity: { loginProvider: 'access', subject: 't|u' },
-      },
-      T0,
-    );
-    const html = await (await adminGet(app, owner, '/admin/users')).text();
-    expect(html).toContain('aria-label="Status for u@example.com"');
-    const res = await adminPost(app, owner, `/admin/users/${user.id}`, {
-      role: 'admin',
-      status: 'suspended',
+  it('approve without a role, or of someone decided meanwhile, is refused', async () => {
+    const session = await sessionFor('owner');
+    const pending = await pendingUser();
+    expect((await adminPost(app, session, `/admin/users/${pending.id}/approve`)).status).toBe(400);
+    await adminPost(app, session, `/admin/users/${pending.id}/reject`);
+    const late = await adminPost(app, session, `/admin/users/${pending.id}/approve`, {
+      role: 'viewer',
     });
-    expect(res.headers.get('location')).toBe('/admin/users?notice=updated');
-    expect(await getUser(env.DB, user.id)).toMatchObject({ role: 'admin', status: 'suspended' });
-    const back = await adminPost(app, owner, `/admin/users/${user.id}`, {
-      role: 'admin',
+    expect(late.status).toBe(409);
+    expect(await late.text()).toContain(
+      'wait@example.com was already approved or rejected (now Suspended).',
+    );
+  });
+
+  it('end to end: an expired invitee tries, the owner renews, the invitee gets in', async () => {
+    const invitee = await createUser(
+      {
+        email: 'late@example.com',
+        role: 'token_manager',
+        status: 'invited',
+        inviteExpiresAt: T0 - 1,
+      },
+      T0 - 10,
+    );
+    const access = await testAccess();
+    const jwt = await access.sign({ sub: 'late-sub', email: 'late@example.com' }, { now: T0 });
+    const signIn = () => app.request('/admin/users', { headers: { [ACCESS_JWT_HEADER]: jwt } });
+    const refused = await signIn();
+    expect(refused.status).toBe(403);
+    expect(await refused.text()).toContain(
+      'Your invitation expired. Owners can see that you tried.',
+    );
+    expect(await countNeedsDecision(env.DB, T0)).toBe(1);
+
+    const session = await sessionFor('owner');
+    const decide = slice(await page(session), '<section id="decide"', '</section>');
+    expect(decide).toContain(
+      'late@example.com tried to sign in just now, but the invitation expired',
+    );
+    expect(decide).toContain(`action="/admin/users/${invitee.id}/resend-invite"`);
+    const renew = await adminPost(app, session, `/admin/users/${invitee.id}/resend-invite`);
+    expect(renew.status).toBe(303);
+    expect(await countNeedsDecision(env.DB, T0)).toBe(0);
+
+    expect((await signIn()).status).toBe(200);
+    expect(await getUser(env.DB, invitee.id)).toMatchObject({
       status: 'active',
+      role: 'token_manager',
     });
-    expect(back.headers.get('location')).toBe('/admin/users?notice=updated');
-    expect((await getUser(env.DB, user.id))?.status).toBe('active');
   });
 
-  it('refuses pending as a status set from the list', async () => {
-    const owner = await sessionFor('owner');
-    const user = await createUser(
-      { email: 'u@example.com', identity: { loginProvider: 'access', subject: 't|u' } },
-      T0,
+  it('a deliberately suspended user who tried is not queued; their row says they tried', async () => {
+    const user = await linked('s@example.com', { status: 'suspended' });
+    await refusedAt(user.id, T0 - 60_000);
+    expect(await countNeedsDecision(env.DB, T0)).toBe(0);
+    const html = await page(await sessionFor('owner'));
+    expect(html).not.toContain('id="decide"');
+    expect(slice(html, `id="user-${user.id}"`, '</tr>')).toContain('· tried 1 min ago');
+  });
+
+  it('a different sign-in account card offers Reset sign-in… and Dismiss removes it', async () => {
+    const user = await linked('d@example.com');
+    await refusedAt(user.id, T0 - 60_000);
+    const session = await sessionFor('owner');
+    const decide = slice(await page(session), '<section id="decide"', '</section>');
+    expect(decide).toContain(
+      'with a different sign-in account (Access user ID <code>…1234</code>)',
     );
-    const res = await adminPost(app, owner, `/admin/users/${user.id}`, { status: 'pending' });
-    expect(res.status).toBe(400);
-    expect((await getUser(env.DB, user.id))?.status).toBe('active');
-  });
-});
-
-describe('join defaults', () => {
-  it('starts as active viewer and is shown on the page', async () => {
-    const html = await (await adminGet(app, await sessionFor('owner'), '/admin/users')).text();
-    expect(html).toContain('<strong>active viewer</strong>');
-    expect(html).toContain('action="/admin/users/defaults"');
-  });
-
-  it('owners can change role and status for later sign-ins', async () => {
-    const owner = await sessionFor('owner');
-    const res = await adminPost(app, owner, '/admin/users/defaults', {
-      role: 'admin',
-      status: 'pending',
+    expect(decide).toContain(`commandfor="dlg-card-reset-${user.id}"`);
+    expect(decide).not.toContain('cloudflareaccess.com');
+    const dismiss = await adminPost(app, session, `/admin/users/${user.id}/dismiss-attempt`, {
+      expected_refused_at: String(T0 - 60_000),
     });
-    expect(res.headers.get('location')).toBe('/admin/users?notice=defaults_saved');
-    expect(await getJoinDefaults(env.DB)).toEqual({ role: 'admin', status: 'pending' });
-    expect(await auditActions()).toEqual(['user.join_defaults']);
-    const again = await adminPost(app, owner, '/admin/users/defaults', {
-      role: 'admin',
-      status: 'pending',
-    });
-    expect(again.headers.get('location')).toBe('/admin/users?notice=defaults_unchanged');
+    const html = await follow(session, dismiss);
+    expect(html).toContain('Dismissed the refused sign-in of d@example.com.');
+    expect(html).not.toContain('id="decide"');
+    expect(await auditActions()).toEqual(['user.dismiss_attempt']);
   });
 
-  it.each([
-    [{ role: 'owner', status: 'active' }],
-    [{ role: 'viewer', status: 'invited' }],
-    [{ role: 'viewer' }],
-  ])('rejects %j', async (fields) => {
-    const res = await adminPost(app, await sessionFor('owner'), '/admin/users/defaults', fields);
-    expect(res.status).toBe(400);
-    expect(await getJoinDefaults(env.DB)).toEqual({ role: 'viewer', status: 'active' });
+  it('a stale Dismiss keeps a newer attempt (409)', async () => {
+    const user = await linked('d@example.com');
+    await refusedAt(user.id, T0 - 30_000);
+    const res = await adminPost(
+      app,
+      await sessionFor('owner'),
+      `/admin/users/${user.id}/dismiss-attempt`,
+      {
+        expected_refused_at: String(T0 - 60_000),
+      },
+    );
+    expect(res.status).toBe(409);
+    expect((await getUser(env.DB, user.id))?.last_refused_at).toBe(T0 - 30_000);
   });
 });

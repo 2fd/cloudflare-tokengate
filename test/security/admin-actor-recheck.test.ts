@@ -107,7 +107,10 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
       'demotes the user to viewer',
       (id: string) => [`/admin/users/${id}`, { role: 'viewer' }] as const,
     ],
-    ['resets the user’s login', (id: string) => [`/admin/users/${id}/reset-login`, {}] as const],
+    [
+      'resets the user’s login',
+      (id: string) => [`/admin/users/${id}/reset-login`, { confirm: '1' }] as const,
+    ],
   ])('writes nothing when an owner %s mid-request', async (_label, ownerAction) => {
     const w = await world();
     const before = await serviceState(w.serviceId, w.admin.id);

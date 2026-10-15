@@ -92,15 +92,20 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, RoutePermission>> = Obje
 
   // == users ==
   'GET /admin/users/sign-in': read,
+  'POST /admin/users/sign-in/policy': usersWrite,
+  // Admin hosts are a deployment setting (I-DEPLOY-1), shown here because they decide where people
+  // sign in.
   'POST /admin/users/sign-in/hosts': settingsWrite,
   'GET /admin/users': read,
   'POST /admin/users': usersWrite,
-  'POST /admin/users/defaults': usersWrite,
+  'GET /admin/users/:id': read,
   'POST /admin/users/:id': usersWrite,
   'POST /admin/users/:id/approve': usersWrite,
   'POST /admin/users/:id/reject': usersWrite,
   'POST /admin/users/:id/reset-login': usersWrite,
   'POST /admin/users/:id/resend-invite': usersWrite,
+  'POST /admin/users/:id/delete': usersWrite,
+  'POST /admin/users/:id/dismiss-attempt': usersWrite,
 
   // == tokens ==
   'GET /admin/tokens/hosts': read,

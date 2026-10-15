@@ -12,7 +12,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { App, AppContext } from '../../app';
 import { parseConfig } from '../../config';
 import type { User } from '../../db/types';
-import { recordSeenStatements } from '../../db/users';
+import { recordRefusedStatements, recordSeenStatements } from '../../db/users';
 import type { Deps } from '../../deps';
 import { paths } from '../paths';
 import {
@@ -41,9 +41,12 @@ const MESSAGES = {
     'Cloudflare Access did not present a valid user identity for this request. Check that the Access application covers /admin on this hostname, then reload.',
   certs_unavailable: 'Cloudflare Access could not be reached to check your identity. Try again.',
   email_taken:
-    'Another user already has this email address (for example an expired invitation, or an account linked to another sign-in). Ask an owner to use "Resend invitation" or "Reset login", then reload this page.',
-  pending: 'Your account is waiting for an owner to approve it. Reload this page after they do.',
-  suspended: 'This account is suspended. Ask an owner to reactivate it.',
+    'Another user already has this email address with a different sign-in account. Owners can see that you tried. Ask one to reset your sign-in, then reload.',
+  email_taken_expired:
+    'Your invitation expired. Owners can see that you tried. Ask one to renew it, then reload.',
+  pending:
+    'Your account is waiting for an owner to approve it. Owners see your request on their Overview. Reload this page after they do.',
+  suspended: 'This account is suspended. Owners can see that you tried. Ask one to reactivate it.',
 } as const;
 type MessageKey = keyof typeof MESSAGES;
 
@@ -85,6 +88,11 @@ export const adminMiddleware: MiddlewareHandler<AppContext> = async (c, next) =>
         reason: resolution.reason,
       }),
     );
+    // Only a verified Access identity gets here. The refusal is recorded on the user it names, so
+    // owners see that they tried (not audited, links nothing: I-LINK-1).
+    if (resolution.userId !== undefined) {
+      await recordRefused(deps, resolution.userId, resolution.lastRefusedAt ?? null, identity);
+    }
     return errorPage(c, resolution.reason, 403, identity.loginProvider);
   }
   const { user } = resolution;
@@ -165,6 +173,28 @@ async function recordSeen(deps: Deps, user: User, identity: LoginIdentity): Prom
       loginProvider: identity.loginProvider,
       subject: identity.subject,
       now,
+    }),
+  );
+}
+
+/**
+ * Records a refused sign-in on the user it names, at most once per SEEN_INTERVAL_MS (the same
+ * throttle as recordSeen; the UPDATE repeats it in SQL). Never touches `updated_at`.
+ */
+async function recordRefused(
+  deps: Deps,
+  userId: string,
+  lastRefusedAt: number | null,
+  identity: LoginIdentity,
+): Promise<void> {
+  const now = deps.now();
+  if (lastRefusedAt !== null && now - lastRefusedAt < SEEN_INTERVAL_MS) return;
+  await deps.env.DB.batch(
+    recordRefusedStatements(deps.env.DB, {
+      userId,
+      subject: identity.subject,
+      now,
+      minIntervalMs: SEEN_INTERVAL_MS,
     }),
   );
 }
