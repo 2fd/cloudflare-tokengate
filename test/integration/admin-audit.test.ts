@@ -79,8 +79,8 @@ describe('GET /admin/audit', () => {
     expect(html).toContain('<b>Before</b>');
     expect(html).toContain('&quot;name&quot;: &quot;old&quot;');
     expect(html).toContain('&quot;warnings&quot;');
-    expect(html).toContain('href="/admin/services/svc_01JAAAAAAAAAAAAAAAAAAAAAAA"');
-    expect(html).toContain('href="/admin/grants/grt_01JAAAAAAAAAAAAAAAAAAAAAAA"');
+    expect(html).toContain('href="/admin/tokens/svc_01JAAAAAAAAAAAAAAAAAAAAAAA"');
+    expect(html).toContain('href="/admin/access/grt_01JAAAAAAAAAAAAAAAAAAAAAAA"');
     // Redacted at write time; the page never sees the value.
     expect(html).not.toContain('sealed-bytes');
     expect(html).toContain('[redacted]');

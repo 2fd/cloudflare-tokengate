@@ -1,12 +1,7 @@
 // Plain-language text for request-log reasons and links to the project documentation.
 import { GATEWAY_ERRORS } from '../../lib/errors';
 
-const DOCS_ROOT = 'https://github.com/2fd/cloudflare-tokengate/blob/main/docs';
-
-/** Link to a page of the project documentation, e.g. `docsUrl('callers/github-actions.md')`. */
-export function docsUrl(path: string): string {
-  return `${DOCS_ROOT}/${path}`;
-}
+export { docsUrl } from './docs';
 
 /** Plain-language meaning of every reason the proxy records (gateway codes plus finer reasons). */
 const REASON_TEXT: Readonly<Record<string, string>> = {

@@ -90,10 +90,10 @@ async function expectRefused(key: string, role: Role, extra: Record<string, stri
 
 describe('I-RBAC-1: token and access duties are separate', () => {
   it('lists token and access routes', () => {
-    expect(TOKEN_ROUTES).toContain('POST /admin/services/:id/test');
-    expect(TOKEN_ROUTES).toContain('POST /admin/services/:id/credential');
-    expect(ACCESS_ROUTES).toContain('POST /admin/grants');
-    expect(ACCESS_ROUTES).toContain('POST /admin/caller-providers');
+    expect(TOKEN_ROUTES).toContain('POST /admin/tokens/:id/test');
+    expect(TOKEN_ROUTES).toContain('POST /admin/tokens/:id/credential');
+    expect(ACCESS_ROUTES).toContain('POST /admin/access');
+    expect(ACCESS_ROUTES).toContain('POST /admin/consumers');
   });
 
   it.each(ACCESS_ROUTES)('token_manager is refused %s', async (key) => {
@@ -121,23 +121,23 @@ describe('I-RBAC-1: token and access duties are separate', () => {
   });
 
   it('a token manager cannot delete a service together with its grants (with_accesses)', async () => {
-    await expectRefused('POST /admin/services/:id/delete', 'token_manager', { with_accesses: '1' });
+    await expectRefused('POST /admin/tokens/:id/delete', 'token_manager', { with_accesses: '1' });
   });
 
   it.each(['token_manager', 'admin'] as const)(
     '%s cannot allow a host on the way (allow_host needs settings:write)',
     async (role) => {
-      await expectRefused('POST /admin/services', role, { allow_host: '1' });
+      await expectRefused('POST /admin/tokens', role, { allow_host: '1' });
     },
   );
 
   it('an empty field-permission field is not a use of it', async () => {
-    const { res } = await send('POST /admin/services', 'token_manager', { allow_host: '' });
+    const { res } = await send('POST /admin/tokens', 'token_manager', { allow_host: '' });
     expect(res.status).toBe(303);
   });
 
   it('an owner may send both fields', async () => {
-    const { res } = await send('POST /admin/services', 'owner', { allow_host: '1' });
+    const { res } = await send('POST /admin/tokens', 'owner', { allow_host: '1' });
     expect(res.status).toBe(303);
   });
 

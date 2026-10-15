@@ -13,7 +13,7 @@ export type AdminContext = Context<AppContext>;
 
 export interface PageProps {
   title: string;
-  /** Navigation entry to highlight, e.g. `/admin/services`. */
+  /** Navigation entry to highlight, e.g. `/admin/tokens`. */
   section?: string;
   banners?: Banner[];
   /** Already-resolved notice text (pages map `?notice=<key>` through a constant table). */
@@ -31,6 +31,7 @@ export function renderPage(c: AdminContext, props: PageProps, body: Child) {
         email: viewer.user.email,
         role: viewer.user.role,
         signOutUrl: signOutUrl(viewer.loginProvider),
+        csrfToken: viewer.csrfToken,
       }}
       section={props.section}
       banners={props.banners}

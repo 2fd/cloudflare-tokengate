@@ -3,7 +3,8 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ROUTE_PERMISSIONS } from '../../src/admin/auth/rbac';
-import { percentileText, VERIFIED_CALL_SQL } from '../../src/admin/routes/dashboard';
+import { percentileText, VERIFIED_CALL_SQL } from '../../src/admin/routes/overview';
+import { putSettingStatement } from '../../src/db/settings';
 import type { User } from '../../src/db/types';
 import { adminGet, adminPost, createUser, loginAs, resetControlPlane } from '../helpers/admin-auth';
 import { createTestApp } from '../helpers/app';
@@ -30,9 +31,9 @@ describe('GET /admin on a fresh deployment', () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('Get started');
-    expect(html).toContain('href="/admin/caller-providers/new"');
-    expect(html).toContain('href="/admin/services/new"');
-    expect(html).toContain('href="/admin/grants/new"');
+    expect(html).toContain('href="/admin/consumers/new"');
+    expect(html).toContain('href="/admin/tokens/new"');
+    expect(html).toContain('href="/admin/access/new"');
     expect(html).toContain('docs/callers/github-actions.md');
     expect(html).toContain('No requests in the last 24 hours');
     expect(html).toContain('No denied requests in the last 24 hours');
@@ -43,7 +44,7 @@ describe('GET /admin on a fresh deployment', () => {
     const html = await (await adminGet(a, await loginAs(a, viewer), '/admin')).text();
     expect(html).toContain('Ask a token manager, admin or owner to do this step.');
     expect(html).toContain('Ask an access manager, admin or owner to do this step.');
-    expect(html).not.toContain('href="/admin/services/new"');
+    expect(html).not.toContain('href="/admin/tokens/new"');
   });
 
   it('renders operational banners from loadDashboard', async () => {
@@ -80,8 +81,8 @@ describe('GET /admin with traffic', () => {
     expect(html).toMatch(/<span>Requests<\/span><b>4<\/b>/);
     expect(html).toMatch(/<span>Allowed<\/span><b>3<\/b>/);
     expect(html).toMatch(/<span>Denied<\/span><b>1<\/b>/);
-    expect(html).toContain(`href="/admin/services/${fixture.serviceId}"`);
-    expect(html).toContain(`href="/admin/requests?service=${fixture.serviceId}"`);
+    expect(html).toContain(`href="/admin/tokens/${fixture.serviceId}"`);
+    expect(html).toContain(`href="/admin/requests?token=${fixture.serviceId}"`);
     const denial = (await fixture.records()).find((r) => r.reason === 'no_matching_grant');
     expect(denial).toBeDefined();
     expect(html).toContain(`href="/admin/requests/${denial?.id}"`);
@@ -159,7 +160,7 @@ describe('dashboard explanations', () => {
     ).run();
     const a = createTestApp({ now: () => TEST_EPOCH_MS });
     const html = await (await adminGet(a, await loginAs(a, viewer), '/admin')).text();
-    expect(html).toContain('Allowed requests are not recorded (sample rate 0 in Settings)');
+    expect(html).toContain('Allowed requests are not recorded (sample rate 0 in Data retention)');
   });
 });
 
@@ -173,5 +174,35 @@ describe('I-RBAC-1: dashboard, requests and audit routes', () => {
     ]) {
       expect(ROUTE_PERMISSIONS[route]).toEqual({ permission: 'read', mutates: false });
     }
+  });
+});
+
+describe('GET /admin system status (moved from Settings)', () => {
+  const app = () => createTestApp({ now: () => TEST_EPOCH_MS });
+
+  it('renders the status in #health with names only', async () => {
+    const a = app();
+    const html = await (await adminGet(a, await loginAs(a, viewer), '/admin')).text();
+    expect(html).toContain('<details id="health"><summary>System status</summary>');
+    expect(html).toContain('<dt>Login providers</dt><dd>Cloudflare Access</dd>');
+    expect(html).toContain('Control plane (DB): up to date');
+    expect(html).not.toContain('First owner');
+  });
+
+  it('escapes stored text such as the last cron error', async () => {
+    await env.DB.batch([
+      putSettingStatement(
+        env.DB,
+        'cron_last_error',
+        '<script>alert(1)</script>',
+        TEST_EPOCH_MS,
+        null,
+      ),
+      putSettingStatement(env.DB, 'cron_last_error_at', TEST_EPOCH_MS, TEST_EPOCH_MS, null),
+    ]);
+    const a = app();
+    const html = await (await adminGet(a, await loginAs(a, viewer), '/admin')).text();
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
   });
 });

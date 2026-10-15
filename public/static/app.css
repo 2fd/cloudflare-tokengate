@@ -13,6 +13,7 @@
 body { margin: 0; background: var(--bg); color: var(--fg); }
 a { color: var(--accent); }
 main { max-width: 1200px; margin: 0 auto; padding: 1rem 1.25rem 4rem; }
+.footer { max-width: 1200px; margin: 0 auto; padding: 1rem 1.25rem 2rem; border-top: 1px solid var(--line); }
 h1 { font-size: 1.5rem; margin: 1rem 0; }
 h2 { font-size: 1.15rem; margin: 2rem 0 .75rem; }
 .topbar { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; padding: .6rem 1.25rem;

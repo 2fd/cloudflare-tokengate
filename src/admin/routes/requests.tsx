@@ -22,6 +22,7 @@ import type { Decision, TraceEntry } from '../../policy/types';
 import { canonicalizePath } from '../../proxy/path';
 import type { Outcome, RequestRecord } from '../../telemetry/types';
 import { can } from '../auth/rbac';
+import { paths } from '../paths';
 import { renderPage } from '../render';
 import {
   Badge,
@@ -82,17 +83,21 @@ const NEXT_STEP: Readonly<Record<string, string>> = {
   method_not_allowed: 'Use a standard HTTP method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS).',
   base_url_invalid: "Check the service's base URL on the service page.",
   injection_invalid: 'Re-enter the credential and injection on the service page.',
-  keyring_absent: 'Set the TOKENGATE_KEK secret on the Worker. See Settings for keyring status.',
-  keyring_malformed: 'Fix the TOKENGATE_KEK or TOKENGATE_KEYRING secret. See Settings.',
-  active_kid_missing: 'Fix the TOKENGATE_KEYRING secret: its active key is missing. See Settings.',
-  key_not_32_bytes: 'Fix the keyring secret: every key must be 32 bytes. See Settings.',
+  keyring_absent:
+    'Set the TOKENGATE_KEK secret on the Worker. See Service tokens › Encryption keys for the keyring status.',
+  keyring_malformed:
+    'Fix the TOKENGATE_KEK or TOKENGATE_KEYRING secret. See Service tokens › Encryption keys.',
+  active_kid_missing:
+    'Fix the TOKENGATE_KEYRING secret: its active key is missing. See Service tokens › Encryption keys.',
+  key_not_32_bytes:
+    'Fix the keyring secret: every key must be 32 bytes. See Service tokens › Encryption keys.',
   both_kek_and_keyring_set: 'Remove one of TOKENGATE_KEK and TOKENGATE_KEYRING.',
   dev_placeholder_key:
-    'Replace the development TOKENGATE_KEK from .dev.vars.example with a key of your own. See Settings.',
+    'Replace the development TOKENGATE_KEK from .dev.vars.example with a key of your own. See Service tokens › Encryption keys.',
   credential_missing:
     'Set the credential on the service page. If the service had one, check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the credential again: the row may have been edited in D1.',
   credential_binding_mismatch:
-    'If Settings shows a replaced key, restore it. Otherwise the service row was probably edited in D1: check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the credential again.',
+    'If Service tokens › Encryption keys shows a replaced key, restore it. Otherwise the service row was probably edited in D1: check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the credential again.',
   credential_invalid: 'Re-enter the credential on the service page.',
   keyring_missing_key:
     'Restore the missing key in the keyring. If you enter the credential again instead, first check the base URL and injection against an out-of-band source (provider docs, configuration as code).',
@@ -114,7 +119,7 @@ export function registerRequestsRoutes(app: App): void {
   app.get('/admin/requests', async (c) => {
     const deps = c.get('deps');
     const query = {
-      service: c.req.query('service') ?? '',
+      token: c.req.query('token') ?? '',
       outcome: c.req.query('outcome') ?? '',
       repo: (c.req.query('repo') ?? '').trim(),
       slug: (c.req.query('slug') ?? '').trim(),
@@ -147,15 +152,16 @@ export function registerRequestsRoutes(app: App): void {
         : olderBefore
           ? withQuery(SECTION, { ...query, before: olderBefore })
           : null;
-    const filtered = Boolean(query.service || query.outcome || query.repo || query.slug);
+    const filtered = Boolean(query.token || query.outcome || query.repo || query.slug);
     return renderPage(
       c,
       { title: 'Requests', section: SECTION },
       <>
         <p class="muted">
           Every call that reached the gateway, newest first. Denied and failed requests are always
-          recorded; allowed requests may be sampled (see <a href="/admin/settings">Settings</a>).
-          Open a request to see why it was allowed or denied.
+          recorded; allowed requests may be sampled (see{' '}
+          <a href={paths.retention()}>Data retention</a>). Open a request to see why it was allowed
+          or denied.
         </p>
         <RequestFilters query={query} services={services} />
         {query.before ? (
@@ -234,15 +240,15 @@ export function registerRequestsRoutes(app: App): void {
   });
 }
 
-type FilterQuery = Record<'service' | 'outcome' | 'repo' | 'slug' | 'before', string>;
+type FilterQuery = Record<'token' | 'outcome' | 'repo' | 'slug' | 'before', string>;
 
 function parseRequestFilter(
   query: FilterQuery,
 ): { ok: true; filter: RequestFilter } | { ok: false; errors: string[] } {
   const errors: string[] = [];
   const filter: RequestFilter = {};
-  if (query.service) {
-    if (SERVICE_ID.test(query.service)) filter.service_id = query.service;
+  if (query.token) {
+    if (SERVICE_ID.test(query.token)) filter.service_id = query.token;
     else errors.push('The service filter is not a valid service id.');
   }
   if (query.outcome) {
@@ -276,12 +282,12 @@ function RequestFilters(props: { query: FilterQuery; services: Service[] }) {
     ...services.map((s) => ({ value: s.id, label: `${s.name} (${s.slug})` })),
   ];
   // Only a well-formed id gets its own option: arbitrary query text is never shown as a label.
-  if (SERVICE_ID.test(query.service) && !services.some((s) => s.id === query.service)) {
-    serviceOptions.push({ value: query.service, label: `Deleted service ${query.service}` });
+  if (SERVICE_ID.test(query.token) && !services.some((s) => s.id === query.token)) {
+    serviceOptions.push({ value: query.token, label: `Deleted service ${query.token}` });
   }
   return (
     <form method="get" action={SECTION} class="filters" aria-label="Filter requests">
-      <Select label="Service" name="service" value={query.service} options={serviceOptions} />
+      <Select label="Service" name="token" value={query.token} options={serviceOptions} />
       <Select
         label="Outcome"
         name="outcome"
@@ -343,9 +349,7 @@ function CallerCell(props: { record: RequestRecord }) {
 function GrantLink(props: { id: string | null; names: Map<string, string> }) {
   if (!props.id) return <>—</>;
   const name = props.names.get(props.id);
-  return (
-    <a href={`/admin/grants/${encodeURIComponent(props.id)}`}>{name ?? <Code>{props.id}</Code>}</a>
-  );
+  return <a href={paths.accessItem(props.id)}>{name ?? <Code>{props.id}</Code>}</a>;
 }
 
 function RequestTable(props: { records: RequestRecord[]; grantNames: Map<string, string> }) {
@@ -551,7 +555,7 @@ function RequestDetail(props: {
       ) : null}
       {props.canCreateGrant ? (
         <p class="actions">
-          <a class="button" href={withQuery('/admin/grants/new', { from_request: r.id })}>
+          <a class="button" href={paths.accessNew({ from_request: r.id })}>
             Create grant from this request
           </a>
           <small class="muted">
@@ -568,7 +572,7 @@ function RequestDetail(props: {
           [
             'Service',
             r.service_id && service ? (
-              <a href={`/admin/services/${encodeURIComponent(r.service_id)}`}>
+              <a href={paths.token(r.service_id)}>
                 {service.name} <Code>{service.slug}</Code>
               </a>
             ) : r.service_slug ? (
@@ -586,9 +590,7 @@ function RequestDetail(props: {
             'Caller provider',
             r.caller_provider_id ? (
               provider ? (
-                <a href={`/admin/caller-providers/${encodeURIComponent(r.caller_provider_id)}`}>
-                  {provider.name}
-                </a>
+                <a href={paths.consumer(r.caller_provider_id)}>{provider.name}</a>
               ) : (
                 <>
                   <Code>{r.caller_provider_id}</Code> <span class="muted">(deleted)</span>

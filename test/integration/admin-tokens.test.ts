@@ -77,10 +77,10 @@ async function createViaForm(
   session: AdminSession,
   fields: Record<string, string> = {},
 ): Promise<string> {
-  const res = await adminPost(app, session, '/admin/services', { ...OPENAI_FORM, ...fields });
+  const res = await adminPost(app, session, '/admin/tokens', { ...OPENAI_FORM, ...fields });
   expect(res.status).toBe(303);
   const location = res.headers.get('location') ?? '';
-  const id = /^\/admin\/services\/(svc_[0-9A-Z]{26})\?notice=/.exec(location)?.[1];
+  const id = /^\/admin\/tokens\/(svc_[0-9A-Z]{26})\?notice=/.exec(location)?.[1];
   if (!id) throw new Error(`unexpected redirect ${location}`);
   return id;
 }
@@ -117,24 +117,24 @@ beforeEach(async () => {
 describe('services list', () => {
   it('shows an empty state with the next step for admins', async () => {
     const admin = await sessionFor('admin');
-    const res = await adminGet(app, admin, '/admin/services');
+    const res = await adminGet(app, admin, '/admin/tokens');
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('No services yet');
-    expect(html).toContain('href="/admin/services/new"');
+    expect(html).toContain('href="/admin/tokens/new"');
   });
 
   it('renders services for a viewer without create links', async () => {
     const admin = await sessionFor('admin');
     await createViaForm(admin, { credential: SECRET });
     const viewer = await sessionFor('viewer');
-    const res = await adminGet(app, viewer, '/admin/services');
+    const res = await adminGet(app, viewer, '/admin/tokens');
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('<code>openai</code>');
     expect(html).toContain('api.openai.com');
     expect(html).toContain('…WXYZ');
-    expect(html).not.toContain('href="/admin/services/new"');
+    expect(html).not.toContain('href="/admin/tokens/new"');
     expect(html).not.toContain(SECRET);
   });
 });
@@ -142,10 +142,10 @@ describe('services list', () => {
 describe('new service form', () => {
   it('lists templates and prefills from ?template=', async () => {
     const admin = await sessionFor('admin');
-    const picker = await (await adminGet(app, admin, '/admin/services/new')).text();
-    expect(picker).toContain('/admin/services/new?template=slack-webhook');
+    const picker = await (await adminGet(app, admin, '/admin/tokens/new')).text();
+    expect(picker).toContain('/admin/tokens/new?template=slack-webhook');
 
-    const res = await adminGet(app, admin, '/admin/services/new?template=openai');
+    const res = await adminGet(app, admin, '/admin/tokens/new?template=openai');
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('value="https://api.openai.com/v1"');
@@ -156,7 +156,7 @@ describe('new service form', () => {
 
   it('is forbidden for viewers', async () => {
     const viewer = await sessionFor('viewer');
-    expect((await adminGet(app, viewer, '/admin/services/new')).status).toBe(403);
+    expect((await adminGet(app, viewer, '/admin/tokens/new')).status).toBe(403);
   });
 });
 
@@ -170,7 +170,7 @@ describe('create', () => {
     expect(row?.forward_headers).toBe('["openai-beta","openai-project"]');
     expect(upstream.calls).toEqual(['https://api.openai.com/v1/models']);
 
-    const res = await adminGet(app, admin, `/admin/services/${id}?notice=created_verified`);
+    const res = await adminGet(app, admin, `/admin/tokens/${id}?notice=created_verified`);
     const html = await res.text();
     expect(html).toContain('the credential check against the upstream passed');
     expect(html).toContain('https://gw.test/proxy/openai');
@@ -179,7 +179,7 @@ describe('create', () => {
 
   it('re-renders with errors, submitted values and no audit row on invalid input', async () => {
     const admin = await sessionFor('admin');
-    const res = await adminPost(app, admin, '/admin/services', {
+    const res = await adminPost(app, admin, '/admin/tokens', {
       ...OPENAI_FORM,
       slug: 'Bad Slug',
       base_url: 'http://127.0.0.1/api',
@@ -198,7 +198,7 @@ describe('create', () => {
 
   it('rejects a malformed expiry date without calling the op', async () => {
     const admin = await sessionFor('admin');
-    const res = await adminPost(app, admin, '/admin/services', {
+    const res = await adminPost(app, admin, '/admin/tokens', {
       ...OPENAI_FORM,
       credential_expires_at: '31/12/2027',
     });
@@ -209,7 +209,7 @@ describe('create', () => {
 
   it('shows the failed check and save_anyway; saves only when ticked', async () => {
     const admin = await sessionFor('admin');
-    const first = await adminPost(app, admin, '/admin/services', {
+    const first = await adminPost(app, admin, '/admin/tokens', {
       ...OPENAI_FORM,
       credential: BAD_SECRET,
     });
@@ -227,7 +227,7 @@ describe('create', () => {
 
   it('is forbidden for viewers and writes nothing', async () => {
     const viewer = await sessionFor('viewer');
-    const res = await adminPost(app, viewer, '/admin/services', OPENAI_FORM);
+    const res = await adminPost(app, viewer, '/admin/tokens', OPENAI_FORM);
     expect(res.status).toBe(403);
     expect(await serviceRow('openai')).toBeNull();
     expect(await auditActions()).toEqual([]);
@@ -236,7 +236,7 @@ describe('create', () => {
   it('escapes names containing markup', async () => {
     const admin = await sessionFor('admin');
     const id = await createViaForm(admin, { name: '<script>alert(1)</script>' });
-    for (const path of ['/admin/services', `/admin/services/${id}`]) {
+    for (const path of ['/admin/tokens', `/admin/tokens/${id}`]) {
       const html = await (await adminGet(app, admin, path)).text();
       expect(html).not.toContain('<script>alert(1)</script>');
       expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
@@ -249,15 +249,15 @@ describe('service detail', () => {
     const admin = await sessionFor('admin');
     const id = await createViaForm(admin);
     const viewer = await sessionFor('viewer');
-    const res = await adminGet(app, viewer, `/admin/services/${id}`);
+    const res = await adminGet(app, viewer, `/admin/tokens/${id}`);
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('missing');
     expect(html).toContain('No grant uses this service yet');
     expect(html).not.toContain('Change credential or destination');
-    expect(html).not.toContain('<form method="post" action="/admin/services/');
+    expect(html).not.toContain('<form method="post" action="/admin/tokens/');
 
-    const missing = await adminGet(app, viewer, '/admin/services/svc_00000000000000000000000000');
+    const missing = await adminGet(app, viewer, '/admin/tokens/svc_00000000000000000000000000');
     expect(missing.status).toBe(404);
   });
 
@@ -268,7 +268,7 @@ describe('service detail', () => {
       injection_param: 'api_key',
       verify_method: '',
     });
-    const html = await (await adminGet(app, admin, `/admin/services/${id}`)).text();
+    const html = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
     expect(html).toContain('Upstreams may echo URLs');
   });
 
@@ -277,11 +277,11 @@ describe('service detail', () => {
     const id = await createViaForm(admin, { credential: SECRET });
     const viewer = await sessionFor('viewer');
     for (const [path, fields] of [
-      [`/admin/services/${id}`, { name: 'x' }],
-      [`/admin/services/${id}/credential`, { secret: SECRET }],
-      [`/admin/services/${id}/test`, {}],
-      [`/admin/services/${id}/toggle`, { enabled: '0' }],
-      [`/admin/services/${id}/delete`, { confirm: '1' }],
+      [`/admin/tokens/${id}`, { name: 'x' }],
+      [`/admin/tokens/${id}/credential`, { secret: SECRET }],
+      [`/admin/tokens/${id}/test`, {}],
+      [`/admin/tokens/${id}/toggle`, { enabled: '0' }],
+      [`/admin/tokens/${id}/delete`, { confirm: '1' }],
     ] as const) {
       expect((await adminPost(app, viewer, path, fields)).status).toBe(403);
     }
@@ -293,7 +293,7 @@ describe('edit settings', () => {
   it('updates non-binding fields with one audit row', async () => {
     const admin = await sessionFor('admin');
     const id = await createViaForm(admin);
-    const res = await adminPost(app, admin, `/admin/services/${id}`, {
+    const res = await adminPost(app, admin, `/admin/tokens/${id}`, {
       ...OPENAI_FORM,
       name: 'OpenAI prod',
       timeout_ms: '300000',
@@ -302,7 +302,7 @@ describe('edit settings', () => {
       base_url: 'https://evil.example.com',
     });
     expect(res.status).toBe(303);
-    expect(res.headers.get('location')).toBe(`/admin/services/${id}?notice=updated`);
+    expect(res.headers.get('location')).toBe(`/admin/tokens/${id}?notice=updated`);
     const row = await serviceRow('openai');
     expect(row?.name).toBe('OpenAI prod');
     expect(row?.timeout_ms).toBe(300000);
@@ -314,7 +314,7 @@ describe('edit settings', () => {
   it('re-renders the edit form on validation errors', async () => {
     const admin = await sessionFor('admin');
     const id = await createViaForm(admin);
-    const res = await adminPost(app, admin, `/admin/services/${id}`, {
+    const res = await adminPost(app, admin, `/admin/tokens/${id}`, {
       ...OPENAI_FORM,
       timeout_ms: '5',
       forward_headers: 'authorization',
@@ -333,7 +333,7 @@ describe('change credential or destination', () => {
     const id = await createViaForm(admin, { credential: SECRET });
     const before = await serviceRow('openai');
 
-    const failed = await adminPost(app, admin, `/admin/services/${id}/credential`, {
+    const failed = await adminPost(app, admin, `/admin/tokens/${id}/credential`, {
       base_url: 'https://api.openai.com/v2',
       injection_kind: 'bearer',
       credential: BAD_SECRET,
@@ -346,13 +346,13 @@ describe('change credential or destination', () => {
     expect(html).not.toContain(BAD_SECRET);
     expect(await serviceRow('openai')).toEqual(before);
 
-    const saved = await adminPost(app, admin, `/admin/services/${id}/credential`, {
+    const saved = await adminPost(app, admin, `/admin/tokens/${id}/credential`, {
       base_url: 'https://api.openai.com/v2',
       injection_kind: 'bearer',
       credential: SECRET,
     });
     expect(saved.status).toBe(303);
-    expect(saved.headers.get('location')).toBe(`/admin/services/${id}?notice=credential_verified`);
+    expect(saved.headers.get('location')).toBe(`/admin/tokens/${id}?notice=credential_verified`);
     const after = await serviceRow('openai');
     expect(after?.base_url).toBe('https://api.openai.com/v2');
     expect(after?.credential_sealed).not.toBe(before?.credential_sealed);
@@ -362,7 +362,7 @@ describe('change credential or destination', () => {
   it('requires the credential', async () => {
     const admin = await sessionFor('admin');
     const id = await createViaForm(admin, { credential: SECRET });
-    const res = await adminPost(app, admin, `/admin/services/${id}/credential`, {
+    const res = await adminPost(app, admin, `/admin/tokens/${id}/credential`, {
       base_url: 'https://api.openai.com/v1',
       injection_kind: 'header',
       injection_header_name: 'X-Api-Key',
@@ -377,7 +377,7 @@ describe('test, toggle, delete', () => {
   it('tests the stored credential and shows the result', async () => {
     const admin = await sessionFor('admin');
     const id = await createViaForm(admin, { credential: SECRET });
-    const res = await adminPost(app, admin, `/admin/services/${id}/test`);
+    const res = await adminPost(app, admin, `/admin/tokens/${id}/test`);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('Credential check passed (HTTP 200)');
     expect(await auditActions()).toEqual(['service.create', 'service.credential.test']);
@@ -386,15 +386,15 @@ describe('test, toggle, delete', () => {
   it('disables and enables', async () => {
     const admin = await sessionFor('admin');
     const id = await createViaForm(admin);
-    const off = await adminPost(app, admin, `/admin/services/${id}/toggle`, { enabled: '0' });
-    expect(off.headers.get('location')).toBe(`/admin/services/${id}?notice=disabled`);
+    const off = await adminPost(app, admin, `/admin/tokens/${id}/toggle`, { enabled: '0' });
+    expect(off.headers.get('location')).toBe(`/admin/tokens/${id}?notice=disabled`);
     expect((await serviceRow('openai'))?.enabled).toBe(0);
-    const on = await adminPost(app, admin, `/admin/services/${id}/toggle`, { enabled: '1' });
-    expect(on.headers.get('location')).toBe(`/admin/services/${id}?notice=enabled`);
+    const on = await adminPost(app, admin, `/admin/tokens/${id}/toggle`, { enabled: '1' });
+    expect(on.headers.get('location')).toBe(`/admin/tokens/${id}?notice=enabled`);
     expect((await serviceRow('openai'))?.enabled).toBe(1);
     expect(await auditActions()).toEqual(['service.create', 'service.disable', 'service.enable']);
 
-    const bad = await adminPost(app, admin, `/admin/services/${id}/toggle`, { enabled: 'yes' });
+    const bad = await adminPost(app, admin, `/admin/tokens/${id}/toggle`, { enabled: 'yes' });
     expect(bad.status).toBe(400);
   });
 
@@ -403,20 +403,20 @@ describe('test, toggle, delete', () => {
     const id = await createViaForm(admin);
     await insertGrant(id, 'deploy <bot>');
 
-    const page = await (await adminGet(app, admin, `/admin/services/${id}`)).text();
+    const page = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
     expect(page).toContain('used by 1 grant(s)');
-    expect(page).toContain('href="/admin/grants/grt_TEST"');
+    expect(page).toContain('href="/admin/access/grt_TEST"');
     expect(page).toContain('deploy &lt;bot&gt;');
 
-    const blocked = await adminPost(app, admin, `/admin/services/${id}/delete`, { confirm: '1' });
+    const blocked = await adminPost(app, admin, `/admin/tokens/${id}/delete`, { confirm: '1' });
     expect(blocked.status).toBe(409);
     expect(await blocked.text()).toContain('delete them first');
 
     await env.DB.prepare('DELETE FROM grants').run();
-    const unconfirmed = await adminPost(app, admin, `/admin/services/${id}/delete`);
+    const unconfirmed = await adminPost(app, admin, `/admin/tokens/${id}/delete`);
     expect(unconfirmed.status).toBe(400);
-    const deleted = await adminPost(app, admin, `/admin/services/${id}/delete`, { confirm: '1' });
-    expect(deleted.headers.get('location')).toBe('/admin/services?notice=deleted');
+    const deleted = await adminPost(app, admin, `/admin/tokens/${id}/delete`, { confirm: '1' });
+    expect(deleted.headers.get('location')).toBe('/admin/tokens?notice=deleted');
     expect(await serviceRow('openai')).toBeNull();
     expect(await auditActions()).toEqual(['service.create', 'service.delete']);
   });
@@ -426,7 +426,7 @@ describe('review: forms, notices and per-kind fields', () => {
   it('puts a CSRF token in every POST form of the detail page', async () => {
     const admin = await sessionFor('admin');
     const id = await createViaForm(admin, { credential: SECRET });
-    const html = await (await adminGet(app, admin, `/admin/services/${id}`)).text();
+    const html = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
     const forms = html.match(/<form method="post"[\s\S]*?<\/form>/g) ?? [];
     // toggle, test, settings, credential, delete (+ the layout's sign-out form)
     expect(forms.length).toBeGreaterThanOrEqual(5);
@@ -439,7 +439,7 @@ describe('review: forms, notices and per-kind fields', () => {
     const res = await adminPost(
       app,
       admin,
-      `/admin/services/${id}/toggle`,
+      `/admin/tokens/${id}/toggle`,
       { enabled: '0' },
       { csrf: null },
     );
@@ -453,7 +453,7 @@ describe('review: forms, notices and per-kind fields', () => {
     const id = await createViaForm(admin);
     for (const notice of ['<b>pwned</b>', 'constructor', '__proto__', 'toString']) {
       const html = await (
-        await adminGet(app, admin, `/admin/services/${id}?notice=${encodeURIComponent(notice)}`)
+        await adminGet(app, admin, `/admin/tokens/${id}?notice=${encodeURIComponent(notice)}`)
       ).text();
       expect(html).not.toContain('pwned');
       expect(html).not.toContain('class="banner info" role="status"');
@@ -463,19 +463,19 @@ describe('review: forms, notices and per-kind fields', () => {
   it('warns that a service without a credential cannot serve requests', async () => {
     const admin = await sessionFor('admin');
     const id = await createViaForm(admin);
-    const adminHtml = await (await adminGet(app, admin, `/admin/services/${id}`)).text();
+    const adminHtml = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
     expect(adminHtml).toContain('No credential is stored yet');
     expect(adminHtml).toContain('Change credential or destination&quot; below');
     const viewer = await sessionFor('viewer');
-    const viewerHtml = await (await adminGet(app, viewer, `/admin/services/${id}`)).text();
+    const viewerHtml = await (await adminGet(app, viewer, `/admin/tokens/${id}`)).text();
     expect(viewerHtml).toContain('Ask an admin to add it');
 
-    await adminPost(app, admin, `/admin/services/${id}/credential`, {
+    await adminPost(app, admin, `/admin/tokens/${id}/credential`, {
       base_url: OPENAI_FORM.base_url,
       injection_kind: 'bearer',
       credential: SECRET,
     });
-    const after = await (await adminGet(app, admin, `/admin/services/${id}`)).text();
+    const after = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
     expect(after).not.toContain('No credential is stored yet');
   });
 
@@ -488,26 +488,26 @@ describe('review: forms, notices and per-kind fields', () => {
     };
 
     top(
-      await (await adminPost(app, admin, `/admin/services/${id}/test`)).text(),
+      await (await adminPost(app, admin, `/admin/tokens/${id}/test`)).text(),
       'Credential check passed',
     );
     top(
-      await (await adminPost(app, admin, `/admin/services/${id}/toggle`, { enabled: 'x' })).text(),
+      await (await adminPost(app, admin, `/admin/tokens/${id}/toggle`, { enabled: 'x' })).text(),
       'choose whether to enable or disable',
     );
     top(
-      await (await adminPost(app, admin, `/admin/services/${id}/delete`)).text(),
+      await (await adminPost(app, admin, `/admin/tokens/${id}/delete`)).text(),
       'tick the confirmation box',
     );
 
     const edit = await (
-      await adminPost(app, admin, `/admin/services/${id}`, { ...OPENAI_FORM, timeout_ms: '5' })
+      await adminPost(app, admin, `/admin/tokens/${id}`, { ...OPENAI_FORM, timeout_ms: '5' })
     ).text();
     top(edit, 'href="#settings"');
     expect(edit).toContain('<h2 id="settings">');
 
     const credential = await (
-      await adminPost(app, admin, `/admin/services/${id}/credential`, {
+      await adminPost(app, admin, `/admin/tokens/${id}/credential`, {
         base_url: OPENAI_FORM.base_url,
         injection_kind: 'bearer',
         credential: BAD_SECRET,
@@ -521,14 +521,14 @@ describe('review: forms, notices and per-kind fields', () => {
 
   it('points to the failed check at the top of the new-service form', async () => {
     const admin = await sessionFor('admin');
-    const res = await adminPost(app, admin, '/admin/services', {
+    const res = await adminPost(app, admin, '/admin/tokens', {
       ...OPENAI_FORM,
       credential: BAD_SECRET,
     });
     expect(res.status).toBe(422);
     const html = await res.text();
     expect(html.indexOf('The credential check failed, so nothing was saved')).toBeLessThan(
-      html.indexOf('<form method="post" action="/admin/services"'),
+      html.indexOf('<form method="post" action="/admin/tokens"'),
     );
   });
 
@@ -564,17 +564,17 @@ describe('review: forms, notices and per-kind fields', () => {
   it('refuses a settings save over a newer change with 409 and keeps the newer values', async () => {
     const admin = await sessionFor('admin');
     const id = await createViaForm(admin);
-    const page = await (await adminGet(app, admin, `/admin/services/${id}`)).text();
+    const page = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
     const opened = /name="expected_updated_at" value="(\d+)"/.exec(page)?.[1];
     expect(opened).toBeDefined();
     const fields = { ...OPENAI_FORM, credential_expires_at: '', expected_updated_at: opened ?? '' };
 
-    const first = await adminPost(app, admin, `/admin/services/${id}`, {
+    const first = await adminPost(app, admin, `/admin/tokens/${id}`, {
       ...fields,
       name: 'First',
     });
     expect(first.status).toBe(303);
-    const stale = await adminPost(app, admin, `/admin/services/${id}`, {
+    const stale = await adminPost(app, admin, `/admin/tokens/${id}`, {
       ...fields,
       name: 'Second',
     });
@@ -590,7 +590,7 @@ describe('review: forms, notices and per-kind fields', () => {
     await env.DB.prepare('UPDATE services SET credential_expires_at = ? WHERE id = ?')
       .bind(stored, id)
       .run();
-    const res = await adminPost(app, admin, `/admin/services/${id}`, {
+    const res = await adminPost(app, admin, `/admin/tokens/${id}`, {
       ...OPENAI_FORM,
       name: 'Renamed',
       credential_expires_at: '2030-01-15',
@@ -602,7 +602,7 @@ describe('review: forms, notices and per-kind fields', () => {
   it('reports a duplicate slug with the form kept', async () => {
     const admin = await sessionFor('admin');
     await createViaForm(admin);
-    const res = await adminPost(app, admin, '/admin/services', { ...OPENAI_FORM, name: 'Again' });
+    const res = await adminPost(app, admin, '/admin/tokens', { ...OPENAI_FORM, name: 'Again' });
     expect(res.status).toBe(409);
     const html = await res.text();
     expect(html).toContain('another service already uses this slug');

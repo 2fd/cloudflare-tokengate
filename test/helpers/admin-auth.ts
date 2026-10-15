@@ -6,7 +6,7 @@
 //   const owner = await createUser({ email: 'o@example.com', role: 'owner' });
 //   const app = createAdminTestApp();
 //   const session = await loginAs(app, owner);
-//   const res = await adminPost(app, session, '/admin/settings', { retention: '30' });
+//   const res = await adminPost(app, session, '/admin/retention', { request_log_retention_days: '30' });
 import { env } from 'cloudflare:workers';
 import { type Context, Hono } from 'hono';
 import { ACCESS_JWT_HEADER, accessSubject } from '../../src/admin/auth/access';
@@ -223,13 +223,13 @@ export function createAdminTestApp(options: AdminTestAppOptions = {}): AdminTest
 export function stubAdminPages(app: App): void {
   const ok = (c: Context<AppContext>) => c.text(`ok ${c.get('viewer').user.role}`);
   app.get('/admin', ok);
-  app.get('/admin/services', ok);
-  app.get('/admin/services/new', ok);
-  app.post('/admin/services', ok);
-  app.get('/admin/services/:id', ok);
-  app.post('/admin/services/:id', ok);
+  app.get('/admin/tokens', ok);
+  app.get('/admin/tokens/new', ok);
+  app.post('/admin/tokens', ok);
+  app.get('/admin/tokens/:id', ok);
+  app.post('/admin/tokens/:id', ok);
   app.post('/admin/users', ok);
-  app.post('/admin/settings/rewrap', ok);
+  app.post('/admin/tokens/keys/rewrap', ok);
   app.get('/admin/unlisted', ok);
   app.all('/admin/any-method', ok);
 }

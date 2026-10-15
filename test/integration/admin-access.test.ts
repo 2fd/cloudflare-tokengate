@@ -94,21 +94,21 @@ function grantIdFrom(response: Response): string {
 describe('grants: viewer', () => {
   it('can read but not create, edit, toggle or delete', async () => {
     const grant = await seedGrant(app.deps, provider.id, serviceId);
-    const list = await adminGet(app, viewer, '/admin/grants');
+    const list = await adminGet(app, viewer, '/admin/access');
     expect(list.status).toBe(200);
     const listHtml = await list.text();
     expect(listHtml).toContain(grant.name);
     expect(listHtml).not.toContain('Create a grant');
-    const detail = await (await adminGet(app, viewer, `/admin/grants/${grant.id}`)).text();
+    const detail = await (await adminGet(app, viewer, `/admin/access/${grant.id}`)).text();
     expect(detail).toContain('repository_id exact 987654321');
     expect(detail).not.toContain('Save changes');
 
-    expect((await adminGet(app, viewer, '/admin/grants/new')).status).toBe(403);
+    expect((await adminGet(app, viewer, '/admin/access/new')).status).toBe(403);
     for (const path of [
-      '/admin/grants',
-      `/admin/grants/${grant.id}`,
-      `/admin/grants/${grant.id}/toggle`,
-      `/admin/grants/${grant.id}/delete`,
+      '/admin/access',
+      `/admin/access/${grant.id}`,
+      `/admin/access/${grant.id}/toggle`,
+      `/admin/access/${grant.id}/delete`,
     ]) {
       const res = await adminPost(app, viewer, path, { ...advancedFields(), enabled: '0' });
       expect(res.status, path).toBe(403);
@@ -120,7 +120,7 @@ describe('grants: viewer', () => {
 
 describe('grants: new form', () => {
   it('asks for caller provider and service first', async () => {
-    const html = await (await adminGet(app, admin, '/admin/grants/new')).text();
+    const html = await (await adminGet(app, admin, '/admin/access/new')).text();
     expect(html).toContain('Step 1 of 2');
     expect(html).toContain(`<option value="${provider.id}"`);
   });
@@ -130,15 +130,15 @@ describe('grants: new form', () => {
       env.DB.prepare('DELETE FROM services'),
       env.DB.prepare('DELETE FROM caller_providers'),
     ]);
-    const html = await (await adminGet(app, admin, '/admin/grants/new')).text();
-    expect(html).toContain('href="/admin/caller-providers/new"');
+    const html = await (await adminGet(app, admin, '/admin/access/new')).text();
+    expect(html).toContain('href="/admin/consumers/new"');
   });
 
   it('prefills the GitHub builder from the tenant pin and rules from the service template', async () => {
     const res = await adminGet(
       app,
       admin,
-      `/admin/grants/new?caller_provider=${provider.id}&service=${serviceId}`,
+      `/admin/access/new?consumer=${provider.id}&token=${serviceId}`,
     );
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -153,7 +153,7 @@ describe('grants: new form', () => {
 
 describe('grants: create', () => {
   it('creates a grant with the GitHub builder and writes one audit row', async () => {
-    const res = await adminPost(app, admin, '/admin/grants', presetFields());
+    const res = await adminPost(app, admin, '/admin/access', presetFields());
     expect(res.status).toBe(303);
     expect(await grantAuditActions()).toEqual(['grant.create']);
     const grant = await getGrant(env.DB, grantIdFrom(res));
@@ -175,7 +175,7 @@ describe('grants: create', () => {
 
   it('requires acknowledging the exact warnings shown before saving', async () => {
     const fields = presetFields({ require_protected_ref: '' });
-    const first = await adminPost(app, admin, '/admin/grants', fields);
+    const first = await adminPost(app, admin, '/admin/access', fields);
     expect(first.status).toBe(422);
     const html = await first.text();
     expect(html).toContain('protected refs are not required');
@@ -185,7 +185,7 @@ describe('grants: create', () => {
     expect(await grantAuditActions()).toEqual([]);
 
     // A box ticked for other warnings does not count.
-    const stale = await adminPost(app, admin, '/admin/grants', {
+    const stale = await adminPost(app, admin, '/admin/access', {
       ...fields,
       acknowledge_warnings: '1',
       warnings_digest: '0'.repeat(64),
@@ -193,7 +193,7 @@ describe('grants: create', () => {
     expect(stale.status).toBe(422);
     expect(await grantAuditActions()).toEqual([]);
 
-    const saved = await adminPost(app, admin, '/admin/grants', {
+    const saved = await adminPost(app, admin, '/admin/access', {
       ...fields,
       acknowledge_warnings: '1',
       warnings_digest: digest ?? '',
@@ -206,7 +206,7 @@ describe('grants: create', () => {
     const builder = await adminPost(
       app,
       admin,
-      '/admin/grants',
+      '/admin/access',
       presetFields({ owner_id: 'acme' }),
     );
     expect(builder.status).toBe(422);
@@ -215,7 +215,7 @@ describe('grants: create', () => {
     const text = await adminPost(
       app,
       admin,
-      '/admin/grants',
+      '/admin/access',
       advancedFields({ conditions_text: 'repository_id equals 1', rules_text: 'GET repos' }),
     );
     expect(text.status).toBe(422);
@@ -230,7 +230,7 @@ describe('grants: create', () => {
     const res = await adminPost(
       app,
       admin,
-      '/admin/grants',
+      '/admin/access',
       advancedFields({ conditions_text: 'ref exact refs/heads/main\nref_protected exact true' }),
     );
     expect(res.status).toBe(422);
@@ -242,7 +242,7 @@ describe('grants: create', () => {
     const res = await adminPost(
       app,
       admin,
-      '/admin/grants',
+      '/admin/access',
       advancedFields({ expires_at: '2099-01-02T03:04', enabled: '' }),
     );
     expect(res.status).toBe(303);
@@ -255,11 +255,11 @@ describe('grants: create', () => {
     const res = await adminPost(
       app,
       admin,
-      '/admin/grants',
+      '/admin/access',
       advancedFields({ name: '<script>alert(1)</script>' }),
     );
     expect(res.status).toBe(303);
-    for (const path of ['/admin/grants', res.headers.get('location') ?? '']) {
+    for (const path of ['/admin/access', res.headers.get('location') ?? '']) {
       const html = await (await adminGet(app, admin, path)).text();
       expect(html).not.toContain('<script>alert(1)</script>');
       expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
@@ -270,7 +270,7 @@ describe('grants: create', () => {
 describe('grants: detail actions', () => {
   it('edits conditions and rules as text', async () => {
     const grant = await seedGrant(app.deps, provider.id, serviceId);
-    const res = await adminPost(app, admin, `/admin/grants/${grant.id}`, {
+    const res = await adminPost(app, admin, `/admin/access/${grant.id}`, {
       name: 'renamed',
       conditions_text: `repository_owner_id exact ${OWNER_ID}\nrepository_id exact ${REPOSITORY_ID}, 5`,
       rules_text: 'GET,HEAD /repos/acme/**',
@@ -285,7 +285,7 @@ describe('grants: detail actions', () => {
 
   it('asks for acknowledgement when an edit introduces warnings', async () => {
     const grant = await seedGrant(app.deps, provider.id, serviceId);
-    const res = await adminPost(app, admin, `/admin/grants/${grant.id}`, {
+    const res = await adminPost(app, admin, `/admin/access/${grant.id}`, {
       name: grant.name,
       conditions_text: `repository_owner_id exact ${OWNER_ID}\nrepository_id exact ${REPOSITORY_ID}\nevent_name exact pull_request_target`,
       rules_text: 'GET /repos/**',
@@ -299,18 +299,18 @@ describe('grants: detail actions', () => {
 
   it('reports a save without changes as unchanged and writes nothing', async () => {
     const grant = await seedGrant(app.deps, provider.id, serviceId);
-    const res = await adminPost(app, admin, `/admin/grants/${grant.id}`, {
+    const res = await adminPost(app, admin, `/admin/access/${grant.id}`, {
       name: grant.name,
       conditions_text: `repository_owner_id exact ${OWNER_ID}\nrepository_id exact ${REPOSITORY_ID}`,
       rules_text: 'GET /repos/**',
       expected_updated_at: String(grant.updated_at),
     });
     expect(res.status).toBe(303);
-    expect(res.headers.get('location')).toBe(`/admin/grants/${grant.id}?notice=unchanged`);
+    expect(res.headers.get('location')).toBe(`/admin/access/${grant.id}?notice=unchanged`);
     expect(await grantAuditActions()).toEqual(['grant.create']);
     expect((await getGrant(env.DB, grant.id))?.updated_at).toBe(grant.updated_at);
     const page = await (
-      await adminGet(app, admin, `/admin/grants/${grant.id}?notice=unchanged`)
+      await adminGet(app, admin, `/admin/access/${grant.id}?notice=unchanged`)
     ).text();
     expect(page).toContain('Nothing changed');
   });
@@ -324,14 +324,14 @@ describe('grants: detail actions', () => {
       forward_headers: [],
     });
     const fields = advancedFields({ service_id: webhookId, rules_text: 'GET,POST /' });
-    const first = await adminPost(app, admin, '/admin/grants', fields);
+    const first = await adminPost(app, admin, '/admin/access', fields);
     expect(first.status).toBe(422);
     const html = await first.text();
     expect(html).toContain('allow only POST');
     expect(html).toContain('name="acknowledge_warnings"');
     expect(await grantAuditActions()).toEqual([]);
 
-    const postOnly = await adminPost(app, admin, '/admin/grants', {
+    const postOnly = await adminPost(app, admin, '/admin/access', {
       ...fields,
       rules_text: 'POST /',
     });
@@ -341,17 +341,17 @@ describe('grants: detail actions', () => {
 
   it('disables, enables and deletes', async () => {
     const grant = await seedGrant(app.deps, provider.id, serviceId);
-    const off = await adminPost(app, admin, `/admin/grants/${grant.id}/toggle`, { enabled: '0' });
+    const off = await adminPost(app, admin, `/admin/access/${grant.id}/toggle`, { enabled: '0' });
     expect(off.status).toBe(303);
     expect((await getGrant(env.DB, grant.id))?.enabled).toBe(false);
-    const on = await adminPost(app, admin, `/admin/grants/${grant.id}/toggle`, { enabled: '1' });
+    const on = await adminPost(app, admin, `/admin/access/${grant.id}/toggle`, { enabled: '1' });
     expect(on.status).toBe(303);
     expect((await getGrant(env.DB, grant.id))?.enabled).toBe(true);
-    const deleted = await adminPost(app, admin, `/admin/grants/${grant.id}/delete`, {
+    const deleted = await adminPost(app, admin, `/admin/access/${grant.id}/delete`, {
       confirm: '1',
     });
     expect(deleted.status).toBe(303);
-    expect(deleted.headers.get('location')).toBe('/admin/grants?notice=deleted');
+    expect(deleted.headers.get('location')).toBe('/admin/access?notice=deleted');
     expect(await getGrant(env.DB, grant.id)).toBeNull();
     expect(await grantAuditActions()).toEqual([
       'grant.create',
@@ -363,10 +363,10 @@ describe('grants: detail actions', () => {
 
   it('duplicates through a prefilled new-grant form', async () => {
     const grant = await seedGrant(app.deps, provider.id, serviceId, 'original');
-    const detail = await (await adminGet(app, admin, `/admin/grants/${grant.id}`)).text();
-    expect(detail).toContain(`/admin/grants/new?duplicate=${grant.id}`);
+    const detail = await (await adminGet(app, admin, `/admin/access/${grant.id}`)).text();
+    expect(detail).toContain(`/admin/access/new?duplicate=${grant.id}`);
     const html = await (
-      await adminGet(app, admin, `/admin/grants/new?duplicate=${grant.id}`)
+      await adminGet(app, admin, `/admin/access/new?duplicate=${grant.id}`)
     ).text();
     expect(html).toContain('value="original (copy)"');
     expect(html).toContain(`repository_id exact ${REPOSITORY_ID}`);
@@ -375,21 +375,17 @@ describe('grants: detail actions', () => {
   it('filters the list by service and caller provider', async () => {
     await seedGrant(app.deps, provider.id, serviceId, 'listed grant');
     const match = await (
-      await adminGet(
-        app,
-        admin,
-        `/admin/grants?service=${serviceId}&caller_provider=${provider.id}`,
-      )
+      await adminGet(app, admin, `/admin/access?token=${serviceId}&consumer=${provider.id}`)
     ).text();
     expect(match).toContain('listed grant');
-    const other = await (await adminGet(app, admin, '/admin/grants?service=svc_other')).text();
+    const other = await (await adminGet(app, admin, '/admin/access?token=svc_other')).text();
     expect(other).not.toContain('listed grant');
     expect(other).toContain('No grants match these filters.');
   });
 
   it('answers 404 for unknown ids', async () => {
-    expect((await adminGet(app, admin, '/admin/grants/grt_missing')).status).toBe(404);
-    expect((await adminGet(app, admin, '/admin/grants/new?duplicate=grt_missing')).status).toBe(
+    expect((await adminGet(app, admin, '/admin/access/grt_missing')).status).toBe(404);
+    expect((await adminGet(app, admin, '/admin/access/new?duplicate=grt_missing')).status).toBe(
       404,
     );
   });
@@ -443,7 +439,7 @@ describe('grants: prefill from a request (I-LOG-2)', () => {
     const res = await adminGet(
       app,
       admin,
-      '/admin/grants/new?from_request=req_01JTESTREQUEST000000000000',
+      '/admin/access/new?from_request=req_01JTESTREQUEST000000000000',
     );
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -467,7 +463,7 @@ describe('grants: prefill from a request (I-LOG-2)', () => {
     ['/repos/acme/app/contents/a%2Fb', 'req_01JTESTENCODEDSLASH0000000'],
   ])('does not prefill a rule for the path %s', async (path, id) => {
     await store(record({ id, path }));
-    const res = await adminGet(app, admin, `/admin/grants/new?from_request=${id}`);
+    const res = await adminGet(app, admin, `/admin/access/new?from_request=${id}`);
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('No rule was prefilled');
@@ -486,7 +482,7 @@ describe('grants: prefill from a request (I-LOG-2)', () => {
       'req_01JTESTTENANT000000000000',
       'req_01JTESTMISSING00000000000',
     ]) {
-      const res = await adminGet(app, admin, `/admin/grants/new?from_request=${id}`);
+      const res = await adminGet(app, admin, `/admin/access/new?from_request=${id}`);
       expect(res.status, id).toBe(400);
       expect(await res.text()).not.toContain('repository_id exact');
     }
@@ -497,11 +493,11 @@ describe('grants: prefill from a request (I-LOG-2)', () => {
 describe('grants: review findings', () => {
   it('deletes only with the confirmation box ticked', async () => {
     const grant = await seedGrant(app.deps, provider.id, serviceId);
-    const detail = await (await adminGet(app, admin, `/admin/grants/${grant.id}`)).text();
-    expect(detail).toContain(`action="/admin/grants/${grant.id}/delete"`);
+    const detail = await (await adminGet(app, admin, `/admin/access/${grant.id}`)).text();
+    expect(detail).toContain(`action="/admin/access/${grant.id}/delete"`);
     expect(detail).toContain('name="confirm"');
 
-    const unconfirmed = await adminPost(app, admin, `/admin/grants/${grant.id}/delete`);
+    const unconfirmed = await adminPost(app, admin, `/admin/access/${grant.id}/delete`);
     expect(unconfirmed.status).toBe(400);
     expect(await unconfirmed.text()).toContain('Tick the confirmation box');
     expect(await getGrant(env.DB, grant.id)).not.toBeNull();
@@ -511,10 +507,10 @@ describe('grants: review findings', () => {
   it('refuses mutations without the CSRF token (I-CSRF-1)', async () => {
     const grant = await seedGrant(app.deps, provider.id, serviceId);
     for (const [path, fields] of [
-      ['/admin/grants', advancedFields()],
-      [`/admin/grants/${grant.id}`, { name: 'x' }],
-      [`/admin/grants/${grant.id}/toggle`, { enabled: '0' }],
-      [`/admin/grants/${grant.id}/delete`, { confirm: '1' }],
+      ['/admin/access', advancedFields()],
+      [`/admin/access/${grant.id}`, { name: 'x' }],
+      [`/admin/access/${grant.id}/toggle`, { enabled: '0' }],
+      [`/admin/access/${grant.id}/delete`, { confirm: '1' }],
     ] as const) {
       const res = await adminPost(app, admin, path, fields, { csrf: null });
       expect(res.status, path).toBe(403);
@@ -526,7 +522,7 @@ describe('grants: review findings', () => {
   it('never echoes an unknown notice key', async () => {
     const grant = await seedGrant(app.deps, provider.id, serviceId);
     const html = await (
-      await adminGet(app, admin, `/admin/grants/${grant.id}?notice=%3Cb%3Eowned%3C%2Fb%3E`)
+      await adminGet(app, admin, `/admin/access/${grant.id}?notice=%3Cb%3Eowned%3C%2Fb%3E`)
     ).text();
     expect(html).not.toContain('owned');
   });
@@ -537,7 +533,7 @@ describe('grants: review findings', () => {
       .bind(provider.id)
       .run();
     await env.DB.prepare('UPDATE grants SET expires_at = 1 WHERE id = ?').bind(grant.id).run();
-    const html = await (await adminGet(app, admin, `/admin/grants/${grant.id}`)).text();
+    const html = await (await adminGet(app, admin, `/admin/access/${grant.id}`)).text();
     expect(html).toContain('This grant has expired.');
     expect(html).toContain('is disabled, so this grant matches nothing');
   });
@@ -584,7 +580,7 @@ describe('grants: review findings', () => {
     const res = await adminGet(
       app,
       admin,
-      '/admin/grants/new?from_request=req_01JTESTXSS000000000000000',
+      '/admin/access/new?from_request=req_01JTESTXSS000000000000000',
     );
     expect(res.status).toBe(200);
     const html = await res.text();

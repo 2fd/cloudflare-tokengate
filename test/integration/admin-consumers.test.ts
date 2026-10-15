@@ -80,24 +80,24 @@ describe('caller providers: viewer', () => {
     const provider = await seedGithubProvider(app.deps);
     const before = await auditActions();
 
-    const list = await adminGet(app, viewer, '/admin/caller-providers');
+    const list = await adminGet(app, viewer, '/admin/consumers');
     expect(list.status).toBe(200);
     const listHtml = await list.text();
     expect(listHtml).toContain(provider.name);
     expect(listHtml).not.toContain('Add a caller provider');
 
-    const detail = await adminGet(app, viewer, `/admin/caller-providers/${provider.id}`);
+    const detail = await adminGet(app, viewer, `/admin/consumers/${provider.id}`);
     expect(detail.status).toBe(200);
     const detailHtml = await detail.text();
     expect(detailHtml).toContain(provider.audience);
     expect(detailHtml).not.toContain('Save changes');
 
-    expect((await adminGet(app, viewer, '/admin/caller-providers/new')).status).toBe(403);
+    expect((await adminGet(app, viewer, '/admin/consumers/new')).status).toBe(403);
     for (const path of [
-      '/admin/caller-providers',
-      `/admin/caller-providers/${provider.id}`,
-      `/admin/caller-providers/${provider.id}/toggle`,
-      `/admin/caller-providers/${provider.id}/delete`,
+      '/admin/consumers',
+      `/admin/consumers/${provider.id}`,
+      `/admin/consumers/${provider.id}/toggle`,
+      `/admin/consumers/${provider.id}/delete`,
     ]) {
       const res = await adminPost(app, viewer, path, { ...githubFields(), enabled: '0' });
       expect(res.status, path).toBe(403);
@@ -109,12 +109,12 @@ describe('caller providers: viewer', () => {
 
 describe('caller providers: create', () => {
   it('offers a profile choice, then a form with profile defaults and a random audience', async () => {
-    const chooser = await (await adminGet(app, admin, '/admin/caller-providers/new')).text();
-    expect(chooser).toContain('/admin/caller-providers/new?profile=github-actions');
-    expect(chooser).toContain('/admin/caller-providers/new?profile=gitlab-ci');
-    expect(chooser).toContain('/admin/caller-providers/new?profile=generic');
+    const chooser = await (await adminGet(app, admin, '/admin/consumers/new')).text();
+    expect(chooser).toContain('/admin/consumers/new?type=github-actions');
+    expect(chooser).toContain('/admin/consumers/new?type=gitlab-ci');
+    expect(chooser).toContain('/admin/consumers/new?type=generic');
 
-    const res = await adminGet(app, admin, '/admin/caller-providers/new?profile=github-actions');
+    const res = await adminGet(app, admin, '/admin/consumers/new?type=github-actions');
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain(`value="${GITHUB_ISSUER}"`);
@@ -124,10 +124,10 @@ describe('caller providers: create', () => {
   });
 
   it('creates a GitHub caller provider, writes one audit row and shows the workflow snippet', async () => {
-    const res = await adminPost(app, admin, '/admin/caller-providers', githubFields());
+    const res = await adminPost(app, admin, '/admin/consumers', githubFields());
     expect(res.status).toBe(303);
     const location = res.headers.get('location') ?? '';
-    expect(location).toMatch(/^\/admin\/caller-providers\/cpr_[0-9A-Z]{26}\?notice=created$/);
+    expect(location).toMatch(/^\/admin\/consumers\/cpr_[0-9A-Z]{26}\?notice=created$/);
     expect(await auditActions()).toEqual(['caller_provider.create']);
 
     const id = location.split('/')[3]?.split('?')[0] ?? '';
@@ -150,7 +150,7 @@ describe('caller providers: create', () => {
     const res = await adminPost(
       app,
       admin,
-      '/admin/caller-providers',
+      '/admin/consumers',
       githubFields({ owner_ids: '', name: 'Kept name' }),
     );
     expect(res.status).toBe(422);
@@ -161,7 +161,7 @@ describe('caller providers: create', () => {
   });
 
   it('creates a generic caller provider from pin lines, anchor claims and an explicit JWKS URI', async () => {
-    const res = await adminPost(app, admin, '/admin/caller-providers', {
+    const res = await adminPost(app, admin, '/admin/consumers', {
       profile: 'generic',
       name: 'Acme IdP',
       issuer: ACME_ISSUER,
@@ -186,7 +186,7 @@ describe('caller providers: create', () => {
   });
 
   it('reports unparseable pin lines without calling the op', async () => {
-    const res = await adminPost(app, admin, '/admin/caller-providers', {
+    const res = await adminPost(app, admin, '/admin/consumers', {
       profile: 'generic',
       name: 'Acme IdP',
       issuer: ACME_ISSUER,
@@ -205,11 +205,11 @@ describe('caller providers: create', () => {
     const res = await adminPost(
       app,
       admin,
-      '/admin/caller-providers',
+      '/admin/consumers',
       githubFields({ name: '<script>alert(1)</script>' }),
     );
     expect(res.status).toBe(303);
-    for (const path of ['/admin/caller-providers', res.headers.get('location') ?? '']) {
+    for (const path of ['/admin/consumers', res.headers.get('location') ?? '']) {
       const html = await (await adminGet(app, admin, path)).text();
       expect(html).not.toContain('<script>alert(1)</script>');
       expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
@@ -229,14 +229,14 @@ describe('caller providers: edit, toggle, delete', () => {
       audience: provider.audience,
       issuer: ENTERPRISE_ISSUER,
     });
-    const first = await adminPost(app, admin, `/admin/caller-providers/${provider.id}`, fields);
+    const first = await adminPost(app, admin, `/admin/consumers/${provider.id}`, fields);
     expect(first.status).toBe(422);
     const html = await first.text();
     expect(html).toContain('name="confirm_trust_change"');
     expect(html).toContain('deploy &lt;b&gt;grant&lt;/b&gt;');
     expect(await auditActions()).toEqual(before);
 
-    const second = await adminPost(app, admin, `/admin/caller-providers/${provider.id}`, {
+    const second = await adminPost(app, admin, `/admin/consumers/${provider.id}`, {
       ...fields,
       confirm_trust_change: '1',
     });
@@ -256,7 +256,7 @@ describe('caller providers: edit, toggle, delete', () => {
     });
     if (!created.ok) throw new Error(created.errors.join('; '));
     const html = await (
-      await adminGet(app, admin, `/admin/caller-providers/${created.callerProvider.id}`)
+      await adminGet(app, admin, `/admin/consumers/${created.callerProvider.id}`)
     ).text();
     expect(html).toContain('name="tenant_pin_text"');
     expect(html).not.toContain('name="owner_ids"');
@@ -264,16 +264,14 @@ describe('caller providers: edit, toggle, delete', () => {
 
   it('disables and re-enables through the toggle route', async () => {
     const provider = await seedGithubProvider(app.deps);
-    const off = await adminPost(app, admin, `/admin/caller-providers/${provider.id}/toggle`, {
+    const off = await adminPost(app, admin, `/admin/consumers/${provider.id}/toggle`, {
       enabled: '0',
     });
     expect(off.status).toBe(303);
-    expect(off.headers.get('location')).toBe(
-      `/admin/caller-providers/${provider.id}?notice=disabled`,
-    );
+    expect(off.headers.get('location')).toBe(`/admin/consumers/${provider.id}?notice=disabled`);
     expect((await getCallerProvider(env.DB, provider.id))?.enabled).toBe(false);
 
-    const on = await adminPost(app, admin, `/admin/caller-providers/${provider.id}/toggle`, {
+    const on = await adminPost(app, admin, `/admin/consumers/${provider.id}/toggle`, {
       enabled: '1',
     });
     expect(on.status).toBe(303);
@@ -289,48 +287,42 @@ describe('caller providers: edit, toggle, delete', () => {
     const serviceId = await seedService(app.deps);
     const grant = await seedGrant(app.deps, provider.id, serviceId);
 
-    const blocked = await adminPost(app, admin, `/admin/caller-providers/${provider.id}/delete`, {
+    const blocked = await adminPost(app, admin, `/admin/consumers/${provider.id}/delete`, {
       confirm: '1',
     });
     expect(blocked.status).toBe(409);
     expect(await blocked.text()).toContain('delete them first');
 
     await env.DB.prepare('DELETE FROM grants WHERE id = ?').bind(grant.id).run();
-    const deleted = await adminPost(app, admin, `/admin/caller-providers/${provider.id}/delete`, {
+    const deleted = await adminPost(app, admin, `/admin/consumers/${provider.id}/delete`, {
       confirm: '1',
     });
     expect(deleted.status).toBe(303);
-    expect(deleted.headers.get('location')).toBe('/admin/caller-providers?notice=deleted');
+    expect(deleted.headers.get('location')).toBe('/admin/consumers?notice=deleted');
     expect(await getCallerProvider(env.DB, provider.id)).toBeNull();
     expect((await auditActions()).at(-1)).toBe('caller_provider.delete');
   });
 
   it('answers 404 for unknown ids', async () => {
-    expect((await adminGet(app, admin, '/admin/caller-providers/cpr_missing')).status).toBe(404);
-    const res = await adminPost(app, admin, '/admin/caller-providers/cpr_missing', githubFields());
+    expect((await adminGet(app, admin, '/admin/consumers/cpr_missing')).status).toBe(404);
+    const res = await adminPost(app, admin, '/admin/consumers/cpr_missing', githubFields());
     expect(res.status).toBe(404);
   });
 
   it('shows an empty state with next steps', async () => {
-    const html = await (await adminGet(app, admin, '/admin/caller-providers')).text();
+    const html = await (await adminGet(app, admin, '/admin/consumers')).text();
     expect(html).toContain('No caller providers yet.');
-    expect(html).toContain('/admin/caller-providers/new?profile=github-actions');
+    expect(html).toContain('/admin/consumers/new?type=github-actions');
   });
 });
 
 describe('caller providers: review findings', () => {
   it('deletes only with the confirmation box ticked', async () => {
     const provider = await seedGithubProvider(app.deps);
-    const detail = await (
-      await adminGet(app, admin, `/admin/caller-providers/${provider.id}`)
-    ).text();
-    expect(detail).toContain(`action="/admin/caller-providers/${provider.id}/delete"`);
+    const detail = await (await adminGet(app, admin, `/admin/consumers/${provider.id}`)).text();
+    expect(detail).toContain(`action="/admin/consumers/${provider.id}/delete"`);
 
-    const unconfirmed = await adminPost(
-      app,
-      admin,
-      `/admin/caller-providers/${provider.id}/delete`,
-    );
+    const unconfirmed = await adminPost(app, admin, `/admin/consumers/${provider.id}/delete`);
     expect(unconfirmed.status).toBe(400);
     expect(await unconfirmed.text()).toContain('Tick the confirmation box');
     expect(await getCallerProvider(env.DB, provider.id)).not.toBeNull();
@@ -341,10 +333,8 @@ describe('caller providers: review findings', () => {
     const provider = await seedGithubProvider(app.deps);
     const serviceId = await seedService(app.deps);
     await seedGrant(app.deps, provider.id, serviceId);
-    const html = await (
-      await adminGet(app, admin, `/admin/caller-providers/${provider.id}`)
-    ).text();
-    expect(html).not.toContain(`action="/admin/caller-providers/${provider.id}/delete"`);
+    const html = await (await adminGet(app, admin, `/admin/consumers/${provider.id}`)).text();
+    expect(html).not.toContain(`action="/admin/consumers/${provider.id}/delete"`);
     expect(html).toContain('Delete those grants first');
   });
 
@@ -357,7 +347,7 @@ describe('caller providers: review findings', () => {
     });
     if (!created.ok) throw new Error(created.errors.join('; '));
     const html = await (
-      await adminGet(app, admin, `/admin/caller-providers/${created.callerProvider.id}`)
+      await adminGet(app, admin, `/admin/consumers/${created.callerProvider.id}`)
     ).text();
     expect(html).toContain(
       'with: { audience: &quot;tokengate,odd}#audience&quot;, url: https://gw.test }',
@@ -367,10 +357,10 @@ describe('caller providers: review findings', () => {
   it('refuses mutations without the CSRF token (I-CSRF-1)', async () => {
     const provider = await seedGithubProvider(app.deps);
     for (const path of [
-      '/admin/caller-providers',
-      `/admin/caller-providers/${provider.id}`,
-      `/admin/caller-providers/${provider.id}/toggle`,
-      `/admin/caller-providers/${provider.id}/delete`,
+      '/admin/consumers',
+      `/admin/consumers/${provider.id}`,
+      `/admin/consumers/${provider.id}/toggle`,
+      `/admin/consumers/${provider.id}/delete`,
     ]) {
       const res = await adminPost(
         app,

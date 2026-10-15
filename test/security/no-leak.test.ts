@@ -494,9 +494,9 @@ async function driveAdmin(): Promise<void> {
   };
   // Rejected create: the form is re-rendered, the credential is not.
   expect(
-    (await adminForm('create invalid', '/admin/services', { ...serviceForm, slug: '-' })).status,
+    (await adminForm('create invalid', '/admin/tokens', { ...serviceForm, slug: '-' })).status,
   ).toBe(400);
-  const createdRes = await adminForm('create', '/admin/services', serviceForm);
+  const createdRes = await adminForm('create', '/admin/tokens', serviceForm);
   expect(createdRes.status).toBe(303);
   const formServiceId = /svc_[0-9A-Z]{26}/.exec(createdRes.headers.get('location') ?? '')?.[0];
   expect(formServiceId).toBeDefined();
@@ -507,7 +507,7 @@ async function driveAdmin(): Promise<void> {
     injection_kind: 'bearer',
     credential: rotated,
   };
-  const path = `/admin/services/${formServiceId}`;
+  const path = `/admin/tokens/${formServiceId}`;
   expect(
     (await adminForm('credential verify fails', `${path}/credential`, credentialForm)).status,
   ).toBe(422);
@@ -527,14 +527,14 @@ async function driveAdmin(): Promise<void> {
     .bind(JSON.stringify({ method: 'GET', path: '/verify', expect_status: 200 }), bearerId)
     .run();
   expect(
-    (await adminForm('test (passes, echoes)', `/admin/services/${bearerId}/test`, {})).status,
+    (await adminForm('test (passes, echoes)', `/admin/tokens/${bearerId}/test`, {})).status,
   ).toBe(200);
   // An expiring credential produces a cron audit event that names the service.
   await env.DB.prepare('UPDATE services SET credential_expires_at = ? WHERE id = ?')
     .bind(fx.clock.now() + 2 * 86_400_000, bearerId)
     .run();
   await runCron(fx.app.deps);
-  expect((await adminForm('rewrap', '/admin/settings/rewrap', {})).status).toBe(303);
+  expect((await adminForm('rewrap', '/admin/tokens/keys/rewrap', {})).status).toBe(303);
 
   // Every read page of the RBAC table, with every seeded id, plus query variants.
   const { results: requestRows } = await env.TELEMETRY_DB.prepare(
@@ -544,14 +544,18 @@ async function driveAdmin(): Promise<void> {
   const { results: grantRows } = await env.DB.prepare('SELECT id FROM grants').all<{
     id: string;
   }>();
+  // Seeded ids (or full URLs) per `:id` route, one block per admin section.
   const ids: Record<string, string[]> = {
-    '/admin/services/:id': [...serviceIds.values()],
-    '/admin/caller-providers/:id': [fx.providerId],
-    '/admin/grants/:id': grantRows.map((row) => row.id),
+    // == monitoring ==
     '/admin/requests/:id': requestRows.flatMap((row) => [
       `/admin/requests/${row.id}`,
       `/admin/requests/${row.id}?reevaluate=1`,
     ]),
+    // == tokens ==
+    '/admin/tokens/:id': [...serviceIds.values()],
+    // == consumers ==
+    '/admin/consumers/:id': [fx.providerId],
+    '/admin/access/:id': grantRows.map((row) => row.id),
   };
   for (const key of Object.keys(ROUTE_PERMISSIONS)) {
     if (!key.startsWith('GET ')) continue;
@@ -567,12 +571,20 @@ async function driveAdmin(): Promise<void> {
       expect((await admin(pattern, url)).status, url).toBe(200);
     }
   }
-  for (const url of [
+  // Query variants of the read pages, one array per admin section (append to your own only).
+  const monitoringVariants = [
     '/admin/requests?outcome=denied',
     '/admin/requests?outcome=error',
     '/admin/audit?target_type=service',
-    `/admin/services/new?template=github`,
-    ...requestRows.map((row) => `/admin/grants/new?from_request=${row.id}`),
+  ];
+  const usersVariants: string[] = [];
+  const tokensVariants = ['/admin/tokens/new?template=github'];
+  const consumersVariants = requestRows.map((row) => `/admin/access/new?from_request=${row.id}`);
+  for (const url of [
+    ...monitoringVariants,
+    ...usersVariants,
+    ...tokensVariants,
+    ...consumersVariants,
   ]) {
     expect((await admin(url, url)).status, url).toBeLessThan(500);
   }

@@ -9,6 +9,7 @@ import type { Role } from '../../src/db/types';
 import {
   type AdminWorld,
   createAdminWorldApp,
+  expectedActions,
   MUTATION_FIXTURES,
   readPath,
   resetAdminWorld,
@@ -117,7 +118,8 @@ describe('I-RBAC-1: route × role matrix on the real app', () => {
       expect(res.status, body.slice(0, 500)).toBe(200);
     } else {
       expect(mutation?.successStatus ?? [303], body.slice(0, 500)).toContain(res.status);
-      expect(await auditCount()).toBe(auditBefore + 1);
+      const actions = mutation ? expectedActions(mutation).length : 1;
+      expect(await auditCount()).toBe(auditBefore + actions);
     }
 
     if (!allowed) {
@@ -128,32 +130,59 @@ describe('I-RBAC-1: route × role matrix on the real app', () => {
 });
 
 describe('I-RBAC-1: routes outside the table are denied (fail closed)', () => {
-  it.each([
-    ['GET', '/admin/not-a-page'],
-    ['GET', '/admin/services/svc_x/credential'],
-    ['POST', '/admin/requests'],
-    ['POST', '/admin/audit'],
-    ['PUT', '/admin/services'],
-    ['DELETE', '/admin/users/usr_x'],
-    ['PATCH', '/admin/settings'],
-  ])('%s %s is 403 for an owner', async (method, path) => {
+  function ownerRequest(method: string, path: string) {
     const owner = sessions.owner;
-    const res = await world.app.request(path, {
+    return world.app.request(path, {
       method,
       headers: {
         ...owner.headers,
         'sec-fetch-site': 'same-origin',
         'content-type': 'application/x-www-form-urlencoded',
       },
-      ...(method === 'GET' ? {} : { body: new URLSearchParams({ _csrf: owner.csrfToken }) }),
+      ...(method === 'GET' || method === 'HEAD'
+        ? {}
+        : { body: new URLSearchParams({ _csrf: owner.csrfToken }) }),
       redirect: 'manual',
     });
+  }
+
+  it.each([
+    ['GET', '/admin/not-a-page'],
+    ['GET', '/admin/tokens/svc_x/credential'],
+    ['HEAD', '/admin/not-a-page'],
+    // Old URLs (ADR 0019): no redirects.
+    ['GET', '/admin/services'],
+    ['GET', '/admin/services/new'],
+    ['GET', '/admin/caller-providers'],
+    ['GET', '/admin/grants'],
+    ['GET', '/admin/settings'],
+  ])('%s %s is a 404 page for an owner, with no side effect', async (method, path) => {
+    const before = await controlPlaneDump();
+    const res = await ownerRequest(method, path);
+    expect(res.status).toBe(404);
+    if (method === 'GET') expect(await res.text()).toContain('Page not found');
+    expect(await controlPlaneDump()).toBe(before);
+  });
+
+  it.each([
+    ['POST', '/admin/requests'],
+    ['POST', '/admin/audit'],
+    ['POST', '/admin/services'],
+    ['POST', '/admin/settings'],
+    ['PUT', '/admin/tokens'],
+    ['DELETE', '/admin/users/usr_x'],
+    ['PATCH', '/admin/retention'],
+  ])('%s %s is 403 for an owner, with no side effect', async (method, path) => {
+    const before = await controlPlaneDump();
+    const res = await ownerRequest(method, path);
     expect(res.status).toBe(403);
+    expect(await res.text()).toContain('This page does not exist or is not available.');
+    expect(await controlPlaneDump()).toBe(before);
   });
 
   it('HEAD resolves to the GET rule (admin-only pages stay admin-only)', async () => {
     const head = (actor: Role) =>
-      world.app.request('/admin/services/new', {
+      world.app.request('/admin/tokens/new', {
         method: 'HEAD',
         headers: { ...sessions[actor].headers },
         redirect: 'manual',
@@ -164,7 +193,7 @@ describe('I-RBAC-1: routes outside the table are denied (fail closed)', () => {
     expect((await head('admin')).status).toBe(200);
   });
 
-  it('HEAD or GET on the POST-only export is refused and writes no audit row', async () => {
+  it('HEAD or GET on the POST-only export is a 404 and writes no audit row', async () => {
     const before = await auditCount();
     for (const method of ['GET', 'HEAD']) {
       const res = await world.app.request('/admin/export', {
@@ -172,7 +201,7 @@ describe('I-RBAC-1: routes outside the table are denied (fail closed)', () => {
         headers: { ...sessions.owner.headers },
         redirect: 'manual',
       });
-      expect(res.status, method).toBe(403);
+      expect(res.status, method).toBe(404);
     }
     expect(await auditCount()).toBe(before);
   });

@@ -2,12 +2,17 @@
 // `default-src 'none'` with no script-src (src/http/security.ts).
 import type { Child } from 'hono/jsx';
 import type { Role } from '../../db/types';
+import { CSRF_FIELD } from '../auth/csrf';
+import { can } from '../auth/rbac';
+import { paths } from '../paths';
 
 export interface Viewer {
   email: string;
   role: Role;
   /** Sign-out link; null when the login has none (local dev login). */
   signOutUrl: string | null;
+  /** CSRF token for the forms the shell itself renders (the export in the footer). */
+  csrfToken?: string;
 }
 
 export interface Banner {
@@ -15,15 +20,19 @@ export interface Banner {
   text: string;
 }
 
+// Interim navigation until the section shell lands: every page that exists, under its URL.
 const NAV: Array<{ href: string; label: string }> = [
-  { href: '/admin', label: 'Dashboard' },
-  { href: '/admin/services', label: 'Services' },
-  { href: '/admin/caller-providers', label: 'Caller providers' },
-  { href: '/admin/grants', label: 'Grants' },
-  { href: '/admin/requests', label: 'Requests' },
-  { href: '/admin/audit', label: 'Audit log' },
-  { href: '/admin/users', label: 'Users' },
-  { href: '/admin/settings', label: 'Settings' },
+  { href: paths.overview(), label: 'Dashboard' },
+  { href: paths.tokens(), label: 'Services' },
+  { href: paths.consumers(), label: 'Caller providers' },
+  { href: paths.access(), label: 'Grants' },
+  { href: paths.requests(), label: 'Requests' },
+  { href: paths.audit(), label: 'Audit log' },
+  { href: paths.users(), label: 'Users' },
+  { href: paths.signIn(), label: 'Sign-in' },
+  { href: paths.tokenHosts(), label: 'Allowed hosts' },
+  { href: paths.tokenKeys(), label: 'Encryption keys' },
+  { href: paths.retention(), label: 'Data retention' },
 ];
 
 export function Layout(props: {
@@ -35,6 +44,7 @@ export function Layout(props: {
   notice?: string | null;
   children?: Child;
 }) {
+  const viewer = props.viewer;
   return (
     <html lang="en">
       <head>
@@ -46,10 +56,10 @@ export function Layout(props: {
       </head>
       <body>
         <header class="topbar">
-          <a class="brand" href="/admin">
+          <a class="brand" href={paths.overview()}>
             tokengate
           </a>
-          {props.viewer ? (
+          {viewer ? (
             <nav>
               {NAV.map((item) => (
                 <a href={item.href} aria-current={props.section === item.href ? 'page' : undefined}>
@@ -58,12 +68,12 @@ export function Layout(props: {
               ))}
             </nav>
           ) : null}
-          {props.viewer ? (
+          {viewer ? (
             <div class="whoami">
               <span>
-                {props.viewer.email} <span class="badge">{props.viewer.role}</span>
+                {viewer.email} <span class="badge">{viewer.role}</span>
               </span>
-              {props.viewer.signOutUrl ? <a href={props.viewer.signOutUrl}>Sign out</a> : null}
+              {viewer.signOutUrl ? <a href={viewer.signOutUrl}>Sign out</a> : null}
             </div>
           ) : null}
         </header>
@@ -84,6 +94,17 @@ export function Layout(props: {
           <h1>{props.title}</h1>
           {props.children}
         </main>
+        {viewer?.csrfToken && can(viewer.role, 'config:export') ? (
+          <footer class="footer">
+            <form method="post" action="/admin/export" class="inline">
+              <input type="hidden" name={CSRF_FIELD} value={viewer.csrfToken} />
+              <button type="submit" class="secondary">
+                Download configuration export
+              </button>{' '}
+              <small class="muted">No secrets. Includes every user's email.</small>
+            </form>
+          </footer>
+        ) : null}
       </body>
     </html>
   );

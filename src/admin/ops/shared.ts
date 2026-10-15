@@ -348,3 +348,16 @@ export function allOf(...guards: SqlGuard[]): SqlGuard {
     binds: guards.flatMap((guard) => guard.binds),
   };
 }
+
+/** Host list input: entries separated by commas, spaces or new lines, lowercased and deduplicated. */
+export function hostListEntries(raw: unknown): string[] {
+  if (typeof raw !== 'string') return [];
+  return [
+    ...new Set(
+      raw
+        .split(/[\s,]+/)
+        .map((entry) => entry.trim().toLowerCase())
+        .filter((entry) => entry !== ''),
+    ),
+  ];
+}

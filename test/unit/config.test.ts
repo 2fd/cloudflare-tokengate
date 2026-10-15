@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { parseAdminHostInput, parseUpstreamHostInput } from '../../src/admin/ops/settings';
+import { parseAdminHostInput } from '../../src/admin/ops/admin-hosts';
+import { parseUpstreamHostInput } from '../../src/admin/ops/upstream-hosts';
 import {
   adminHostAllowed,
   type Config,

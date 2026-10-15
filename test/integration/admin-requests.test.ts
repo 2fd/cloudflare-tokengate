@@ -123,7 +123,7 @@ describe('request log with records from the proxy', () => {
     expect(await get('outcome=denied')).toEqual([noToken.id, noGrant.id]);
     expect(await get('outcome=allowed')).toEqual([allowed.id]);
     expect(await get('repo=acme%2Fapp')).toEqual([noGrant.id, allowed.id]);
-    expect(await get(`service=${fixture.serviceId}`)).toEqual([noGrant.id, allowed.id]);
+    expect(await get(`token=${fixture.serviceId}`)).toEqual([noGrant.id, allowed.id]);
     expect(await get('slug=echo')).toEqual([noToken.id, noGrant.id, allowed.id]);
     expect(await get('slug=other')).toEqual([]);
   });
@@ -132,14 +132,14 @@ describe('request log with records from the proxy', () => {
     const res = await adminGet(fixture.app, ownerSession, `/admin/requests/${noGrant.id}`);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain(`href="/admin/grants/new?from_request=${noGrant.id}"`);
+    expect(html).toContain(`href="/admin/access/new?from_request=${noGrant.id}"`);
     expect(html).toContain('Create grant from this request');
     // Allowlisted claims are shown; the token itself never was stored.
     expect(html).toContain('repository_id');
     expect(html).toContain('987654321');
     expect(html).not.toContain('repository_visibility');
     expect(html).toContain('Policy evaluation at request time');
-    expect(html).toContain(`/admin/grants/${fixture.grantId}`);
+    expect(html).toContain(`/admin/access/${fixture.grantId}`);
     expect(html).toContain('no rule allows this method and path');
   });
 
@@ -182,7 +182,7 @@ describe('request log with records from the proxy', () => {
       await adminGet(fixture.app, viewerSession, `/admin/requests/${noGrant.id}?reevaluate=1`)
     ).text();
     expect(allowedNow).toContain('<b>allowed</b>');
-    expect(allowedNow).toContain(`/admin/grants/${grantId}`);
+    expect(allowedNow).toContain(`/admin/access/${grantId}`);
     const auditAfter = await env.DB.prepare('SELECT COUNT(*) AS n FROM audit_log').first<{
       n: number;
     }>();
@@ -230,7 +230,7 @@ describe('request log with records from the proxy', () => {
     expect(html).toContain(
       'An access manager, admin or owner can create a grant from this request.',
     );
-    expect(html).not.toContain('/admin/grants/new');
+    expect(html).not.toContain('/admin/access/new');
   });
 
   it('rejects mutations from a viewer (no POST routes)', async () => {
@@ -276,7 +276,7 @@ describe('request log pages without proxy traffic', () => {
     await insertRecords([requestRecord(TEST_EPOCH_MS)]);
     const a = app();
     const session = await loginAs(a, viewer);
-    for (const query of ['outcome=bogus', 'before=req_1', 'service=svc_%3Cscript%3E']) {
+    for (const query of ['outcome=bogus', 'before=req_1', 'token=svc_%3Cscript%3E']) {
       const res = await adminGet(a, session, `/admin/requests?${query}`);
       expect(res.status).toBe(400);
       const html = await res.text();
@@ -290,7 +290,7 @@ describe('request log pages without proxy traffic', () => {
     const a = app();
     const session = await loginAs(a, viewer);
     const spoof = 'Your session expired, sign in at evil.example';
-    const res = await adminGet(a, session, `/admin/requests?service=${encodeURIComponent(spoof)}`);
+    const res = await adminGet(a, session, `/admin/requests?token=${encodeURIComponent(spoof)}`);
     expect(res.status).toBe(400);
     const html = await res.text();
     expect(html).not.toContain(`Deleted service ${spoof}`);
@@ -298,7 +298,7 @@ describe('request log pages without proxy traffic', () => {
 
     // A well-formed id of a service that no longer exists keeps its own option.
     const gone = newId('svc', TEST_EPOCH_MS, random);
-    const ok = await adminGet(a, session, `/admin/requests?service=${gone}`);
+    const ok = await adminGet(a, session, `/admin/requests?token=${gone}`);
     expect(ok.status).toBe(200);
     expect(await ok.text()).toContain(`Deleted service ${gone}`);
   });

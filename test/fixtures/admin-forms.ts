@@ -5,7 +5,7 @@
 //
 //   await resetAdminWorld();
 //   const world = await seedAdminWorld(createAdminWorldApp());
-//   const request = await MUTATION_FIXTURES['POST /admin/grants']?.(world);
+//   const request = await MUTATION_FIXTURES['POST /admin/access']?.(world);
 //   await adminPost(world.app, ownerSession, request.path, request.fields);
 import { env } from 'cloudflare:workers';
 import { createCallerProvider } from '../../src/admin/ops/caller-providers';
@@ -42,8 +42,11 @@ export interface AdminWorld {
 export interface MutationRequest {
   path: string;
   fields: Record<string, string | string[]>;
-  /** The audit action the mutation must write. */
-  action: string;
+  /**
+   * The audit action the mutation must write, or the ordered actions when one submit makes several
+   * mutations (each its own batch with its own row).
+   */
+  action: string | readonly string[];
   /** Statuses that mean "succeeded" (default: a 303 POST-redirect-GET). */
   successStatus?: number[];
   /** App serving the request when the mutation needs another environment (same databases). */
@@ -51,6 +54,11 @@ export interface MutationRequest {
 }
 
 export type MutationFixture = (world: AdminWorld) => Promise<MutationRequest>;
+
+/** The audit actions a mutation request must write, in order. */
+export function expectedActions(request: MutationRequest): readonly string[] {
+  return typeof request.action === 'string' ? [request.action] : request.action;
+}
 
 /** Empties both databases' admin-visible tables. */
 export async function resetAdminWorld(): Promise<void> {
@@ -135,153 +143,19 @@ const unique = (prefix: string) => `${prefix}-${++sequence}-${crypto.randomUUID(
  * Fixtures assume an owner session (owners hold every permission).
  */
 export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
-  'POST /admin/services': async () => ({
-    path: '/admin/services',
-    action: 'service.create',
-    fields: {
-      slug: unique('svc'),
-      name: 'Fixture service',
-      description: '',
-      base_url: 'https://api.openai.com/v1',
-      injection_kind: 'bearer',
-      forward_headers: '',
-      timeout_ms: '60000',
-      verify_method: '',
-      credential: 'sk-fixture-create-0123456789abcdef',
-    },
-  }),
-  'POST /admin/services/:id': async (w) => ({
-    path: `/admin/services/${w.serviceId}`,
-    action: 'service.update',
-    fields: {
-      name: 'Renamed service',
-      description: 'changed',
-      forward_headers: 'x-github-api-version',
-      timeout_ms: '60000',
-      verify_method: WORLD_VERIFY.method,
-      verify_path: WORLD_VERIFY.path,
-      verify_expect_status: String(WORLD_VERIFY.expect_status),
-    },
-  }),
-  'POST /admin/services/:id/credential': async (w) => ({
-    path: `/admin/services/${w.serviceId}/credential`,
-    action: 'service.credential.set',
-    fields: {
-      base_url: 'https://api.github.com',
-      injection_kind: 'bearer',
-      credential: 'ghp_fixtureRotated0123456789abcdef',
-    },
-  }),
-  'POST /admin/services/:id/test': async (w) => ({
-    path: `/admin/services/${w.serviceId}/test`,
-    action: 'service.credential.test',
-    fields: {},
-    // The result is rendered once, not redirected to.
-    successStatus: [200],
-  }),
-  'POST /admin/services/:id/toggle': async (w) => ({
-    path: `/admin/services/${w.serviceId}/toggle`,
-    action: 'service.disable',
-    fields: { enabled: '0' },
-  }),
-  'POST /admin/services/:id/delete': async (w) => {
-    const id = await seedService(w.app.deps, { slug: unique('doomed') });
-    return {
-      path: `/admin/services/${id}/delete`,
-      action: 'service.delete',
-      fields: { confirm: '1' },
-    };
-  },
-
-  'POST /admin/caller-providers': async () => ({
-    path: '/admin/caller-providers',
-    action: 'caller_provider.create',
-    fields: {
-      profile: 'generic',
-      name: unique('Acme IdP'),
-      issuer: `https://${unique('idp')}.acme.example`,
-      jwks_uri: 'https://idp.acme.example/keys',
-      audience: 'tokengate:abcdefghijklmnopqrstuvwxyz',
-      allowed_algs: 'RS256',
-      max_token_age_seconds: '300',
-      pin_mode: 'text',
-      tenant_pin_text: 'org_id exact 77',
-      anchor_claims: 'sub',
-    },
-  }),
-  'POST /admin/caller-providers/:id': async (w) => ({
-    path: `/admin/caller-providers/${w.provider.id}`,
-    action: 'caller_provider.update',
-    fields: {
-      profile: w.provider.profile,
-      name: 'GitHub Actions (renamed)',
-      issuer: w.provider.issuer,
-      audience: w.provider.audience,
-      allowed_algs: w.provider.allowed_algs,
-      max_token_age_seconds: '300',
-      pin_mode: 'fields',
-      owner_ids: OWNER_ID,
-      enterprise_id: '',
-    },
-  }),
-  'POST /admin/caller-providers/:id/toggle': async (w) => ({
-    path: `/admin/caller-providers/${w.provider.id}/toggle`,
-    action: 'caller_provider.disable',
-    fields: { enabled: '0' },
-  }),
-  'POST /admin/caller-providers/:id/delete': async (w) => {
-    const created = await createCallerProvider(w.app.deps, ACTOR, {
-      name: unique('doomed'),
-      profile: 'generic',
-      issuer: `https://${unique('doomed')}.example.org`,
-      jwks_uri: 'https://doomed.example.org/jwks',
-      anchor_claims: ['sub'],
-    });
-    if (!created.ok) throw new Error(`fixture: ${created.errors.join('; ')}`);
-    return {
-      path: `/admin/caller-providers/${created.callerProvider.id}/delete`,
-      action: 'caller_provider.delete',
-      fields: { confirm: '1' },
-    };
-  },
-
-  'POST /admin/grants': async (w) => ({
-    path: '/admin/grants',
-    action: 'grant.create',
-    fields: {
-      caller_provider_id: w.provider.id,
-      service_id: w.serviceId,
-      mode: 'preset',
-      name: unique('main deploys'),
-      owner_id: OWNER_ID,
-      repository_ids: REPOSITORY_ID,
-      context: 'branch',
-      pattern: 'main',
-      require_protected_ref: '1',
-      rules_text: 'GET /repos/**',
-      enabled: '1',
-    },
-  }),
-  'POST /admin/grants/:id': async (w) => ({
-    path: `/admin/grants/${w.grantId}`,
-    action: 'grant.update',
-    fields: {
-      name: 'renamed grant',
-      conditions_text: `repository_owner_id exact ${OWNER_ID}\nrepository_id exact ${REPOSITORY_ID}`,
-      rules_text: 'GET,HEAD /repos/acme/**',
-    },
-  }),
-  'POST /admin/grants/:id/toggle': async (w) => ({
-    path: `/admin/grants/${w.grantId}/toggle`,
-    action: 'grant.disable',
-    fields: { enabled: '0' },
-  }),
-  'POST /admin/grants/:id/delete': async (w) => ({
-    path: `/admin/grants/${w.grantId}/delete`,
-    action: 'grant.delete',
-    fields: { confirm: '1' },
+  // == monitoring ==
+  'POST /admin/retention': async () => ({
+    path: '/admin/retention',
+    action: 'settings.update',
+    fields: { request_log_retention_days: '30' },
   }),
 
+  // == users ==
+  'POST /admin/users/sign-in/hosts': async () => ({
+    path: '/admin/users/sign-in/hosts',
+    action: 'settings.admin_hosts',
+    fields: { add: `${unique('host')}.example.com` },
+  }),
   'POST /admin/users': async () => ({
     path: '/admin/users',
     action: 'user.invite',
@@ -339,34 +213,16 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
     };
   },
 
-  'POST /admin/settings/upstream-hosts': async () => ({
-    path: '/admin/settings/upstream-hosts',
+  // == tokens ==
+  'POST /admin/tokens/hosts': async () => ({
+    path: '/admin/tokens/hosts',
     action: 'settings.upstream_hosts',
     fields: { allowed_upstream_hosts: `${unique('host')}.example.com` },
   }),
-
-  'POST /admin/settings/admin-hosts': async () => ({
-    path: '/admin/settings/admin-hosts',
-    action: 'settings.admin_hosts',
-    fields: { admin_hosts: `gw.test\n${unique('host')}.example.com` },
-  }),
-
-  'POST /admin/export': async () => ({
-    path: '/admin/export',
-    action: 'config.export',
-    fields: {},
-    // The export is the response body (a download), not a redirect.
-    successStatus: [200],
-  }),
-  'POST /admin/settings': async () => ({
-    path: '/admin/settings',
-    action: 'settings.update',
-    fields: { request_log_retention_days: '30' },
-  }),
   // A rewrap with nothing to re-encrypt changes nothing and is not audited, so this request is
   // served with a rotated keyring: the world credential, sealed under k1, moves to k2.
-  'POST /admin/settings/rewrap': async () => ({
-    path: '/admin/settings/rewrap',
+  'POST /admin/tokens/keys/rewrap': async () => ({
+    path: '/admin/tokens/keys/rewrap',
     action: 'keyring.rewrap',
     fields: {},
     app: createTestApp({
@@ -374,19 +230,186 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
       env: { TOKENGATE_KEK: '', TOKENGATE_KEYRING: KEYRING_1_2 },
     }),
   }),
+  'POST /admin/tokens': async () => ({
+    path: '/admin/tokens',
+    action: 'service.create',
+    fields: {
+      slug: unique('svc'),
+      name: 'Fixture service',
+      description: '',
+      base_url: 'https://api.openai.com/v1',
+      injection_kind: 'bearer',
+      forward_headers: '',
+      timeout_ms: '60000',
+      verify_method: '',
+      credential: 'sk-fixture-create-0123456789abcdef',
+    },
+  }),
+  'POST /admin/tokens/:id': async (w) => ({
+    path: `/admin/tokens/${w.serviceId}`,
+    action: 'service.update',
+    fields: {
+      name: 'Renamed service',
+      description: 'changed',
+      forward_headers: 'x-github-api-version',
+      timeout_ms: '60000',
+      verify_method: WORLD_VERIFY.method,
+      verify_path: WORLD_VERIFY.path,
+      verify_expect_status: String(WORLD_VERIFY.expect_status),
+    },
+  }),
+  'POST /admin/tokens/:id/credential': async (w) => ({
+    path: `/admin/tokens/${w.serviceId}/credential`,
+    action: 'service.credential.set',
+    fields: {
+      base_url: 'https://api.github.com',
+      injection_kind: 'bearer',
+      credential: 'ghp_fixtureRotated0123456789abcdef',
+    },
+  }),
+  'POST /admin/tokens/:id/test': async (w) => ({
+    path: `/admin/tokens/${w.serviceId}/test`,
+    action: 'service.credential.test',
+    fields: {},
+    // The result is rendered once, not redirected to.
+    successStatus: [200],
+  }),
+  'POST /admin/tokens/:id/toggle': async (w) => ({
+    path: `/admin/tokens/${w.serviceId}/toggle`,
+    action: 'service.disable',
+    fields: { enabled: '0' },
+  }),
+  'POST /admin/tokens/:id/delete': async (w) => {
+    const id = await seedService(w.app.deps, { slug: unique('doomed') });
+    return {
+      path: `/admin/tokens/${id}/delete`,
+      action: 'service.delete',
+      fields: { confirm: '1' },
+    };
+  },
+
+  // == consumers ==
+  'POST /admin/consumers': async () => ({
+    path: '/admin/consumers',
+    action: 'caller_provider.create',
+    fields: {
+      profile: 'generic',
+      name: unique('Acme IdP'),
+      issuer: `https://${unique('idp')}.acme.example`,
+      jwks_uri: 'https://idp.acme.example/keys',
+      audience: 'tokengate:abcdefghijklmnopqrstuvwxyz',
+      allowed_algs: 'RS256',
+      max_token_age_seconds: '300',
+      pin_mode: 'text',
+      tenant_pin_text: 'org_id exact 77',
+      anchor_claims: 'sub',
+    },
+  }),
+  'POST /admin/consumers/:id': async (w) => ({
+    path: `/admin/consumers/${w.provider.id}`,
+    action: 'caller_provider.update',
+    fields: {
+      profile: w.provider.profile,
+      name: 'GitHub Actions (renamed)',
+      issuer: w.provider.issuer,
+      audience: w.provider.audience,
+      allowed_algs: w.provider.allowed_algs,
+      max_token_age_seconds: '300',
+      pin_mode: 'fields',
+      owner_ids: OWNER_ID,
+      enterprise_id: '',
+    },
+  }),
+  'POST /admin/consumers/:id/toggle': async (w) => ({
+    path: `/admin/consumers/${w.provider.id}/toggle`,
+    action: 'caller_provider.disable',
+    fields: { enabled: '0' },
+  }),
+  'POST /admin/consumers/:id/delete': async (w) => {
+    const created = await createCallerProvider(w.app.deps, ACTOR, {
+      name: unique('doomed'),
+      profile: 'generic',
+      issuer: `https://${unique('doomed')}.example.org`,
+      jwks_uri: 'https://doomed.example.org/jwks',
+      anchor_claims: ['sub'],
+    });
+    if (!created.ok) throw new Error(`fixture: ${created.errors.join('; ')}`);
+    return {
+      path: `/admin/consumers/${created.callerProvider.id}/delete`,
+      action: 'caller_provider.delete',
+      fields: { confirm: '1' },
+    };
+  },
+  'POST /admin/access': async (w) => ({
+    path: '/admin/access',
+    action: 'grant.create',
+    fields: {
+      caller_provider_id: w.provider.id,
+      service_id: w.serviceId,
+      mode: 'preset',
+      name: unique('main deploys'),
+      owner_id: OWNER_ID,
+      repository_ids: REPOSITORY_ID,
+      context: 'branch',
+      pattern: 'main',
+      require_protected_ref: '1',
+      rules_text: 'GET /repos/**',
+      enabled: '1',
+    },
+  }),
+  'POST /admin/access/:id': async (w) => ({
+    path: `/admin/access/${w.grantId}`,
+    action: 'grant.update',
+    fields: {
+      name: 'renamed grant',
+      conditions_text: `repository_owner_id exact ${OWNER_ID}\nrepository_id exact ${REPOSITORY_ID}`,
+      rules_text: 'GET,HEAD /repos/acme/**',
+    },
+  }),
+  'POST /admin/access/:id/toggle': async (w) => ({
+    path: `/admin/access/${w.grantId}/toggle`,
+    action: 'grant.disable',
+    fields: { enabled: '0' },
+  }),
+  'POST /admin/access/:id/delete': async (w) => ({
+    path: `/admin/access/${w.grantId}/delete`,
+    action: 'grant.delete',
+    fields: { confirm: '1' },
+  }),
+
+  // == global ==
+  'POST /admin/export': async () => ({
+    path: '/admin/export',
+    action: 'config.export',
+    fields: {},
+    // The export is the response body (a download), not a redirect.
+    successStatus: [200],
+  }),
 };
+
+/**
+ * Seeded ids for the `:id` GET routes of the RBAC table, one block per admin section (add or
+ * remove entries only inside your own block).
+ */
+const READ_IDS: Readonly<Record<string, Readonly<Record<string, (world: AdminWorld) => string>>>> =
+  {
+    monitoring: { '/admin/requests/:id': (w) => w.requestId },
+    users: {},
+    tokens: { '/admin/tokens/:id': (w) => w.serviceId },
+    consumers: {
+      '/admin/consumers/:id': (w) => w.provider.id,
+      '/admin/access/:id': (w) => w.grantId,
+    },
+    global: {},
+  };
 
 /** Concrete URL for a GET route of the RBAC table, with `:id` bound to a seeded row. */
 export function readPath(routeKey: string, world: AdminWorld): string {
   const [method, pattern = ''] = routeKey.split(' ');
   if (method !== 'GET') throw new Error(`readPath: not a GET route: ${routeKey}`);
-  const ids: Record<string, string> = {
-    '/admin/services/:id': world.serviceId,
-    '/admin/caller-providers/:id': world.provider.id,
-    '/admin/grants/:id': world.grantId,
-    '/admin/requests/:id': world.requestId,
-  };
-  const id = ids[pattern];
+  const id = Object.values(READ_IDS)
+    .find((section) => Object.hasOwn(section, pattern))
+    ?.[pattern]?.(world);
   if (id !== undefined) return pattern.replace(':id', id);
   if (pattern.includes(':')) throw new Error(`readPath: no id for ${routeKey}`);
   return pattern;

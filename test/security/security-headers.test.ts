@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { CONTENT_SECURITY_POLICY } from '../../src/http/security';
+import { adminGet, createUser, loginAs, resetControlPlane } from '../helpers/admin-auth';
 import { createTestApp, setAdminHosts } from '../helpers/app';
 
 async function withAdminHosts(hosts: string[]): Promise<void> {
@@ -23,7 +24,7 @@ describe('I-DEPLOY-1: security headers and host pinning', () => {
     expect(CONTENT_SECURITY_POLICY).not.toContain('script-src');
   });
 
-  it.each(['/admin', '/admin/services', '/admin/nope'])(
+  it.each(['/admin', '/admin/tokens', '/admin/nope'])(
     'sets headers and no-store on %s',
     async (path) => {
       const app = createTestApp();
@@ -32,6 +33,17 @@ describe('I-DEPLOY-1: security headers and host pinning', () => {
       expect(res.headers.get('cache-control')).toBe('no-store');
     },
   );
+
+  it('sets the same headers and no-store on the signed-in 404 page', async () => {
+    onTestFinished(() => resetControlPlane());
+    const app = createTestApp();
+    const owner = await createUser({ email: 'o@example.com', role: 'owner' });
+    const res = await adminGet(app, await loginAs(app, owner), '/admin/nope');
+    expect(res.status).toBe(404);
+    expect(await res.text()).toContain('Page not found');
+    expectBrowserHeaders(res);
+    expect(res.headers.get('cache-control')).toBe('no-store');
+  });
 
   it('sets headers on other worker responses without forcing no-store', async () => {
     const app = createTestApp();
@@ -60,7 +72,7 @@ describe('I-DEPLOY-1: security headers and host pinning', () => {
     await withAdminHosts(['admin.example.com']);
     const app = createTestApp();
     for (const origin of ['https://tokengate.acme.workers.dev', 'https://gw.test']) {
-      for (const path of ['/admin', '/admin/services', '/admin/users/x']) {
+      for (const path of ['/admin', '/admin/tokens', '/admin/users/x']) {
         const res = await app.request(path, { origin, redirect: 'manual' });
         expect(res.status, `${origin}${path}`).toBe(404);
         expectBrowserHeaders(res);

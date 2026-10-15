@@ -6,6 +6,7 @@
 // permissions so audited writes re-check both at commit (I-SESS-1).
 // There are no gateway sessions: Access owns sign-in, sign-out and session lifetime.
 import type { MiddlewareHandler } from 'hono';
+import type { Child } from 'hono/jsx';
 import { matchedRoutes } from 'hono/route';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { App, AppContext } from '../../app';
@@ -13,6 +14,7 @@ import { parseConfig } from '../../config';
 import type { User } from '../../db/types';
 import { recordSeenStatements } from '../../db/users';
 import type { Deps } from '../../deps';
+import { paths } from '../paths';
 import { ADMIN_FORM_MAX_BYTES, type AdminContext, type FormFields, parsedForm } from '../render';
 import { Layout } from '../views/layout';
 import { CSRF_FIELD, csrfCheck, ensureCsrfCookie, isUnsafeMethod, readCsrfCookie } from './csrf';
@@ -83,11 +85,17 @@ export const adminMiddleware: MiddlewareHandler<AppContext> = async (c, next) =>
   const route = endpointRoute(c);
   const rule = route ? routePermission(route.method, route.path) : null;
   if (!rule) {
+    // No handler runs either way (fail closed). A page that does not exist is a 404 with a static
+    // hint for old URLs; any other unlisted request stays 403.
+    if (c.req.method === 'GET' || c.req.method === 'HEAD') {
+      return notFound(c, user, identity.loginProvider, csrfToken, requestUrl.pathname);
+    }
     return forbidden(
       c,
       user,
       identity.loginProvider,
       'This page does not exist or is not available.',
+      csrfToken,
     );
   }
 
@@ -111,6 +119,7 @@ export const adminMiddleware: MiddlewareHandler<AppContext> = async (c, next) =>
         user,
         identity.loginProvider,
         'The form was not accepted (it expired or came from another site). Reload the page and try again.',
+        csrfToken,
       );
     }
   }
@@ -119,7 +128,13 @@ export const adminMiddleware: MiddlewareHandler<AppContext> = async (c, next) =>
   // mutating routes declare them, and their form was read above).
   const permissions = requestPermissions(rule, fields);
   if (!permissions.every((permission) => can(user.role, permission))) {
-    return forbidden(c, user, identity.loginProvider, 'Your role does not allow this action.');
+    return forbidden(
+      c,
+      user,
+      identity.loginProvider,
+      'Your role does not allow this action.',
+      csrfToken,
+    );
   }
 
   await recordSeen(deps, user, identity);
@@ -173,7 +188,7 @@ function errorPage(c: AdminContext, key: MessageKey, status: ContentfulStatusCod
   return c.html(
     <Layout title="Sign-in problem" banners={[{ level: 'error', text: MESSAGES[key] }]}>
       <p>
-        <a href="/admin">Reload</a>
+        <a href={paths.overview()}>Reload</a>
       </p>
     </Layout>,
     status,
@@ -205,19 +220,115 @@ function setupPage(c: AdminContext) {
   );
 }
 
-function forbidden(c: AdminContext, user: User, loginProvider: LoginProviderId, message: string) {
+function shellViewer(user: User, loginProvider: LoginProviderId, csrfToken: string) {
+  return { email: user.email, role: user.role, signOutUrl: signOutUrl(loginProvider), csrfToken };
+}
+
+function forbidden(
+  c: AdminContext,
+  user: User,
+  loginProvider: LoginProviderId,
+  message: string,
+  csrfToken: string,
+) {
   return c.html(
-    <Layout
-      title="Forbidden"
-      viewer={{ email: user.email, role: user.role, signOutUrl: signOutUrl(loginProvider) }}
-    >
+    <Layout title="Forbidden" viewer={shellViewer(user, loginProvider, csrfToken)}>
       <p class="banner error" role="alert">
         {message}
       </p>
       <p>
-        <a href="/admin">Back to the dashboard</a>
+        <a href={paths.overview()}>Back to the dashboard</a>
       </p>
     </Layout>,
     403,
+  );
+}
+
+/**
+ * Where the pages of old URL prefixes went (ADR 0019). There are no redirects; the 404 page shows
+ * the hint of the first matching prefix. Static text only: the requested path is never echoed.
+ */
+const MOVED_HINTS: ReadonlyArray<{ prefix: string; hint: () => Child }> = [
+  {
+    prefix: '/admin/services',
+    hint: () => (
+      <>
+        Services are now <a href={paths.tokens()}>Service tokens</a>.
+      </>
+    ),
+  },
+  {
+    prefix: '/admin/caller-providers',
+    hint: () => (
+      <>
+        Caller providers are now <a href={paths.consumers()}>Service consumers</a>.
+      </>
+    ),
+  },
+  {
+    prefix: '/admin/grants',
+    hint: () => (
+      <>
+        Grants are now <a href={paths.access()}>Consumer access</a>.
+      </>
+    ),
+  },
+  {
+    prefix: '/admin/settings',
+    hint: () => (
+      <>
+        The Settings page was split up:
+        <ul>
+          <li>
+            Retention, sampling and the row cap: <a href={paths.retention()}>Data retention</a>
+          </li>
+          <li>
+            The upstream host allowlist: <a href={paths.tokenHosts()}>Allowed hosts</a>
+          </li>
+          <li>
+            Encryption keys and re-encryption: <a href={paths.tokenKeys()}>Encryption keys</a>
+          </li>
+          <li>
+            Admin hosts and the login provider: <a href={paths.signIn()}>Sign-in</a>
+          </li>
+          <li>
+            System status: <a href={paths.overview({ hash: 'health' })}>the overview</a>
+          </li>
+        </ul>
+        Admins and owners download the configuration export from the bottom of every page.
+      </>
+    ),
+  },
+];
+
+const SECTIONS: ReadonlyArray<{ href: string; label: string }> = [
+  { href: paths.overview(), label: 'Monitoring' },
+  { href: paths.users(), label: 'Users' },
+  { href: paths.tokens(), label: 'Service tokens' },
+  { href: paths.consumers(), label: 'Service consumers' },
+];
+
+/** The 404 page for an unlisted GET or HEAD, built from the resolved user (no handler ran). */
+function notFound(
+  c: AdminContext,
+  user: User,
+  loginProvider: LoginProviderId,
+  csrfToken: string,
+  pathname: string,
+) {
+  const moved = MOVED_HINTS.find((entry) => pathname.startsWith(entry.prefix));
+  return c.html(
+    <Layout title="Page not found" viewer={shellViewer(user, loginProvider, csrfToken)}>
+      {moved ? <div class="banner info">{moved.hint()}</div> : null}
+      <p>There is no page at this address. Go to one of the sections:</p>
+      <ul>
+        {SECTIONS.map((section) => (
+          <li>
+            <a href={section.href}>{section.label}</a>
+          </li>
+        ))}
+      </ul>
+    </Layout>,
+    404,
   );
 }

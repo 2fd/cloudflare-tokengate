@@ -28,6 +28,7 @@ import {
 } from '../grant-text';
 import { createGrant, deleteGrant, setGrantEnabled, updateGrant } from '../ops/grants';
 import type { OpFailure } from '../ops/shared';
+import { paths, returnPath } from '../paths';
 import {
   type AdminContext,
   adminActor,
@@ -55,7 +56,8 @@ import {
 } from '../views/components';
 import { formatTime, withQuery } from '../views/format';
 
-const SECTION = '/admin/grants';
+const SECTION = paths.access();
+const NEW = paths.accessNew();
 
 const NOTICES: Record<string, string> = {
   created: 'Grant created. Matching callers can use the service from the next request on.',
@@ -87,14 +89,14 @@ const PREFILL_EXTRA_CLAIMS: Record<string, string[]> = {
   generic: [],
 };
 
-export function registerGrantsRoutes(app: App): void {
-  app.get('/admin/grants', listPage);
-  app.get('/admin/grants/new', newPage);
-  app.post('/admin/grants', create);
-  app.get('/admin/grants/:id', detailPage);
-  app.post('/admin/grants/:id', update);
-  app.post('/admin/grants/:id/toggle', toggle);
-  app.post('/admin/grants/:id/delete', remove);
+export function registerAccessRoutes(app: App): void {
+  app.get('/admin/access', listPage);
+  app.get('/admin/access/new', newPage);
+  app.post('/admin/access', create);
+  app.get('/admin/access/:id', detailPage);
+  app.post('/admin/access/:id', update);
+  app.post('/admin/access/:id/toggle', toggle);
+  app.post('/admin/access/:id/delete', remove);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -260,8 +262,8 @@ async function acknowledgement(
 
 async function listPage(c: AdminContext) {
   const db = c.get('deps').env.DB;
-  const serviceFilter = c.req.query('service') || undefined;
-  const providerFilter = c.req.query('caller_provider') || undefined;
+  const serviceFilter = c.req.query('token') || undefined;
+  const providerFilter = c.req.query('consumer') || undefined;
   const [grants, providers, services] = await Promise.all([
     listGrants(db, { service_id: serviceFilter, caller_provider_id: providerFilter }),
     listCallerProviders(db),
@@ -283,12 +285,7 @@ async function listPage(c: AdminContext) {
       </p>
       {canWrite ? (
         <p class="actions">
-          <a
-            href={withQuery(`${SECTION}/new`, {
-              caller_provider: providerFilter,
-              service: serviceFilter,
-            })}
-          >
+          <a href={paths.accessNew({ consumer: providerFilter, token: serviceFilter })}>
             Create a grant
           </a>
         </p>
@@ -296,7 +293,7 @@ async function listPage(c: AdminContext) {
       <form method="get" action={SECTION} class="filters">
         <Select
           label="Service"
-          name="service"
+          name="token"
           value={serviceFilter ?? ''}
           options={[
             { value: '', label: 'All services' },
@@ -305,7 +302,7 @@ async function listPage(c: AdminContext) {
         />
         <Select
           label="Caller provider"
-          name="caller_provider"
+          name="consumer"
           value={providerFilter ?? ''}
           options={[
             { value: '', label: 'All caller providers' },
@@ -340,7 +337,7 @@ async function listPage(c: AdminContext) {
             {grants.map((grant) => (
               <tr>
                 <td>
-                  <a href={`${SECTION}/${grant.id}`}>{grant.name}</a>
+                  <a href={paths.accessItem(grant.id)}>{grant.name}</a>
                 </td>
                 <td>
                   {providerById.get(grant.caller_provider_id)?.name ?? (
@@ -386,8 +383,8 @@ async function newPage(c: AdminContext) {
   const fromRequest = c.req.query('from_request');
   if (fromRequest) return prefillFromRequest(c, fromRequest);
 
-  const providerId = c.req.query('caller_provider') ?? '';
-  const serviceId = c.req.query('service') ?? '';
+  const providerId = c.req.query('consumer') ?? '';
+  const serviceId = c.req.query('token') ?? '';
   const target = providerId && serviceId ? await loadTarget(c, providerId, serviceId) : null;
   if (!target) return renderChooser(c, providerId, serviceId);
   const mode: Mode =
@@ -444,7 +441,7 @@ async function create(c: AdminContext) {
     expires_at: built.expiresAt,
     acknowledge_warnings: ack.acknowledged,
   });
-  if (result.ok) return redirectWithNotice(c, `${SECTION}/${result.grant.id}`, 'created');
+  if (result.ok) return redirectWithNotice(c, paths.accessItem(result.grant.id), 'created');
   return renderCreateForm(
     c,
     target,
@@ -502,7 +499,7 @@ async function update(c: AdminContext) {
   if (result.ok) {
     return redirectWithNotice(
       c,
-      `${SECTION}/${grant.id}`,
+      paths.accessItem(grant.id),
       result.changed === false ? 'unchanged' : 'updated',
     );
   }
@@ -520,9 +517,13 @@ async function update(c: AdminContext) {
 
 async function toggle(c: AdminContext) {
   const id = c.req.param('id') ?? '';
-  const enabled = flag(await formData(c), 'enabled');
+  const form = await formData(c);
+  const enabled = flag(form, 'enabled');
   const result = await setGrantEnabled(c.get('deps'), adminActor(c), id, enabled);
-  if (result.ok) return redirectWithNotice(c, `${SECTION}/${id}`, enabled ? 'enabled' : 'disabled');
+  if (result.ok) {
+    const back = returnPath('POST /admin/access/:id/toggle', form._return, { id });
+    return redirectWithNotice(c, back, enabled ? 'enabled' : 'disabled');
+  }
   return rerenderDetail(c, result);
 }
 
@@ -582,7 +583,7 @@ async function prefillFromRequest(c: AdminContext, requestId: string) {
           token was verified, and whose caller provider and service still exist can prefill a grant.
         </p>
         <p>
-          <a href={`${SECTION}/new`}>Create a grant from scratch</a>
+          <a href={NEW}>Create a grant from scratch</a>
         </p>
       </>,
     );
@@ -660,10 +661,10 @@ async function renderChooser(
     <>
       <Messages errors={errors} />
       <p>Step 1 of 2: who may call, and which service?</p>
-      <form method="get" action={`${SECTION}/new`} class="stack">
+      <form method="get" action={NEW} class="stack">
         <Select
           label="Caller provider"
-          name="caller_provider"
+          name="consumer"
           value={providerId}
           options={providers.map((provider) => ({
             value: provider.id,
@@ -673,7 +674,7 @@ async function renderChooser(
         />
         <Select
           label="Service"
-          name="service"
+          name="token"
           value={serviceId}
           options={services.map((service) => ({
             value: service.id,
@@ -709,7 +710,7 @@ function renderCreateForm(
 ) {
   const { provider, profile, service } = target;
   const preset = form.mode === 'preset';
-  const base = { caller_provider: provider.id, service: service.id };
+  const base = { consumer: provider.id, token: service.id };
   return renderPage(
     c,
     { title: 'Create a grant', section: SECTION, status },
@@ -717,22 +718,19 @@ function renderCreateForm(
       <FormBanners messages={messages} />
       <Details
         rows={[
-          [
-            'Caller provider',
-            <a href={`/admin/caller-providers/${provider.id}`}>{provider.name}</a>,
-          ],
-          ['Service', <a href={`/admin/services/${service.id}`}>{service.name}</a>],
+          ['Caller provider', <a href={paths.consumer(provider.id)}>{provider.name}</a>],
+          ['Service', <a href={paths.token(service.id)}>{service.name}</a>],
         ]}
       />
       <p>
-        <a href={`${SECTION}/new`}>Choose another caller provider or service</a>
+        <a href={NEW}>Choose another caller provider or service</a>
       </p>
       {profile.id === 'github-actions' ? (
         <p class="muted">
           {preset ? (
             <>
               Using the GitHub builder.{' '}
-              <a href={withQuery(`${SECTION}/new`, { ...base, mode: 'advanced' })}>
+              <a href={withQuery(NEW, { ...base, mode: 'advanced' })}>
                 Write conditions as text instead
               </a>{' '}
               (clears this form).
@@ -740,7 +738,7 @@ function renderCreateForm(
           ) : (
             <>
               Writing conditions as text.{' '}
-              <a href={withQuery(`${SECTION}/new`, { ...base, mode: 'preset' })}>
+              <a href={withQuery(NEW, { ...base, mode: 'preset' })}>
                 Use the GitHub builder instead
               </a>{' '}
               (clears this form).
@@ -816,7 +814,7 @@ function renderEditPage(
         computed={computed}
       />
       <p>
-        <a href={`${SECTION}/${grant.id}`}>Cancel</a>
+        <a href={paths.accessItem(grant.id)}>Cancel</a>
       </p>
     </>,
   );
@@ -843,14 +841,11 @@ async function renderDetail(
         rows={[
           ['ID', <code>{grant.id}</code>],
           ['Status', <GrantStatus grant={grant} now={now} />],
-          [
-            'Caller provider',
-            <a href={`/admin/caller-providers/${provider.id}`}>{provider.name}</a>,
-          ],
+          ['Caller provider', <a href={paths.consumer(provider.id)}>{provider.name}</a>],
           [
             'Service',
             <>
-              <a href={`/admin/services/${service.id}`}>{service.name}</a>{' '}
+              <a href={paths.token(service.id)}>{service.name}</a>{' '}
               <code>/proxy/{service.slug}</code>
             </>,
           ],
@@ -864,19 +859,17 @@ async function renderDetail(
       {canWrite ? (
         <div class="actions">
           <ActionButton
-            action={`${SECTION}/${grant.id}/toggle`}
+            action={`${paths.accessItem(grant.id)}/toggle`}
             csrf={viewer.csrfToken}
             label={grant.enabled ? 'Disable' : 'Enable'}
             fields={{ enabled: grant.enabled ? '0' : '1' }}
             danger={grant.enabled}
           />
-          <a href={withQuery(`${SECTION}/new`, { duplicate: grant.id })}>Duplicate</a>
+          <a href={withQuery(NEW, { duplicate: grant.id })}>Duplicate</a>
         </div>
       ) : null}
       <p class="muted">
-        <a href={withQuery('/admin/requests', { service: service.id })}>
-          Recent requests to this service
-        </a>
+        <a href={paths.requests({ token: service.id })}>Recent requests to this service</a>
       </p>
 
       <h2>Conditions (all must match)</h2>
@@ -946,7 +939,7 @@ async function renderDetail(
             computed={null}
           />
           <h2>Delete</h2>
-          <form method="post" action={`${SECTION}/${grant.id}/delete`} class="stack">
+          <form method="post" action={`${paths.accessItem(grant.id)}/delete`} class="stack">
             <Csrf token={viewer.csrfToken} />
             <Checkbox
               name="confirm"
@@ -1004,7 +997,7 @@ function EditForm(props: {
 }) {
   const { grant, target, form } = props;
   return (
-    <form method="post" action={`${SECTION}/${grant.id}`} class="stack">
+    <form method="post" action={paths.accessItem(grant.id)} class="stack">
       <Csrf token={props.csrf} />
       <VersionField value={form.expected_updated_at} />
       <NameFields form={form} />
@@ -1251,22 +1244,22 @@ function NextStep(props: { providers: CallerProvider[]; services: Service[] }) {
   if (props.providers.length === 0) {
     return (
       <>
-        First <a href="/admin/caller-providers/new">add a caller provider</a> (e.g. GitHub Actions).
-        See <code>docs/getting-started.md</code>.
+        First <a href={paths.consumerNew()}>add a caller provider</a> (e.g. GitHub Actions). See{' '}
+        <code>docs/getting-started.md</code>.
       </>
     );
   }
   if (props.services.length === 0) {
     return (
       <>
-        First <a href="/admin/services/new">add a service</a> to call.
+        First <a href={paths.tokenNew()}>add a service</a> to call.
       </>
     );
   }
   return (
     <>
-      <a href={`${SECTION}/new`}>Create a grant</a>, or open a denied request in{' '}
-      <a href="/admin/requests?outcome=denied">Requests</a> and create one from it.
+      <a href={NEW}>Create a grant</a>, or open a denied request in{' '}
+      <a href={paths.requests({ outcome: 'denied' })}>Requests</a> and create one from it.
     </>
   );
 }

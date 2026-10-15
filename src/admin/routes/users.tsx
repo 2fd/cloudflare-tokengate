@@ -17,6 +17,7 @@ import {
   updateJoinDefaults,
   updateUser,
 } from '../ops/users';
+import { paths, returnPath } from '../paths';
 import {
   type AdminContext,
   adminActor,
@@ -29,7 +30,7 @@ import { Badge, Csrf, Field, Messages, Select } from '../views/components';
 import { formatTime, loginProviderNames } from '../views/format';
 import type { Banner } from '../views/layout';
 
-const SECTION = '/admin/users';
+const SECTION = paths.users();
 const INVITE_DAYS = Math.round(INVITE_TTL_MS / 86_400_000);
 
 const NOTICES = {
@@ -123,8 +124,9 @@ export function registerUsersRoutes(app: App): void {
 
   for (const decision of ['approve', 'reject'] as const) {
     app.post(`/admin/users/:id/${decision}`, async (c) => {
+      const form = await formData(c);
       // An approval may set the role in the same change (optional until the Users section redesign).
-      const role = decision === 'approve' ? text(await formData(c), 'role') : undefined;
+      const role = decision === 'approve' ? text(form, 'role') : undefined;
       const result = await decidePending(
         c.get('deps'),
         adminActor(c),
@@ -133,7 +135,8 @@ export function registerUsersRoutes(app: App): void {
         role === undefined || role === '' ? undefined : (role as Role),
       );
       if (!result.ok) return failurePage(c, result);
-      return redirectWithNotice(c, SECTION, decision === 'approve' ? 'approved' : 'rejected');
+      const back = returnPath(`POST /admin/users/:id/${decision}`, form._return);
+      return redirectWithNotice(c, back, decision === 'approve' ? 'approved' : 'rejected');
     });
   }
 
@@ -199,7 +202,7 @@ async function usersPage(
     <>
       <p>
         People who can sign in to this admin console. Callers (CI jobs) are not users: they are
-        authorized by <a href="/admin/grants">grants</a>.
+        authorized by <a href={paths.access()}>grants</a>.
       </p>
       <p class="muted">
         Anyone your Cloudflare Access policy lets in joins on their first sign-in as{' '}
@@ -260,7 +263,7 @@ async function usersPage(
           values={options.invite}
           config={config}
           providerText={providerText}
-          loginUrl={`${new URL(c.req.url).origin}/admin`}
+          loginUrl={`${new URL(c.req.url).origin}${paths.overview()}`}
         />
       ) : (
         <p class="muted">Only owners can invite users or change their access.</p>
@@ -333,7 +336,7 @@ function PendingTable(props: { users: UserListEntry[]; csrf: string; isOwner: bo
       </thead>
       <tbody>
         {props.users.map((user) => {
-          const base = `/admin/users/${encodeURIComponent(user.id)}`;
+          const base = paths.user(user.id);
           return (
             <tr>
               <td>
@@ -388,7 +391,7 @@ function StatusCell(props: { user: User; now: number }) {
 
 function UserActions(props: { user: UserListEntry; csrf: string }) {
   const { user, csrf } = props;
-  const base = `/admin/users/${encodeURIComponent(user.id)}`;
+  const base = paths.user(user.id);
   // Only a user with a linked sign-in can be active (ops/users.ts updateUser).
   const statusEditable = user.status !== 'invited' && user.identity_count > 0;
   return (

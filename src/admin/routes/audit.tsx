@@ -3,29 +3,40 @@
 import type { App } from '../../app';
 import { listAuditEvents } from '../../db/audit';
 import type { AuditEvent } from '../../db/types';
+import { paths } from '../paths';
 import { renderPage } from '../render';
 import { Code, EmptyState, Field, Messages, NextPage, Select } from '../views/components';
 import { formatTime, withQuery } from '../views/format';
 
-const SECTION = '/admin/audit';
+const SECTION = paths.audit();
 const PAGE_SIZE = 50;
 const AUDIT_ID = /^aud_[0-9A-HJKMNP-TV-Z]{26}$/;
 const TARGET_TYPE = /^[a-z_]{1,64}$/;
 const MAX_TEXT_FILTER = 256;
 
-/** Target types written by the ops, with their labels and detail pages. */
-const TARGETS: Readonly<Record<string, { label: string; page: ((id: string) => string) | null }>> =
-  {
-    service: { label: 'Service', page: (id) => `/admin/services/${encodeURIComponent(id)}` },
-    caller_provider: {
-      label: 'Caller provider',
-      page: (id) => `/admin/caller-providers/${encodeURIComponent(id)}`,
-    },
-    grant: { label: 'Grant', page: (id) => `/admin/grants/${encodeURIComponent(id)}` },
-    user: { label: 'User', page: () => '/admin/users' },
-    settings: { label: 'Settings', page: () => '/admin/settings' },
-    keyring: { label: 'Keyring', page: () => '/admin/settings' },
-  };
+/** Pages that hold each settings change, by audit action (settings rows have no target id). */
+const SETTINGS_PAGES: Readonly<Record<string, string>> = {
+  'settings.update': paths.retention(),
+  'settings.upstream_hosts': paths.tokenHosts(),
+  'settings.admin_hosts': paths.signIn('hosts'),
+  'user.join_defaults': paths.signIn('policy'),
+};
+
+/** Target types written by the ops, with their labels and pages. */
+const TARGETS: Readonly<
+  Record<string, { label: string; page: (id: string, action: string) => string | null }>
+> = {
+  service: { label: 'Service token', page: (id) => paths.token(id) },
+  caller_provider: { label: 'Service consumer', page: (id) => paths.consumer(id) },
+  grant: { label: 'Consumer access', page: (id) => paths.accessItem(id) },
+  user: { label: 'User', page: () => paths.users() },
+  settings: {
+    label: 'Settings',
+    page: (_id, action) =>
+      Object.hasOwn(SETTINGS_PAGES, action) ? (SETTINGS_PAGES[action] ?? null) : null,
+  },
+  keyring: { label: 'Encryption keys', page: () => paths.tokenKeys() },
+};
 
 type AuditQueryText = Record<'target_type' | 'target_id' | 'actor' | 'before', string>;
 
@@ -141,16 +152,17 @@ function AuditFilters(props: { query: AuditQueryText }) {
 }
 
 function TargetCell(props: { event: AuditEvent }) {
-  const { target_type: type, target_id: id } = props.event;
+  const { target_type: type, target_id: id, action } = props.event;
   if (!type) return <>—</>;
   const target = Object.hasOwn(TARGETS, type) ? TARGETS[type] : undefined;
   const label = target?.label ?? type;
-  if (!id) return <>{label}</>;
+  const page = target?.page(id ?? '', action) ?? null;
+  if (!id) return page ? <a href={page}>{label}</a> : <>{label}</>;
   return (
     <>
       {label}{' '}
-      {target?.page ? (
-        <a href={target.page(id)}>
+      {page ? (
+        <a href={page}>
           <Code>{id}</Code>
         </a>
       ) : (

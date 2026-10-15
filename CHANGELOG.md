@@ -8,6 +8,23 @@ The format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
 
 First public release (0.1.0).
 
+### Admin UI redesign
+
+The admin UI has four sections: Monitoring, Users, Service tokens and Service consumers ([ADR 0019](docs/adr/0019-admin-information-architecture.md)). Token and access duties are separate roles ([ADR 0018](docs/adr/0018-role-split-and-field-permissions.md)).
+
+- **New URLs.** Services are at `/admin/tokens`, caller providers at `/admin/consumers` and grants at `/admin/access`. The Settings page is removed: Data retention (`/admin/retention`), Allowed hosts (`/admin/tokens/hosts`), Encryption keys (`/admin/tokens/keys`) and Sign-in (`/admin/users/sign-in`) replace it, the system status is on the Overview, and the configuration export is in the page footer for admins and owners. An unknown admin URL shows a "Page not found" page that links to the sections.
+
+<!-- WP1 -->
+<!-- WP2 -->
+<!-- WP3 -->
+<!-- WP4 -->
+
+#### Upgrade notes for the redesign
+
+- **Roles.** `migrations/0002_admin_redesign.sql` rebuilds the `users` and `user_identities` tables to allow the roles `token_manager` and `access_manager`. Every row is kept, and `admin` keeps everything it could do before. Take a D1 backup before you apply it ([docs/operations/upgrades.md](docs/operations/upgrades.md#migration-policy)).
+- **URLs.** There are no redirects from the old URLs (`/admin/services*`, `/admin/caller-providers*`, `/admin/grants*`, `/admin/settings*`). They show the "Page not found" page with a hint to the new page. Update bookmarks and links in runbooks.
+<!-- WP0: export v2 -->
+
 ### Added
 
 - **Credential proxy.** `/proxy/<slug>/…` accepts `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` and `OPTIONS`. The caller sends a workload identity token in `x-tokengate-token` or `Authorization: Bearer`. For `header` Injection, it can also send the token in the injected header. The gateway verifies it, checks grants, removes the token and injects the stored credential. Responses stream back. See [docs/architecture.md](docs/architecture.md).

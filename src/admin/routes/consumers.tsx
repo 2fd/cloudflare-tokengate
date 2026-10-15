@@ -20,6 +20,7 @@ import {
   updateCallerProvider,
 } from '../ops/caller-providers';
 import type { OpFailure } from '../ops/shared';
+import { paths, returnPath } from '../paths';
 import {
   type AdminContext,
   adminActor,
@@ -45,7 +46,7 @@ import {
 } from '../views/components';
 import { formatTime } from '../views/format';
 
-const SECTION = '/admin/caller-providers';
+const SECTION = paths.consumers();
 
 const NOTICES: Record<string, string> = {
   created: 'Caller provider created. Next: create a grant that lets its callers use a service.',
@@ -73,14 +74,14 @@ const GHA_PROXY_BASE = '${{ steps.tokengate.outputs.proxy-base }}';
 // GitHub Actions expression syntax, not a template literal.
 const GHA_TOKEN = '${{ steps.tokengate.outputs.token }}';
 
-export function registerCallerProvidersRoutes(app: App): void {
-  app.get('/admin/caller-providers', listPage);
-  app.get('/admin/caller-providers/new', newPage);
-  app.post('/admin/caller-providers', create);
-  app.get('/admin/caller-providers/:id', detailPage);
-  app.post('/admin/caller-providers/:id', update);
-  app.post('/admin/caller-providers/:id/toggle', toggle);
-  app.post('/admin/caller-providers/:id/delete', remove);
+export function registerConsumersRoutes(app: App): void {
+  app.get('/admin/consumers', listPage);
+  app.get('/admin/consumers/new', newPage);
+  app.post('/admin/consumers', create);
+  app.get('/admin/consumers/:id', detailPage);
+  app.post('/admin/consumers/:id', update);
+  app.post('/admin/consumers/:id/toggle', toggle);
+  app.post('/admin/consumers/:id/delete', remove);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -229,7 +230,7 @@ async function listPage(c: AdminContext) {
       </p>
       {canWrite ? (
         <p class="actions">
-          <a href="/admin/caller-providers/new">Add a caller provider</a>
+          <a href={paths.consumerNew()}>Add a caller provider</a>
         </p>
       ) : null}
       {providers.length === 0 ? (
@@ -237,10 +238,9 @@ async function listPage(c: AdminContext) {
           No caller providers yet.{' '}
           {canWrite ? (
             <>
-              Start with{' '}
-              <a href="/admin/caller-providers/new?profile=github-actions">GitHub Actions</a>,{' '}
-              <a href="/admin/caller-providers/new?profile=gitlab-ci">GitLab CI</a> or{' '}
-              <a href="/admin/caller-providers/new?profile=generic">another OIDC issuer</a>.
+              Start with <a href={paths.consumerNew({ type: 'github-actions' })}>GitHub Actions</a>,{' '}
+              <a href={paths.consumerNew({ type: 'gitlab-ci' })}>GitLab CI</a> or{' '}
+              <a href={paths.consumerNew({ type: 'generic' })}>another OIDC issuer</a>.
             </>
           ) : (
             'Ask an admin to add one.'
@@ -263,7 +263,7 @@ async function listPage(c: AdminContext) {
             {providers.map((provider) => (
               <tr>
                 <td>
-                  <a href={`${SECTION}/${provider.id}`}>{provider.name}</a>
+                  <a href={paths.consumer(provider.id)}>{provider.name}</a>
                 </td>
                 <td>{profileLabel(provider.profile)}</td>
                 <td>
@@ -277,7 +277,7 @@ async function listPage(c: AdminContext) {
                   )}
                 </td>
                 <td>
-                  <a href={`/admin/grants?caller_provider=${provider.id}`}>
+                  <a href={paths.access({ consumer: provider.id })}>
                     {grantCounts.get(provider.id) ?? 0}
                   </a>
                 </td>
@@ -294,7 +294,7 @@ async function listPage(c: AdminContext) {
 }
 
 async function newPage(c: AdminContext) {
-  const profile = getProfile(c.req.query('profile') ?? '');
+  const profile = getProfile(c.req.query('type') ?? '');
   if (!profile) return renderProfileChooser(c);
   const form = defaultForm(profile, defaultAudience(c.get('deps').random));
   return renderCreateForm(c, profile, form, {});
@@ -320,7 +320,7 @@ async function create(c: AdminContext) {
     anchor_claims: profile.id === 'generic' ? lines(form.anchor_claims) : [],
     enabled: true,
   });
-  if (result.ok) return redirectWithNotice(c, `${SECTION}/${result.callerProvider.id}`, 'created');
+  if (result.ok) return redirectWithNotice(c, paths.consumer(result.callerProvider.id), 'created');
   return renderCreateForm(c, profile, form, result, failureStatus(result));
 }
 
@@ -357,7 +357,7 @@ async function update(c: AdminContext) {
   if (result.ok) {
     return redirectWithNotice(
       c,
-      `${SECTION}/${provider.id}`,
+      paths.consumer(provider.id),
       result.changed === false ? 'unchanged' : 'updated',
     );
   }
@@ -371,9 +371,13 @@ async function update(c: AdminContext) {
 
 async function toggle(c: AdminContext) {
   const id = c.req.param('id') ?? '';
-  const enabled = flag(await formData(c), 'enabled');
+  const form = await formData(c);
+  const enabled = flag(form, 'enabled');
   const result = await setCallerProviderEnabled(c.get('deps'), adminActor(c), id, enabled);
-  if (result.ok) return redirectWithNotice(c, `${SECTION}/${id}`, enabled ? 'enabled' : 'disabled');
+  if (result.ok) {
+    const back = returnPath('POST /admin/consumers/:id/toggle', form._return, { id });
+    return redirectWithNotice(c, back, enabled ? 'enabled' : 'disabled');
+  }
   return rerenderDetail(c, result);
 }
 
@@ -412,7 +416,7 @@ function renderProfileChooser(c: AdminContext, status: 200 | 422 = 200) {
       <ul>
         {PROFILE_ORDER.map((id) => (
           <li>
-            <a href={`${SECTION}/new?profile=${id}`}>{PROFILES[id].label}</a>
+            <a href={paths.consumerNew({ type: id })}>{PROFILES[id].label}</a>
             {' — '}
             {PROFILE_INTRO[id]}
           </li>
@@ -447,7 +451,7 @@ function renderCreateForm(
         <ProviderFields profile={profile} form={form} editing={false} />
         <p class="actions">
           <button type="submit">Create caller provider</button>
-          <a href={`${SECTION}/new`}>Choose another type</a>
+          <a href={paths.consumerNew()}>Choose another type</a>
         </p>
       </form>
     </>,
@@ -475,7 +479,7 @@ function renderEditPage(
         affected={messages.affected ?? null}
       />
       <p>
-        <a href={`${SECTION}/${provider.id}`}>Cancel</a>
+        <a href={paths.consumer(provider.id)}>Cancel</a>
       </p>
     </>,
   );
@@ -534,7 +538,7 @@ async function renderDetail(
       {canWrite ? (
         <div class="actions">
           <ActionButton
-            action={`${SECTION}/${provider.id}/toggle`}
+            action={`${paths.consumer(provider.id)}/toggle`}
             csrf={viewer.csrfToken}
             label={provider.enabled ? 'Disable' : 'Enable'}
             fields={{ enabled: provider.enabled ? '0' : '1' }}
@@ -551,7 +555,7 @@ async function renderDetail(
         <EmptyState>
           No grants yet, so every caller is refused.{' '}
           {canWrite ? (
-            <a href={`/admin/grants/new?caller_provider=${provider.id}`}>Create a grant</a>
+            <a href={paths.accessNew({ consumer: provider.id })}>Create a grant</a>
           ) : null}
         </EmptyState>
       ) : (
@@ -568,7 +572,7 @@ async function renderDetail(
               {grants.map((grant) => (
                 <tr>
                   <td>
-                    <a href={`/admin/grants/${grant.id}`}>{grant.name}</a>
+                    <a href={paths.accessItem(grant.id)}>{grant.name}</a>
                   </td>
                   <td>
                     <EnabledBadge enabled={grant.enabled} />
@@ -580,7 +584,7 @@ async function renderDetail(
           </table>
           {canWrite ? (
             <p>
-              <a href={`/admin/grants/new?caller_provider=${provider.id}`}>Create another grant</a>
+              <a href={paths.accessNew({ consumer: provider.id })}>Create another grant</a>
             </p>
           ) : null}
         </>
@@ -603,7 +607,7 @@ async function renderDetail(
               then it can be deleted. To refuse its tokens right away, disable it instead.
             </p>
           ) : (
-            <form method="post" action={`${SECTION}/${provider.id}/delete`} class="stack">
+            <form method="post" action={`${paths.consumer(provider.id)}/delete`} class="stack">
               <Csrf token={viewer.csrfToken} />
               <Checkbox
                 name="confirm"
@@ -636,7 +640,7 @@ function EditForm(props: {
 }) {
   const { provider, profile, form, affected } = props;
   return (
-    <form method="post" action={`${SECTION}/${provider.id}`} class="stack">
+    <form method="post" action={paths.consumer(provider.id)} class="stack">
       <Csrf token={props.csrf} />
       <VersionField value={form.expected_updated_at} />
       <ProviderFields profile={profile} form={form} editing />
@@ -650,7 +654,7 @@ function EditForm(props: {
           <ul>
             {affected.map((grant) => (
               <li>
-                <a href={`/admin/grants/${grant.id}`}>{grant.name}</a>
+                <a href={paths.accessItem(grant.id)}>{grant.name}</a>
               </li>
             ))}
           </ul>

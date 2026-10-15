@@ -144,7 +144,7 @@ describe('I-CRED-2: the service page flags an unattested destination', () => {
     const world = await seedAdminWorld(app);
     const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
     await repoint(world.serviceId);
-    const path = `/admin/services/${world.serviceId}`;
+    const path = `/admin/tokens/${world.serviceId}`;
 
     const page = await (await adminGet(app, session, path)).text();
     expect(page).toContain('was changed outside the admin UI');
@@ -177,7 +177,7 @@ describe('I-CRED-2: the service page flags an unattested destination', () => {
     const app = createAdminWorldApp();
     const world = await seedAdminWorld(app);
     const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
-    const page = await (await adminGet(app, session, `/admin/services/${world.serviceId}`)).text();
+    const page = await (await adminGet(app, session, `/admin/tokens/${world.serviceId}`)).text();
     expect(page).not.toContain('outside the admin UI');
     expect(page).not.toContain('not confirmed');
     expect(page).not.toContain('name="confirm_destination"');

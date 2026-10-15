@@ -273,7 +273,7 @@ export function dashboardBanners(data: DashboardData): Banner[] {
   if (keyring.changedKids.length > 0) {
     banners.push({
       level: 'error',
-      text: `Key id(s) ${keyring.changedKids.join(', ')} now hold a different key than the one stored credentials were sealed with (key check value changed); credentials sealed with the previous key answer credential_unavailable. Restore the previous key value, or set those credentials again and then run "Re-encrypt credentials" in Settings to accept the new key.`,
+      text: `Key id(s) ${keyring.changedKids.join(', ')} now hold a different key than the one stored credentials were sealed with (key check value changed); credentials sealed with the previous key answer credential_unavailable. Restore the previous key value, or set those credentials again and then run "Re-encrypt credentials" in Service tokens › Encryption keys to accept the new key.`,
     });
   }
   if (keyring.malformedCount > 0) {
@@ -332,7 +332,7 @@ export function dashboardBanners(data: DashboardData): Banner[] {
   if (keyring.notActiveCount > 0 && !keyring.error) {
     banners.push({
       level: 'info',
-      text: `${keyring.notActiveCount} credential(s) are sealed with a key other than the active key ${keyring.activeKid}. Rewrap them in Settings.`,
+      text: `${keyring.notActiveCount} credential(s) are sealed with a key other than the active key ${keyring.activeKid}. Re-encrypt them in Service tokens › Encryption keys.`,
     });
   }
   if (alerts.activeOwners === 1) {

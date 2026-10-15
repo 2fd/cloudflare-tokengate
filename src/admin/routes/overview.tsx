@@ -1,10 +1,21 @@
-// Admin dashboard (`GET /admin`): last-24 h traffic, per-service table, operational banners,
-// recent denials and a getting-started checklist. Read-only.
+// Admin overview (`GET /admin`): last-24 h traffic, per-service table, operational banners,
+// recent denials, a getting-started checklist and the system status (`#health`). Read-only. The
+// status shows names, counts and the admin hosts, never configured values that could be secret
+// (I-CFG-1).
 import type { App } from '../../app';
+import { type Config, parseConfig } from '../../config';
+import { type SchemaState, schemaStatusByDatabase } from '../../db/migrations';
 import type { RecentDenial } from '../../db/rollups';
-import { settingsFromRows, settingsStatement } from '../../db/settings';
+import {
+  getAdminHosts,
+  getAllowedUpstreamHosts,
+  settingsFromRows,
+  settingsStatement,
+} from '../../db/settings';
 import type { Role } from '../../db/types';
+import type { Deps } from '../../deps';
 import type { AppEnv } from '../../env';
+import { cronHealth } from '../../health';
 import {
   type DashboardData,
   dashboardBanners,
@@ -14,19 +25,33 @@ import {
   type TrafficStats,
 } from '../../telemetry/dashboard';
 import { can, type Permission } from '../auth/rbac';
+import { paths } from '../paths';
 import { renderPage } from '../render';
-import { Badge, Code, EmptyState } from '../views/components';
-import { formatCount, formatDuration, formatPercent, formatTime, withQuery } from '../views/format';
+import { Badge, Code, Details, EmptyState } from '../views/components';
+import {
+  formatCount,
+  formatDuration,
+  formatPercent,
+  formatTime,
+  loginProviderNames,
+} from '../views/format';
 import { docsUrl, reasonText } from '../views/reasons';
 
-export function registerDashboardRoutes(app: App): void {
+export function registerOverviewRoutes(app: App): void {
   app.get('/admin', async (c) => {
     const deps = c.get('deps');
-    const [data, setup] = await Promise.all([loadDashboard(deps), loadSetupState(deps.env)]);
+    const [data, setup, status] = await Promise.all([
+      loadDashboard(deps),
+      loadSetupState(deps.env),
+      loadSystemStatus(deps),
+    ]);
     return renderPage(
       c,
-      { title: 'Dashboard', section: '/admin', banners: dashboardBanners(data) },
-      <DashboardPage data={data} setup={setup} role={c.get('viewer').user.role} />,
+      { title: 'Dashboard', section: paths.overview(), banners: dashboardBanners(data) },
+      <>
+        <DashboardPage data={data} setup={setup} role={c.get('viewer').user.role} />
+        <SystemStatus status={status} env={deps.env} />
+      </>,
     );
   });
 }
@@ -81,7 +106,7 @@ function DashboardPage(props: { data: DashboardData; setup: SetupState; role: Ro
       <p class="muted">
         Traffic through the proxy since {formatTime(data.window.from)}.
         {setup.sampleRate <= 0
-          ? ' Allowed requests are not recorded (sample rate 0 in Settings), so allowed counts and latency stay at zero.'
+          ? ' Allowed requests are not recorded (sample rate 0 in Data retention), so allowed counts and latency stay at zero.'
           : setup.sampleRate < 1
             ? ` Allowed requests are sampled at ${formatPercent(setup.sampleRate)}, so counts are estimates.`
             : null}
@@ -132,7 +157,7 @@ function SetupChecklist(props: { setup: SetupState; role: Role }) {
       done: setup.callerProviders > 0,
       title: 'Add a caller provider',
       what: 'Tells the gateway which CI tokens to trust, for example GitHub Actions in your organization.',
-      href: '/admin/caller-providers/new',
+      href: paths.consumerNew(),
       action: 'Add a caller provider',
       permission: 'access:write',
     },
@@ -140,7 +165,7 @@ function SetupChecklist(props: { setup: SetupState; role: Role }) {
       done: setup.services > 0,
       title: 'Add a service',
       what: 'The upstream API (Slack, OpenAI, GitHub, …) and the credential the gateway attaches for callers.',
-      href: '/admin/services/new',
+      href: paths.tokenNew(),
       action: 'Add a service',
       permission: 'tokens:write',
     },
@@ -148,7 +173,7 @@ function SetupChecklist(props: { setup: SetupState; role: Role }) {
       done: setup.grants > 0,
       title: 'Create a grant',
       what: 'Decides which callers (for example, which repositories and branches) may call which service.',
-      href: '/admin/grants/new',
+      href: paths.accessNew(),
       action: 'Create a grant',
       permission: 'access:write',
     },
@@ -253,9 +278,7 @@ function ServiceTable(props: { services: ServiceTraffic[] }) {
               </td>
               <td>
                 {s.serviceId ? (
-                  <a href={withQuery('/admin/requests', { service: s.serviceId })}>
-                    {formatCount(s.requests)}
-                  </a>
+                  <a href={paths.requests({ token: s.serviceId })}>{formatCount(s.requests)}</a>
                 ) : (
                   formatCount(s.requests)
                 )}
@@ -287,7 +310,7 @@ function ServiceLabel(props: { service: ServiceTraffic }) {
     );
   }
   return (
-    <a href={`/admin/services/${encodeURIComponent(s.serviceId)}`}>
+    <a href={paths.token(s.serviceId)}>
       {s.name ?? s.slug} <Code>{s.slug}</Code>
     </a>
   );
@@ -310,7 +333,7 @@ function DenialTable(props: { denials: RecentDenial[] }) {
           {props.denials.map((d) => (
             <tr>
               <td>
-                <a href={`/admin/requests/${encodeURIComponent(d.id)}`}>{formatTime(d.ts)}</a>
+                <a href={paths.request(d.id)}>{formatTime(d.ts)}</a>
               </td>
               <td>
                 <Code>{d.reason ?? '—'}</Code> <span class="muted">(HTTP {d.status})</span>
@@ -342,4 +365,135 @@ function DenialTable(props: { denials: RecentDenial[] }) {
       </table>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------------------------
+// System status (moved from the removed Settings page)
+
+const SCHEMA_TEXT: Record<SchemaState, string> = {
+  ok: 'up to date',
+  behind: 'migrations missing: run "wrangler d1 migrations apply" (docs/operations/upgrades.md)',
+  ahead: 'newer than this code (a rollback?); see docs/operations/upgrades.md',
+  unknown: 'could not be read',
+};
+
+interface SystemStatusData {
+  config: Config;
+  cron: Awaited<ReturnType<typeof cronHealth>>;
+  schema: Awaited<ReturnType<typeof schemaStatusByDatabase>>;
+  upstreamHosts: string[] | null;
+  adminHosts: string[] | null;
+}
+
+async function loadSystemStatus(deps: Deps): Promise<SystemStatusData> {
+  const [cron, schema, upstreamHosts, adminHosts] = await Promise.all([
+    cronHealth(deps),
+    schemaStatusByDatabase(deps),
+    getAllowedUpstreamHosts(deps.env.DB),
+    getAdminHosts(deps.env.DB),
+  ]);
+  return { config: parseConfig(deps.env), cron, schema, upstreamHosts, adminHosts };
+}
+
+function SystemStatus(props: { status: SystemStatusData; env: AppEnv }) {
+  const { config, cron, schema, upstreamHosts, adminHosts } = props.status;
+  const env = props.env;
+  return (
+    <details id="health">
+      <summary>System status</summary>
+      <Details
+        rows={[
+          [
+            'Database schema',
+            <>
+              Control plane (DB): {SCHEMA_TEXT[schema.DB]}
+              <br />
+              Telemetry (TELEMETRY_DB): {SCHEMA_TEXT[schema.TELEMETRY_DB]}
+            </>,
+          ],
+          ['Hourly maintenance job', <CronStatus cron={cron} />],
+          ['Admin hosts', adminHostsText(adminHosts)],
+          ['Login providers', loginStatusText(config)],
+          [
+            'Upstream host allowlist',
+            upstreamHosts === null
+              ? 'not set: services may use any public https host'
+              : `set (${upstreamHosts.length} entries)`,
+          ],
+          [
+            'Request log queue (REQUEST_LOG_QUEUE)',
+            bindingText(
+              env.REQUEST_LOG_QUEUE !== undefined,
+              'request records are written to the database directly',
+            ),
+          ],
+          [
+            'Request archive (REQUEST_ARCHIVE)',
+            bindingText(env.REQUEST_ARCHIVE !== undefined, 'records are not archived to R2'),
+          ],
+          [
+            'Proxy rate limiter (PROXY_RATE_LIMITER)',
+            bindingText(env.PROXY_RATE_LIMITER !== undefined, 'no per-grant request cap'),
+          ],
+        ]}
+      />
+      {config.errors.length > 0 ? (
+        <>
+          <h3>Configuration problems</h3>
+          <p>
+            These features are turned off until the variables are fixed (docs/configuration.md):
+          </p>
+          <ul>
+            {config.errors.map((error) => (
+              <li>
+                <code>{error.variable}</code>: {error.message}
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </details>
+  );
+}
+
+function CronStatus(props: { cron: Awaited<ReturnType<typeof cronHealth>> }) {
+  const { cron } = props;
+  return (
+    <>
+      {cron.failing ? (
+        <Badge tone="bad">failing</Badge>
+      ) : cron.lastSuccessAt === null ? (
+        <Badge tone="muted">not run yet</Badge>
+      ) : cron.stale ? (
+        <Badge tone="warn">late</Badge>
+      ) : (
+        <Badge tone="ok">running</Badge>
+      )}{' '}
+      Last success: {cron.lastSuccessAt === null ? 'never' : formatTime(cron.lastSuccessAt)}
+      {cron.failing ? (
+        <div>
+          Last failure at {formatTime(cron.lastErrorAt)}: <code>{cron.lastError ?? 'unknown'}</code>
+        </div>
+      ) : null}
+      {cron.lastSuccessAt === null && !cron.failing ? (
+        <div class="muted">It runs a few minutes past every hour.</div>
+      ) : null}
+    </>
+  );
+}
+
+function loginStatusText(config: Config): string {
+  const names = loginProviderNames(config);
+  return names.length > 0
+    ? names.join(', ')
+    : 'none configured: nobody can sign in (docs/configuration.md)';
+}
+
+function adminHostsText(hosts: string[] | null): string {
+  if (hosts === null) return 'not set yet: set on the first sign-in.';
+  return `${hosts.join(', ')}.`;
+}
+
+function bindingText(bound: boolean, whenMissing: string): string {
+  return bound ? 'bound' : `not bound: ${whenMissing}`;
 }

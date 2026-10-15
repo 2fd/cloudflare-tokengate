@@ -74,7 +74,7 @@ function parseJsonOrNull(raw: string): unknown {
 }
 
 /**
- * Upstream host allowlist (I-SSRF-1), edited in Settings by owners. Stored as a JSON array of
+ * Upstream host allowlist (I-SSRF-1), edited by owners in Service tokens › Allowed hosts. Stored as a JSON array of
  * lowercased entries (exact host or `*.<domain>`), or null for "any public https host".
  */
 export const UPSTREAM_HOSTS_KEY = 'allowed_upstream_hosts';
@@ -106,7 +106,7 @@ export async function getAllowedUpstreamHosts(db: D1Database): Promise<string[] 
 /**
  * Admin host allowlist (I-DEPLOY-1): the hostnames /admin answers on, as a JSON array of lowercased
  * `isAdminHostEntry` entries. The first-owner bootstrap stores the hostname of that sign-in
- * (`bootstrapOwnerStatements`); owners edit it in Settings. Absent until then.
+ * (`bootstrapOwnerStatements`); owners edit it in Users › Sign-in. Absent until then.
  */
 export const ADMIN_HOSTS_KEY = 'admin_hosts';
 

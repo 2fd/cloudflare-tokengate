@@ -15,7 +15,7 @@ tokengate is one Cloudflare Worker with two D1 databases. Each company deploys i
 | Component | Binding or route | Role |
 |---|---|---|
 | Proxy | `ANY /proxy/:slug`, `ANY /proxy/:slug/*` | Verifies the caller token, authorizes the request, injects the credential and forwards. |
-| Admin UI | `/admin/*` | Server-rendered pages to manage services, caller providers, grants, users and settings. Every request is authenticated by its Cloudflare Access JWT; there are no gateway sessions and no `/auth` routes ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). |
+| Admin UI | `/admin/*` | Server-rendered pages in four sections: Monitoring (`/admin`), Users (`/admin/users`), Service tokens (`/admin/tokens`) and Service consumers (`/admin/consumers`, with consumer access at `/admin/access`); `src/admin/paths.ts` builds every URL ([ADR 0019](adr/0019-admin-information-architecture.md)). Every request is authenticated by its Cloudflare Access JWT; there are no gateway sessions and no `/auth` routes ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). |
 | Health | `GET /healthz`, `GET /readyz` | Liveness without I/O; readiness as booleans only. See [observability.md](observability.md). |
 | Static files | `/static/*` (Workers Assets, binding `ASSETS`) | `public/static/app.css`. `run_worker_first` sends every other path to the Worker. |
 | Cron | `scheduled`, `7 * * * *` | Rollups, retention purge, credential-expiry notices, heartbeat. |

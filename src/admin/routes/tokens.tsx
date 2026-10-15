@@ -24,6 +24,7 @@ import {
 } from '../ops/services';
 import type { OpFailure, OpFailureReason } from '../ops/shared';
 import type { VerifyOutcome } from '../ops/verify';
+import { paths, returnPath } from '../paths';
 import {
   type AdminContext,
   adminActor,
@@ -50,7 +51,7 @@ import {
 import { formatTime } from '../views/format';
 import type { Banner } from '../views/layout';
 
-const SECTION = '/admin/services';
+const SECTION = paths.tokens();
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 const NOTICES: Record<string, string> = {
@@ -92,17 +93,17 @@ const QUERY_WARNING =
 const PATH_WARNING =
   'With URL path injection the credential is part of the webhook URL. Some webhook APIs return it in the response body: Discord GET and PATCH on the webhook URL return the webhook token. Response bodies are not redacted, so grant only POST / for these services.';
 
-export function registerServicesRoutes(app: App): void {
-  app.get('/admin/services', listPage);
-  // Registered before `/admin/services/:id` so "new" is never taken as an id.
-  app.get('/admin/services/new', newPage);
-  app.post('/admin/services', create);
-  app.get('/admin/services/:id', detailPage);
-  app.post('/admin/services/:id', update);
-  app.post('/admin/services/:id/credential', setCredential);
-  app.post('/admin/services/:id/test', testCredential);
-  app.post('/admin/services/:id/toggle', toggle);
-  app.post('/admin/services/:id/delete', remove);
+export function registerTokensRoutes(app: App): void {
+  app.get('/admin/tokens', listPage);
+  // Registered before `/admin/tokens/:id` so "new" is never taken as an id.
+  app.get('/admin/tokens/new', newPage);
+  app.post('/admin/tokens', create);
+  app.get('/admin/tokens/:id', detailPage);
+  app.post('/admin/tokens/:id', update);
+  app.post('/admin/tokens/:id/credential', setCredential);
+  app.post('/admin/tokens/:id/test', testCredential);
+  app.post('/admin/tokens/:id/toggle', toggle);
+  app.post('/admin/tokens/:id/delete', remove);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -319,7 +320,7 @@ async function listPage(c: AdminContext) {
       </p>
       {canWrite ? (
         <p class="actions">
-          <a href="/admin/services/new">Add a service</a>
+          <a href={paths.tokenNew()}>Add a service</a>
         </p>
       ) : null}
       {services.length === 0 ? (
@@ -327,8 +328,8 @@ async function listPage(c: AdminContext) {
           No services yet.{' '}
           {canWrite ? (
             <>
-              <a href="/admin/services/new">Add your first service</a> — templates for Slack,
-              OpenAI, Anthropic and GitHub are available.
+              <a href={paths.tokenNew()}>Add your first service</a> — templates for Slack, OpenAI,
+              Anthropic and GitHub are available.
             </>
           ) : (
             'Ask an admin to add one.'
@@ -352,7 +353,7 @@ async function listPage(c: AdminContext) {
             {services.map((service) => (
               <tr>
                 <td>
-                  <a href={`/admin/services/${service.id}`}>
+                  <a href={paths.token(service.id)}>
                     <code>{service.slug}</code>
                   </a>
                 </td>
@@ -422,7 +423,7 @@ async function create(c: AdminContext) {
       : result.verify.passed
         ? 'created_verified'
         : 'created_unverified';
-  return redirectWithNotice(c, `/admin/services/${result.service.id}`, notice);
+  return redirectWithNotice(c, paths.token(result.service.id), notice);
 }
 
 async function detailPage(c: AdminContext) {
@@ -466,7 +467,7 @@ async function update(c: AdminContext) {
   }
   return redirectWithNotice(
     c,
-    `/admin/services/${service.id}`,
+    paths.token(service.id),
     result.changed === false ? 'unchanged' : 'updated',
   );
 }
@@ -512,7 +513,7 @@ async function setCredential(c: AdminContext) {
       : result.verify.passed
         ? 'credential_verified'
         : 'credential_unverified';
-  return redirectWithNotice(c, `/admin/services/${service.id}`, notice);
+  return redirectWithNotice(c, paths.token(service.id), notice);
 }
 
 async function testCredential(c: AdminContext) {
@@ -540,7 +541,8 @@ async function toggle(c: AdminContext) {
   const deps = c.get('deps');
   const service = await getService(deps.env.DB, c.req.param('id') ?? '');
   if (!service) return notFound(c);
-  const requested = text(await formData(c), 'enabled');
+  const form = await formData(c);
+  const requested = text(form, 'enabled');
   if (requested !== '1' && requested !== '0') {
     return renderDetail(c, service, {
       actionErrors: ['choose whether to enable or disable the service'],
@@ -557,7 +559,8 @@ async function toggle(c: AdminContext) {
       status: FAILURE_STATUS[result.reason],
     });
   }
-  return redirectWithNotice(c, `/admin/services/${service.id}`, enabled ? 'enabled' : 'disabled');
+  const back = returnPath('POST /admin/tokens/:id/toggle', form._return, { id: service.id });
+  return redirectWithNotice(c, back, enabled ? 'enabled' : 'disabled');
 }
 
 async function remove(c: AdminContext) {
@@ -578,7 +581,7 @@ async function remove(c: AdminContext) {
       status: FAILURE_STATUS[result.reason],
     });
   }
-  return redirectWithNotice(c, '/admin/services', 'deleted');
+  return redirectWithNotice(c, paths.tokens(), 'deleted');
 }
 
 function noticeFor(c: AdminContext): string | null {
@@ -601,7 +604,7 @@ function notFound(c: AdminContext) {
     c,
     { title: 'Service not found', section: SECTION, status: 404 },
     <p>
-      This service does not exist or was deleted. <a href="/admin/services">Back to services</a>
+      This service does not exist or was deleted. <a href={paths.tokens()}>Back to services</a>
     </p>,
   );
 }
@@ -636,7 +639,7 @@ function renderNewForm(
         </p>
       ) : null}
       <Messages errors={state.errors} warnings={state.warnings} />
-      <form method="post" action="/admin/services" class="stack">
+      <form method="post" action={paths.tokens()} class="stack">
         <Csrf token={csrf} />
         <input type="hidden" name="template" value={template?.id ?? ''} />
         <fieldset>
@@ -672,7 +675,7 @@ function renderNewForm(
         {state.verify && !state.verify.passed ? <SaveAnyway /> : null}
         <p class="actions">
           <button type="submit">Create service</button>
-          <a href="/admin/services">Cancel</a>
+          <a href={paths.tokens()}>Cancel</a>
         </p>
       </form>
     </>,
@@ -690,9 +693,7 @@ function TemplatePicker() {
       <ul>
         {SERVICE_TEMPLATES.map((template) => (
           <li>
-            <a href={`/admin/services/new?template=${encodeURIComponent(template.id)}`}>
-              {template.label}
-            </a>{' '}
+            <a href={paths.tokenNew({ template: template.id })}>{template.label}</a>{' '}
             <span class="muted">{template.base_url}</span>
           </li>
         ))}
@@ -707,7 +708,7 @@ function TemplateGuidance(props: { template: ServiceTemplate }) {
     <section>
       <p>
         Using the <strong>{template.label}</strong> template.{' '}
-        <a href="/admin/services/new">Choose another template or start from scratch</a>
+        <a href={paths.tokenNew()}>Choose another template or start from scratch</a>
       </p>
       <p class="muted">
         {template.notes} Provider documentation: <a href={template.docs_url}>{template.docs_url}</a>
@@ -1029,7 +1030,7 @@ async function renderDetail(c: AdminContext, service: Service, state: DetailStat
     },
     <>
       <p>
-        <a href="/admin/services">← All services</a>
+        <a href={paths.tokens()}>← All services</a>
       </p>
       {/* Results of the action just submitted go first: the re-rendered page opens at the top. */}
       <Messages errors={state.actionErrors} />
@@ -1110,9 +1111,7 @@ async function renderDetail(c: AdminContext, service: Service, state: DetailStat
       <GrantsTable grants={grants} providerNames={providerNames} />
       {canWrite ? (
         <p>
-          <a href={`/admin/grants/new?service=${encodeURIComponent(service.id)}`}>
-            Create a grant for this service
-          </a>
+          <a href={paths.accessNew({ token: service.id })}>Create a grant for this service</a>
         </p>
       ) : null}
       {template ? <StarterRules rules={template.starter_rules} /> : null}
@@ -1127,7 +1126,7 @@ async function renderDetail(c: AdminContext, service: Service, state: DetailStat
           </p>
           <p class="actions">
             <ActionButton
-              action={`/admin/services/${service.id}/toggle`}
+              action={`${paths.token(service.id)}/toggle`}
               csrf={csrf}
               label={service.enabled ? 'Disable service' : 'Enable service'}
               danger={service.enabled}
@@ -1265,7 +1264,7 @@ function TestButton(props: { service: Service; csrf: string }) {
   return (
     <p class="actions">
       <ActionButton
-        action={`/admin/services/${service.id}/test`}
+        action={`${paths.token(service.id)}/test`}
         csrf={props.csrf}
         label="Test credential"
       />
@@ -1308,10 +1307,10 @@ function GrantsTable(props: {
         {props.grants.map((grant) => (
           <tr>
             <td>
-              <a href={`/admin/grants/${grant.id}`}>{grant.name}</a>
+              <a href={paths.accessItem(grant.id)}>{grant.name}</a>
             </td>
             <td>
-              <a href={`/admin/caller-providers/${grant.caller_provider_id}`}>
+              <a href={paths.consumer(grant.caller_provider_id)}>
                 {props.providerNames.get(grant.caller_provider_id) ?? grant.caller_provider_id}
               </a>
             </td>
@@ -1335,7 +1334,7 @@ function EditForm(props: {
 }) {
   const { values } = props;
   return (
-    <form method="post" action={`/admin/services/${props.service.id}`} class="stack">
+    <form method="post" action={paths.token(props.service.id)} class="stack">
       <Csrf token={props.csrf} />
       <VersionField value={values.expected_updated_at} />
       <p class="muted">
@@ -1367,7 +1366,7 @@ function CredentialForm(props: {
 }) {
   const { service, values } = props;
   return (
-    <form method="post" action={`/admin/services/${service.id}/credential`} class="stack">
+    <form method="post" action={`${paths.token(service.id)}/credential`} class="stack">
       <Csrf token={props.csrf} />
       <p class="muted">
         Use this form to replace the credential, or to change where and how it is sent. The
@@ -1400,7 +1399,7 @@ function DeleteSection(props: { service: Service; grantCount: number; csrf: stri
     );
   }
   return (
-    <form method="post" action={`/admin/services/${props.service.id}/delete`} class="stack">
+    <form method="post" action={`${paths.token(props.service.id)}/delete`} class="stack">
       <Csrf token={props.csrf} />
       <Checkbox
         name="confirm"

@@ -1,12 +1,14 @@
 // I-AUDIT-1 at the HTTP layer: every mutating route of the RBAC table, submitted the way the admin
-// UI submits it, writes exactly one audit_log row. A mutating route without a fixture in
-// test/fixtures/admin-forms.ts fails here, so new routes cannot ship unaudited by omission.
+// UI submits it, writes exactly one audit_log row per mutation, in the order the fixture lists. A
+// mutating route without a fixture in test/fixtures/admin-forms.ts fails here, so new routes cannot
+// ship unaudited by omission.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ROUTE_PERMISSIONS } from '../../src/admin/auth/rbac';
 import {
   type AdminWorld,
   createAdminWorldApp,
+  expectedActions,
   MUTATION_FIXTURES,
   resetAdminWorld,
   seedAdminWorld,
@@ -69,12 +71,8 @@ describe('I-AUDIT-1: every mutating admin route writes exactly one audit row', (
     await world.app.settle();
 
     const added = (await auditRows()).filter((row) => !before.has(row.id));
-    expect(added).toHaveLength(1);
-    expect(added[0]).toMatchObject({
-      action: request.action,
-      actor_type: 'user',
-      actor_id: ownerId,
-    });
+    expect(added.map((row) => row.action)).toEqual(expectedActions(request));
+    for (const row of added) expect(row).toMatchObject({ actor_type: 'user', actor_id: ownerId });
   });
 });
 

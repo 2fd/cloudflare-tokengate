@@ -17,7 +17,7 @@ export function SetupInstructions(props: { host: string }) {
         <li>
           Serve the gateway on a custom domain. The admin console does not answer on workers.dev.
           This page was served from <code>{props.host}</code>. The hostname of the first sign-in
-          becomes the only admin host; owners can add more in Settings.
+          becomes the only admin host; owners can add more in Users › Sign-in.
         </li>
         <li>
           In Zero Trust, create a self-hosted Access application for that hostname that covers only

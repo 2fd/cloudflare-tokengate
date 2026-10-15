@@ -63,7 +63,7 @@ async function world() {
 }
 
 async function repoint(app: Parameters<typeof adminPost>[0], session: AdminSession, id: string) {
-  return adminPost(app, session, `/admin/services/${id}/credential`, {
+  return adminPost(app, session, `/admin/tokens/${id}/credential`, {
     base_url: `https://${ATTACKER_HOST}`,
     injection_kind: 'bearer',
     credential: 'attacker-token-0123456789',
@@ -220,7 +220,7 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
     const grantCount = async () =>
       env.DB.prepare('SELECT count(*) AS n FROM grants').first<number>('n');
 
-    it('an admin demoted to token_manager cannot create a grant (POST /admin/grants)', async () => {
+    it('an admin demoted to token_manager cannot create a grant (POST /admin/access)', async () => {
       const w = await world();
       const before = await grantCount();
       const result = await createGrant(
@@ -238,7 +238,7 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
       expect(await grantCount()).toBe(before);
     });
 
-    it('an admin demoted to access_manager cannot send the stored credential (POST /admin/services/:id/test)', async () => {
+    it('an admin demoted to access_manager cannot send the stored credential (POST /admin/tokens/:id/test)', async () => {
       const w = await world();
       const calls = w.network.calls.length;
       const result = await testServiceCredential(
@@ -314,7 +314,7 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
         disableStatus = res.status;
       }, 'api.github.com');
       const calls = w.network.calls.length;
-      const res = await adminPost(w.app, w.adminSession, `/admin/services/${w.serviceId}/test`, {});
+      const res = await adminPost(w.app, w.adminSession, `/admin/tokens/${w.serviceId}/test`, {});
       expect({ auditedAtSend, disableStatus, status: res.status }).toEqual({
         auditedAtSend: 1,
         disableStatus: 303,
