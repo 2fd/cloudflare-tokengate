@@ -121,6 +121,7 @@ describe('I-CRED-2: setServiceCredential re-seals with the new AAD', () => {
         credential_sealed: snapshot.credential_sealed as string,
         credential_hint: null,
         credential_expires_at: null,
+        template_id: 'github',
       },
       Date.now(),
       serviceCredentialGuard(snapshot),

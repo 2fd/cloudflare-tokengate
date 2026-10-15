@@ -1,10 +1,16 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  checkServiceCreate,
   createService,
   deleteService,
+  freeNameAmong,
+  freeSlugAmong,
   opContextFor,
+  rotateServiceSecret,
+  serviceFieldErrors,
   setServiceCredential,
+  slugBaseFor,
   testServiceCredential,
   updateServiceFields,
 } from '../../../../src/admin/ops/services';
@@ -153,9 +159,11 @@ describe('createService', () => {
     const result = await createService(deps, ACTOR, serviceInput(), CONTEXT);
     expect(result).toMatchObject({ ok: false, reason: 'conflict' });
     if (result.ok) return;
+    // Pre-checked before the keyring and the credential check (A7.4), with the free slug.
     expect(result.errors).toEqual([
-      'another service already uses this slug; choose a different slug',
+      'another token already uses github; leave empty to use github-2',
     ]);
+    expect(result.fieldErrors?.[0]?.field).toBe('slug');
     expect(await auditCount()).toBe(before);
   });
 
@@ -352,7 +360,13 @@ describe('setServiceCredential', () => {
       deps,
       ACTOR,
       id,
-      { base_url: 'https://api.github.com', injection: { kind: 'bearer' }, secret: SECRET },
+      {
+        base_url: 'https://api.github.com',
+        injection: { kind: 'bearer' },
+        secret: SECRET,
+        // No credential is stored yet: the destination is confirmed by typing its host (I-CRED-2).
+        confirm_destination: 'api.github.com',
+      },
       CONTEXT,
     );
     expect(sealedKid((await getService(env.DB, id))?.credential_sealed ?? null)).toBe('k9');
@@ -429,7 +443,7 @@ describe('deleteService', () => {
   it('deletes and keeps the full non-secret configuration in the audit row', async () => {
     const deps = opsDeps();
     const id = await seedService(deps, { secret: SECRET });
-    expect(await deleteService(deps, ACTOR, id)).toEqual({ ok: true });
+    expect(await deleteService(deps, ACTOR, id)).toEqual({ ok: true, deletedAccesses: 0 });
     expect(await getService(env.DB, id)).toBeNull();
     const audit = (await auditRows(id)).at(-1);
     expect(audit?.action).toBe('service.delete');
@@ -454,5 +468,150 @@ describe('deleteService', () => {
     expect(result.errors.join()).toContain('"ci deploy"');
     expect(await getService(env.DB, id)).not.toBeNull();
     expect(await auditCount()).toBe(before);
+  });
+});
+
+describe('token helpers', () => {
+  it('derives free slugs and names, and a custom slug from the host', () => {
+    expect(freeSlugAmong('slack', [])).toBe('slack');
+    expect(freeSlugAmong('slack', ['slack', 'slack-2'])).toBe('slack-3');
+    expect(freeSlugAmong('a'.repeat(63), ['a'.repeat(63)])).toBe(`${'a'.repeat(61)}-2`);
+    expect(freeNameAmong('Slack', ['Slack'])).toBe('Slack 2');
+    expect(slugBaseFor('https://api.example.com/v1')).toBe('example');
+    expect(slugBaseFor('https://www.Acme.io')).toBe('acme');
+    expect(slugBaseFor('https://hooks.slack.com/services')).toBe('hooks');
+    expect(slugBaseFor('not a url')).toBe('custom');
+  });
+
+  it('maps validation messages to their form fields', () => {
+    expect(
+      serviceFieldErrors([
+        'base URL must use https',
+        'slug must be 1-63 characters',
+        'credential expiry must be a timestamp in milliseconds',
+        'credential is empty',
+        'injection: header name must be a lower-case HTTP token (max 64 characters)',
+        'forward header "authorization" is never forwarded',
+        'something else',
+      ]).map((error) => error.field),
+    ).toEqual([
+      'base_url',
+      'slug',
+      'credential_expires_at',
+      'credential',
+      'injection_header_name',
+      'forward_headers',
+      null,
+    ]);
+  });
+
+  it('keeps template check headers and refuses reserved or injected ones', async () => {
+    const deps = opsDeps();
+    const ok = await createService(
+      deps,
+      ACTOR,
+      serviceInput({
+        slug: 'anthropic',
+        base_url: 'https://api.anthropic.com',
+        injection: { kind: 'header', name: 'x-api-key' },
+        forward_headers: [],
+        verify: {
+          method: 'GET',
+          path: '/v1/models',
+          expect_status: 200,
+          headers: { 'anthropic-version': '2023-06-01' },
+        },
+      }),
+      CONTEXT,
+    );
+    expect(ok.ok && ok.service.verify?.headers).toEqual({ 'anthropic-version': '2023-06-01' });
+    expect(ok.ok && ok.service.template_id).toBe('anthropic');
+    const badHeaders: Array<Record<string, string>> = [
+      { 'x-api-key': 'k' },
+      { authorization: 'x' },
+      { 'x-ok': 'line\nbreak' },
+      { a: '1', b: '2', c: '3', d: '4', e: '5' },
+    ];
+    for (const headers of badHeaders) {
+      const bad = await createService(
+        deps,
+        ACTOR,
+        serviceInput({
+          slug: 'bad-headers',
+          injection: { kind: 'header', name: 'x-api-key' },
+          forward_headers: [],
+          verify: { method: 'GET', path: '/x', expect_status: 200, headers },
+        }),
+        CONTEXT,
+      );
+      expect(bad, JSON.stringify(headers)).toMatchObject({ ok: false, reason: 'invalid' });
+    }
+  });
+
+  it('checkServiceCreate sends nothing and writes nothing; hostAllowed skips only the allowlist', async () => {
+    const network = fakeNetwork();
+    const deps = opsDeps({ fetch: network.fetch });
+    await setUpstreamHosts(['api.github.com']);
+    const input = serviceInput({
+      slug: 'openai',
+      base_url: 'https://api.openai.com/v1',
+      secret: SECRET,
+      verify: { method: 'GET', path: '/models', expect_status: 200 },
+    });
+    expect(await checkServiceCreate(deps, input, CONTEXT)).toMatchObject({
+      ok: false,
+      reason: 'invalid',
+    });
+    expect(await checkServiceCreate(deps, input, CONTEXT, { hostAllowed: true })).toMatchObject({
+      ok: true,
+    });
+    expect(network.calls).toEqual([]);
+    expect(await auditCount()).toBe(0);
+  });
+
+  it('rotateServiceSecret keeps the stored destination and refuses an unattested one', async () => {
+    const deps = opsDeps();
+    const id = await seedService(deps, { secret: SECRET });
+    const rotated = await rotateServiceSecret(deps, ACTOR, id, { secret: `${SECRET}x` }, CONTEXT);
+    expect(rotated).toMatchObject({ ok: true, siblings: [] });
+    expect((await getService(env.DB, id))?.base_url).toBe('https://api.github.com');
+    await env.DB.prepare("UPDATE services SET base_url = 'https://uploads.github.com' WHERE id = ?")
+      .bind(id)
+      .run();
+    expect(await rotateServiceSecret(deps, ACTOR, id, { secret: SECRET }, CONTEXT)).toMatchObject({
+      ok: false,
+      reason: 'confirmation_required',
+    });
+  });
+
+  it('testServiceCredential stores a GitHub-reported expiry that differs, as service.update', async () => {
+    const deps = opsDeps({
+      fetch: fakeNetwork(() =>
+        Response.json(
+          {},
+          { headers: { 'github-authentication-token-expiration': '2031-01-02 03:04:05 UTC' } },
+        ),
+      ).fetch,
+    });
+    const id = await seedService(deps, {
+      secret: SECRET,
+      verify: { method: 'GET', path: '/rate_limit', expect_status: 200 },
+    });
+    await env.DB.prepare('UPDATE services SET credential_expires_at = NULL WHERE id = ?')
+      .bind(id)
+      .run();
+    const result = await testServiceCredential(deps, ACTOR, id, CONTEXT);
+    expect(result).toMatchObject({ ok: true, expirySaved: true });
+    expect((await getService(env.DB, id))?.credential_expires_at).toBe(
+      Date.UTC(2031, 0, 2, 3, 4, 5),
+    );
+    expect((await auditRows(id)).map((row) => row.action).slice(-2)).toEqual([
+      'service.credential.test',
+      'service.update',
+    ]);
+    // Unchanged expiry: no second row.
+    expect(await testServiceCredential(deps, ACTOR, id, CONTEXT)).toMatchObject({
+      expirySaved: false,
+    });
   });
 });

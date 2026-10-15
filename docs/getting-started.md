@@ -189,18 +189,17 @@ GitLab CI and other issuers are covered in [callers/gitlab-ci.md](callers/gitlab
 
 ## 13. Add a service token
 
-A service is one upstream API plus the credential the gateway attaches. This example uses the GitHub REST API.
+A service token is one upstream API plus the secret the gateway attaches. This example uses the GitHub REST API.
 
 1. In GitHub, create a fine-grained personal access token that can access only your test repository. The default read-only "Metadata" permission is enough for this example.
-2. In the admin UI, open Services and click "Add a service".
-3. Under "Start from a template", click "GitHub REST API".
-4. Keep the "Slug" `github`. Callers use it in the URL: `<gateway>/proxy/github/...`. You cannot change it later.
-5. Paste the token in "Credential (optional)".
-6. Click "Create service".
+2. In the admin UI, open **Service tokens**. With no tokens yet, "Add your first token" is open.
+3. Open the **GitHub REST API** card.
+4. Paste the token in **Personal access token**. Leave name and slug empty: the token gets the name `GitHub` and the slug `github`. Consumers use the slug in the URL: `<gateway>/proxy/github/...`. It cannot be changed later.
+5. Select **Check and save GitHub**.
 
-The template includes a credential check (`GET /rate_limit`). If it passes, the page shows "Service created; the credential check against the upstream passed."
+The template includes a secret check (`GET /rate_limit`). If it passes, the token page says "GitHub created (slug github); the secret check passed." and reads the token's expiry from GitHub. If the check fails, the page keeps the secret for 15 minutes; fix the cause and select **Check again and save**, or **Save without a passing check**.
 
-The credential is encrypted before it is stored. The UI shows only its length and last 4 characters ([I-CRED-1](threat-model.md#i-cred-1)). More templates and their settings are in [upstreams/github.md](upstreams/github.md) and the other [upstreams](upstreams/) pages.
+The secret is encrypted before it is stored. The UI shows only its length and last 4 characters ([I-CRED-1](threat-model.md#i-cred-1)). The token page says "0 consumers can use this token": loading a token gives nobody access. More token types and their settings are in [upstreams/github.md](upstreams/github.md) and the other [upstreams](upstreams/) pages.
 
 ## 14. Make the first call
 

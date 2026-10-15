@@ -139,13 +139,15 @@ describe('key rotation flow', () => {
     const rotated = appWith({ TOKENGATE_KEK: '', TOKENGATE_KEYRING: KEYRING_1_2 });
     const session = await ownerOf(rotated);
     const before = await (await adminGet(rotated, session, '/admin/tokens/keys')).text();
-    expect(before).toContain('1 credential(s) are still encrypted with an older key');
+    expect(before).toContain('1 secret is still encrypted with an older key');
+    expect(before).toContain('Re-encrypt 1 secret…');
+    expect(before).toContain('name="_return" value="detail"');
     expect(before).toContain('action="/admin/tokens/keys/rewrap"');
 
     const res = await adminPost(rotated, session, '/admin/tokens/keys/rewrap');
     expect(res.headers.get('location')).toBe('/admin/tokens/keys?notice=rewrapped');
     const after = await (await adminGet(rotated, session, '/admin/tokens/keys')).text();
-    expect(after).toContain('Every stored credential uses the active key.');
+    expect(after).toContain('Every stored secret uses the active key.');
   });
 
   it('recovers from a replaced key: the button is offered for a changed check value alone', async () => {
@@ -157,11 +159,11 @@ describe('key rotation flow', () => {
     const replaced = appWith({ TOKENGATE_KEK: KEK_2 });
     const session = await ownerOf(replaced);
     const before = await (await adminGet(replaced, session, '/admin/tokens/keys')).text();
-    expect(before).toContain(
-      'Restore the original key, or set those credentials again and then re-encrypt credentials to accept the new key.',
-    );
+    expect(before).toContain('Key k1 is not the key that encrypted its secrets');
+    expect(before).toContain('changed</span>');
+    expect(before).toContain('Confirming also accepts the new check value');
     expect(before).not.toContain('still encrypted with an older key');
-    expect(before).not.toContain('Fix the problems listed above first');
+    expect(before).not.toContain('Fix the problems above first');
     expect(before).toContain('action="/admin/tokens/keys/rewrap"');
 
     // "one" still needs the old key: nothing changes and it is named.
@@ -188,9 +190,21 @@ describe('key rotation flow', () => {
     const after = await (
       await adminGet(replaced, session, '/admin/tokens/keys?notice=key_confirmed')
     ).text();
-    expect(after).toContain('New key confirmed: every credential opens with it.');
+    expect(after).toContain('New key confirmed: every secret opens with it.');
     expect(after).not.toContain('its check value changed');
-    expect(after).toContain('Every stored credential uses the active key.');
+    expect(after).toContain('Every stored secret uses the active key.');
+  });
+});
+
+describe('the key check command', () => {
+  it('names pnpm keyring check and the login variables it needs (I-CRED-3)', async () => {
+    const html = await (
+      await adminGet(app, await sessionFor('viewer'), '/admin/tokens/keys')
+    ).text();
+    expect(html).toContain('<code>pnpm keyring check</code>');
+    expect(html).toContain('<code>AUTH_ACCESS_DEVELOPMENT</code>');
+    expect(html).toContain('Active key k1. 1 key loaded. Every stored secret opens.');
+    expect(html).toContain('<caption id="keys-cap">Keys in the keyring</caption>');
   });
 });
 
@@ -201,7 +215,7 @@ describe('re-encrypt control', () => {
     const html = await (await adminGet(noKey, await ownerOf(noKey), '/admin/tokens/keys')).text();
     expect(html).toContain('No encryption key is configured');
     expect(html).not.toContain('still encrypted with an older key');
-    expect(html).not.toContain('Only owners can re-encrypt');
+    expect(html).not.toContain('Ask an owner to re-encrypt');
     expect(html).not.toContain('action="/admin/tokens/keys/rewrap"');
   });
 
@@ -215,7 +229,7 @@ describe('re-encrypt control', () => {
     const html = await (await adminGet(rotated, session, '/admin/tokens/keys')).text();
     expect(html).toContain('still encrypted with an older key');
     expect(html).not.toContain('action="/admin/tokens/keys/rewrap"');
-    expect(html).toContain('Only owners can re-encrypt');
+    expect(html).toContain('Ask an owner to re-encrypt the secrets');
   });
 
   it('does not offer re-encryption while a key used by credentials is missing', async () => {

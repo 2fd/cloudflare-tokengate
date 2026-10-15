@@ -59,7 +59,7 @@ describe('I-RBAC-1: static admin routes are registered before their :id siblings
 
   it('POST /admin/tokens/hosts is the allowlist route, not a token edit', async () => {
     const app = createTestApp();
-    const fields = { allowed_upstream_hosts: 'api.example.com' };
+    const fields = { mode: 'list', other_hosts: 'api.example.com' };
     const refused = await adminPost(
       app,
       await sessionFor(app, 'token_manager'),

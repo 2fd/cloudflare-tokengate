@@ -51,6 +51,44 @@ export function credentialAad(
   return utf8(`${AAD_LABEL}\n${serviceId}\n${baseUrl}\n${injectionJson}`);
 }
 
+/** A different label from AAD_LABEL: a draft never opens as a stored credential, nor the reverse. */
+const DRAFT_AAD_LABEL = 'tokengate/v1/credential-draft';
+
+/** What a credential draft (ADR 0020) is bound to: who typed it, for which destination, until when. */
+export interface CredentialDraftBinding {
+  userId: string;
+  loginProvider: string;
+  subject: string;
+  /** `new` (a token being created) or the service id. */
+  target: string;
+  /** Normalized base URL. */
+  baseUrl: string;
+  /** Canonical injection JSON. */
+  injectionJson: string;
+  /** Milliseconds since the epoch; carried in clear in the draft and bound here. */
+  expiresAt: number;
+}
+
+/**
+ * Additional authenticated data of a sealed credential draft. No field may contain '\n'
+ * (asserted), so the encoding is unambiguous; the injection JSON is last.
+ */
+export function credentialDraftAad(binding: CredentialDraftBinding): Uint8Array {
+  const fields = [
+    binding.userId,
+    binding.loginProvider,
+    binding.subject,
+    binding.target,
+    binding.baseUrl,
+    String(binding.expiresAt),
+    binding.injectionJson,
+  ];
+  if (fields.some((field) => typeof field !== 'string' || field.includes('\n'))) {
+    throw new Error('credentialDraftAad: fields must be strings without newlines');
+  }
+  return utf8([DRAFT_AAD_LABEL, ...fields].join('\n'));
+}
+
 /**
  * Seals `plaintext` under the keyring's active KEK.
  * `random` is called exactly three times, in this order: DEK (32), iv (12), dek_iv (12).

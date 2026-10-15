@@ -37,6 +37,12 @@ export interface VerifyCheck {
   expect_status: number;
   /** Slack-style APIs report failures as 200 with {"ok": false}. */
   expect_ok_field?: boolean;
+  /**
+   * Extra request headers of the check (at most 4), e.g. `anthropic-version`. Set by templates
+   * only. Lower-case names that are never forwarded headers or the injected header; the
+   * credential is injected after them, so they can never replace it.
+   */
+  headers?: Record<string, string>;
 }
 
 export interface ValidationResult {

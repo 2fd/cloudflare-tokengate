@@ -6,24 +6,24 @@ Use this when a job needs a token with more access than its own `GITHUB_TOKEN`, 
 
 ## Service templates
 
-In the admin UI, open **Services**, select **Add a service** and choose a template (`src/admin/service-templates.ts`).
+In the admin UI, open **Service tokens**, select **Add a token** and open the **GitHub REST API** card. Paste the token, tick **Also add release asset uploads (uploads.github.com) with the same token** if jobs upload release assets, and select **Check and save GitHub**. One paste creates both tokens. Everything in the table comes from the templates (`src/admin/service-templates.ts`).
 
 | Field | **GitHub REST API** | **GitHub release asset uploads** |
 |---|---|---|
 | Slug | `github` | `github-uploads` |
 | Base URL | `https://api.github.com` | `https://uploads.github.com` |
-| How the credential is sent | Bearer token | Bearer token |
-| Extra headers callers may send | `x-github-api-version` | `x-github-api-version` |
+| How the secret is sent | Bearer token | Bearer token |
+| Extra headers consumers may send | `x-github-api-version` | `x-github-api-version` |
 | Timeout (milliseconds) | `60000` | `600000` |
-| Credential check | `GET /rate_limit`, expect `200` | none |
+| Secret check | `GET /rate_limit`, expect `200` | none |
 | Suggested grant rule | `GET /repos/OWNER/REPO/**` | `POST /repos/OWNER/REPO/releases/*/assets` |
 | Host for the upstream host allowlist | `api.github.com` | `uploads.github.com` |
 
-If the upstream host allowlist in Settings is set, add the host to it before you create the service ([configuration](../configuration.md#upstream-host-allowlist)). Otherwise saving the service fails.
+If **Service tokens › Allowed hosts** is set and does not include `api.github.com`, the card says so before you type anything. An owner ticks **Also allow api.github.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
 
 - Prefer a fine-grained personal access token limited to the repositories and permissions the jobs need (`github_pat_REDACTED`).
-- Release asset uploads use a separate host, so they need the second service. Store the same token in both.
-- Set **Credential expires on (optional, UTC)** to the token's expiry. The dashboard warns 14 days before. If you leave it empty, the credential check fills it in from GitHub's `github-authentication-token-expiration` response header.
+- Release asset uploads use a separate host, so they need the second token. The checkbox stores the same secret in both, and **Replace secret** on either token page offers to replace it in the other too.
+- The form does not ask for the expiry: the secret check reads it from GitHub's `github-authentication-token-expiration` response header, and **Test GitHub secret** on the token page updates it. The Overview warns 14 days before.
 - The gateway stores static credentials only. It does not mint GitHub App installation tokens; see [roadmap.md](../roadmap.md).
 
 Reference: <https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api>.

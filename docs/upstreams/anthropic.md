@@ -4,20 +4,20 @@ This page shows admins how to set up an Anthropic service and shows workflow aut
 
 ## Service template
 
-In the admin UI, open **Services**, select **Add a service** and choose the **Anthropic API** template (`src/admin/service-templates.ts`).
+In the admin UI, open **Service tokens**, select **Add a token** and open the **Anthropic API** card. Paste the API key and select **Check and save Anthropic**. Everything in the table comes from the template (`src/admin/service-templates.ts`); the form does not ask for it. Name and slug are optional: when empty, the gateway uses `Anthropic` and the slug below, or the next free one (`anthropic-2`).
 
 | Field | Template value |
 |---|---|
 | Slug | `anthropic` |
 | Base URL | `https://api.anthropic.com` (no `/v1`: the SDKs add it) |
-| How the credential is sent | Custom header; **Header name (custom header only)** `x-api-key`, no prefix |
-| Extra headers callers may send | `anthropic-version`, `anthropic-beta` |
+| How the secret is sent | Custom header `x-api-key`, no prefix |
+| Extra headers consumers may send | `anthropic-version`, `anthropic-beta` |
 | Timeout (milliseconds) | `600000` |
-| Credential check | none (the API requires an `anthropic-version` header, which a check cannot send) |
+| Secret check | `GET /v1/models` with `anthropic-version: 2023-06-01`, expect `200` |
 | Suggested grant rule | `POST /v1/messages` |
 | Host for the upstream host allowlist | `api.anthropic.com` |
 
-If the upstream host allowlist in Settings is set, add the host to it before you create the service ([configuration](../configuration.md#upstream-host-allowlist)). Otherwise saving the service fails.
+If **Service tokens › Allowed hosts** is set and does not include `api.anthropic.com`, the card says so before you type anything. An owner ticks **Also allow api.anthropic.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
 
 Reference: <https://docs.anthropic.com/en/api/overview>.
 

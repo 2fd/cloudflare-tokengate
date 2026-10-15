@@ -91,7 +91,8 @@ async function expectRefused(key: string, role: Role, extra: Record<string, stri
 describe('I-RBAC-1: token and access duties are separate', () => {
   it('lists token and access routes', () => {
     expect(TOKEN_ROUTES).toContain('POST /admin/tokens/:id/test');
-    expect(TOKEN_ROUTES).toContain('POST /admin/tokens/:id/credential');
+    expect(TOKEN_ROUTES).toContain('POST /admin/tokens/:id/secret');
+    expect(TOKEN_ROUTES).toContain('POST /admin/tokens/:id/destination');
     expect(ACCESS_ROUTES).toContain('POST /admin/access');
     expect(ACCESS_ROUTES).toContain('POST /admin/consumers');
   });

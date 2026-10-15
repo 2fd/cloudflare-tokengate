@@ -221,23 +221,34 @@ a `settings.admin_hosts` audit event.
 
 ## Upstream host allowlist
 
-The hosts that service base URLs may use. It is a setting in the admin UI, not a variable: Settings >
-"Upstream hosts". Only owners can change it (permission `settings:write`). Admins cannot widen it.
-Each change writes a `settings.upstream_hosts` audit event.
+The hosts that service token base URLs may use. It is a setting in the admin UI, not a variable:
+**Service tokens › Allowed hosts** (`/admin/tokens/hosts`). Only owners can change it (permission
+`settings:write`). Admins and token managers cannot widen it. Each change writes a
+`settings.upstream_hosts` audit event.
 
-- **Empty (the default):** any public https host is allowed. You can load a credential for any
-  upstream. IP literals, `localhost`, `*.workers.dev` and the gateway's own hosts ([admin hosts](#admin-hosts) and the request host) are always refused
-  ([I-SSRF-1](threat-model.md#i-ssrf-1)).
-- **Entries:** one per line, or separated by commas or spaces. `api.example.com` matches that host
-  only. `*.example.com` matches any host below it (`a.example.com`, `a.b.example.com`) but not
-  `example.com` itself. A wildcard needs at least two labels after `*.`: `*.com` is invalid. Entries
-  are lowercased and duplicates removed. An invalid entry refuses the whole save and names the entry.
-- **Where it applies:** when a service is saved, with the error "host ... is not in the upstream host
-  allowlist (Settings)", and on every proxied request. The proxy reads the list in its per-request D1
-  batch, so a change applies to the next request. A service outside the list answers
-  `503 not_configured` (reason `base_url_invalid`). Settings names the services that point outside it.
+- **Any public HTTPS host (the default, no list):** you can load a secret for any upstream. IP
+  literals, `localhost`, `*.workers.dev` and the gateway's own hosts ([admin hosts](#admin-hosts)
+  and the request host) are always refused ([I-SSRF-1](threat-model.md#i-ssrf-1)).
+- **Only the hosts below:** owners tick hosts from a list of the hosts that tokens and token types
+  use, and type others under "Other hosts", one per line. Only hosts the stored list contains
+  literally start ticked: a host that is refused now, or covered by a wildcard, starts unticked, so
+  a save never allows one silently. Wildcards and hosts no token uses stay in "Other hosts".
+  `api.example.com` matches that host only. `*.example.com` matches any host below it
+  (`a.example.com`, `a.b.example.com`) but not `example.com` itself. A wildcard needs at least two
+  labels after `*.`: `*.com` is invalid. A pasted URL is reduced to its host. Entries are
+  lowercased and duplicates removed. An invalid entry refuses the whole save and names the line.
+  "Only" with nothing ticked or typed is refused: an empty list would mean any host.
+- **From a token form:** when a token type's host or a custom base URL is not allowed, the form says
+  so. An owner ticks **Also allow <host> in Allowed hosts** in the same submit; the allowlist change
+  is committed first, as its own audited change, and the token is saved after it. Anyone else asks
+  an owner. The field `allow_host` needs `settings:write`, so the middleware refuses it for other
+  roles and the commit re-checks it ([I-RBAC-1](threat-model.md#i-rbac-1)).
+- **Where it applies:** when a token is saved, and on every proxied request. The proxy reads the
+  list in its per-request D1 batch, so a change applies to the next request. A token outside the
+  list answers `503 not_configured` (reason `base_url_invalid`). The Allowed hosts page lists the
+  tokens that point outside it.
 - **Stored value:** key `allowed_upstream_hosts` in the `settings` table, a JSON array or `null`. A
-  stored value that is not a valid list denies every host (fail closed).
+  stored value that is not a valid list denies every host (fail closed), and the page says so.
 
 Hosts of the service templates (`src/admin/service-templates.ts`):
 

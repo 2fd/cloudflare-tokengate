@@ -37,8 +37,6 @@ async function seed() {
   await env.DB.prepare(
     "INSERT OR IGNORE INTO users (id, email, role, status, created_at, updated_at) VALUES ('usr_b', 'B@example.com', 'admin', 'active', 1, 1), ('usr_a', 'a@example.com', 'owner', 'active', 1, 1), ('usr_c', 'c@example.com', 'token_manager', 'active', 1, 1), ('usr_d', 'd@example.com', 'access_manager', 'pending', 1, 1)",
   ).run();
-  // template_id is persisted by the token forms later; set it directly here.
-  await env.DB.prepare("UPDATE services SET template_id = 'slack' WHERE id = ?").bind(slack).run();
   await env.DB.prepare(
     `INSERT INTO claim_labels (caller_provider_id, claim, value, label, updated_at, updated_by)
      VALUES (?1, 'repository_id', '987654321', 'acme/api', 1, 'usr_a'),
@@ -73,7 +71,8 @@ describe('buildExport', () => {
     expect(document.services.map((s) => s.slug)).toEqual(['github', 'slack']);
     expect(document.services[0]?.credential).toMatchObject({ hint: '…cdef (30 chars)' });
     expect(document.services[1]?.credential).toBeNull();
-    expect(document.services.map((s) => s.template_id)).toEqual([null, 'slack']);
+    // createService derives template_id from the destination.
+    expect(document.services.map((s) => s.template_id)).toEqual(['github', 'slack']);
     expect(document.claim_labels).toEqual([
       {
         caller_provider: 'GitHub Actions',

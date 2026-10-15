@@ -41,6 +41,8 @@ export interface NewServiceRow {
   credential_updated_at: number | null;
   credential_expires_at: number | null;
   verify: VerifyCheck | null;
+  /** Display and preset data only (templateIdFor), never part of the AAD. */
+  template_id: string | null;
   enabled: boolean;
   created_at: number;
 }
@@ -49,9 +51,9 @@ export function insertServiceStatement(db: D1Database, row: NewServiceRow): D1Pr
   return db
     .prepare(
       `INSERT INTO services (id, slug, name, description, base_url, injection, forward_headers, timeout_ms,
-         credential_sealed, credential_hint, credential_updated_at, credential_expires_at, verify, enabled,
-         created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         credential_sealed, credential_hint, credential_updated_at, credential_expires_at, verify,
+         template_id, enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       row.id,
@@ -67,6 +69,7 @@ export function insertServiceStatement(db: D1Database, row: NewServiceRow): D1Pr
       row.credential_updated_at,
       row.credential_expires_at,
       verifyJson(row.verify),
+      row.template_id,
       row.enabled ? 1 : 0,
       row.created_at,
       row.created_at,
@@ -133,6 +136,8 @@ export interface ServiceCredentialValues {
   credential_sealed: string;
   credential_hint: string | null;
   credential_expires_at: number | null;
+  /** Recomputed from the new destination on every credential save (templateIdFor). */
+  template_id: string | null;
 }
 
 export function updateServiceCredentialStatement(
@@ -145,7 +150,8 @@ export function updateServiceCredentialStatement(
   return db
     .prepare(
       `UPDATE services SET base_url = ?, injection = ?, credential_sealed = ?, credential_hint = ?,
-         credential_updated_at = ?, credential_expires_at = ?, updated_at = MAX(?, updated_at + 1)
+         credential_updated_at = ?, credential_expires_at = ?, template_id = ?,
+         updated_at = MAX(?, updated_at + 1)
        WHERE id = ? AND (${guard.sql})`,
     )
     .bind(
@@ -155,6 +161,7 @@ export function updateServiceCredentialStatement(
       values.credential_hint,
       now,
       values.credential_expires_at,
+      values.template_id,
       now,
       id,
       ...guard.binds,

@@ -113,7 +113,13 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, RoutePermission>> = Obje
   'POST /admin/tokens': { ...tokensWrite, fieldPermissions: { allow_host: 'settings:write' } },
   'GET /admin/tokens/:id': read,
   'POST /admin/tokens/:id': tokensWrite,
-  'POST /admin/tokens/:id/credential': tokensWrite,
+  // Rotate only: the destination is read from the stored row, never from the form.
+  'POST /admin/tokens/:id/secret': tokensWrite,
+  // A new destination needs the secret again (I-CRED-2); allowing its host edits the allowlist.
+  'POST /admin/tokens/:id/destination': {
+    ...tokensWrite,
+    fieldPermissions: { allow_host: 'settings:write' },
+  },
   'POST /admin/tokens/:id/test': tokensWrite,
   'POST /admin/tokens/:id/toggle': tokensWrite,
   // Deleting the consumer access of the token with it is an access change.

@@ -281,8 +281,10 @@ describe('I-CFG-1: malformed config disables the affected feature; never runs ha
   });
 
   it.each([
-    'api.slack.com,https://api.openai.com',
     'api.slack.com:443',
+    '10.0.0.1',
+    'localhost',
+    'my-worker.workers.dev',
     '*.com',
     '*',
     '**.slack.com',
@@ -314,6 +316,14 @@ describe('upstream host allowlist', () => {
       hosts: ['api.slack.com', '*.openai.com'],
     });
     expect(parseUpstreamHostInput(' \n ')).toEqual({ ok: true, hosts: null });
+    // A pasted URL is reduced to its host.
+    expect(parseUpstreamHostInput('api.slack.com,https://API.openai.com/v1')).toEqual({
+      ok: true,
+      hosts: ['api.slack.com', 'api.openai.com'],
+    });
+    // Errors name the line.
+    const multi = parseUpstreamHostInput('api.slack.com\n10.0.0.1');
+    expect(multi.ok === false && multi.error).toContain('Line 2');
   });
 
   it.each([

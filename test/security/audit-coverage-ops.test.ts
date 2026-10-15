@@ -21,10 +21,12 @@ import { rewrapCredentials } from '../../src/admin/ops/keyring';
 import {
   createService,
   deleteService,
+  rotateServiceSecret,
   setServiceCredential,
   testServiceCredential,
   updateServiceFields,
 } from '../../src/admin/ops/services';
+import { addUpstreamHost, updateUpstreamHosts } from '../../src/admin/ops/upstream-hosts';
 import type { CallerProvider } from '../../src/db/types';
 import type { Deps } from '../../src/deps';
 import { newId } from '../../src/lib/ids';
@@ -149,6 +151,33 @@ const successes: Array<OpCase & { action: string }> = [
     run: (d, id) => deleteService(d, ACTOR, id),
   },
   {
+    name: 'deleteService (with its accesses)',
+    action: 'service.delete',
+    setup: async (d) => {
+      const id = await seedService(d, { slug: 'cascade' });
+      return `${id}:${(await seedGrant(d, provider.id, id)).id}`;
+    },
+    run: (d, ids) => {
+      const [id = '', grantId = ''] = ids.split(':');
+      return deleteService(d, ACTOR, id, { withAccesses: true, accessIds: [grantId] });
+    },
+  },
+  {
+    name: 'rotateServiceSecret',
+    action: 'service.credential.set',
+    run: (d) => rotateServiceSecret(d, ACTOR, serviceId, { secret: `${CANARY}-new` }, CONTEXT),
+  },
+  {
+    name: 'addUpstreamHost',
+    action: 'settings.upstream_hosts',
+    setup: async (d) => {
+      const set = await updateUpstreamHosts(d, ACTOR, 'api.github.com');
+      if (!set.ok) throw new Error(set.errors.join());
+      return '';
+    },
+    run: (d) => addUpstreamHost(d, ACTOR, 'https://api.openai.com/v1'),
+  },
+  {
     name: 'createCallerProvider',
     action: 'caller_provider.create',
     run: (d) =>
@@ -268,6 +297,35 @@ const failures: OpCase[] = [
     name: 'deleteService (referenced)',
     setup: seedOwnGrant,
     run: (d) => deleteService(d, ACTOR, serviceId),
+  },
+  {
+    name: 'deleteService (accesses not the confirmed set)',
+    setup: seedOwnGrant,
+    run: (d) => deleteService(d, ACTOR, serviceId, { withAccesses: true, accessIds: [] }),
+  },
+  {
+    name: 'rotateServiceSecret (unattested)',
+    setup: async () => {
+      await env.DB.prepare(
+        "UPDATE services SET base_url = 'https://uploads.github.com' WHERE id = ?",
+      )
+        .bind(serviceId)
+        .run();
+      return '';
+    },
+    run: (d) => rotateServiceSecret(d, ACTOR, serviceId, { secret: CANARY }, CONTEXT),
+  },
+  {
+    name: 'setServiceCredential (no credential, unconfirmed)',
+    setup: (d) => seedService(d, { slug: 'bare' }),
+    run: (d, id) =>
+      setServiceCredential(
+        d,
+        ACTOR,
+        id,
+        { base_url: 'https://api.github.com', injection: { kind: 'bearer' }, secret: CANARY },
+        CONTEXT,
+      ),
   },
   {
     name: 'createCallerProvider (no pin on shared issuer)',

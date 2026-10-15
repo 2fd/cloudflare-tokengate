@@ -49,7 +49,7 @@ describe('the shell on every page', () => {
     expect(html).toContain('<main id="main" tabindex="-1">');
     expect(html.match(/<h1>/g)).toHaveLength(1);
     expect(html).toContain('<meta name="color-scheme" content="light dark"/>');
-    expect(html).toContain('<title>Services – Service tokens – tokengate</title>');
+    expect(html).toContain('<title>Service tokens – Service tokens – tokengate</title>');
     expect(html).not.toContain('<script');
     expect(html).not.toContain(' style=');
   });

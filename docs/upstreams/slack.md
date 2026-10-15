@@ -5,20 +5,20 @@ For Slack incoming webhooks, see [webhooks.md](webhooks.md).
 
 ## Service template
 
-In the admin UI, open **Services**, select **Add a service** and choose the **Slack Web API** template (`src/admin/service-templates.ts`).
+In the admin UI, open **Service tokens**, select **Add a token** and open the **Slack Web API** card. Paste the bot token and select **Check and save Slack**. Everything in the table comes from the template (`src/admin/service-templates.ts`); the form does not ask for it. Name and slug are optional: when empty, the gateway uses `Slack` and the slug below, or the next free one (`slack-2`).
 
 | Field | Template value |
 |---|---|
 | Slug | `slack` |
 | Base URL | `https://slack.com/api` |
-| How the credential is sent | Bearer token (`Authorization: Bearer <credential>`) |
-| Extra headers callers may send | none |
+| How the secret is sent | Bearer token (`Authorization: Bearer <credential>`) |
+| Extra headers consumers may send | none |
 | Timeout (milliseconds) | `30000` |
-| Credential check | `POST /auth.test`, expect `200` and `"ok": true` |
+| Secret check | `POST /auth.test`, expect `200` and `"ok": true` |
 | Suggested grant rule | `POST /chat.postMessage` |
 | Host for the upstream host allowlist | `slack.com` (`*.slack.com` does not match it) |
 
-If the upstream host allowlist in Settings is set, add the host to it before you create the service ([configuration](../configuration.md#upstream-host-allowlist)). Otherwise saving the service fails.
+If **Service tokens › Allowed hosts** is set and does not include `slack.com`, the card says so before you type anything. An owner ticks **Also allow slack.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
 
 Use a bot token (`xoxb-REDACTED`). The credential check calls `auth.test`, because Slack answers a bad token with HTTP 200 and `"ok": false`.
 

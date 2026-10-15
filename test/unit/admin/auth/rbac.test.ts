@@ -46,7 +46,8 @@ const DOCUMENTED_ADMIN_ROUTES = [
   'POST /admin/tokens',
   'GET /admin/tokens/:id',
   'POST /admin/tokens/:id',
-  'POST /admin/tokens/:id/credential',
+  'POST /admin/tokens/:id/secret',
+  'POST /admin/tokens/:id/destination',
   'POST /admin/tokens/:id/test',
   'POST /admin/tokens/:id/delete',
   'POST /admin/tokens/:id/toggle',
@@ -75,6 +76,7 @@ const DOCUMENTED_ADMIN_ROUTES = [
 const FIELD_PERMISSIONS: Record<string, Record<string, Permission>> = {
   // == tokens ==
   'POST /admin/tokens': { allow_host: 'settings:write' },
+  'POST /admin/tokens/:id/destination': { allow_host: 'settings:write' },
   'POST /admin/tokens/:id/delete': { with_accesses: 'access:write' },
 };
 

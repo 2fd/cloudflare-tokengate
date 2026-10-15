@@ -1,8 +1,10 @@
-// Prefill data for the "new service" form and the operation presets of consumer access. Templates
-// are suggestions only: the submitted form goes through the same validation as any other service.
-// Every template is checked by test/unit/admin/ops/service-templates.test.ts against
-// validateBaseUrl, validateServiceFields and the rule validation of its operation presets.
+// The token types of the "Add a token" accordion and the operation presets of consumer access. A
+// template card posts only the secret and display fields: base URL, injection, headers, timeout and
+// check come from here, never from the form (I-SSRF-1). Every template is checked by
+// test/unit/admin/ops/service-templates.test.ts against validateBaseUrl, validateServiceFields, the
+// rule validation of its operation presets, and its own secret placeholder and pattern.
 import type { Service } from '../db/types';
+import { canonicalJson } from '../lib/json';
 import type { Injection, ProxyMethod, Rule, VerifyCheck } from '../policy/types';
 
 /** Stands for the repository (`acme/api`) in an operation preset path. */
@@ -18,9 +20,31 @@ export interface OperationPreset {
   default: boolean;
 }
 
+/** How the secret of a template is asked for: the label, an exact fake example and the hint. */
+export interface TemplateSecret {
+  label: string;
+  /** Format-exact but visibly fake (zeros and X), so secret scanners do not flag the source. */
+  placeholder: string;
+  hint: string;
+  /**
+   * Webhook templates: the whole webhook URL is pasted and the server keeps the part after one of
+   * these prefixes (the path secret). The bare remainder is accepted too.
+   */
+  url_prefixes?: readonly string[];
+  /** HTML `pattern` of the pasted value (compiled with the `v` flag by browsers). */
+  pattern?: string;
+}
+
 export interface ServiceTemplate {
   id: string;
   label: string;
+  /** The card summary after the label: host and secret shape, e.g. "slack.com/api · bot token xoxb-…". */
+  card_summary: string;
+  secret: TemplateSecret;
+  /** Templates that take the same secret (rotate offers to replace it in the others too). */
+  family?: 'github';
+  /** The upstream reports the secret's expiry on the check (GitHub): no expiry field is asked. */
+  expiry_from_check: boolean;
   /** Suggested slug and display name. */
   slug: string;
   name: string;
@@ -39,11 +63,25 @@ export interface ServiceTemplate {
   notes: string;
 }
 
+const GITHUB_SECRET: TemplateSecret = {
+  label: 'Personal access token',
+  placeholder:
+    'github_pat_00XXXXXXXXXXXXXXXXXXXX_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+  hint: 'Fine-grained token limited to the needed repositories (classic ghp_… also works). Its expiry is read from GitHub.',
+};
+
 /** Deeply frozen: forms prefill from these shared objects and must copy before editing. */
 export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
   {
     id: 'slack',
     label: 'Slack Web API',
+    card_summary: 'slack.com/api · bot token xoxb-…',
+    secret: {
+      label: 'Bot token',
+      placeholder: 'xoxb-0000000000-0000000000000-XXXXXXXXXXXXXXXXXXXXXXXX',
+      hint: 'Bot User OAuth Token from api.slack.com/apps › OAuth & Permissions. Starts with xoxb-.',
+    },
+    expiry_from_check: false,
     slug: 'slack',
     name: 'Slack',
     base_url: 'https://slack.com/api',
@@ -72,6 +110,15 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
   {
     id: 'slack-webhook',
     label: 'Slack incoming webhook',
+    card_summary: 'hooks.slack.com · webhook URL',
+    secret: {
+      label: 'Webhook URL',
+      placeholder: 'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX',
+      hint: 'Paste the whole webhook URL. Only the part after /services/ is stored, as the secret.',
+      url_prefixes: ['https://hooks.slack.com/services/'],
+      pattern: 'https://hooks\\.slack\\.com/services/[^\\/\\s]+(\\/[^\\/\\s]+)+',
+    },
+    expiry_from_check: false,
     slug: 'slack-webhook',
     name: 'Slack webhook',
     base_url: 'https://hooks.slack.com/services',
@@ -83,11 +130,21 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
     operation_presets: [preset('send', 'Send messages', true, ['POST', '/'])],
     docs_url: 'https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/',
     notes:
-      'Paste only the part after https://hooks.slack.com/services/. There is no read-only check for webhooks.',
+      'There is no read-only check for webhooks. Consumers POST to <gateway>/proxy/slack-webhook.',
   },
   {
     id: 'discord-webhook',
     label: 'Discord webhook',
+    card_summary: 'discord.com · webhook URL',
+    secret: {
+      label: 'Webhook URL',
+      placeholder:
+        'https://discord.com/api/webhooks/000000000000000000/XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+      hint: 'Paste the whole webhook URL from Server settings › Integrations › Webhooks.',
+      url_prefixes: ['https://discord.com/api/webhooks/', 'https://discordapp.com/api/webhooks/'],
+      pattern: 'https://(discord|discordapp)\\.com/api/webhooks/[0-9]+/[A-Za-z0-9_\\-]+',
+    },
+    expiry_from_check: false,
     slug: 'discord-webhook',
     name: 'Discord webhook',
     base_url: 'https://discord.com/api/webhooks',
@@ -101,11 +158,18 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
     operation_presets: [preset('send', 'Send messages', true, ['POST', '/'])],
     docs_url: 'https://discord.com/developers/docs/resources/webhook#execute-webhook',
     notes:
-      'Paste only the "{id}/{token}" part after https://discord.com/api/webhooks/. Grant only POST /: GET and PATCH on the webhook URL return the token in the response body.',
+      'Grant only POST /: GET and PATCH on the webhook URL return the token in the response body.',
   },
   {
     id: 'openai',
     label: 'OpenAI API',
+    card_summary: 'api.openai.com · project API key sk-proj-…',
+    secret: {
+      label: 'API key',
+      placeholder: 'sk-proj-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+      hint: 'Project API key from platform.openai.com › API keys.',
+    },
+    expiry_from_check: false,
     slug: 'openai',
     name: 'OpenAI',
     base_url: 'https://api.openai.com/v1',
@@ -124,6 +188,13 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
   {
     id: 'anthropic',
     label: 'Anthropic API',
+    card_summary: 'api.anthropic.com · API key sk-ant-…',
+    secret: {
+      label: 'API key',
+      placeholder: 'sk-ant-api03-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+      hint: 'API key from console.anthropic.com › API keys.',
+    },
+    expiry_from_check: false,
     slug: 'anthropic',
     name: 'Anthropic',
     // Without /v1: the Anthropic SDKs add /v1 to every path themselves.
@@ -131,9 +202,14 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
     injection: { kind: 'header', name: 'x-api-key' },
     forward_headers: ['anthropic-version', 'anthropic-beta'],
     timeout_ms: 600_000,
-    // The API requires an anthropic-version header, which a verify check cannot send.
-    // https://docs.anthropic.com/en/api/versioning
-    verify: null,
+    // Listing models is read-only and needs the anthropic-version header, which the check sends.
+    // https://docs.anthropic.com/en/api/models-list
+    verify: {
+      method: 'GET',
+      path: '/v1/models',
+      expect_status: 200,
+      headers: { 'anthropic-version': '2023-06-01' },
+    },
     operation_presets: [
       preset('messages', 'Send messages', true, ['POST', '/v1/messages']),
       preset('count-tokens', 'Count tokens', false, ['POST', '/v1/messages/count_tokens']),
@@ -144,6 +220,10 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
   {
     id: 'github',
     label: 'GitHub REST API',
+    card_summary: 'api.github.com · personal access token github_pat_… or ghp_…',
+    secret: GITHUB_SECRET,
+    family: 'github',
+    expiry_from_check: true,
     slug: 'github',
     name: 'GitHub',
     base_url: 'https://api.github.com',
@@ -163,6 +243,10 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
   {
     id: 'github-uploads',
     label: 'GitHub release asset uploads',
+    card_summary: 'uploads.github.com · the same token as GitHub REST API',
+    secret: GITHUB_SECRET,
+    family: 'github',
+    expiry_from_check: true,
     slug: 'github-uploads',
     name: 'GitHub uploads',
     base_url: 'https://uploads.github.com',
@@ -194,14 +278,104 @@ export function getServiceTemplate(id: string): ServiceTemplate | null {
 }
 
 /**
- * The template of a service: its stored `template_id`, else the template with the same base URL
- * (services saved before template_id was persisted). Display and preset data only.
+ * The template of a service: its stored `template_id` (set on every save from the destination, see
+ * templateIdFor). Display and preset data only, never a security reference.
  */
-export function templateForService(
-  service: Pick<Service, 'base_url' | 'template_id'>,
-): ServiceTemplate | null {
-  if (service.template_id !== null) return getServiceTemplate(service.template_id);
-  return SERVICE_TEMPLATES.find((template) => template.base_url === service.base_url) ?? null;
+export function templateForService(service: Pick<Service, 'template_id'>): ServiceTemplate | null {
+  return service.template_id === null ? null : getServiceTemplate(service.template_id);
+}
+
+/**
+ * The template whose destination is exactly this one (normalized base URL and canonical injection
+ * JSON), else null: a token keeps a type label only while it points where the template points.
+ */
+export function templateIdFor(baseUrl: string, injectionJson: string): string | null {
+  return (
+    SERVICE_TEMPLATES.find(
+      (template) =>
+        template.base_url === baseUrl && canonicalJson(template.injection) === injectionJson,
+    )?.id ?? null
+  );
+}
+
+/** True when two templates take the same secret (same id or same family). */
+export function sameSecretFamily(a: ServiceTemplate, b: ServiceTemplate): boolean {
+  return a.id === b.id || (a.family !== undefined && a.family === b.family);
+}
+
+/**
+ * Prefixes that identify a vendor's secret, longest first, mapped to the template it belongs to.
+ * Used only to refuse a secret pasted into the wrong card, never to pick the card: GitHub
+ * Enterprise Server shares the GitHub prefixes, and `sk-` is used by many vendors.
+ */
+export const FOREIGN_PREFIXES: ReadonlyArray<readonly [prefix: string, templateId: string]> = [
+  ['https://hooks.slack.com/', 'slack-webhook'],
+  ['https://discord.com/api/webhooks/', 'discord-webhook'],
+  ['https://discordapp.com/api/webhooks/', 'discord-webhook'],
+  ['github_pat_', 'github'],
+  ['sk-proj-', 'openai'],
+  ['sk-ant-', 'anthropic'],
+  ['ghp_', 'github'],
+  ['gho_', 'github'],
+  ['ghs_', 'github'],
+  ['xox', 'slack'],
+];
+
+/** "bot token", but "API key" (acronyms keep their case). */
+function lowerLabel(label: string): string {
+  return /^[A-Z]{2}/.test(label) ? label : `${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+}
+
+export type TemplateSecretResult =
+  | { ok: true; secret: string }
+  /** `likely`: the template the pasted value seems to belong to. The error never quotes it. */
+  | { ok: false; error: string; likely: string | null };
+
+/**
+ * The secret to store for a value pasted into `template`'s card: a whole webhook URL becomes its
+ * path secret; another vendor's secret, or a URL in a card that takes no URL, is refused before
+ * anything is sent (the wrong-type guard). Format checks are normalizeCredential's.
+ */
+export function secretFromTemplateInput(
+  template: ServiceTemplate,
+  raw: string,
+): TemplateSecretResult {
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  const lower = value.toLowerCase();
+  const host = new URL(template.base_url).host;
+  const prefixes = template.secret.url_prefixes ?? [];
+  const own = prefixes.find((prefix) => lower.startsWith(prefix.toLowerCase()));
+  if (own !== undefined) {
+    const rest = value.slice(own.length).split(/[?#]/)[0]?.replace(/\/+$/, '') ?? '';
+    if (rest === '') {
+      return {
+        ok: false,
+        error: `Paste the whole webhook URL, including the part after ${own}`,
+        likely: null,
+      };
+    }
+    return { ok: true, secret: rest };
+  }
+  const foreign = FOREIGN_PREFIXES.find(([prefix]) => lower.startsWith(prefix.toLowerCase()));
+  const likely = foreign ? getServiceTemplate(foreign[1]) : null;
+  if (likely && !sameSecretFamily(likely, template)) {
+    return {
+      ok: false,
+      error: `This looks like a ${likely.label} secret, and it would be sent to ${host}. Use the ${likely.label} card instead, or paste the ${lowerLabel(template.secret.label)} of ${template.label}`,
+      likely: likely.id,
+    };
+  }
+  if (/^https?:\/\//i.test(value)) {
+    return {
+      ok: false,
+      error:
+        prefixes.length > 0
+          ? `This is not a ${template.label} URL. Paste a URL that starts with ${prefixes[0]}`
+          : `This is a URL. Paste the ${lowerLabel(template.secret.label)} of ${template.label} itself`,
+      likely: null,
+    };
+  }
+  return { ok: true, secret: value };
 }
 
 /** The rules of `preset` with REPO_PLACEHOLDER replaced by `repository` (e.g. `acme/api`). */
