@@ -1,68 +1,76 @@
-// Plain-text form of grant conditions and rules for the admin UI (one per line), plus the event
-// summary shown next to a grant. Parsing only checks the line syntax; shapes, anchors and
-// warnings are checked by policy/validate.ts when the grant is saved.
+// Text forms of consumer access (grant) conditions and rules for the admin UI: the read-only
+// "Exact conditions" copy, the comma-separated value lists of the rows editor, and the event
+// summary shown next to an access. The UI has no condition or rule text syntax to type: values
+// are parsed one field at a time (parseValueList); shapes, anchors and warnings are checked by
+// policy/validate.ts when the access is saved.
 //
-//   conditions: [not] <claim> <exact|glob> <value>[, <value>...]
-//   rules:      <METHOD[,METHOD...]|*> <path-glob>
+//   conditions (display only): [not] <claim> <exact|glob> <value>[, <value>...]
+//   rules (display only):      <METHOD[,METHOD...]|*> <path-glob>
 //
-// Claims and values that would be ambiguous as bare text (empty, surrounding spaces, control
-// characters, a leading quote or `#`; commas in values; whitespace in claims, the claim `not`) are
-// written as JSON strings. Blank lines and lines starting with `#` are ignored.
+// Values that would be ambiguous as bare text (empty, surrounding spaces, control characters, a
+// leading quote or `#`, commas) are written as JSON strings, in both directions.
 import type { IssuerProfile } from '../identity/types';
 import type { Condition, Rule } from '../policy/types';
-
-export type ParseFailure = { ok: false; errors: string[] };
-
-export const CONDITION_SYNTAX = '[not] <claim> exact|glob <value>[, <value>...]';
-export const RULE_SYNTAX = '<METHOD[,METHOD...]|*> /path-glob';
 
 export function formatConditions(conditions: Condition[]): string {
   return conditions.map(formatCondition).join('\n');
 }
 
 export function formatCondition(condition: Condition): string {
-  const values = condition.values.map(formatValue).join(', ');
-  return `${condition.negate === true ? 'not ' : ''}${formatClaim(condition.claim)} ${condition.match} ${values}`;
-}
-
-export function parseConditions(
-  text: string,
-): { ok: true; conditions: Condition[] } | ParseFailure {
-  const conditions: Condition[] = [];
-  const errors: string[] = [];
-  for (const [index, line] of contentLines(text)) {
-    const parsed = parseConditionLine(line);
-    if (typeof parsed === 'string') errors.push(`condition line ${index}: ${parsed}`);
-    else conditions.push(parsed);
-  }
-  return errors.length > 0 ? { ok: false, errors } : { ok: true, conditions };
+  return `${condition.negate === true ? 'not ' : ''}${formatClaim(condition.claim)} ${condition.match} ${formatValueList(condition.values)}`;
 }
 
 export function formatRules(rules: Rule[]): string {
   return rules.map((rule) => `${rule.methods.join(',')} ${rule.path}`).join('\n');
 }
 
-export function parseRules(text: string): { ok: true; rules: Rule[] } | ParseFailure {
-  const rules: Rule[] = [];
-  const errors: string[] = [];
-  for (const [index, line] of contentLines(text)) {
-    const match = /^(\S.*?)\s+(\/\S*)$/.exec(line);
-    if (!match) {
-      errors.push(`rule line ${index}: expected "${RULE_SYNTAX}", e.g. "GET /repos/**"`);
+/** Values as the rows editor shows them: `a, b`, with JSON quotes where a value needs them. */
+export function formatValueList(values: readonly string[]): string {
+  return values.map(formatValue).join(', ');
+}
+
+/**
+ * The comma-separated alternatives of one rows-editor value field: bare text without commas
+ * (trimmed), or JSON strings (`"a,b"`, `""`). Inverse of formatValueList.
+ */
+export function parseValueList(text: string): { ok: true; values: string[] } | ParseFailure {
+  const scanner = new Scanner(text);
+  const values: string[] = [];
+  scanner.skipSpace();
+  if (scanner.done()) return { ok: true, values };
+  for (;;) {
+    scanner.skipSpace();
+    if (scanner.text[scanner.pos] === '"') {
+      const value = scanner.quoted();
+      if (value === null) {
+        return fail('A quoted value is not complete: close it with ", like "a,b".');
+      }
+      values.push(value);
+      scanner.skipSpace();
+      if (scanner.done()) return { ok: true, values };
+      if (scanner.text[scanner.pos] !== ',') {
+        return fail('Put a comma after the quoted value, like "a,b", c.');
+      }
+      scanner.pos++;
       continue;
     }
-    const methods = (match[1] ?? '')
-      .split(',')
-      .map((method) => method.trim().toUpperCase())
-      .filter((method) => method !== '');
-    if (methods.length === 0) {
-      errors.push(`rule line ${index}: list at least one method or *`);
-      continue;
-    }
-    // Method names are checked by validateGrant against PROXY_METHODS.
-    rules.push({ methods: methods as Rule['methods'], path: match[2] ?? '' });
+    const comma = scanner.text.indexOf(',', scanner.pos);
+    const end = comma === -1 ? scanner.text.length : comma;
+    const value = scanner.text.slice(scanner.pos, end).trim();
+    if (value === '') return fail('Remove the empty value between the commas (write "" for one).');
+    values.push(value);
+    if (comma === -1) return { ok: true, values };
+    scanner.pos = comma + 1;
   }
-  return errors.length > 0 ? { ok: false, errors } : { ok: true, rules };
+}
+
+export interface ParseFailure {
+  ok: false;
+  error: string;
+}
+
+function fail(error: string): ParseFailure {
+  return { ok: false, error };
 }
 
 /** Which events a grant accepts under the event guard (I-AUTHZ-3). Null when the profile has none. */
@@ -100,16 +108,6 @@ export function eventSummary(conditions: Condition[], profile: IssuerProfile): E
 }
 
 // ---------------------------------------------------------------------------------------------
-
-/** Non-blank, non-comment lines with 1-based line numbers. */
-function contentLines(text: string): Array<[number, string]> {
-  const out: Array<[number, string]> = [];
-  text.split(/\r\n|\r|\n/).forEach((raw, index) => {
-    const line = raw.trim();
-    if (line !== '' && !line.startsWith('#')) out.push([index + 1, line]);
-  });
-  return out;
-}
 
 function needsQuotes(text: string): boolean {
   return (
@@ -160,71 +158,5 @@ class Scanner {
     } catch {
       return null;
     }
-  }
-
-  /** A whitespace-free word, or a JSON string. */
-  word(): { text: string; quoted: boolean } | null {
-    this.skipSpace();
-    if (this.done()) return null;
-    if (this.text[this.pos] === '"') {
-      const text = this.quoted();
-      return text === null ? null : { text, quoted: true };
-    }
-    const start = this.pos;
-    while (this.pos < this.text.length && !/\s/.test(this.text[this.pos] ?? '')) this.pos++;
-    return { text: this.text.slice(start, this.pos), quoted: false };
-  }
-}
-
-function parseConditionLine(line: string): Condition | string {
-  const syntax = `expected "${CONDITION_SYNTAX}"`;
-  const scanner = new Scanner(line);
-  let first = scanner.word();
-  if (first === null) return syntax;
-  // A bare leading `not` always means negation; a claim named "not" is written as "not" in quotes.
-  const negate = !first.quoted && first.text === 'not';
-  if (negate) {
-    first = scanner.word();
-    if (first === null) return syntax;
-  }
-  const claim = first.text;
-  const match = scanner.word();
-  if (match === null || match.quoted) return syntax;
-  const kind = match.text.toLowerCase();
-  if (kind !== 'exact' && kind !== 'glob') {
-    return `match must be "exact" or "glob", not ${JSON.stringify(match.text)}`;
-  }
-  const values = parseValues(scanner);
-  if (typeof values === 'string') return values;
-  if (values.length === 0) return `${syntax}: at least one value is required`;
-  const condition: Condition = { claim, match: kind, values };
-  if (negate) condition.negate = true;
-  return condition;
-}
-
-/** Comma-separated values; each is a JSON string or bare text without commas (trimmed). */
-function parseValues(scanner: Scanner): string[] | string {
-  const values: string[] = [];
-  scanner.skipSpace();
-  if (scanner.done()) return values;
-  for (;;) {
-    scanner.skipSpace();
-    if (scanner.text[scanner.pos] === '"') {
-      const value = scanner.quoted();
-      if (value === null) return 'a quoted value is not a valid JSON string';
-      values.push(value);
-      scanner.skipSpace();
-      if (scanner.done()) return values;
-      if (scanner.text[scanner.pos] !== ',') return 'expected "," after a quoted value';
-      scanner.pos++;
-      continue;
-    }
-    const comma = scanner.text.indexOf(',', scanner.pos);
-    const end = comma === -1 ? scanner.text.length : comma;
-    const value = scanner.text.slice(scanner.pos, end).trim();
-    if (value === '') return 'empty value (write "" for an empty string)';
-    values.push(value);
-    if (comma === -1) return values;
-    scanner.pos = comma + 1;
   }
 }

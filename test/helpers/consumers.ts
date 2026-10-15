@@ -1,0 +1,162 @@
+// Fixtures for the service consumer and consumer access integration tests: a fresh control plane,
+// an app over a fake network that records every outbound call, sessions per role, and seeders for
+// labels and request records.
+import { env } from 'cloudflare:workers';
+import { insertRequestRecordsStatements } from '../../src/db/requests';
+import type { Role } from '../../src/db/types';
+import type { RequestRecord } from '../../src/telemetry/types';
+import {
+  type FetchCall,
+  fakeNetwork,
+  GITHUB_ISSUER,
+  GITHUB_JWKS,
+  KEK_1,
+} from '../unit/admin/ops/helpers';
+import { type AdminSession, createUser, loginAs, resetControlPlane } from './admin-auth';
+import { createTestApp, type TestApp } from './app';
+
+export const GITLAB_ISSUER = 'https://gitlab.com';
+export const BUILDKITE_ISSUER = 'https://agent.buildkite.com';
+
+export interface ConsumersWorld {
+  app: TestApp;
+  calls: FetchCall[];
+  sessions: Record<Role, AdminSession>;
+}
+
+/** Resets both databases and logs one user per role into an app over a recording fake network. */
+export async function consumersWorld(
+  extraIssuers: Record<string, string> = {},
+  discovery: Record<string, unknown> = {},
+): Promise<ConsumersWorld> {
+  await resetControlPlane();
+  await env.TELEMETRY_DB.batch([
+    env.TELEMETRY_DB.prepare('DELETE FROM request_log'),
+    env.TELEMETRY_DB.prepare('DELETE FROM request_rollup_hourly'),
+  ]);
+  const issuers: Record<string, string> = {
+    [GITHUB_ISSUER]: GITHUB_JWKS,
+    [GITLAB_ISSUER]: `${GITLAB_ISSUER}/oauth/discovery/keys`,
+    [BUILDKITE_ISSUER]: `${BUILDKITE_ISSUER}/.well-known/jwks`,
+    ...extraIssuers,
+  };
+  const net = fakeNetwork(undefined, issuers);
+  const fetchWithAlgs: typeof fetch = async (input, init) => {
+    const response = await net.fetch(input, init);
+    const url = String(input instanceof Request ? input.url : input);
+    if (!url.endsWith('/.well-known/openid-configuration') || response.status !== 200)
+      return response;
+    const document = (await response.json()) as Record<string, unknown>;
+    return Response.json({ ...document, ...discovery });
+  };
+  const app = createTestApp({ fetch: fetchWithAlgs, env: { TOKENGATE_KEK: KEK_1 } });
+  const roles: Role[] = ['viewer', 'token_manager', 'access_manager', 'admin', 'owner'];
+  const sessions = {} as Record<Role, AdminSession>;
+  for (const role of roles) {
+    const user = await createUser({ email: `${role.replace('_', '-')}@example.com`, role });
+    sessions[role] = await loginAs(app, user);
+  }
+  return { app, calls: net.calls, sessions };
+}
+
+export async function seedLabel(
+  providerId: string,
+  claim: string,
+  value: string,
+  label: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO claim_labels (caller_provider_id, claim, value, label, updated_at, updated_by)
+     VALUES (?, ?, ?, ?, 1, NULL)
+     ON CONFLICT (caller_provider_id, claim, value) DO UPDATE SET label = excluded.label`,
+  )
+    .bind(providerId, claim, value, label)
+    .run();
+}
+
+export async function labels(providerId?: string): Promise<Array<Record<string, unknown>>> {
+  const statement = providerId
+    ? env.DB.prepare(
+        'SELECT claim, value, label FROM claim_labels WHERE caller_provider_id = ? ORDER BY claim, value',
+      ).bind(providerId)
+    : env.DB.prepare('SELECT claim, value, label FROM claim_labels ORDER BY claim, value');
+  return (await statement.all<Record<string, unknown>>()).results;
+}
+
+/** Audit actions except sign-ins, in insertion order. */
+export async function auditActions(): Promise<string[]> {
+  const { results } = await env.DB.prepare(
+    "SELECT action FROM audit_log WHERE action NOT LIKE 'user.%' ORDER BY rowid",
+  ).all<{ action: string }>();
+  return results.map((row) => row.action);
+}
+
+export async function lastAudit(action: string): Promise<Record<string, unknown> | null> {
+  const row = await env.DB.prepare(
+    'SELECT diff FROM audit_log WHERE action = ? ORDER BY rowid DESC LIMIT 1',
+  )
+    .bind(action)
+    .first<{ diff: string | null }>();
+  return row?.diff ? (JSON.parse(row.diff) as Record<string, unknown>) : null;
+}
+
+export function requestRecord(overrides: Partial<RequestRecord> & { id: string }): RequestRecord {
+  return {
+    ts: Date.now(),
+    outcome: 'denied',
+    reason: 'no_matching_grant',
+    status: 403,
+    upstream_status: null,
+    method: 'GET',
+    path: '/repos/acme/app',
+    service_slug: 'github',
+    service_id: null,
+    caller_provider_id: null,
+    grant_id: null,
+    claims_verified: 1,
+    caller_subject: null,
+    caller_repository: null,
+    caller_claims: null,
+    jti: null,
+    untrusted_iss: null,
+    eval_trace: null,
+    duration_ms: 5,
+    upstream_ms: null,
+    weight: 1,
+    ip: null,
+    user_agent: null,
+    colo: null,
+    ...overrides,
+  };
+}
+
+export async function seedRequests(records: RequestRecord[]): Promise<void> {
+  await env.TELEMETRY_DB.batch(insertRequestRecordsStatements(env.TELEMETRY_DB, records));
+}
+
+/** The value of the first input named `name` in a page, or null. */
+export function inputValue(html: string, name: string): string | null {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(`<input[^>]*name="${escaped}"[^>]*value="([^"]*)"`).exec(html);
+  return match?.[1] ?? null;
+}
+
+/** The ids of the checked radios/checkboxes named `name`. */
+export function checkedValues(html: string, name: string): string[] {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const out: string[] = [];
+  for (const match of html.matchAll(new RegExp(`<input[^>]*name="${escaped}"[^>]*>`, 'g'))) {
+    if (!/\schecked(=""|\s|\/|>)/.test(match[0])) continue;
+    const value = /value="([^"]*)"/.exec(match[0]);
+    if (value) out.push(value[1] ?? '');
+  }
+  return out;
+}
+
+export function locationOf(response: Response): string {
+  return response.headers.get('location') ?? '';
+}
+
+export function idFromLocation(location: string): string {
+  return location.split('?')[0]?.split('/').at(-1) ?? '';
+}

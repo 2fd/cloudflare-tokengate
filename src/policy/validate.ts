@@ -526,6 +526,31 @@ export interface GrantInput {
 }
 
 /**
+ * Stable codes of the risks a grant can carry (A7.7). The validator emits all but `any_ref`, which
+ * only the structured builder knows (src/policy/presets.ts). Pages compare codes, never texts.
+ */
+export type WarningCode =
+  | 'broad_glob'
+  | 'unprotected_ref'
+  | 'event_glob'
+  | 'pwn_request'
+  | 'inherited_trust_event'
+  | 'untrusted_event'
+  | 'path_injection_non_post'
+  | 'any_ref'
+  | 'pull_request';
+
+export interface WarningDetail {
+  code: WarningCode;
+  message: string;
+}
+
+export interface GrantValidationResult extends ValidationResult {
+  /** The warnings with their codes, in the order of `warnings`. */
+  warningDetails: WarningDetail[];
+}
+
+/**
  * Validates grant conditions and rules: shapes, anchor rules (I-AUTHZ-2), containment in the
  * caller provider's tenant pin, and warnings for risky patterns (docs/policies.md). `service`, when given,
  * adds warnings that depend on how the grant's service injects its credential.
@@ -535,9 +560,9 @@ export function validateGrant(
   profile: IssuerProfile,
   provider: CallerProvider,
   service: Pick<Service, 'injection'> | null = null,
-): ValidationResult {
+): GrantValidationResult {
   const errors: string[] = [];
-  const warnings: string[] = [];
+  const details: WarningDetail[] = [];
   if (profile.id !== provider.profile) {
     errors.push(`profile ${profile.id} does not match the caller provider (${provider.profile})`);
   }
@@ -592,11 +617,11 @@ export function validateGrant(
     }
   }
 
-  warnings.push(...grantWarnings(conditions, profile));
+  details.push(...grantWarnings(conditions, profile));
   if (service?.injection.kind === 'path' && Array.isArray(input.rules)) {
-    warnings.push(...pathInjectionRuleWarnings(input.rules));
+    details.push(...pathInjectionRuleWarnings(input.rules));
   }
-  return { errors, warnings };
+  return { errors, warnings: details.map((detail) => detail.message), warningDetails: details };
 }
 
 /** Values every pin condition on `claim` accepts (pin conditions are ANDed). */
@@ -607,14 +632,16 @@ function tenantPinValues(pin: Condition[], claim: string): Set<string> {
   return new Set(first.values.filter((value) => rest.every((c) => c.values.includes(value))));
 }
 
-function grantWarnings(conditions: Condition[], profile: IssuerProfile): string[] {
-  const warnings: string[] = [];
+function grantWarnings(conditions: Condition[], profile: IssuerProfile): WarningDetail[] {
+  const warnings: WarningDetail[] = [];
+  const warn = (code: WarningCode, message: string) => warnings.push({ code, message });
 
   for (const c of conditions) {
     if (c.match !== 'glob' || c.negate === true || !WIDE_GLOB_CLAIMS.includes(c.claim)) continue;
     const wide = c.values.filter((v) => v.startsWith('*') || v.includes('**'));
     if (wide.length > 0) {
-      warnings.push(
+      warn(
+        'broad_glob',
         `${c.claim} glob ${JSON.stringify(wide)} is broad; anyone who can push a branch, tag, environment or workflow with a matching name is admitted`,
       );
     }
@@ -632,7 +659,8 @@ function grantWarnings(conditions: Condition[], profile: IssuerProfile): string[
       (c) => REF_CLAIMS.includes(c.claim) && c.negate !== true,
     );
     if (usesRefOrEnvironment && !requiresProtected) {
-      warnings.push(
+      warn(
+        'unprotected_ref',
         'the grant matches on ref or environment without "ref_protected exact true"; repository writers can create matching refs',
       );
     }
@@ -643,7 +671,8 @@ function grantWarnings(conditions: Condition[], profile: IssuerProfile): string[
     for (const c of conditions) {
       if (c.claim !== eventClaim) continue;
       if (c.match === 'glob') {
-        warnings.push(
+        warn(
+          'event_glob',
           `${eventClaim} uses a glob; globs never allow untrusted events, list events with exact match (I-AUTHZ-3)`,
         );
         continue;
@@ -652,7 +681,8 @@ function grantWarnings(conditions: Condition[], profile: IssuerProfile): string[
       for (const event of c.values) {
         if (profile.trustedEvents.includes(event)) continue;
         if (PWN_REQUEST_EVENTS.includes(event)) {
-          warnings.push(
+          warn(
+            'pwn_request',
             `${eventClaim} "${event}" runs with base-repository privileges on input from outside contributors ("pwn request"); see https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/`,
           );
         } else if (
@@ -660,11 +690,16 @@ function grantWarnings(conditions: Condition[], profile: IssuerProfile): string[
           INHERITED_TRUST_EVENTS.includes(event) &&
           !requiresProtected
         ) {
-          warnings.push(
+          warn(
+            'inherited_trust_event',
             `${eventClaim} "${event}" pipelines can be started by merge request pipelines, including fork merge requests; add "ref_protected exact true" to keep them out (I-AUTHZ-3)`,
           );
         } else {
-          warnings.push(
+          // pull_request is the one untrusted GitHub event the structured form offers (A7.7).
+          warn(
+            profile.id === 'github-actions' && event === 'pull_request'
+              ? 'pull_request'
+              : 'untrusted_event',
             `${eventClaim} "${event}" is not a trusted event; this grant opts in to it`,
           );
         }
@@ -681,7 +716,7 @@ function grantWarnings(conditions: Condition[], profile: IssuerProfile): string[
  * https://discord.com/developers/docs/resources/webhook#get-webhook-with-token). Upstream
  * response bodies are not redacted, so every other method is flagged.
  */
-function pathInjectionRuleWarnings(rules: unknown[]): string[] {
+function pathInjectionRuleWarnings(rules: unknown[]): WarningDetail[] {
   const methods = new Set<string>();
   for (const rule of rules) {
     if (!isRecord(rule) || !Array.isArray(rule.methods)) continue;
@@ -691,7 +726,10 @@ function pathInjectionRuleWarnings(rules: unknown[]): string[] {
   }
   if (methods.size === 0) return [];
   return [
-    `the service injects the credential into the URL path and this grant allows ${[...methods].join(', ')}; webhook APIs such as Discord return the credential in the response body for GET and PATCH on the webhook URL, and response bodies are not redacted; allow only POST`,
+    {
+      code: 'path_injection_non_post',
+      message: `the service injects the credential into the URL path and this grant allows ${[...methods].join(', ')}; webhook APIs such as Discord return the credential in the response body for GET and PATCH on the webhook URL, and response bodies are not redacted; allow only POST`,
+    },
   ];
 }
 

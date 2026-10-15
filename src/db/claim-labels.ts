@@ -131,6 +131,76 @@ export function idWithLabelText(id: string, label: string | null): string {
   return label ? `${label} (${id})` : id;
 }
 
+/** Boolean SQL expression plus its binds; evaluated as `... AND (sql)`. */
+type SqlGuard = { sql: string; binds: unknown[] };
+
+/** A label to store: what consumer and access saves write (WP4). */
+export type ClaimLabelInput = Pick<ClaimLabel, 'caller_provider_id' | 'claim' | 'value' | 'label'>;
+
+/**
+ * Inserts or replaces one label while `guard` holds, in the batch of the save that typed it, so
+ * the label and the save's audit row commit together (I-AUDIT-1).
+ */
+export function upsertClaimLabelStatement(
+  db: D1Database,
+  label: ClaimLabelInput,
+  now: number,
+  actor: string | null,
+  guard: SqlGuard,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO claim_labels (caller_provider_id, claim, value, label, updated_at, updated_by)
+       SELECT ?, ?, ?, ?, ?, ? WHERE (${guard.sql})
+       ON CONFLICT (caller_provider_id, claim, value)
+       DO UPDATE SET label = excluded.label, updated_at = excluded.updated_at,
+         updated_by = excluded.updated_by`,
+    )
+    .bind(
+      label.caller_provider_id,
+      label.claim,
+      label.value,
+      label.label,
+      now,
+      actor,
+      ...guard.binds,
+    );
+}
+
+/** Deletes every label of one caller provider while `guard` holds (consumer delete). */
+export function deleteClaimLabelsStatement(
+  db: D1Database,
+  providerId: string,
+  guard: SqlGuard,
+): D1PreparedStatement {
+  return db
+    .prepare(`DELETE FROM claim_labels WHERE caller_provider_id = ? AND (${guard.sql})`)
+    .bind(providerId, ...guard.binds);
+}
+
+/** The labels of `next` that are new or differ from `current` (what a save must write). */
+export function changedLabels(
+  current: readonly ClaimLabel[],
+  next: readonly ClaimLabelInput[],
+): Array<{ input: ClaimLabelInput; before: string | null }> {
+  const out: Array<{ input: ClaimLabelInput; before: string | null }> = [];
+  const seen = new Set<string>();
+  for (const input of next) {
+    const key = `${input.caller_provider_id}\u0000${input.claim}\u0000${input.value}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const before =
+      current.find(
+        (label) =>
+          label.caller_provider_id === input.caller_provider_id &&
+          label.claim === input.claim &&
+          label.value === input.value,
+      )?.label ?? null;
+    if (before !== input.label) out.push({ input, before });
+  }
+  return out;
+}
+
 function claimLabelFromRow(row: Record<string, unknown>): ClaimLabel {
   return {
     caller_provider_id: String(row.caller_provider_id),

@@ -9,6 +9,7 @@
 //   await adminPost(world.app, ownerSession, request.path, request.fields);
 import { env } from 'cloudflare:workers';
 import { createCallerProvider } from '../../src/admin/ops/caller-providers';
+import { createGrant } from '../../src/admin/ops/grants';
 import { insertRequestRecordsStatements } from '../../src/db/requests';
 import type { CallerProvider } from '../../src/db/types';
 import { newId } from '../../src/lib/ids';
@@ -289,36 +290,34 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
   },
 
   // == consumers ==
-  'POST /admin/consumers': async () => ({
-    path: '/admin/consumers',
-    action: 'caller_provider.create',
-    fields: {
-      profile: 'generic',
-      name: unique('Acme IdP'),
-      issuer: `https://${unique('idp')}.acme.example`,
-      jwks_uri: 'https://idp.acme.example/keys',
-      audience: 'tokengate:abcdefghijklmnopqrstuvwxyz',
-      allowed_algs: 'RS256',
-      max_token_age_seconds: '300',
-      pin_mode: 'text',
-      tenant_pin_text: 'org_id exact 77',
-      anchor_claims: 'sub',
-    },
-  }),
+  'POST /admin/consumers': async () => {
+    const issuer = `https://${unique('idp')}.acme.example`;
+    return {
+      path: '/admin/consumers',
+      action: 'caller_provider.create',
+      app: discoveringApp(issuer),
+      fields: {
+        type: 'generic',
+        generic_issuer: issuer,
+        generic_anchor_claims: 'sub',
+        generic_pin_claim: 'org_id',
+        generic_pin_value: '77',
+      },
+    };
+  },
   'POST /admin/consumers/:id': async (w) => ({
     path: `/admin/consumers/${w.provider.id}`,
     action: 'caller_provider.update',
     fields: {
-      profile: w.provider.profile,
-      name: 'GitHub Actions (renamed)',
-      issuer: w.provider.issuer,
-      audience: w.provider.audience,
-      allowed_algs: w.provider.allowed_algs,
-      max_token_age_seconds: '300',
-      pin_mode: 'fields',
-      owner_ids: OWNER_ID,
-      enterprise_id: '',
+      intent: 'rename',
+      name: unique('GitHub Actions renamed'),
+      expected_updated_at: String(w.provider.updated_at),
     },
+  }),
+  'POST /admin/consumers/:id/tenants': async (w) => ({
+    path: `/admin/consumers/${w.provider.id}/tenants`,
+    action: 'caller_provider.update',
+    fields: { intent: 'add', tenant: 'acme-labs (7654321)' },
   }),
   'POST /admin/consumers/:id/toggle': async (w) => ({
     path: `/admin/consumers/${w.provider.id}/toggle`,
@@ -334,37 +333,51 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
       anchor_claims: ['sub'],
     });
     if (!created.ok) throw new Error(`fixture: ${created.errors.join('; ')}`);
+    const grant = await createGrant(w.app.deps, ACTOR, {
+      name: unique('doomed access'),
+      caller_provider_id: created.callerProvider.id,
+      service_id: w.serviceId,
+      conditions: [{ claim: 'sub', match: 'exact', values: ['job-1'] }],
+      rules: [{ methods: ['GET'], path: '/repos/**' }],
+    });
+    if (!grant.ok) throw new Error(`fixture: ${grant.errors.join('; ')}`);
     return {
       path: `/admin/consumers/${created.callerProvider.id}/delete`,
       action: 'caller_provider.delete',
-      fields: { confirm: '1' },
+      fields: { confirm: '1', with_accesses: '1', access_ids: grant.grant.id },
     };
   },
   'POST /admin/access': async (w) => ({
     path: '/admin/access',
     action: 'grant.create',
     fields: {
-      caller_provider_id: w.provider.id,
-      service_id: w.serviceId,
-      mode: 'preset',
-      name: unique('main deploys'),
-      owner_id: OWNER_ID,
-      repository_ids: REPOSITORY_ID,
+      consumer_id: w.provider.id,
+      token_id: w.serviceId,
+      repository: 'acme/api (987654321)',
       context: 'branch',
-      pattern: 'main',
-      require_protected_ref: '1',
-      rules_text: 'GET /repos/**',
-      enabled: '1',
+      branch: 'main',
+      ref_protection: 'protected',
+      op: 'read-repo',
+      expires: 'never',
     },
   }),
   'POST /admin/access/:id': async (w) => ({
     path: `/admin/access/${w.grantId}`,
     action: 'grant.update',
     fields: {
-      name: 'renamed grant',
-      conditions_text: `repository_owner_id exact ${OWNER_ID}\nrepository_id exact ${REPOSITORY_ID}`,
-      rules_text: 'GET,HEAD /repos/acme/**',
+      intent: 'save',
+      repository: `acme/api (${REPOSITORY_ID})`,
+      context: 'branch',
+      branch: 'main',
+      ref_protection: 'protected',
+      op: 'read-repo',
+      expires: 'keep',
     },
+  }),
+  'POST /admin/access/:id/copy': async (w) => ({
+    path: `/admin/access/${w.grantId}/copy`,
+    action: 'grant.duplicate',
+    fields: { repository: 'acme/web (987654322)', token_id: w.serviceId },
   }),
   'POST /admin/access/:id/toggle': async (w) => ({
     path: `/admin/access/${w.grantId}/toggle`,
@@ -413,4 +426,16 @@ export function readPath(routeKey: string, world: AdminWorld): string {
   if (id !== undefined) return pattern.replace(':id', id);
   if (pattern.includes(':')) throw new Error(`readPath: no id for ${routeKey}`);
   return pattern;
+}
+
+// == consumers ==
+/** The world app with OIDC discovery for one more issuer (same databases). */
+function discoveringApp(issuer: string): TestApp {
+  return createAdminWorldApp(
+    fakeNetwork(undefined, {
+      'https://token.actions.githubusercontent.com':
+        'https://token.actions.githubusercontent.com/.well-known/jwks',
+      [issuer]: `${issuer}/.well-known/jwks`,
+    }).fetch,
+  );
 }

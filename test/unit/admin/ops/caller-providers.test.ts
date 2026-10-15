@@ -258,7 +258,10 @@ describe('deleteCallerProvider', () => {
       reason: 'conflict',
     });
     await env.DB.prepare('DELETE FROM grants WHERE id = ?').bind(grant.id).run();
-    expect(await deleteCallerProvider(deps, ACTOR, provider.id)).toEqual({ ok: true });
+    expect(await deleteCallerProvider(deps, ACTOR, provider.id)).toEqual({
+      ok: true,
+      deletedAccesses: 0,
+    });
     expect(await getCallerProvider(env.DB, provider.id)).toBeNull();
     expect((await auditRows(provider.id)).at(-1)?.action).toBe('caller_provider.delete');
   });

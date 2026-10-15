@@ -266,14 +266,14 @@ describe('setGrantEnabled', () => {
 });
 
 describe('duplicateGrant', () => {
-  it('creates a disabled copy referencing the source', async () => {
+  it('creates an enabled copy referencing the source', async () => {
     const grant = await seedGrant(deps, provider.id, serviceId, 'deploy');
     const result = await duplicateGrant(deps, ACTOR, grant.id);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.grant).toMatchObject({
       name: 'deploy (copy)',
-      enabled: false,
+      enabled: true,
       conditions: grant.conditions,
       rules: grant.rules,
     });
@@ -281,6 +281,36 @@ describe('duplicateGrant', () => {
     const [audit] = await auditRows(result.grant.id);
     expect(audit).toMatchObject({ action: 'grant.duplicate' });
     expect(audit?.diff?.source_id).toBe(grant.id);
+  });
+
+  it('copies to another repository with its label, validated against the target', async () => {
+    const grant = await seedGrant(deps, provider.id, serviceId, 'deploy');
+    const result = await duplicateGrant(deps, ACTOR, grant.id, {
+      conditions: [
+        { claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID] },
+        { claim: 'repository_id', match: 'exact', values: ['111'] },
+      ],
+      labels: [{ claim: 'repository_id', value: '111', label: 'acme/web' }],
+      name: 'GitHub for acme/web (any ref)',
+    });
+    expect(result.ok).toBe(true);
+    const labels = await env.DB.prepare(
+      "SELECT label FROM claim_labels WHERE claim = 'repository_id' AND value = '111'",
+    ).all<{ label: string }>();
+    expect(labels.results).toEqual([{ label: 'acme/web' }]);
+  });
+
+  it('refuses a copy whose warnings nobody accepted, writing nothing', async () => {
+    const grant = await seedGrant(deps, provider.id, serviceId, 'deploy');
+    const before = (await auditRows()).length;
+    const result = await duplicateGrant(deps, ACTOR, grant.id, {
+      conditions: [
+        ...grant.conditions,
+        { claim: 'ref', match: 'glob', values: ['refs/heads/main'] },
+      ],
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'acknowledgement_required' });
+    expect(await auditRows()).toHaveLength(before);
   });
 });
 
@@ -319,5 +349,100 @@ describe('guarded insert', () => {
     const result = await statement.run();
     expect(result.meta.changes).toBe(0);
     expect(await getGrant(env.DB, 'grt_guarded')).toBeNull();
+  });
+});
+
+describe('labels, accepted risks and in-memory consumers', () => {
+  const labelRows = async () =>
+    (
+      await env.DB.prepare(
+        'SELECT claim, value, label, updated_by FROM claim_labels ORDER BY claim, value',
+      ).all()
+    ).results;
+
+  it('writes the typed labels in the create batch and records them and the risks in the audit', async () => {
+    const result = await createGrant(deps, ACTOR, {
+      name: 'labelled',
+      caller_provider_id: provider.id,
+      service_id: serviceId,
+      conditions: anchoredConditions(),
+      rules: RULES,
+      labels: [{ claim: 'repository_id', value: '987654321', label: 'acme/api' }],
+      accepted_risks: ['unprotected_ref'],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(await labelRows()).toEqual([
+      { claim: 'repository_id', value: '987654321', label: 'acme/api', updated_by: ACTOR.id },
+    ]);
+    const [audit] = await auditRows(result.grant.id);
+    expect(audit?.diff).toMatchObject({
+      accepted_risks: ['unprotected_ref'],
+      labels: {
+        before: { 'repository_id:987654321': null },
+        after: { 'repository_id:987654321': 'acme/api' },
+      },
+    });
+  });
+
+  it('a save that only changes a label is one grant.update with the label diff', async () => {
+    const grant = await seedGrant(deps, provider.id, serviceId);
+    const label = { claim: 'repository_id' as const, value: '987654321', label: 'acme/api' };
+    expect((await updateGrant(deps, ACTOR, grant.id, { labels: [label] })).ok).toBe(true);
+    const renamed = await updateGrant(deps, ACTOR, grant.id, {
+      labels: [{ ...label, label: 'acme/api-renamed' }],
+    });
+    expect(renamed).toMatchObject({ ok: true, changed: true, labelsChanged: true });
+    const unchanged = await updateGrant(deps, ACTOR, grant.id, {
+      labels: [{ ...label, label: 'acme/api-renamed' }],
+    });
+    expect(unchanged).toMatchObject({ ok: true, changed: false });
+    const rows = (await auditRows(grant.id)).map((row) => row.action);
+    expect(rows).toEqual(['grant.create', 'grant.update', 'grant.update']);
+  });
+
+  it('refuses labels that are not numeric IDs of a labelled claim', async () => {
+    const result = await createGrant(deps, ACTOR, {
+      name: 'bad label',
+      caller_provider_id: provider.id,
+      service_id: serviceId,
+      conditions: anchoredConditions(),
+      rules: RULES,
+      labels: [{ claim: 'repository_id', value: 'acme', label: 'acme/api' }],
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(await labelRows()).toEqual([]);
+  });
+
+  it('checkGrant validates against an in-memory consumer without reading or writing it', async () => {
+    const { checkGrant } = await import('../../../../src/admin/ops/grants');
+    const pending: CallerProvider = {
+      ...provider,
+      id: 'cpr_new',
+      tenant_pin: [{ claim: 'repository_owner_id', match: 'exact', values: ['555'] }],
+    };
+    const values = {
+      name: 'x',
+      description: '',
+      conditions: [
+        { claim: 'repository_owner_id', match: 'exact' as const, values: ['555'] },
+        { claim: 'repository_id', match: 'exact' as const, values: ['1'] },
+      ],
+      rules: RULES,
+      enabled: true,
+      expires_at: null,
+    };
+    const ok = await checkGrant(deps, 'cpr_new', serviceId, values, {
+      expiryChanged: false,
+      acknowledged: true,
+      provider: pending,
+    });
+    expect(ok.ok).toBe(true);
+    // The stored consumer pins another organization, so the same values fail against it.
+    const stored = await checkGrant(deps, provider.id, serviceId, values, {
+      expiryChanged: false,
+      acknowledged: true,
+    });
+    expect(stored.ok).toBe(false);
   });
 });

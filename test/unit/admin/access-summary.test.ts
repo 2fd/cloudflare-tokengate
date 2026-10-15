@@ -27,13 +27,13 @@ function summary(conditions: Condition[], rules: Rule[] = RULES) {
 }
 
 function github(
-  context: 'branch' | 'tag' | 'release' | 'pr' | 'environment',
+  context: 'branch' | 'tag' | 'release' | 'pull_request' | 'environment',
   pattern: string,
   requireProtectedRef = true,
 ) {
   return githubGrantPreset({
     ownerId: '4242',
-    repositoryIds: ['987654321'],
+    repositoryId: '987654321',
     context,
     pattern,
     requireProtectedRef,
@@ -59,7 +59,7 @@ describe('accessSummary', () => {
     expect(summary(github('branch', 'main')).context).toBe('branch main');
     expect(summary(github('tag', 'v*')).context).toBe('tag v*');
     expect(summary(github('release', 'v*')).context).toBe('release v*');
-    expect(summary(github('pr', 'main', false)).context).toBe('PR into main');
+    expect(summary(github('pull_request', 'main', false)).context).toBe('PR into main');
   });
 
   it('describes protected-only and unconstrained accesses', () => {
