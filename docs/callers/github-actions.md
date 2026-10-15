@@ -10,31 +10,36 @@ The job never sees the credential.
 
 <sub>Diagram source: [`../diagrams/src/`](../diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
-## 1. Set up the caller provider (admin)
+## 1. Add the service consumer (admin)
 
-1. In the admin UI, open **Caller providers** and select **Add a caller provider**.
-2. Select **GitHub Actions**.
-3. Keep **Issuer** at `https://token.actions.githubusercontent.com`.
-   If your GitHub Enterprise Cloud uses a customized issuer, enter `https://token.actions.githubusercontent.com/<enterprise-slug>`.
-4. Keep the generated **Audience** (`tokengate:` followed by 26 random characters). Copy it; workflows need it.
-5. In **Allowed organization IDs**, enter the numeric ID of each organization or user account, one per line.
-   Find it with `gh api orgs/ORG --jq .id` (for a user account, `gh api users/USER --jq .id`).
-6. Optional: in **Enterprise ID (optional)**, enter your numeric GitHub Enterprise Cloud ID.
-7. Select **Create caller provider**.
+1. Get each organization or user account that owns the calling repositories, in the format the form takes, `name (ID)`:
 
-Rules the gateway enforces on this form (`src/policy/validate.ts`):
+   ```bash
+   gh api orgs/acme --jq '"\(.login) (\(.id))"'
+   gh api users/NAME --jq '"\(.login) (\(.id))"'   # a user account
+   ```
 
-- The tenant pin is required for `https://token.actions.githubusercontent.com`, because GitHub signs tokens for every GitHub user on that issuer ([I-TEN-1](../threat-model.md#i-ten-1)).
-- The tenant pin may only use `repository_owner_id` and `enterprise_id`. These are numeric IDs that a rename cannot reuse.
+   Each command prints one line, such as `acme (1234567)`.
+2. In the admin UI, open **Service consumers** and open **Add a consumer**.
+3. Keep **GitHub Actions** and paste the lines into **Organizations**, separated by commas.
+4. Only for GitHub Enterprise Cloud with its own OIDC issuer: open **GitHub Enterprise Cloud with its own issuer** and enter the enterprise slug (the issuer becomes `https://token.actions.githubusercontent.com/<slug>`) and, optionally, the numeric **Enterprise ID**.
+5. Select **Add consumer**.
+
+The gateway derives the rest: the name ("GitHub Actions (acme)"), the issuer, the signing keys (OIDC discovery), the algorithm (`RS256`), the maximum token age (600 seconds) and a random audience (`tokengate:` followed by 26 characters). When a GitHub Actions consumer for the same issuer exists, **Add consumer** adds the organizations to it instead. Organizations can be added and removed later on the consumer page. The issuer, audience, algorithms, maximum token age and enterprise ID are under **Advanced trust settings**.
+
+Rules the gateway enforces (`src/policy/validate.ts`, `src/admin/ops/caller-providers.ts`):
+
+- At least one organization is required: GitHub signs tokens for every GitHub user on `https://token.actions.githubusercontent.com` ([I-TEN-1](../threat-model.md#i-ten-1)), and the access form derives each repository's organization from this list.
+- The tenant pin may only use `repository_owner_id` and `enterprise_id`, as numeric IDs that a rename cannot reuse.
 - The audience must have at least 16 printable ASCII characters, without spaces.
 - The audience cannot be a GitHub owner URL (`https://github.com/...`, the default audience of every workflow).
 - The audience cannot be a cloud platform audience: `sts.amazonaws.com`, `api://AzureADTokenExchange`, or a Google `iam.googleapis.com` audience.
-- Each issuer can belong to only one caller provider. To trust several organizations, list all their IDs in one caller provider.
-- **Maximum token age (seconds)** defaults to 600 and accepts 60 to 900.
+- Each issuer can belong to only one consumer. One consumer holds all your organizations.
+- **Maximum token age** defaults to 10 minutes and offers 5, 10 or 15 minutes.
 
 Store the gateway URL and the audience as organization variables, for example `TOKENGATE_URL` and `TOKENGATE_AUDIENCE`.
-Reusable workflows that a grant pins must not read the URL from variables: the caller repository supplies them (see [Central reusable workflow](#central-reusable-workflow-for-the-organization)).
-The caller provider page shows a ready-to-copy snippet under **Use it from CI**.
+Reusable workflows that an access pins must not read the URL from variables: the caller repository supplies them (see [Central reusable workflow](#central-reusable-workflow-for-the-organization)).
+The consumer page shows a ready-to-copy snippet under **Connect your jobs**, with the slugs of the tokens it can use.
 
 ## 2. Mint the token with the composite action
 
@@ -136,17 +141,19 @@ Any other `event_name` (`pull_request`, `pull_request_target`, `workflow_run`, `
 
 The request log stores only these claims: `sub`, `repository`, `repository_id`, `repository_owner`, `repository_owner_id`, `ref`, `ref_type`, `ref_protected`, `event_name`, `environment`, `base_ref`, `head_ref`, `workflow_ref`, `job_workflow_ref`, `actor`, `actor_id`, `run_id`, `run_attempt`, `sha`, `runner_environment`, `enterprise_id` ([I-LOG-1](../threat-model.md#i-log-1)).
 
-Find the numeric IDs with:
+Get a repository in the format the access form takes, `name (ID)`:
 
 ```bash
-gh api repos/OWNER/REPO --jq '{owner_id: .owner.id, repository_id: .id}'
+gh api repos/acme/api --jq '"\(.full_name) (\(.id))"'
 ```
+
+The command prints `acme/api (89012345)`. The ID keeps working after a rename; the name is a display label, and the form derives the organization from it.
 
 ## Examples per context
 
-Admins can create these grants with the GitHub builder on the grant form (**When**), or as condition text.
-The builder output below comes from `src/policy/presets.ts`, with **Only protected branches and tags** selected.
-Full condition syntax and semantics: [policies.md](../policies.md).
+Admins create these accesses with **Give a consumer access**: paste the repository, choose **When**, and enter its branch, tag or environment.
+The conditions below come from `src/policy/presets.ts`, with **Only protected branches and tags (recommended)** chosen.
+The access page shows them under **Exact conditions**. Full semantics: [policies.md](../policies.md#structured-access-form).
 
 ### Branch
 
@@ -156,7 +163,7 @@ on:
     branches: [main]
 ```
 
-Grant (**When**: Branch, pattern `main`):
+Access (**When**: Branch, `main`):
 
 ```text
 repository_owner_id exact 1234567
@@ -175,7 +182,7 @@ on:
     tags: ['v*']
 ```
 
-Grant (**When**: Tag, pattern `v*`):
+Access (**When**: Tag, `v*`):
 
 ```text
 repository_owner_id exact 1234567
@@ -186,7 +193,7 @@ event_name exact push
 ref_protected exact true
 ```
 
-`ref_protected` is `true` for a tag only when a tag ruleset protects it. Without one, drop that condition and accept the builder warning, or add a tag ruleset first.
+`ref_protected` is `true` for a tag only when a tag ruleset protects it. Without one, choose **Also unprotected branches and tags**, which accepts that risk, or add a tag ruleset first.
 
 ### Release
 
@@ -196,7 +203,7 @@ on:
     types: [published]
 ```
 
-Grant (**When**: Release, pattern `v*`): the same as the tag grant, with `event_name exact release`.
+Access (**When**: Release, `v*`): the same as the tag access, with `event_name exact release`.
 
 ### Pull request
 
@@ -206,7 +213,7 @@ on:
     branches: [main]
 ```
 
-Grant (**When**: Pull request, pattern `main`, **Only protected branches and tags** not selected):
+Access (**When**: Pull request into, `main`; this choice has no protected-refs option and carries its risk in its label):
 
 ```text
 repository_owner_id exact 1234567
@@ -218,7 +225,7 @@ base_ref glob main
 - A `pull_request` job runs the code proposed in the pull request. Grant it only low-risk calls.
 - Pull request refs (`refs/pull/N/merge`) are never protected. If you require protected refs, the grant never matches.
 - Pull requests from forks get no OIDC token by default, so the action fails with `No OIDC token available`.
-- `pull_request_target`, `workflow_run` and `issue_comment` run with base-repository privileges on outside input ("pwn requests"). The grant form warns when you opt in to them.
+- `pull_request_target`, `workflow_run` and `issue_comment` run with base-repository privileges on outside input ("pwn requests"). The access form asks you to accept that risk when the rows editor opts in to them.
 
 ### Environment
 
@@ -228,7 +235,7 @@ jobs:
     environment: production
 ```
 
-Grant (**When**: Environment, pattern `production`):
+Access (**When**: Environment, `production`):
 
 ```text
 repository_owner_id exact 1234567
@@ -243,15 +250,15 @@ ref_protected exact true
 
 ### Reusable workflow pin
 
-To allow one reusable workflow, whatever repository in the tenant calls it, leave **Repository IDs** empty and set **Workflow pin (optional)**.
-The builder still adds the conditions of the selected **When** context. The anchor part of the result is:
+To allow one reusable workflow, whatever repository in the tenant calls it, leave **Repository** empty and set **More constraints › Workflow pin**. With several organizations, also choose the organization there.
+The form still adds the conditions of the chosen **When** context. The anchor part of the result is:
 
 ```text
 repository_owner_id exact 1234567
 job_workflow_ref exact acme/infra/.github/workflows/deploy.yml@refs/heads/main
 ```
 
-The pin must be exact. The builder refuses wildcards.
+The pin must be exact. The form refuses wildcards.
 A grant anchored on `job_workflow_ref` admits every repository in the tenant that can call that workflow ([known limitations](../threat-model.md#callers-and-tokens)).
 In that token, `repository_id`, `ref`, `ref_protected`, `environment` and `event_name` describe the calling repository and its run, not the repository that holds the workflow.
 An org member can create a repository with a protected `main` and a `production` environment, so these conditions do not limit which repositories call the workflow. Add `repository_id exact <id>, <id>` for that.
@@ -266,8 +273,8 @@ If `acme/infra` is renamed, transferred or deleted, anyone who can create reposi
   It does not pin the repository: a recreated `acme/infra` that pushes the same commit still supplies its own `vars`, environments and runners.
   Use it together with the rules in [Central reusable workflow](#central-reusable-workflow-for-the-organization).
 
-The builder requires a **When** context, and that context also limits the caller's ref (for example **Branch** `main` adds `ref glob refs/heads/main`).
-For a grant without ref conditions, select **Write conditions as text instead** and enter only the two anchor conditions.
+Every **When** context except **Any branch, tag or environment** also limits the caller's ref (for example **Branch** `main` adds `ref glob refs/heads/main`).
+For an access without ref conditions, choose **Any branch, tag or environment**: it keeps only the two anchor conditions, and its label names its risk.
 
 ### Central reusable workflow for the organization
 
@@ -296,7 +303,7 @@ So the called workflow must decide where the token goes and which calls it makes
 Set up the grant:
 
 1. If `acme/ai-workflows` is private, allow access from the other repositories: in `acme/ai-workflows`, open Settings > Actions > General > Access.
-2. Create the grant in text mode (**Write conditions as text instead**) on the OpenAI service:
+2. Give the consumer access to the OpenAI token with an empty **Repository**, **When**: **Any branch, tag or environment**, and under **More constraints** the **Workflow pin** and **Only GitHub-hosted runners**. The result:
 
    ```text
    repository_owner_id exact 1234567
@@ -305,7 +312,7 @@ Set up the grant:
    ```
 
    Rule: `POST /responses` only. No `event_name` condition means that only trusted events pass.
-   Do not use **Create grant from this request** for this case: it prefills the first anchor rule that the token satisfies, which is `repository_owner_id` + `repository_id` (one repository only).
+   Do not use **Give this caller access** for this case: it prefills the repository of the denied call (one repository only).
 
 The reusable workflow in `acme/ai-workflows`:
 
@@ -359,14 +366,14 @@ jobs:
   This holds only while the called workflow follows the list above. Every calling repository can still make the calls that the workflow makes.
 - To limit which repositories may call the workflow, add `repository_id exact <id>, <id>` to the grant.
 
-### Create a grant from a denied request
+### Give access from a denied request
 
 1. Run the workflow once. It fails with `403 no_matching_grant`.
 2. In the admin UI, open **Requests** and select the denied request. The error body contains its request ID.
-3. Select **Create grant from this request**.
-   The form is prefilled with the caller's anchor IDs, `ref`, `event_name` and `environment` (when present).
-   It also has a rule for the exact call, unless the path contains `*` or `%2F`.
-4. Review the conditions, widen only what you need, and select **Create grant**.
+3. Select **Give this caller access**.
+   The form is prefilled with the caller's repository as `name (ID)`, the context (the environment when the job has one, else the branch or tag), the protected-refs choice the token reported, and the exact call as an operation, unless the path contains `*` or `%2F`.
+   An untrusted event such as `workflow_run` opens the rows editor and asks you to accept that risk.
+4. Review the values, widen only what you need, and select **Give access**.
 
 ## Long jobs
 
@@ -399,6 +406,6 @@ A response without `x-tokengate-request-id` came from Cloudflare, not from the g
 | `tenant_mismatch` (401) | The repository owner is not in **Allowed organization IDs** | Ask an admin to add the organization ID. |
 | `token_expired` or `token_too_old` (401) | Token minted too early | Call `tokengate-token` right before the request. |
 | `event_not_trusted` (403) | The event is not trusted and the grant does not opt in | Ask an admin to add the event to an exact `event_name` condition, or trigger the job another way. |
-| `no_matching_grant` (403) | No grant matches the claims, method and path | Ask an admin to use **Create grant from this request**. |
+| `no_matching_grant` (403) | No grant matches the claims, method and path | Ask an access manager to use **Give this caller access** on the request. |
 | `service_not_found` (404) | Wrong slug, or the service is disabled | Check the slug after `/proxy/`. |
 | `path_invalid` (400) | `//`, `.` or `..` segments, forbidden escapes, or a method-override query parameter | Fix the URL. |

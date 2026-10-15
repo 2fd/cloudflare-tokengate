@@ -4,7 +4,8 @@ This page explains how the gateway decides whether a caller may make a request: 
 tenant pins, grants, conditions and rules. It is for admins who write grants and for security reviewers.
 
 The code is the reference: `src/policy/` (evaluation and validation), `src/identity/profiles/` (what each
-platform is trusted for) and `src/admin/grant-text.ts` (the text format in the grant form).
+platform is trusted for), `src/policy/presets.ts` and `src/admin/consumer-access.ts` (the structured access
+form) and `src/admin/grant-text.ts` (the text format of the "Exact conditions" view and of value lists).
 
 ## How a request is authorized
 
@@ -67,17 +68,22 @@ Claim references: [GitHub OIDC claims](https://docs.github.com/en/actions/refere
 The tenant pin limits a caller provider to your organization. It is checked before any grant
 ([I-TEN-1](threat-model.md#i-ten-1)). A token that fails it gets `401 tenant_mismatch`.
 
-- In the caller provider form it is the "Tenant pin: whose tokens are accepted" section:
-  - GitHub Actions: "Allowed organization IDs" (`repository_owner_id`) and "Enterprise ID (optional)"
-    (`enterprise_id`).
-  - GitLab CI: "Allowed group (namespace) IDs" (`namespace_id`).
-  - Generic: "Required claims", in the condition text format below.
+- In the admin UI it is the consumer's "Organizations" (GitHub), "Groups" (GitLab) or "Tenant pin"
+  (generic) on the consumer page:
+  - GitHub Actions: organizations as `name (ID)` (`repository_owner_id`), and the "Enterprise ID" under
+    Advanced trust settings (`enterprise_id`).
+  - GitLab CI: groups as `path (ID)` (`namespace_id`).
+  - Generic: claim and value rows ("Change the pin"); a value field takes alternatives separated by
+    commas.
 - Each pin condition is `exact` and not negated. All pin conditions must hold.
 - A pin is required for the shared issuers `https://token.actions.githubusercontent.com` and
   `https://gitlab.com`, whatever the profile: anyone on those platforms can mint a token. An empty pin on a
   shared issuer fails closed at request time too.
 - A `generic` caller provider without a pin is allowed, with a warning. Leave it empty only if the issuer
   signs tokens for your company alone.
+- The admin UI requires at least one organization or group for every GitHub and GitLab consumer, also
+  for GitHub Enterprise issuers and self-managed GitLab, and accepts only numeric IDs in their pins. An
+  organization or group that enabled accesses use cannot be removed: the consumer page names them.
 - Use numeric IDs. Names such as `repository_owner` can be renamed and registered again by someone else.
 - A grant cannot list a value outside the pin for a pinned claim, for example an organization ID from
   another organization. Saving such a grant fails.
@@ -99,14 +105,17 @@ Limits: 1–32 conditions and 1–50 rules per grant.
 
 ### Condition syntax
 
-One condition per line in the "Conditions" field:
+The access form builds conditions for you ([Structured access form](#structured-access-form)). The
+rows editor ("Write conditions by hand", and every generic consumer) has one row per condition: the
+claim, "is exactly" (`exact`) or "matches pattern" (`glob`), "Not", and the values. The access page
+shows the stored conditions in this text format under "Exact conditions", and this page uses it in
+examples:
 
 ```text
 [not] <claim> exact|glob <value>[, <value>...]
 ```
 
 ```text
-# Lines starting with # and blank lines are ignored.
 repository_owner_id exact 1234567
 repository_id exact 89012345, 89012346
 ref glob refs/heads/release/*
@@ -117,12 +126,10 @@ not environment exact sandbox
 - `glob`: the claim matches one of the patterns (see [Globs](#globs)).
 - `not`: the claim is present, comparable, and matches none of the values.
 - The values of one condition are alternatives (OR). Conditions combine with AND.
-- The match word is case-insensitive. Claim names and values are case-sensitive.
-- Values are separated by commas and trimmed. Write a value as a JSON string if it contains a comma,
-  starts or ends with a space, or starts with `"`: `ref exact "refs/heads/a,b"`. The form also writes
-  values that start with `#` as JSON strings.
-- A bare leading `not` always means negation. A claim named `not` is written `"not"`. Claim names that
-  contain spaces are written as JSON strings.
+- Claim names and values are case-sensitive.
+- In a values field, values are separated by commas and trimmed. Write a value as a JSON string if it
+  contains a comma, starts or ends with a space, or starts with `"`: `"refs/heads/a,b"`. The text format
+  also writes values that start with `#` as JSON strings.
 - Limits: claim name 1–256 characters; 1–50 values per condition; each value 1–512 characters.
 
 ### Condition semantics
@@ -157,7 +164,10 @@ Rule paths and `glob` conditions use the same matcher (`src/policy/glob.ts`):
 
 ### Rule syntax
 
-One rule per line in the "Rules" field:
+The access form calls rules "Allowed operations". It offers the named operations of the token's
+template (for example "Post messages: POST /chat.postMessage") and the operation sets that other
+accesses of the token use, as checkboxes. "Other operations" has one row per rule: the methods ("All
+methods" is `*`) and the path. The access page lists the stored rules as:
 
 ```text
 <METHOD[,METHOD...]|*> /path-glob
@@ -169,6 +179,10 @@ GET,HEAD /repos/acme/app/**
 * /v1/**
 ```
 
+- A template operation with `{repo}` in its path, such as "Read repository contents:
+  `GET /repos/{repo}/**`", is saved with the repository name of the access: `GET /repos/acme/api/**`.
+  The saved rule is the literal path; renaming the repository later does not change it.
+- A token with `path` injection (a webhook URL) allows exactly `POST /`; the form shows no other choice.
 - Methods are `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE` and `OPTIONS`. `*` means all seven.
   Each method must be listed: `GET` does not allow `HEAD`.
 - The path is relative to the service base URL. It starts with `/` and is printable ASCII without spaces.
@@ -234,36 +248,58 @@ upstream pipeline, including fork merge request pipelines. If you opt in, also r
 opt-in with `ref_protected exact true` still admits downstream pipelines on protected branches whose
 variables come from the upstream pipeline. This is the same trust level as `trigger` and `api`.
 
-The grant form shows the result under the conditions, for example
+The access page shows the result in its summary, for example
 "Events accepted (event_name): push (trusted), pull_request (opted in)". An exact event condition also
 excludes trusted events it does not list.
 
-## GitHub grant builder
+## Structured access form
 
-For `github-actions` caller providers, the create form starts in the GitHub builder. "Write conditions
-as text instead" switches to the text format. Editing a saved grant always uses the text format. The
-builder produces ordinary conditions (`src/policy/presets.ts`), which are validated like any other grant.
+For GitHub Actions and GitLab CI consumers, the form "Give a consumer access" builds the conditions
+from a few choices (`src/admin/consumer-access.ts`, `src/policy/presets.ts`). The result is an ordinary
+condition set, validated like any other ([I-AUTHZ-2](threat-model.md#i-authz-2)). "Write conditions by
+hand" converts the input to rows without losing it. An access is edited with the form it was made with
+when its conditions rebuild exactly; otherwise the edit form opens the rows editor.
 
-| Field | Generated condition |
+| Input | Generated condition |
 |---|---|
-| Organization ID | `repository_owner_id exact <id>` |
-| Repository IDs | `repository_id exact <id>[, <id>...]` |
-| Only protected branches and tags (on by default) | `ref_protected exact true` |
-| Only GitHub-hosted runners | `runner_environment exact github-hosted` |
-| Workflow pin (optional) | `job_workflow_ref exact <OWNER/REPO/PATH@REF>` |
+| Repository `acme/api (89012345)` | `repository_id exact 89012345`, and `repository_owner_id exact <ID of acme>` from the consumer's organizations |
+| Project `acme-group/app (4567890)` (GitLab) | `project_id exact 4567890`, and `namespace_id exact <ID of acme-group>` |
+| Only protected branches and tags (default) | `ref_protected exact true` |
+| More constraints › Workflow pin | `job_workflow_ref exact <owner/repo/path@ref>` (GitLab: `ci_config_ref_uri`) |
+| More constraints › Only GitHub-hosted runners | `runner_environment exact github-hosted` |
 
-The "When" field adds conditions for the context. `<pattern>` is the "Branch, tag or environment" field,
-without `refs/heads/` or `refs/tags/`:
+The organization (GitHub: the first path segment) or group (GitLab: every segment but the last) of the
+repository must be one of the consumer's. Its name is matched against the display labels of the
+consumer's organizations, without regard to case. For a new organization the form asks for its ID and
+adds it to the consumer in the same submit.
 
-| When | Generated conditions |
+"When" adds the context. `<name>` is the input of the chosen card, without `refs/heads/` or
+`refs/tags/`. A branch, tag or PR base can end in `*` (`release/*`) but cannot start with `*` or contain
+`**`; an environment name cannot contain `*`. Use the rows editor for wider patterns.
+
+| When (GitHub) | Generated conditions |
 |---|---|
-| Branch | `ref_type exact branch`<br>`ref glob refs/heads/<pattern>`<br>`event_name exact push, workflow_dispatch, schedule` |
-| Tag | `ref_type exact tag`<br>`ref glob refs/tags/<pattern>`<br>`event_name exact push` |
-| Release | `ref_type exact tag`<br>`ref glob refs/tags/<pattern>`<br>`event_name exact release` |
-| Pull request | `event_name exact pull_request`<br>`base_ref glob <pattern>` |
-| Environment | `environment exact <pattern>`, or `environment glob <pattern>` if it contains `*` |
+| Environment | `environment exact <name>` |
+| Branch | `ref_type exact branch`<br>`ref glob refs/heads/<name>`<br>`event_name exact push, workflow_dispatch, schedule` |
+| Tag | `ref_type exact tag`<br>`ref glob refs/tags/<name>`<br>`event_name exact push` |
+| Any protected branch or tag | `ref_protected exact true` |
+| Release | `ref_type exact tag`<br>`ref glob refs/tags/<name>`<br>`event_name exact release` |
+| Pull request into | `event_name exact pull_request`<br>`base_ref glob <name>` |
+| Any branch, tag or environment | none: only the repository and its owner |
 
-Example: Branch `main`, organization `1234567`, repository `89012345`, protected refs on:
+| When (GitLab) | Generated conditions |
+|---|---|
+| Environment | `environment exact <name>` |
+| Branch | `ref_type exact branch`<br>`ref glob <name>` |
+| Tag | `ref_type exact tag`<br>`ref glob <name>` |
+| Any protected branch or tag | `ref_protected exact true` |
+| Any branch, tag or environment | none |
+
+GitLab contexts add no `pipeline_source` condition, so only trusted pipeline sources match
+([Trusted events](#trusted-events)).
+
+Example: Branch `main`, repository `acme/api (89012345)` of organization `acme (1234567)`, protected
+refs:
 
 ```text
 repository_owner_id exact 1234567
@@ -274,55 +310,71 @@ event_name exact push, workflow_dispatch, schedule
 ref_protected exact true
 ```
 
-The builder refuses to save when an ID is not numeric, when there is neither a repository ID nor a
-workflow pin, when a branch or tag pattern starts with `refs/`, or when the workflow pin contains `*` or does not
-look like `OWNER/REPO/PATH@REF`. Find the IDs with
-`gh api repos/OWNER/REPO --jq '{owner_id: .owner.id, repository_id: .id}'`.
+### Risks and their acceptance
+
+A choice that carries a risk says so in its label, after "Risk:". Choosing it is the acceptance: the
+access saves in one submit, and the audit row records the accepted risk codes and the warnings
+([I-AUTHZ-3](threat-model.md#i-authz-3), [ADR 0021](adr/0021-structured-consumer-access-and-labels.md)).
+
+| Choice | Risk code | Risk |
+|---|---|---|
+| Also unprotected branches and tags | `unprotected_ref` | anyone who can push a branch gets the token |
+| Pull request into | `pull_request` | `pull_request` jobs run the code proposed in the pull request |
+| Any branch, tag or environment | `any_ref` | anyone with write access to the repository gets the token |
+
+The server computes the accepted codes from the submitted choice of the chosen consumer branch, never
+from a list the browser sends. A choice in another, hidden branch covers nothing.
+
+Every other warning (the codes `broad_glob`, `event_glob`, `pwn_request`, `inherited_trust_event`,
+`untrusted_event` and `path_injection_non_post` of [Warnings](#warnings)) needs the box "I have read
+these risks and want to save this access anyway". The box is bound to a digest of exactly the risks
+shown: if an edit changes them, the form asks again. The box shows on the first render when prefilled
+values (a copy, a request record) or the rows editor already carry risks.
 
 ## Warnings
 
-Saving a grant with warnings requires the checkbox "I have read the warnings above and want to save this
-grant anyway". The form remembers which warnings you confirmed. If an edit changes the warnings, the
-form asks again.
+Every warning has a stable code (`warningDetails` in `src/policy/validate.ts`). How each one is
+accepted is in [Risks and their acceptance](#risks-and-their-acceptance). The access page recomputes
+"Accepted risks" from the stored conditions.
 
-| Warning (shortened) | Why |
-|---|---|
-| A `glob` on `ref`, `ref_path`, `base_ref`, `environment`, `job_workflow_ref`, `workflow_ref` or `ci_config_ref_uri` starts with `*` or contains `**` | Anyone who can push a branch, tag, environment or workflow with a matching name is admitted |
-| The grant matches on `ref`, `ref_path` or `environment` without `ref_protected exact true` (GitHub and GitLab) | Repository writers can create matching refs |
-| The event claim uses a glob | Globs never allow untrusted events; list events with `exact` |
-| `workflow_run`, `issue_comment` or `pull_request_target` is opted in | These run with base-repository privileges on input from outside contributors ("pwn request"; see [GitHub Security Lab](https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/)) |
-| GitLab `parent_pipeline` or `pipeline` is opted in without `ref_protected exact true` | Merge request pipelines, including fork merge requests, can start them |
-| Another untrusted event is opted in | The grant accepts an event that is refused by default |
-| The service uses `path` injection and the grant allows a method other than `POST` | Webhook APIs such as Discord return the credential in the response body for `GET` and `PATCH` on the webhook URL, and response bodies are not redacted |
-
-The GitHub builder adds its own warnings:
-
-- **Pull request:** `pull_request` jobs run the code proposed in the pull request.
-- **Pull request with protected refs on:** pull request refs (`refs/pull/N/merge`) are not protected, so
-  the grant may never match. Turn off "Only protected branches and tags" for pull request grants.
-- **Environment with a glob:** GitHub creates unprotected environments on first use, so any matching name
-  a writer picks is admitted.
-- **Protected refs off (not for pull request):** anyone who can push a matching branch or tag is
-  admitted.
+| Code | Warning (shortened) | Why |
+|---|---|---|
+| `broad_glob` | A `glob` on `ref`, `ref_path`, `base_ref`, `environment`, `job_workflow_ref`, `workflow_ref` or `ci_config_ref_uri` starts with `*` or contains `**` | Anyone who can push a branch, tag, environment or workflow with a matching name is admitted |
+| `unprotected_ref` | The access matches on `ref`, `ref_path` or `environment` without `ref_protected exact true` (GitHub and GitLab) | Repository writers can create matching refs |
+| `event_glob` | The event claim uses a glob | Globs never allow untrusted events; list events with `exact` |
+| `pwn_request` | `workflow_run`, `issue_comment` or `pull_request_target` is opted in | These run with base-repository privileges on input from outside contributors ("pwn request"; see [GitHub Security Lab](https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/)) |
+| `inherited_trust_event` | GitLab `parent_pipeline` or `pipeline` is opted in without `ref_protected exact true` | Merge request pipelines, including fork merge requests, can start them |
+| `pull_request` | GitHub `pull_request` is opted in | `pull_request` jobs run the code proposed in the pull request |
+| `untrusted_event` | Another untrusted event is opted in | The access accepts an event that is refused by default |
+| `path_injection_non_post` | The token uses `path` injection and the access allows a method other than `POST` | Webhook APIs such as Discord return the credential in the response body for `GET` and `PATCH` on the webhook URL, and response bodies are not redacted |
+| `any_ref` | (structured form only) Any branch, tag or environment | Anyone with write access to the repository gets the token |
 
 About `ref_protected`: GitHub reports a ref as protected only when branch protections or rulesets are
 configured for it (see `GITHUB_REF_PROTECTED` in
 [GitHub variables](https://docs.github.com/en/actions/reference/workflows-and-actions/variables)). Tags are often not
-protected. For tag and release grants with protected refs on, add a tag ruleset, or the grant never
-matches.
+protected. For tag and release accesses with protected refs, add a tag ruleset, or the access never
+matches. Pull request refs (`refs/pull/N/merge`) are never protected, so the pull request context has no
+protected-refs choice.
 
-## Create a grant from a denied request
+## Give access from a denied request
 
-On a request record denied with `no_matching_grant` or `event_not_trusted`, owners and admins see
-"Create grant from this request" when the token was verified. The form refuses to prefill if the caller
-provider or the service no longer exists.
+On a request record denied with `no_matching_grant` or `event_not_trusted`, access managers, admins and
+owners see "Give this caller access" when the token was verified ([I-LOG-2](threat-model.md#i-log-2)).
+The form refuses to prefill if the consumer or the token no longer exists.
 
-- The conditions are exact copies of the caller's claims: the first anchor rule the token satisfies,
-  plus `ref`, `event_name` and `environment` (GitHub) or `ref`, `pipeline_source` and `environment`
-  (GitLab), when present.
-- The rule is the exact call, for example `POST /chat.postMessage`. If the path contains `*` or
-  `%2F`, no rule is prefilled; write it by hand.
-- Review the grant before saving. Widen only what callers need.
+- GitHub and GitLab: the repository (`<repository> (<repository_id>)`, GitLab `project_path` and
+  `project_id`), the context (environment when the token has one, else branch or tag from `ref`; the
+  pull request context for `pull_request`) and the protected-refs choice from the token's
+  `ref_protected`.
+- Another untrusted event (for example `workflow_run`) opens the rows editor with exact copies of the
+  anchor claims plus `ref`, the event claim and `environment`, and asks to accept its risk on the first
+  render.
+- The operation is the template operation or operation set that contains the exact call, else the exact
+  call as a custom rule, for example `POST /chat.postMessage`. If the path contains `*` or `%2F`, no
+  operation is prefilled; add it by hand.
+- The repository name becomes a display label only when you save. Nothing from the request log is ever
+  offered as a suggestion.
+- Review the values before saving. Widen only what callers need.
 
 ## Examples
 

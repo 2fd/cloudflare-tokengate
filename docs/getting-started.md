@@ -166,24 +166,24 @@ To give someone a role before their first sign-in, open Users and use "Invite a 
 
 ## 12. Add a service consumer
 
-A caller provider tells the gateway which CI tokens to trust.
+A service consumer is the CI system whose jobs call the gateway. It tells the gateway which tokens to trust.
 
-1. Open Caller providers and click "Add a caller provider".
-2. Choose "GitHub Actions".
-3. In "Name", enter a label such as `GitHub Actions (acme)`.
-4. Keep the default "Issuer", `https://token.actions.githubusercontent.com`.
-5. Keep the generated "Audience". It starts with `tokengate:` and is random, so tokens minted for other services are never accepted here.
-6. Find the numeric ID of your GitHub organization:
+1. Get your GitHub organization in the format that the form takes, `name (ID)`:
 
    ```sh
-   gh api orgs/ACME --jq .id
+   gh api orgs/acme --jq '"\(.login) (\(.id))"'
    ```
 
-   For a personal account, use `gh api users/USERNAME --jq .id`.
+   The command prints a line such as `acme (1234567)`. For a personal account, use `gh api users/NAME --jq '"\(.login) (\(.id))"'`.
 
-7. Enter the ID in "Allowed organization IDs". This is the tenant pin. It is required, because anyone on GitHub can get a token from this issuer ([I-TEN-1](threat-model.md#i-ten-1)).
-8. Click "Create caller provider".
-9. Copy the "Audience" value from the caller provider page. The section "Use it from CI" shows a workflow snippet with your values.
+2. In the admin UI, open Service consumers and open "Add a consumer".
+3. Keep the type "GitHub Actions".
+4. Paste the line into "Organizations". To add several organizations, separate them with commas. The organizations are the tenant pin. A GitHub consumer needs at least one, because anyone on GitHub can get a token from the GitHub issuer ([I-TEN-1](threat-model.md#i-ten-1)).
+5. Click "Add consumer".
+
+The gateway sets everything else: the name ("GitHub Actions (acme)"), the issuer, the signing keys, the token checks and the audience. The audience starts with `tokengate:` and is random, so tokens minted for other services are never accepted here. The consumer page shows it under "Connect your jobs", in a workflow snippet with your values.
+
+When you add a service token first (step 13), you can also skip this step: "Give a consumer access" adds the consumer in the same form.
 
 GitLab CI and other issuers are covered in [callers/gitlab-ci.md](callers/gitlab-ci.md) and [callers/generic-oidc.md](callers/generic-oidc.md).
 
@@ -204,11 +204,11 @@ The credential is encrypted before it is stored. The UI shows only its length an
 
 ## 14. Make the first call
 
-1. Use a test repository owned by the organization whose ID you entered in step 12. Set two Actions variables on it. Replace `OWNER/REPO` with the test repository. You run these commands in the gateway clone, so `--repo` is required.
+1. Use a test repository owned by the organization that you added in step 12. Set two Actions variables on it. Replace `OWNER/REPO` with the test repository. You run these commands in the gateway clone, so `--repo` is required.
 
    ```sh
    gh variable set TOKENGATE_URL --repo OWNER/REPO --body "<gateway>"
-   gh variable set TOKENGATE_AUDIENCE --repo OWNER/REPO --body "<audience from step 12>"
+   gh variable set TOKENGATE_AUDIENCE --repo OWNER/REPO --body "<audience from the consumer page>"
    ```
 
 2. Add `.github/workflows/tokengate-smoke.yml` on the default branch:
@@ -249,26 +249,21 @@ The step fails with HTTP 403. The body contains `"code":"no_matching_grant"` and
 
 ## 15. Give access from the denied request
 
-1. In the admin UI, open Requests. You can also use "Recent denials" on the Dashboard.
-2. Open the denied request. Its reason is `no_matching_grant`.
-3. Click "Create grant from this request". The grant form opens, prefilled with this caller's exact values:
+1. In the admin UI, open Monitoring › Requests and open the denied request. Its reason is `no_matching_grant`.
+2. Click "Give this caller access". The form "Give a consumer access" opens, prefilled with this caller's exact values:
+   - Consumer: GitHub Actions (acme). Token: GitHub.
+   - Repository: `acme/demo (7654321)`, the name and numeric ID from the verified token.
+   - When: Branch `main`, with protected refs as the token reported them.
+   - Allowed operations: the exact call, `GET /repos/acme/demo`.
+3. Review the values. Change only what you need.
+4. If `main` is a protected branch, keep "Only protected branches and tags (recommended)". Otherwise choose "Also unprotected branches and tags". That choice accepts its risk ("anyone who can push a branch gets the token"), and the audit log records it.
+5. Click "Give access".
 
-   ```text
-   repository_owner_id exact 1234567
-   repository_id exact 7654321
-   ref exact refs/heads/main
-   event_name exact workflow_dispatch
-   ```
+The access page opens with "Connect your jobs", the snippet with this token's slug. The gateway stores the repository name `acme/demo` as a display label of its ID. Labels never change what an access allows ([I-AUTHZ-2](threat-model.md#i-authz-2)).
 
-   The rule is the exact call: `GET /repos/acme/demo`.
+Only requests with a verified token that were denied with `no_matching_grant` or `event_not_trusted` offer this button ([I-LOG-2](threat-model.md#i-log-2)). The button requires the role `access_manager`, `admin` or `owner`. The form never suggests values from the request log: its lists come from consumers and accesses that you saved.
 
-4. Review the conditions and the rule. Widen only what you need. [policies.md](policies.md) explains the syntax.
-5. Click "Create grant".
-6. The form comes back with a warning: the grant matches on `ref` without `ref_protected exact true`.
-   - If `main` is a protected branch, add the line `ref_protected exact true` to "Conditions" and click "Create grant" again.
-   - Otherwise, check "I have read the warnings above and want to save this grant anyway" and click "Create grant" again.
-
-Only requests with a verified token that were denied with `no_matching_grant` or `event_not_trusted` offer this button ([I-LOG-2](threat-model.md#i-log-2)). The button requires the role `access_manager`, `admin` or `owner`.
+Without a denied request, open Service consumers › Consumer access and click "Give a consumer access". Paste the output of `gh api repos/acme/demo --jq '"\(.full_name) (\(.id))"'` into "Repository". Choose when jobs get the token, then click "Give access". The page [policies.md](policies.md#structured-access-form) shows the conditions each choice makes.
 
 ## 16. Call again
 
@@ -279,7 +274,7 @@ gh run watch --repo OWNER/REPO
 
 The step prints the repository JSON from the GitHub API. The job never saw the GitHub token: the gateway removed the caller token and added the credential ([I-TOK-1](threat-model.md#i-tok-1), [I-INJ-1](threat-model.md#i-inj-1)).
 
-The Requests page shows the call as allowed, with the grant that matched, unless "Share of allowed requests to record" is `0`. The "Get started" checklist on the Dashboard disappears once a caller provider, a service, a grant and a verified call exist.
+The Requests page shows the call as allowed, with the consumer access that matched, unless "Share of allowed requests to record" is `0`. The matrix on Service consumers › Consumer access shows which consumers can use which tokens.
 
 ## Production on a custom domain
 
