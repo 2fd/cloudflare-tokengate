@@ -1,10 +1,12 @@
 // I-CRED-2: a credential is bound to (service id, base_url, injection). The admin ops cannot change
 // the binding without re-entering the credential, re-sealing uses the new AAD, and rows edited
-// directly in D1 fail closed.
+// directly in D1 fail closed. A sealed draft of a secret (A13.6) opens only for its own token and
+// destination, so it never follows a repoint.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { rewrapCredentials } from '../../src/admin/ops/keyring';
 import {
+  destinationFingerprint,
   openStoredCredential,
   setServiceCredential,
   testServiceCredential,
@@ -18,7 +20,9 @@ import {
   updateServiceCredentialStatement,
 } from '../../src/db/services';
 import type { Service } from '../../src/db/types';
-import { TEST_ACCESS_ENV } from '../helpers/app';
+import { resetAdminWorld } from '../fixtures/admin-forms';
+import { adminPost, createUser, loginAs } from '../helpers/admin-auth';
+import { createTestApp, TEST_ACCESS_ENV } from '../helpers/app';
 import {
   ACTOR,
   CONTEXT,
@@ -43,6 +47,11 @@ async function stored(id: string): Promise<Service> {
   const service = await getService(env.DB, id);
   if (!service) throw new Error('service missing');
   return service;
+}
+
+/** The rotate form's digest of the destination stored now (a page loaded at this point). */
+async function rotateFields(id: string): Promise<{ expected_destination: string }> {
+  return { expected_destination: await destinationFingerprint(await stored(id)) };
 }
 
 beforeEach(resetControlPlane);
@@ -121,6 +130,7 @@ describe('I-CRED-2: setServiceCredential re-seals with the new AAD', () => {
         credential_sealed: snapshot.credential_sealed as string,
         credential_hint: null,
         credential_expires_at: null,
+        template_id: 'github',
       },
       Date.now(),
       serviceCredentialGuard(snapshot),
@@ -170,5 +180,85 @@ describe('I-CRED-2: rows edited in D1 fail closed', () => {
       ok: false,
       error: 'credential_binding_mismatch',
     });
+  });
+});
+
+describe('I-CRED-2: a sealed draft never follows a repoint or another token', () => {
+  const ATTACKER = 'https://attacker.example';
+  const draftOf = (html: string) => /name="credential_draft" value="([^"]+)"/.exec(html)?.[1] ?? '';
+
+  /** Two attested tokens at the same destination; every upstream refuses, so a rotate re-renders. */
+  async function world() {
+    const network = fakeNetwork(() =>
+      Response.json({ message: 'Bad credentials' }, { status: 401 }),
+    );
+    const app = createTestApp({ fetch: network.fetch, env: { TOKENGATE_KEK: KEK_1 } });
+    const a = await seedService(app.deps, { slug: 'a', secret: SECRET });
+    const b = await seedService(app.deps, { slug: 'b', secret: SECRET });
+    await env.DB.prepare('UPDATE services SET verify = ?').bind(JSON.stringify(VERIFY)).run();
+    const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
+    const first = await adminPost(app, session, `/admin/tokens/${a}/secret`, {
+      ...(await rotateFields(a)),
+      credential: 'ghp_draftedSecret0123456789abcdefWXYZ',
+    });
+    expect(first.status).toBe(422);
+    const draft = draftOf(await first.text());
+    expect(draft).toMatch(/^cd1\./);
+    return { network, app, session, a, b, draft, sent: network.calls.length };
+  }
+
+  beforeEach(resetAdminWorld);
+
+  it("a draft made on one token's rotate form does not open on another token", async () => {
+    const { network, app, session, b, draft, sent } = await world();
+    const before = await stored(b);
+    const res = await adminPost(app, session, `/admin/tokens/${b}/secret`, {
+      ...(await rotateFields(b)),
+      credential_draft: draft,
+      save_anyway: '1',
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain('Enter the personal access token again');
+    expect((await stored(b)).credential_sealed).toBe(before.credential_sealed);
+    expect(network.calls.length).toBe(sent);
+  });
+
+  it('a D1 repoint after the re-render makes the draft refuse: nothing goes to the new host', async () => {
+    const { network, app, session, a, draft } = await world();
+    const loaded = await rotateFields(a);
+    await env.DB.prepare('UPDATE services SET base_url = ? WHERE id = ?').bind(ATTACKER, a).run();
+    const before = await stored(a);
+    // The form loaded before the repoint names the old destination: refused before the draft opens.
+    const stale = await adminPost(app, session, `/admin/tokens/${a}/secret`, {
+      ...loaded,
+      credential_draft: draft,
+      save_anyway: '1',
+    });
+    expect(stale.status).toBe(409);
+    expect(await stale.text()).not.toContain('name="credential_draft"');
+    // A form loaded after it: the draft is bound to the old destination and refuses.
+    const res = await adminPost(app, session, `/admin/tokens/${a}/secret`, {
+      ...(await rotateFields(a)),
+      credential_draft: draft,
+      save_anyway: '1',
+    });
+    expect([400, 422]).toContain(res.status);
+    expect((await stored(a)).credential_sealed).toBe(before.credential_sealed);
+    expect(network.calls.filter((call) => call.url.startsWith(ATTACKER))).toEqual([]);
+  });
+
+  it('a rotate draft does not open on Change destination with another base URL', async () => {
+    const { network, app, session, a, draft } = await world();
+    const before = await stored(a);
+    const res = await adminPost(app, session, `/admin/tokens/${a}/destination`, {
+      base_url: 'https://uploads.github.com',
+      injection_kind: 'bearer',
+      credential_draft: draft,
+      save_anyway: '1',
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain('again: the destination changed');
+    expect((await stored(a)).base_url).toBe(before.base_url);
+    expect(network.calls.filter((call) => call.url.includes('uploads.github.com'))).toEqual([]);
   });
 });

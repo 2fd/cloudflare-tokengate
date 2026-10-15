@@ -8,12 +8,15 @@ import {
   sealCredential,
   sealedKid,
 } from '../../crypto/envelope';
+import { sha256Hex } from '../../crypto/hash';
 import { type Keyring, loadKeyring } from '../../crypto/keyring';
-import { listGrants } from '../../db/grants';
+import { deleteGrantsByIdsStatement, exactGrantSetGuard, listGrants } from '../../db/grants';
 import {
   deleteServiceStatement,
   getService,
+  getServiceBySlug,
   insertServiceStatement,
+  listServices,
   type ServiceFields,
   serviceCredentialGuard,
   serviceExistsGuard,
@@ -29,7 +32,7 @@ import {
   getState,
   recordKeyCheckValueStatement,
 } from '../../db/settings';
-import type { Actor, Service } from '../../db/types';
+import type { Actor, Grant, Service } from '../../db/types';
 import type { Deps } from '../../deps';
 import { newId } from '../../lib/ids';
 import { canonicalJson } from '../../lib/json';
@@ -40,12 +43,15 @@ import {
   validateBaseUrl,
   validateServiceFields,
 } from '../../policy/validate';
+import { getServiceTemplate, templateIdFor } from '../service-templates';
 import {
   allOf,
   booleanErrors,
   commitOrConstraintFailure,
   concurrentChange,
   descriptionErrors,
+  type FieldError,
+  fieldError,
   nextVersion,
   type OpFailure,
   opFailure,
@@ -107,16 +113,50 @@ export interface ServiceCreateInput {
   save_anyway?: boolean;
 }
 
-export async function createService(
-  deps: Deps,
-  actor: Actor,
+/** The validated parts of a create, before the keyring and the credential check. */
+interface CreatePlan {
+  base: string;
+  injection: Injection;
+  injectionJson: string;
+  verify: VerifyCheck | null;
+  credential: { value: string; hint: string | null } | null;
+  warnings: string[];
+}
+
+/**
+ * Every check of a create that sends nothing and writes nothing, in the order of A7.4: field
+ * formats and the secret format, then the slug (a SELECT before anything is sent; the UNIQUE
+ * constraint stays the race backstop), then the allowlist. `hostAllowed` skips only the allowlist
+ * check, for a route that allows the host itself first (allow_host).
+ */
+export async function checkServiceCreate(
+  deps: Pick<Deps, 'env'>,
   input: ServiceCreateInput,
   context: OpContext,
-): Promise<CredentialOpResult> {
+  options: { hostAllowed?: boolean } = {},
+): Promise<{ ok: true; warnings: string[] } | OpFailure> {
+  const plan = await planCreate(deps, input, context, options);
+  if (!plan.ok) return plan;
+  // A secret is stored only with a keyring (A7.4 step 4), checked before an owner's allow_host
+  // commits.
+  if (plan.plan.credential) {
+    const keyring = await loadKeyring(deps.env);
+    if (!keyring.ok) return keyringUnavailable(keyring.error);
+  }
+  return { ok: true, warnings: plan.plan.warnings };
+}
+
+async function planCreate(
+  deps: Pick<Deps, 'env'>,
+  input: ServiceCreateInput,
+  context: OpContext,
+  options: { hostAllowed?: boolean },
+): Promise<{ ok: true; plan: CreatePlan } | OpFailure> {
+  const db = deps.env.DB;
   const errors: string[] = [];
   const base = validateBaseUrl(input.base_url, {
-    gatewayHosts: await gatewayHosts(deps.env.DB, context),
-    allowedUpstreamHosts: await getAllowedUpstreamHosts(deps.env.DB),
+    gatewayHosts: await gatewayHosts(db, context),
+    allowedUpstreamHosts: options.hostAllowed ? null : await getAllowedUpstreamHosts(db),
   });
   if (!base.ok) errors.push(base.error);
   const injection = normalizeInjection(input.injection);
@@ -141,9 +181,45 @@ export async function createService(
       ? normalizeCredential(secretText, injection.injection)
       : null;
   if (credential && !credential.ok) errors.push(credential.error);
+  // The slug pre-check is a SELECT that sends nothing, so a taken slug is reported together with
+  // the format errors (one re-render), after them.
+  const slugFormatOk = !fields.errors.some((error) => error.startsWith('slug'));
+  const taken = slugFormatOk && (await getServiceBySlug(db, input.slug)) !== null;
+  const slugErrors = taken
+    ? [
+        fieldError(
+          'slug',
+          `another token already uses ${input.slug}; leave empty to use ${await freeSlug(db, input.slug)}`,
+        ),
+      ]
+    : [];
   if (errors.length > 0 || !base.ok || !injection.ok || (credential && !credential.ok)) {
-    return opFailure('invalid', errors, fields.warnings);
+    return opFailure('invalid', [...serviceFieldErrors(errors), ...slugErrors], fields.warnings);
   }
+  if (slugErrors.length > 0) return opFailure('conflict', slugErrors, fields.warnings);
+  return {
+    ok: true,
+    plan: {
+      base: base.normalized,
+      injection: injection.injection,
+      injectionJson: injection.json,
+      verify,
+      credential: credential ? { value: credential.value, hint: credential.hint } : null,
+      warnings: fields.warnings,
+    },
+  };
+}
+
+export async function createService(
+  deps: Deps,
+  actor: Actor,
+  input: ServiceCreateInput,
+  context: OpContext,
+): Promise<CredentialOpResult> {
+  const planned = await planCreate(deps, input, context, {});
+  if (!planned.ok) return planned;
+  const { plan } = planned;
+  const credential = plan.credential;
 
   const now = deps.now();
   const id = newId('svc', now, deps.random);
@@ -153,22 +229,22 @@ export async function createService(
     const keyring = await loadKeyring(deps.env);
     if (!keyring.ok) return keyringUnavailable(keyring.error);
     sealingKeyring = keyring.keyring;
-    const outcome = verify
+    const outcome = plan.verify
       ? await runVerifyCheck(
           deps,
           {
-            base_url: base.normalized,
-            injection: injection.injection,
+            base_url: plan.base,
+            injection: plan.injection,
             timeout_ms: input.timeout_ms ?? DEFAULT_TIMEOUT_MS,
-            verify,
+            verify: plan.verify,
           },
           credential.value,
         )
       : null;
     if (outcome && !outcome.passed && input.save_anyway !== true) {
-      return verifyFailed(outcome, fields.warnings);
+      return verifyFailed(outcome, plan.warnings);
     }
-    const aad = credentialAad(id, base.normalized, injection.json);
+    const aad = credentialAad(id, plan.base, plan.injectionJson);
     sealed = {
       sealed: await sealCredential(keyring.keyring, credential.value, aad, deps.random),
       hint: credential.hint,
@@ -181,24 +257,20 @@ export async function createService(
     slug: input.slug,
     name: input.name.trim(),
     description: (input.description ?? '').trim(),
-    base_url: base.normalized,
-    injection_json: injection.json,
+    base_url: plan.base,
+    injection_json: plan.injectionJson,
     forward_headers: input.forward_headers ?? [],
     timeout_ms: input.timeout_ms ?? DEFAULT_TIMEOUT_MS,
     credential_sealed: sealed?.sealed ?? null,
     credential_hint: sealed?.hint ?? null,
     credential_updated_at: sealed ? now : null,
     credential_expires_at: input.credential_expires_at ?? sealed?.verify?.expiresAt ?? null,
-    verify,
+    verify: plan.verify,
+    template_id: templateIdFor(plan.base, plan.injectionJson),
     enabled: input.enabled ?? true,
     created_at: now,
   };
-  const after = serviceView({
-    ...row,
-    injection: injection.injection,
-    template_id: null,
-    updated_at: now,
-  });
+  const after = serviceView({ ...row, injection: plan.injection, updated_at: now });
   const outcome = await commitOrConstraintFailure(
     deps,
     actor,
@@ -216,7 +288,104 @@ export async function createService(
     ],
   );
   if (!outcome.ok) return outcome;
-  return { ok: true, service: after, verify: sealed?.verify ?? null, warnings: fields.warnings };
+  return { ok: true, service: after, verify: sealed?.verify ?? null, warnings: plan.warnings };
+}
+
+/** The highest suffixed slug or name tried before giving up (then the clash is a 409). */
+const FREE_SUFFIX_MAX = 99;
+
+/** `base` when no token uses it, else `base-2`, `base-3`, … (within the 63-character limit). */
+export async function freeSlug(db: D1Database, base: string): Promise<string> {
+  return freeSlugAmong(
+    base,
+    (await listServices(db)).map((service) => service.slug),
+  );
+}
+
+/** `base` when no token has that name, else `base 2`, `base 3`, … */
+export async function freeName(db: D1Database, base: string): Promise<string> {
+  return freeNameAmong(
+    base,
+    (await listServices(db)).map((service) => service.name),
+  );
+}
+
+export function freeSlugAmong(base: string, taken: Iterable<string>): string {
+  return freeValue(
+    base,
+    new Set(taken),
+    (value, n) => `${value.slice(0, 63 - `-${n}`.length)}-${n}`,
+  );
+}
+
+export function freeNameAmong(base: string, taken: Iterable<string>): string {
+  return freeValue(base, new Set(taken), (value, n) => `${value} ${n}`);
+}
+
+function freeValue(
+  base: string,
+  taken: Set<string>,
+  suffixed: (base: string, n: number) => string,
+) {
+  if (!taken.has(base)) return base;
+  for (let n = 2; n <= FREE_SUFFIX_MAX; n++) {
+    const candidate = suffixed(base, n);
+    if (!taken.has(candidate)) return candidate;
+  }
+  return base;
+}
+
+/**
+ * The slug a custom token gets by default: the first DNS label of the base URL's host that is not
+ * `api` or `www` (api.example.com → example), reduced to the slug alphabet; `custom` otherwise.
+ */
+export function slugBaseFor(baseUrl: string): string {
+  let host = '';
+  try {
+    host = new URL(baseUrl.trim()).hostname.toLowerCase();
+  } catch {
+    return 'custom';
+  }
+  const labels = host.split('.');
+  const label = labels.slice(0, -1).find((part) => part !== 'api' && part !== 'www') ?? '';
+  const slug = label
+    .replace(/[^a-z0-9-]/g, '')
+    .replace(/^-+/, '')
+    .slice(0, 63);
+  return slug === '' ? 'custom' : slug;
+}
+
+/**
+ * The form field each validation message is about (the messages of policy/validate.ts and the
+ * shared checks start with their subject). Unknown messages belong to the whole form.
+ */
+export function serviceFieldErrors(errors: readonly string[]): FieldError[] {
+  return errors.map((message) => fieldError(serviceFieldOf(message), message));
+}
+
+const FIELD_PREFIXES: ReadonlyArray<readonly [prefix: string, field: string]> = [
+  ['base URL', 'base_url'],
+  ['slug', 'slug'],
+  ['name', 'name'],
+  ['description', 'description'],
+  ['credential expiry', 'credential_expires_at'],
+  ['credential', 'credential'],
+  ['timeout', 'timeout_ms'],
+  ['verify method', 'verify_method'],
+  ['verify expected status', 'verify_expect_status'],
+  ['verify', 'verify_path'],
+  ['injection: header name', 'injection_header_name'],
+  ['injection: header prefix', 'injection_header_prefix'],
+  ['injection: username', 'injection_username'],
+  ['injection: query', 'injection_param'],
+  ['injection: path prefix', 'injection_path_prefix'],
+  ['injection', 'injection_kind'],
+  ['forward header', 'forward_headers'],
+  ['at most 32 forward headers', 'forward_headers'],
+];
+
+function serviceFieldOf(message: string): string | null {
+  return FIELD_PREFIXES.find(([prefix]) => message.startsWith(prefix))?.[1] ?? null;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -389,10 +558,145 @@ export interface ServiceCredentialInput {
   /** Overrides the expiry; default: GitHub's reported expiry, else none. */
   credential_expires_at?: number | null;
   /**
-   * Host of `base_url`, typed by the admin. Required when the stored credential does not open
-   * under the stored row: its destination may have been changed in D1 (I-CRED-2).
+   * Host of `base_url`, typed by the admin. Required when no credential is stored, or when the
+   * stored credential does not open under the stored row: in both cases the stored destination
+   * may have been written straight into D1, waiting for a credential (I-CRED-2).
    */
   confirm_destination?: string;
+  /**
+   * destinationFingerprint of the stored destination the admin saw (the rotate form): when set,
+   * a stored row that points elsewhere now is a conflict, before anything is sent (I-CRED-2).
+   */
+  expected_destination?: string;
+}
+
+/** The validated parts of a credential change, before the check sends the secret. */
+interface CredentialPlan {
+  existing: Service;
+  keyring: Keyring;
+  base: string;
+  injection: Injection;
+  injectionJson: string;
+  /** Null only for a check run with `withoutSecret`. */
+  credential: { value: string; hint: string | null } | null;
+  host: string;
+  /** Why the stored destination is not attested, or null when the stored secret opens. */
+  unattested: OpenCredentialError | 'no_credential' | null;
+  warnings: string[];
+}
+
+/**
+ * Every check of a credential change that sends nothing and writes nothing, in the order of A7.4:
+ * field formats and the secret format, then the allowlist (skipped with `hostAllowed`, for a route
+ * that allows the host itself first), then the keyring, then the destination confirmation of an
+ * unattested or absent binding (I-CRED-2). `withoutSecret` skips the secret format, for a route
+ * that already reported the secret itself and wants the other errors in the same re-render.
+ */
+async function planCredential(
+  deps: Pick<Deps, 'env'>,
+  serviceId: string,
+  input: ServiceCredentialInput,
+  context: OpContext,
+  options: { hostAllowed?: boolean; withoutSecret?: boolean },
+): Promise<{ ok: true; plan: CredentialPlan } | OpFailure> {
+  const existing = await getService(deps.env.DB, serviceId);
+  if (!existing) return opFailure('not_found', ['service not found']);
+  const moved = await destinationMoved(existing, input.expected_destination);
+  if (moved) return moved;
+
+  const errors: string[] = [];
+  const base = validateBaseUrl(input.base_url, {
+    gatewayHosts: await gatewayHosts(deps.env.DB, context),
+    allowedUpstreamHosts: options.hostAllowed ? null : await getAllowedUpstreamHosts(deps.env.DB),
+  });
+  if (!base.ok) errors.push(base.error);
+  const injection = normalizeInjection(input.injection);
+  const fields = validateServiceFields({
+    slug: existing.slug,
+    name: existing.name,
+    timeout_ms: existing.timeout_ms,
+    forward_headers: existing.forward_headers,
+    injection: input.injection as Injection,
+    verify: existing.verify,
+  });
+  errors.push(...fields.errors);
+  errors.push(...timestampErrors('credential expiry', input.credential_expires_at));
+  const credential =
+    injection.ok && options.withoutSecret !== true
+      ? normalizeCredential(
+          typeof input.secret === 'string' ? input.secret : '',
+          injection.injection,
+        )
+      : null;
+  if (credential && !credential.ok) errors.push(credential.error);
+  if (
+    errors.length > 0 ||
+    !base.ok ||
+    !injection.ok ||
+    (credential === null ? options.withoutSecret !== true : !credential.ok)
+  ) {
+    return opFailure('invalid', serviceFieldErrors(errors), fields.warnings);
+  }
+  const secret = credential?.ok ? { value: credential.value, hint: credential.hint } : null;
+
+  const keyring = await loadKeyring(deps.env);
+  if (!keyring.ok) return keyringUnavailable(keyring.error);
+
+  // Before the verify check, which sends the plaintext: a stored destination the credential does
+  // not attest, or one with no credential at all, may be a D1 writer's repoint waiting for the
+  // credential (I-CRED-2).
+  const unattested = existing.credential_sealed
+    ? await openStoredCredential(keyring.keyring, existing).then((opened) =>
+        opened.ok ? null : opened.error,
+      )
+    : 'no_credential';
+  const host = new URL(base.normalized).host;
+  if (unattested !== null && !destinationConfirmed(input.confirm_destination, host)) {
+    const why =
+      unattested === 'no_credential'
+        ? 'no credential is stored, so nothing attests the stored base URL and injection'
+        : `the stored credential does not open under this service's stored base URL and injection (${unattested}); they may have been changed outside the admin UI`;
+    return opFailure(
+      'confirmation_required',
+      [
+        fieldError(
+          'confirm_destination',
+          `${why}. Check the base URL and injection against an out-of-band source, then type the destination host ${host} under "Confirm destination host"`,
+        ),
+      ],
+      fields.warnings,
+    );
+  }
+  return {
+    ok: true,
+    plan: {
+      existing,
+      keyring: keyring.keyring,
+      base: base.normalized,
+      injection: injection.injection,
+      injectionJson: injection.json,
+      credential: secret,
+      host,
+      unattested,
+      warnings: fields.warnings,
+    },
+  };
+}
+
+/**
+ * The checks of setServiceCredential that send nothing and write nothing (planCredential). The
+ * destination route runs it before an owner's `allow_host` commits, so a destination that would be
+ * refused anyway never changes the allowlist.
+ */
+export async function checkServiceCredential(
+  deps: Pick<Deps, 'env'>,
+  serviceId: string,
+  input: ServiceCredentialInput,
+  context: OpContext,
+  options: { hostAllowed?: boolean; withoutSecret?: boolean } = {},
+): Promise<{ ok: true; warnings: string[] } | OpFailure> {
+  const planned = await planCredential(deps, serviceId, input, context, options);
+  return planned.ok ? { ok: true, warnings: planned.plan.warnings } : planned;
 }
 
 /**
@@ -407,61 +711,19 @@ export async function setServiceCredential(
   input: ServiceCredentialInput,
   context: OpContext,
 ): Promise<CredentialOpResult> {
-  const existing = await getService(deps.env.DB, serviceId);
-  if (!existing) return opFailure('not_found', ['service not found']);
-
-  const errors: string[] = [];
-  const base = validateBaseUrl(input.base_url, {
-    gatewayHosts: await gatewayHosts(deps.env.DB, context),
-    allowedUpstreamHosts: await getAllowedUpstreamHosts(deps.env.DB),
-  });
-  if (!base.ok) errors.push(base.error);
-  const injection = normalizeInjection(input.injection);
-  const fields = validateServiceFields({
-    slug: existing.slug,
-    name: existing.name,
-    timeout_ms: existing.timeout_ms,
-    forward_headers: existing.forward_headers,
-    injection: input.injection as Injection,
-    verify: existing.verify,
-  });
-  errors.push(...fields.errors);
-  errors.push(...timestampErrors('credential expiry', input.credential_expires_at));
-  const credential = injection.ok
-    ? normalizeCredential(typeof input.secret === 'string' ? input.secret : '', injection.injection)
-    : null;
-  if (credential && !credential.ok) errors.push(credential.error);
-  if (errors.length > 0 || !base.ok || !injection.ok || !credential?.ok) {
-    return opFailure('invalid', errors, fields.warnings);
-  }
-
-  const keyring = await loadKeyring(deps.env);
-  if (!keyring.ok) return keyringUnavailable(keyring.error);
-
-  // Before the verify check, which sends the plaintext: a stored destination the credential does
-  // not attest may be a D1 writer's repoint waiting for the credential (I-CRED-2).
-  const unattested = existing.credential_sealed
-    ? await openStoredCredential(keyring.keyring, existing).then((opened) =>
-        opened.ok ? null : opened.error,
-      )
-    : null;
-  const host = new URL(base.normalized).host;
-  if (unattested !== null && !destinationConfirmed(input.confirm_destination, host)) {
-    return opFailure(
-      'confirmation_required',
-      [
-        `the stored credential does not open under this service's stored base URL and injection (${unattested}); they may have been changed outside the admin UI. Check the base URL and injection against an out-of-band source, then type the destination host ${host} under "Confirm destination host"`,
-      ],
-      fields.warnings,
-    );
-  }
+  const planned = await planCredential(deps, serviceId, input, context, {});
+  if (!planned.ok) return planned;
+  const { plan } = planned;
+  const { existing, keyring, credential, unattested, host } = plan;
+  if (credential === null)
+    return opFailure('invalid', [fieldError('credential', 'credential is empty')]);
 
   const verify = existing.verify
     ? await runVerifyCheck(
         deps,
         {
-          base_url: base.normalized,
-          injection: injection.injection,
+          base_url: plan.base,
+          injection: plan.injection,
           timeout_ms: existing.timeout_ms,
           verify: existing.verify,
         },
@@ -469,17 +731,18 @@ export async function setServiceCredential(
       )
     : null;
   if (verify && !verify.passed && input.save_anyway !== true) {
-    return verifyFailed(verify, fields.warnings);
+    return verifyFailed(verify, plan.warnings);
   }
 
-  const aad = credentialAad(existing.id, base.normalized, injection.json);
-  const sealed = await sealCredential(keyring.keyring, credential.value, aad, deps.random);
+  const aad = credentialAad(existing.id, plan.base, plan.injectionJson);
+  const sealed = await sealCredential(keyring, credential.value, aad, deps.random);
   const values = {
-    base_url: base.normalized,
-    injection_json: injection.json,
+    base_url: plan.base,
+    injection_json: plan.injectionJson,
     credential_sealed: sealed,
     credential_hint: credential.hint,
     credential_expires_at: input.credential_expires_at ?? verify?.expiresAt ?? null,
+    template_id: templateIdFor(plan.base, plan.injectionJson),
   };
   const now = deps.now();
   const repointed =
@@ -496,29 +759,33 @@ export async function setServiceCredential(
       targetId: existing.id,
       summary: `${existing.credential_sealed ? 'Replaced' : 'Set'} credential of service ${existing.slug}${
         // An unattested stored row is no trustworthy "before": name the confirmed destination.
-        unattested !== null
-          ? ` and set its destination to ${values.base_url} (confirmed; the stored destination was not attested: ${unattested})`
-          : repointed
-            ? ' and changed its destination'
-            : ''
+        unattested === 'no_credential'
+          ? ` and set its destination to ${values.base_url} (confirmed)`
+          : unattested !== null
+            ? ` and set its destination to ${values.base_url} (confirmed; the stored destination was not attested: ${unattested})`
+            : repointed
+              ? ' and changed its destination'
+              : ''
       }`,
       diff: {
         before: credentialAuditView(existing),
         after: credentialAuditView({
           ...values,
-          injection: injection.injection,
+          injection: plan.injection,
           credential_updated_at: now,
         }),
-        ...(unattested !== null
+        ...(unattested !== null && unattested !== 'no_credential'
           ? { stored_binding: { attested: false, error: unattested, confirmed_destination: host } }
-          : {}),
+          : unattested === 'no_credential'
+            ? { stored_binding: { attested: false, confirmed_destination: host } }
+            : {}),
         ...(verify ? { verify: verifyAuditView(verify) } : {}),
       },
     },
     guard,
     [
       updateServiceCredentialStatement(deps.env.DB, existing.id, values, now, guard),
-      ...kcvStatements(deps, keyring.keyring, true, existing.id),
+      ...kcvStatements(deps, keyring, true, existing.id),
     ],
   );
   if (!outcome.ok) return outcome;
@@ -526,11 +793,182 @@ export async function setServiceCredential(
   const service = serviceView({
     ...existing,
     ...values,
-    injection: injection.injection,
+    injection: plan.injection,
     credential_updated_at: now,
     updated_at: nextVersion(existing.updated_at, now),
   });
-  return { ok: true, service, verify, warnings: fields.warnings };
+  return { ok: true, service, verify, warnings: plan.warnings };
+}
+
+export interface ServiceRotateInput {
+  secret: string;
+  save_anyway?: boolean;
+  /** Overrides the expiry; default: GitHub's reported expiry, else none. */
+  credential_expires_at?: number | null;
+  /** Ids of tokens to replace the same secret in (rotationSiblings), each re-checked here. */
+  siblings?: readonly string[];
+  /**
+   * destinationFingerprint of the destination the rotate form showed. A token repointed since
+   * then is a conflict: nothing is sent and nothing is written (I-CRED-2).
+   */
+  expected_destination?: string;
+}
+
+export type RotateResult =
+  | (Extract<CredentialOpResult, { ok: true }> & {
+      /** One entry per requested sibling, in request order. */
+      siblings: Array<{ id: string; slug: string; ok: boolean; error?: string }>;
+    })
+  | (OpFailure & { verify?: VerifyOutcome });
+
+/**
+ * Replaces the secret of a token whose stored binding is attested, keeping its destination: the
+ * base URL and injection come from the stored row, never from the form (I-CRED-2). Siblings are
+ * replaced only after this token commits, each with its own op and audit row (I-AUDIT-1), and only
+ * while it is still attested and holds the same secret this token held before.
+ */
+export async function rotateServiceSecret(
+  deps: Deps,
+  actor: Actor,
+  serviceId: string,
+  input: ServiceRotateInput,
+  context: OpContext,
+): Promise<RotateResult> {
+  const existing = await getService(deps.env.DB, serviceId);
+  if (!existing) return opFailure('not_found', ['service not found']);
+  // The destination the admin saw, before the keyring and before anything is sent.
+  const moved = await destinationMoved(existing, input.expected_destination);
+  if (moved) return moved;
+  // The secret format first, against the stored injection (A7.4), then the keyring.
+  const format = normalizeCredential(
+    typeof input.secret === 'string' ? input.secret : '',
+    existing.injection,
+  );
+  if (!format.ok) return opFailure('invalid', serviceFieldErrors([format.error]));
+  const keyring = await loadKeyring(deps.env);
+  if (!keyring.ok) return keyringUnavailable(keyring.error);
+  const old = await openStoredCredential(keyring.keyring, existing);
+  if (!old.ok) {
+    return opFailure('confirmation_required', [
+      fieldError(
+        null,
+        existing.credential_sealed === null
+          ? 'no secret is stored yet; set it under Change destination, where you confirm the host'
+          : `the stored secret does not open (${old.error}); set it under Change destination, where you confirm the host`,
+      ),
+    ]);
+  }
+  const main = await setServiceCredential(
+    deps,
+    actor,
+    serviceId,
+    {
+      base_url: existing.base_url,
+      injection: existing.injection,
+      secret: input.secret,
+      save_anyway: input.save_anyway,
+      credential_expires_at: input.credential_expires_at,
+      // Re-checked on the row setServiceCredential reads, whose binding its CAS guard pins.
+      expected_destination: await destinationFingerprint(existing),
+    },
+    context,
+  );
+  if (!main.ok) return main;
+  const siblings: Array<{ id: string; slug: string; ok: boolean; error?: string }> = [];
+  for (const siblingId of input.siblings ?? []) {
+    if (siblingId === serviceId) continue;
+    const sibling = await getService(deps.env.DB, siblingId);
+    if (!sibling) {
+      siblings.push({ id: siblingId, slug: siblingId, ok: false, error: 'not found' });
+      continue;
+    }
+    if (!sameFamily(existing, sibling)) {
+      siblings.push({ id: sibling.id, slug: sibling.slug, ok: false, error: 'another type' });
+      continue;
+    }
+    const opened = await openStoredCredential(keyring.keyring, sibling);
+    if (!opened.ok || opened.plaintext !== old.plaintext) {
+      siblings.push({
+        id: sibling.id,
+        slug: sibling.slug,
+        ok: false,
+        error: opened.ok ? 'it holds another secret now' : 'its stored secret does not open',
+      });
+      continue;
+    }
+    const result = await setServiceCredential(
+      deps,
+      actor,
+      sibling.id,
+      {
+        base_url: sibling.base_url,
+        injection: sibling.injection,
+        secret: input.secret,
+        save_anyway: input.save_anyway,
+        // The same secret expires at the same time.
+        credential_expires_at: main.service.credential_expires_at,
+      },
+      context,
+    );
+    siblings.push(
+      result.ok
+        ? { id: sibling.id, slug: sibling.slug, ok: true }
+        : { id: sibling.id, slug: sibling.slug, ok: false, error: result.errors.join('; ') },
+    );
+  }
+  return { ...main, siblings };
+}
+
+/**
+ * Tokens of the same template family (GitHub API and uploads) whose stored secret opens and equals
+ * this token's: the rotate form offers to replace it there too. Compared in memory only; nothing
+ * about the other secrets is returned.
+ */
+export async function rotationSiblings(
+  deps: Pick<Deps, 'env'>,
+  service: Service,
+): Promise<Service[]> {
+  if (familyOf(service) === null || service.credential_sealed === null) return [];
+  const keyring = await loadKeyring(deps.env);
+  if (!keyring.ok) return [];
+  const own = await openStoredCredential(keyring.keyring, service);
+  if (!own.ok) return [];
+  const candidates = (await listServices(deps.env.DB)).filter(
+    (other) =>
+      other.id !== service.id && other.credential_sealed !== null && sameFamily(service, other),
+  );
+  const out: Service[] = [];
+  for (const other of candidates) {
+    const opened = await openStoredCredential(keyring.keyring, other);
+    if (opened.ok && opened.plaintext === own.plaintext) out.push(other);
+  }
+  return out;
+}
+
+function familyOf(service: Pick<Service, 'template_id'>): string | null {
+  const template = service.template_id === null ? null : getServiceTemplate(service.template_id);
+  return template?.family ?? null;
+}
+
+function sameFamily(a: Pick<Service, 'template_id'>, b: Pick<Service, 'template_id'>): boolean {
+  const family = familyOf(a);
+  return family !== null && family === familyOf(b);
+}
+
+/** The latest audit row that set this token's secret: who and when, for display only. */
+export async function lastSecretChange(
+  db: D1Database,
+  serviceId: string,
+): Promise<{ ts: number; actor_email: string | null } | null> {
+  return db
+    .prepare(
+      `SELECT ts, actor_email FROM audit_log WHERE target_id = ?
+         AND (action = 'service.credential.set'
+              OR (action = 'service.create' AND json_extract(diff, '$.after.credential_set') = 1))
+       ORDER BY ts DESC, rowid DESC LIMIT 1`,
+    )
+    .bind(serviceId)
+    .first<{ ts: number; actor_email: string | null }>();
 }
 
 /**
@@ -544,7 +982,7 @@ export async function testServiceCredential(
   actor: Actor,
   serviceId: string,
   context: OpContext,
-): Promise<{ ok: true; verify: VerifyOutcome } | OpFailure> {
+): Promise<{ ok: true; verify: VerifyOutcome; expirySaved: boolean } | OpFailure> {
   const service = await getService(deps.env.DB, serviceId);
   if (!service) return opFailure('not_found', ['service not found']);
   const check = service.verify;
@@ -603,25 +1041,74 @@ export async function testServiceCredential(
       ...verifyAuditView(verify),
     }),
   );
-  return { ok: true, verify };
+  // The upstream reports the secret's expiry (GitHub): keep the stored one current, as its own
+  // audited change. A concurrent edit wins silently; the result still renders.
+  let expirySaved = false;
+  if (verify.expiresAt !== null && verify.expiresAt !== service.credential_expires_at) {
+    const saved = await updateServiceFields(deps, actor, service.id, {
+      credential_expires_at: verify.expiresAt,
+      expected_updated_at: service.updated_at,
+    });
+    expirySaved = saved.ok && saved.changed === true;
+  }
+  return { ok: true, verify, expirySaved };
 }
 
 // ---------------------------------------------------------------------------------------------
 // Delete
 
-/** Refused (conflict) while grants reference the service. The audit row keeps the full config. */
+export interface ServiceDeleteOptions {
+  /** Also delete the consumer access (grants) of the token: needs access:write too. */
+  withAccesses?: boolean;
+  /** The grant ids the admin confirmed; the delete applies only while they are exactly the set. */
+  accessIds?: readonly string[];
+}
+
+/**
+ * Deletes a token. While consumer access references it, it is refused unless `withAccesses` names
+ * exactly the current set: then the accesses and the token go in one batch with one audit row
+ * whose diff holds every deleted row (I-AUDIT-1), or nothing goes (a 409 when the set changed).
+ */
 export async function deleteService(
   deps: Deps,
   actor: Actor,
   serviceId: string,
-): Promise<{ ok: true } | OpFailure> {
+  options: ServiceDeleteOptions = {},
+): Promise<{ ok: true; deletedAccesses: number } | (OpFailure & { accesses?: Grant[] })> {
   const db = deps.env.DB;
   const existing = await getService(db, serviceId);
   if (!existing) return opFailure('not_found', ['service not found']);
   const grants = await listGrants(db, { service_id: serviceId });
-  if (grants.length > 0) return referencedBy(grants);
+  if (grants.length > 0 && options.withAccesses !== true) return referencedBy(grants);
+  if (grants.length > 0 && !actorMayDeleteAccess(actor)) {
+    return opFailure('conflict', [
+      'deleting consumer access needs a role that also manages consumer access; nothing was deleted',
+    ]);
+  }
+  const ids = grants.map((grant) => grant.id).sort();
+  const confirmed = [...new Set(options.accessIds ?? [])].sort();
+  if (grants.length > 0 && JSON.stringify(ids) !== JSON.stringify(confirmed)) {
+    return accessSetChanged(grants);
+  }
 
-  const guard = serviceUnreferencedGuard(serviceId);
+  // The audit row and the grant delete see the same state, so both apply or neither does. After
+  // the grants are gone the token goes only if no grant references it any more, and, in a cascade,
+  // only if this batch wrote its audit row: when the confirmed accesses were removed concurrently,
+  // the exact-set guard is false and the token must stay (I-AUDIT-1). A service.delete row for a
+  // service that still exists can only come from this batch: every earlier one that wrote it
+  // also deleted the service in the same transaction.
+  const guard =
+    grants.length > 0
+      ? allOf(serviceExistsGuard(serviceId), exactGrantSetGuard('service_id', serviceId, ids))
+      : serviceUnreferencedGuard(serviceId);
+  const deleteGuard =
+    grants.length > 0
+      ? allOf(serviceUnreferencedGuard(serviceId), {
+          sql: "EXISTS (SELECT 1 FROM audit_log WHERE action = 'service.delete' AND target_type = 'service' AND target_id = ?)",
+          binds: [serviceId],
+        })
+      : serviceUnreferencedGuard(serviceId);
+  const view = serviceView(existing);
   const outcome = await commitOrConstraintFailure(
     deps,
     actor,
@@ -629,25 +1116,52 @@ export async function deleteService(
       action: 'service.delete',
       targetType: 'service',
       targetId: serviceId,
-      summary: `Deleted service ${existing.slug}`,
-      diff: { before: serviceView(existing) },
+      summary:
+        grants.length > 0
+          ? `Deleted service ${existing.slug} and its ${grants.length} consumer access${grants.length === 1 ? '' : 'es'}`
+          : `Deleted service ${existing.slug}`,
+      diff: { before: grants.length > 0 ? { ...view, accesses: grants } : view },
     },
     guard,
-    [deleteServiceStatement(db, serviceId, guard)],
+    [
+      ...(grants.length > 0 ? [deleteGrantsByIdsStatement(db, ids, guard)] : []),
+      deleteServiceStatement(db, serviceId, deleteGuard),
+    ],
   );
   if (!outcome.ok) return outcome;
   if (!outcome.committed) {
     const current = await listGrants(db, { service_id: serviceId });
-    return current.length > 0 ? referencedBy(current) : concurrentChange('the service');
+    if (grants.length > 0 || current.length > 0) {
+      return options.withAccesses === true ? accessSetChanged(current) : referencedBy(current);
+    }
+    return concurrentChange('the service');
   }
-  return { ok: true };
+  return { ok: true, deletedAccesses: grants.length };
 }
 
-function referencedBy(grants: Array<{ name: string }>): OpFailure {
+/** The admin route passes access:write as a field permission; an op caller must hold it too. */
+function actorMayDeleteAccess(actor: Actor): boolean {
+  const authority = (actor as { authority?: { permissions?: readonly string[] } }).authority;
+  return authority === undefined || (authority.permissions ?? []).includes('access:write');
+}
+
+function referencedBy(grants: Grant[]): OpFailure & { accesses: Grant[] } {
   const names = grants.map((grant) => JSON.stringify(grant.name)).join(', ');
-  return opFailure('conflict', [
-    `the service is used by ${grants.length} grant(s): ${names}; delete them first`,
-  ]);
+  return {
+    ...opFailure('conflict', [
+      `the service is used by ${grants.length} consumer access${grants.length === 1 ? '' : 'es'}: ${names}; delete them first`,
+    ]),
+    accesses: grants,
+  };
+}
+
+function accessSetChanged(grants: Grant[]): OpFailure & { accesses: Grant[] } {
+  return {
+    ...opFailure('conflict', [
+      `the consumer access of this token changed since the page was loaded; nothing was deleted. Check the ${grants.length} listed now and confirm again`,
+    ]),
+    accesses: grants,
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -697,6 +1211,38 @@ export async function storedBinding(
   return { status: 'unattested', error: opened.error, keyChanged };
 }
 
+/**
+ * A short digest of the stored destination (base URL and injection), so a form can say which
+ * destination it showed without posting one: the rotate form carries it (I-CRED-2).
+ */
+export async function destinationFingerprint(
+  service: Pick<Service, 'base_url' | 'injection_json'>,
+): Promise<string> {
+  return (await sha256Hex(`${service.base_url}\n${service.injection_json}`)).slice(0, 32);
+}
+
+/** A conflict when `expected` is set and the stored destination is no longer that one. */
+async function destinationMoved(
+  existing: Service,
+  expected: string | undefined,
+): Promise<OpFailure | null> {
+  if (expected === undefined || expected === (await destinationFingerprint(existing))) return null;
+  return opFailure('conflict', [
+    fieldError(
+      null,
+      `The destination of this token changed since the page was loaded: it now sends the secret to ${hostLabel(existing.base_url)}. Nothing was sent or saved. Check the destination below, then enter the secret again`,
+    ),
+  ]);
+}
+
+function hostLabel(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return 'an invalid base URL';
+  }
+}
+
 /** The admin typed the host of the submitted base URL (case-insensitive, surrounding space ignored). */
 function destinationConfirmed(typed: string | undefined, host: string): boolean {
   return typeof typed === 'string' && typed.trim().toLowerCase() === host.toLowerCase();
@@ -712,12 +1258,20 @@ function destinationConfirmed(typed: string | undefined, host: string): boolean 
 function normalizeVerify(verify: unknown): VerifyCheck | null {
   if (verify === null || verify === undefined) return null;
   if (typeof verify !== 'object' || Array.isArray(verify)) return verify as VerifyCheck;
-  const { method, path, expect_status, expect_ok_field } = verify as VerifyCheck;
+  const { method, path, expect_status, expect_ok_field, headers } = verify as VerifyCheck;
   const out: VerifyCheck = { method, path, expect_status };
   if (expect_ok_field !== undefined && expect_ok_field !== false) {
     out.expect_ok_field = expect_ok_field;
   }
+  // Template check headers (validated by validateServiceFields); an empty set is dropped.
+  if (headers !== undefined && !(isPlainObject(headers) && Object.keys(headers).length === 0)) {
+    out.headers = headers;
+  }
   return out;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function keyringUnavailable(error: string): OpFailure {

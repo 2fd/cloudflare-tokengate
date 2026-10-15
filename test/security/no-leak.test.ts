@@ -6,6 +6,9 @@
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ROUTE_PERMISSIONS } from '../../src/admin/auth/rbac';
+import { destinationFingerprint } from '../../src/admin/ops/services';
+import { SERVICE_TEMPLATES } from '../../src/admin/service-templates';
+import { getService } from '../../src/db/services';
 import type { Injection } from '../../src/policy/types';
 import { runCron } from '../../src/telemetry/cron';
 import { consumeRequestLogBatch } from '../../src/telemetry/queue-consumer';
@@ -477,11 +480,36 @@ async function driveAdmin(): Promise<void> {
   const verify = { verify_method: 'GET', verify_path: '/verify', verify_expect_status: '200' };
   const created = credentialCanary('formcreate');
   const rotated = credentialCanary('rotatedfail');
+  const wrongType = `ghp_${credentialCanary('wrongtype')}`;
   credentials.push(
     { label: 'form create', value: created },
     { label: 'form rotate (verify fails)', value: rotated },
+    { label: 'wrong-type paste', value: wrongType },
   );
+  // One submit per token type card: only the secret is posted, the template supplies the rest.
+  for (const template of SERVICE_TEMPLATES) {
+    const canary = credentialCanary(`tpl${template.id.replaceAll('-', '')}`);
+    credentials.push({ label: `template ${template.id}`, value: canary });
+    const res = await adminForm(`create ${template.id}`, '/admin/tokens', {
+      template: template.id,
+      credential: canary,
+    });
+    expect(res.status, template.id).toBe(303);
+    const id = /svc_[0-9A-Z]{26}/.exec(res.headers.get('location') ?? '')?.[0];
+    serviceIds.set(template.id, id ?? '');
+  }
+  // The wrong-type guard refuses another vendor's secret before anything is sent; the error
+  // names the likely card and never echoes the secret.
+  expect(
+    (
+      await adminForm('wrong-type create', '/admin/tokens', {
+        template: 'openai',
+        credential: wrongType,
+      })
+    ).status,
+  ).toBe(400);
   const serviceForm = {
+    template: 'custom',
     slug: 'svc-form',
     name: 'Form service',
     description: '',
@@ -502,19 +530,42 @@ async function driveAdmin(): Promise<void> {
   expect(formServiceId).toBeDefined();
   serviceIds.set('svc-form', formServiceId ?? '');
 
-  const credentialForm = {
-    base_url: 'https://api.formupstream.test/v2',
-    injection_kind: 'bearer',
-    credential: rotated,
-  };
   const path = `/admin/tokens/${formServiceId}`;
-  expect(
-    (await adminForm('credential verify fails', `${path}/credential`, credentialForm)).status,
-  ).toBe(422);
+  const draftOf = async (res: Response) =>
+    /name="credential_draft" value="([^"]+)"/.exec(await res.clone().text())?.[1] ?? '';
+  // Destination and rotate: a failed check re-renders with a sealed draft (A13.6), then a submit
+  // with only the draft saves.
+  const destination = { base_url: 'https://api.formupstream.test/v2', injection_kind: 'bearer' };
+  const failedDestination = await adminForm('destination verify fails', `${path}/destination`, {
+    ...destination,
+    credential: rotated,
+  });
+  expect(failedDestination.status).toBe(422);
+  const destinationDraft = await draftOf(failedDestination);
+  expect(destinationDraft).toMatch(/^cd1\./);
   expect(
     (
-      await adminForm('credential save anyway', `${path}/credential`, {
-        ...credentialForm,
+      await adminForm('destination save anyway (draft only)', `${path}/destination`, {
+        ...destination,
+        credential_draft: destinationDraft,
+        save_anyway: '1',
+      })
+    ).status,
+  ).toBe(303);
+  // The rotate form carries the digest of the destination it shows (I-CRED-2).
+  const current = await getService(env.DB, formServiceId ?? '');
+  if (!current) throw new Error('service missing');
+  const shown = { expected_destination: await destinationFingerprint(current) };
+  const failedRotate = await adminForm('rotate verify fails', `${path}/secret`, {
+    ...shown,
+    credential: rotated,
+  });
+  expect(failedRotate.status).toBe(422);
+  expect(
+    (
+      await adminForm('rotate save anyway (draft only)', `${path}/secret`, {
+        ...shown,
+        credential_draft: await draftOf(failedRotate),
         save_anyway: '1',
       })
     ).status,
@@ -593,7 +644,16 @@ async function driveAdmin(): Promise<void> {
     '/admin/users?q=owner',
     '/admin/users?notice=invited',
   ];
-  const tokensVariants = ['/admin/tokens/new?template=github'];
+  const tokensVariants = [
+    '/admin/tokens/new?template=github',
+    '/admin/tokens/new?template=custom',
+    '/admin/tokens?status=expiring',
+    '/admin/tokens?key=k1',
+    `/admin/tokens/${formServiceId}?open=destination`,
+    `/admin/tokens/${formServiceId}?open=details&notice=created_verified&also=host_added`,
+    '/admin/tokens/hosts',
+    '/admin/tokens/keys',
+  ];
   const consumersVariants = requestRows.map((row) => `/admin/access/new?from_request=${row.id}`);
   for (const url of [
     ...monitoringVariants,

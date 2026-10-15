@@ -334,12 +334,15 @@ export function validateServiceFields(input: ServiceFieldsInput): ValidationResu
   }
 
   if (input.verify !== null && input.verify !== undefined) {
-    errors.push(...verifyCheckErrors(input.verify));
+    errors.push(...verifyCheckErrors(input.verify, injection.ok ? injection.injection : null));
   }
   return { errors, warnings };
 }
 
-function verifyCheckErrors(verify: unknown): string[] {
+/** At most this many extra headers on a verify check. */
+export const VERIFY_HEADERS_MAX = 4;
+
+function verifyCheckErrors(verify: unknown, injection: Injection | null): string[] {
   if (!isRecord(verify)) return ['verify check must be an object'];
   const errors: string[] = [];
   if (verify.method !== 'GET' && verify.method !== 'POST') {
@@ -368,6 +371,34 @@ function verifyCheckErrors(verify: unknown): string[] {
   }
   if (verify.expect_ok_field !== undefined && typeof verify.expect_ok_field !== 'boolean') {
     errors.push('verify expect_ok_field must be true or false');
+  }
+  if (verify.headers !== undefined) errors.push(...verifyHeaderErrors(verify.headers, injection));
+  return errors;
+}
+
+/** Template-set check headers: never a reserved header or the one carrying the credential. */
+function verifyHeaderErrors(headers: unknown, injection: Injection | null): string[] {
+  if (!isRecord(headers)) return ['verify headers must be an object of header names and values'];
+  const entries = Object.entries(headers);
+  if (entries.length > VERIFY_HEADERS_MAX) {
+    return [`verify check may send at most ${VERIFY_HEADERS_MAX} extra headers`];
+  }
+  const injected = injection ? injectedHeaderName(injection) : null;
+  const errors: string[] = [];
+  for (const [name, value] of entries) {
+    if (!HEADER_NAME_RE.test(name)) {
+      errors.push(`verify header ${JSON.stringify(name)} must be a lower-case HTTP token`);
+    } else if (headerListed(NEVER_FORWARD, name) || name === injected) {
+      errors.push(`verify header "${name}" is reserved`);
+    }
+    if (
+      typeof value !== 'string' ||
+      value.length === 0 ||
+      value.length > 256 ||
+      !/^[\x20-\x7e]+$/.test(value)
+    ) {
+      errors.push(`verify header "${name}" must be printable ASCII text of at most 256 characters`);
+    }
   }
   return errors;
 }

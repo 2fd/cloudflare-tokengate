@@ -1,34 +1,44 @@
-// Admin page: encryption keys (Service tokens). Key ids and check values (KCVs) of the loaded
-// keyring, credentials per key, and re-encryption with the active key (keyring:rewrap). Shows key
-// ids and check values only, never key material (I-CFG-1).
+// Service tokens › Encryption keys (A13.5): key ids and check values (KCVs) of the loaded keyring,
+// the secrets sealed with each, problems with their fix, and re-encryption with the active key
+// (keyring:rewrap). Shows key ids and check values only, never key material (I-CFG-1).
 import type { App } from '../../app';
+import { sealedKid } from '../../crypto/envelope';
+import { listServices } from '../../db/services';
+import type { Service } from '../../db/types';
 import { keyringHealth } from '../../health';
-import { can } from '../auth/rbac';
+import { type NoticeTable, resolveNotice } from '../notice';
 import { KEYRING_ERROR_TEXT, keyringStatus, rewrapCredentials } from '../ops/keyring';
+import { fieldError } from '../ops/shared';
+import type { FieldError } from '../ops/shared';
 import { paths, returnPath } from '../paths';
 import { type AdminContext, adminActor, formData, redirectWithNotice, renderPage } from '../render';
-import { Badge, Csrf, Messages } from '../views/legacy';
+import { AskSomeone, ConfirmDialog, DataTable, EmptyState } from '../views/components';
+import { docsUrl } from '../views/docs';
 
-const PAGE = paths.tokenKeys();
-
-const NOTICES = {
-  rewrapped: 'Credentials re-encrypted with the active key.',
-  rewrapped_partial:
-    'Credentials re-encrypted with the active key, except some that were changed while this ran. Run it again to finish.',
-  rewrap_none: 'Nothing to re-encrypt: every credential already uses the active key.',
-  key_confirmed:
-    'New key confirmed: every credential opens with it. Credentials under older keys, if any, were re-encrypted with the active key.',
-} as const;
-type NoticeKey = keyof typeof NOTICES;
+const NOTICES: NoticeTable = {
+  rewrapped: () => ({ text: 'Secrets re-encrypted with the active key.' }),
+  rewrapped_partial: () => ({
+    text: 'Secrets re-encrypted with the active key, except some that were changed while this ran. Run it again to finish.',
+  }),
+  rewrap_none: () => ({ text: 'Nothing to re-encrypt: every secret already uses the active key.' }),
+  key_confirmed: () => ({
+    text: 'New key confirmed: every secret opens with it. Secrets under older keys, if any, were re-encrypted with the active key.',
+  }),
+};
 
 export function registerTokenKeysRoutes(app: App): void {
-  app.get('/admin/tokens/keys', (c) => keysPage(c, { notice: noticeKey(c.req.query('notice')) }));
+  app.get('/admin/tokens/keys', (c) => keysPage(c, {}));
 
   app.post('/admin/tokens/keys/rewrap', async (c) => {
     const form = await formData(c);
     const result = await rewrapCredentials(c.get('deps'), adminActor(c));
-    if (!result.ok) return keysPage(c, { errors: result.errors, status: 409 });
-    const notice: NoticeKey =
+    if (!result.ok) {
+      return keysPage(c, {
+        errors: result.errors.map((message) => fieldError(null, message)),
+        status: 409,
+      });
+    }
+    const notice =
       result.skipped > 0
         ? 'rewrapped_partial'
         : result.confirmedKids.length > 0
@@ -41,169 +51,265 @@ export function registerTokenKeysRoutes(app: App): void {
   });
 }
 
-async function keysPage(
-  c: AdminContext,
-  options: { notice?: NoticeKey | null; errors?: string[]; status?: 409 },
-) {
+function plural(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+interface KeyRow {
+  kid: string;
+  kcv: string | null;
+  status: 'active' | 'loaded' | 'missing' | 'changed';
+  secrets: number;
+}
+
+async function keysPage(c: AdminContext, o: { errors?: FieldError[]; status?: 409 }) {
   const deps = c.get('deps');
-  const viewer = c.get('viewer');
-  const [keyring, health] = await Promise.all([keyringStatus(deps), keyringHealth(deps)]);
+  const [status, health, tokens] = await Promise.all([
+    keyringStatus(deps),
+    keyringHealth(deps),
+    listServices(deps.env.DB),
+  ]);
+  const tokensOf = (kid: string | null) =>
+    tokens.filter(
+      (token) => token.credential_sealed !== null && sealedKid(token.credential_sealed) === kid,
+    );
+  const rows: KeyRow[] = [
+    ...status.keys.map((key) => ({
+      kid: key.kid,
+      kcv: key.kcv,
+      status: health.changedKids.includes(key.kid)
+        ? ('changed' as const)
+        : key.active
+          ? ('active' as const)
+          : ('loaded' as const),
+      secrets: key.credentials,
+    })),
+    ...(status.error
+      ? []
+      : status.missingKids.map((kid) => ({
+          kid,
+          kcv: null,
+          status: 'missing' as const,
+          secrets: status.credentialsByKid[kid] ?? 0,
+        }))),
+  ];
+  // Problems that block a rewrap; a changed check value does not (a rewrap accepts the new key).
+  const blocking: Array<{ text: string; tokens: Service[] }> = [];
+  if (status.error === null) {
+    for (const kid of status.missingKids) {
+      blocking.push({
+        text: `Key ${kid} is used by ${plural(status.credentialsByKid[kid] ?? 0, 'secret', 'secrets')} but is not in the keyring. Those tokens answer 503 until the key is added back to TOKENGATE_KEYRING.`,
+        tokens: tokensOf(kid),
+      });
+    }
+  }
+  if (status.unreadableCredentials > 0) {
+    blocking.push({
+      text: `${plural(status.unreadableCredentials, 'stored secret is', 'stored secrets are')} damaged. Set them again under Change destination on each token page.`,
+      tokens: tokensOf(null),
+    });
+  }
+  const changed = health.changedKids.map((kid) => ({
+    text: `Key ${kid} is not the key that encrypted its secrets (its check value changed). Restore the original key, or re-encrypt below to accept the new one once every secret under it opens.`,
+    tokens: tokensOf(kid),
+  }));
+  const sentence =
+    status.error !== null
+      ? null
+      : `Active key ${status.activeKid}. ${plural(status.keys.length, 'key', 'keys')} loaded. ${
+          blocking.length === 0 && changed.length === 0
+            ? 'Every stored secret opens.'
+            : 'Some stored secrets do not open: see Problems.'
+        }`;
   return renderPage(
     c,
     {
       title: 'Encryption keys',
       section: 'tokens',
       subsection: 'keys',
-      notice: options.notice ? { text: NOTICES[options.notice] } : null,
-      status: options.status,
+      notice: resolveNotice(NOTICES, c.req.query('notice'), null),
+      errors: o.errors,
+      status: o.status,
     },
-    () => (
+    (ctx) => (
       <>
-        <Messages errors={options.errors} />
-        <KeyringSection
-          csrf={viewer.csrfToken}
-          canRewrap={can(viewer.user.role, 'keyring:rewrap')}
-          status={keyring}
-          changedKids={health.changedKids}
-        />
+        {status.error === 'keyring_absent' ? (
+          <EmptyState
+            title="No encryption key"
+            action={<a href={docsUrl('operations/key-rotation.md')}>How to set up keys</a>}
+          >
+            No encryption key is configured. Set TOKENGATE_KEK or TOKENGATE_KEYRING. Until then
+            secrets cannot be saved and the proxy answers 503.
+          </EmptyState>
+        ) : status.error !== null ? (
+          <ul class="alerts">
+            <li class="alert alert-error">
+              <p>
+                <strong>Error:</strong> {KEYRING_ERROR_TEXT[status.error]}
+              </p>
+            </li>
+          </ul>
+        ) : (
+          <p class="lead">
+            {sentence} Secrets are stored encrypted with the key from the <code>TOKENGATE_KEK</code>{' '}
+            or <code>TOKENGATE_KEYRING</code> secret.
+          </p>
+        )}
+        {rows.length > 0 ? (
+          <DataTable
+            id="keys"
+            caption="Keys in the keyring"
+            rowHeader="kid"
+            rows={rows}
+            columns={[
+              { key: 'kid', header: 'Key ID', render: (row) => <code>{row.kid}</code> },
+              {
+                key: 'kcv',
+                header: 'Key check value',
+                render: (row) => (row.kcv ? <code>{row.kcv}</code> : <span class="muted">—</span>),
+              },
+              {
+                key: 'status',
+                header: 'Status',
+                render: (row) => (
+                  <span
+                    class={`badge ${row.status === 'active' ? 'ok' : row.status === 'loaded' ? 'muted' : 'bad'}`}
+                  >
+                    {row.status}
+                  </span>
+                ),
+              },
+              {
+                key: 'secrets',
+                header: 'Secrets sealed with it',
+                numeric: true,
+                render: (row) =>
+                  row.secrets > 0 ? (
+                    <a href={paths.tokens({ key: row.kid })}>
+                      {row.secrets}
+                      <span class="vh"> tokens with key {row.kid}</span>
+                    </a>
+                  ) : (
+                    '0'
+                  ),
+              },
+            ]}
+          />
+        ) : null}
+        {blocking.length + changed.length > 0 ? (
+          <section aria-labelledby="key-problems-h">
+            <h2 id="key-problems-h">Problems</h2>
+            <ul class="alerts">
+              {[...changed, ...blocking].map((problem) => (
+                <li class="alert alert-error">
+                  <p>
+                    <strong>Error:</strong> {problem.text}
+                  </p>
+                  {problem.tokens.length > 0 ? (
+                    <p class="objects">
+                      {problem.tokens.map((token, index) => (
+                        <>
+                          {index > 0 ? ' · ' : null}
+                          <a href={paths.token(token.id)}>{token.name}</a>
+                        </>
+                      ))}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        <section id="rewrap" aria-labelledby="rewrap-h">
+          <h2 id="rewrap-h">Re-encrypt secrets</h2>
+          <Rewrap
+            ctx={ctx}
+            error={status.error !== null}
+            needsRewrap={status.needsRewrap}
+            changedKids={health.changedKids}
+            blocked={blocking.length > 0}
+          />
+        </section>
+        <section aria-labelledby="kcv-h">
+          <h2 id="kcv-h">Check a key value</h2>
+          <p>
+            Compare each check value with the one printed by <code>pnpm keyring check</code> for the
+            key in your vault. Run it with <code>AUTH_ACCESS_TEAM_DOMAIN</code>,{' '}
+            <code>AUTH_ACCESS_AUD</code> and <code>AUTH_ACCESS_DEVELOPMENT</code> set as in
+            production: keys are bound to the login variables (I-CRED-3), so other values print
+            other check values.{' '}
+            <a href={docsUrl('operations/key-rotation.md')}>Key rotation guide</a>
+          </p>
+        </section>
       </>
     ),
   );
 }
 
-function KeyringSection(props: {
-  csrf: string;
-  canRewrap: boolean;
-  status: Awaited<ReturnType<typeof keyringStatus>>;
-  changedKids: string[];
-}) {
-  const { status } = props;
-  // Problems that block re-encryption. A changed check value does not: re-encryption is how the
-  // new key is accepted once every credential under it opens.
-  const problems: string[] = [];
-  const changedKidProblems: string[] = [];
-  if (status.error) problems.push(KEYRING_ERROR_TEXT[status.error]);
-  // Without a keyring every kid is "missing"; the error above already says so.
-  for (const kid of status.error ? [] : status.missingKids) {
-    problems.push(
-      `Key "${kid}" is used by ${status.credentialsByKid[kid] ?? 0} credential(s) but is not in the keyring. Those services answer 503 until the key is added back.`,
-    );
-  }
-  for (const kid of props.changedKids) {
-    changedKidProblems.push(
-      `Key "${kid}" is not the key that encrypted its credentials (its check value changed). Restore the original key, or set those credentials again and then re-encrypt credentials to accept the new key.`,
-    );
-  }
-  if (status.unreadableCredentials > 0) {
-    problems.push(
-      `${status.unreadableCredentials} stored credential(s) are damaged. Set those credentials again on their service pages.`,
-    );
-  }
-  return (
-    <>
-      <p>
-        Credentials are stored encrypted with the key from the <code>TOKENGATE_KEK</code> or{' '}
-        <code>TOKENGATE_KEYRING</code> secret. Compare each check value with the one printed by{' '}
-        <code>node scripts/keyring.ts check</code> for the key in your vault.
-      </p>
-      {[...changedKidProblems, ...problems].map((problem) => (
-        <p class="banner error" role="alert">
-          {problem}
-        </p>
-      ))}
-      {status.keys.length > 0 ? (
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Key id</th>
-              <th scope="col">Check value</th>
-              <th scope="col">Used for new credentials</th>
-              <th scope="col">Credentials encrypted with it</th>
-            </tr>
-          </thead>
-          <tbody>
-            {status.keys.map((key) => (
-              <tr>
-                <td>
-                  <code>{key.kid}</code>
-                </td>
-                <td>
-                  <code>{key.kcv}</code>
-                </td>
-                <td>{key.active ? <Badge tone="ok">active</Badge> : 'no'}</td>
-                <td>{key.credentials}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : null}
-      <RewrapControl
-        csrf={props.csrf}
-        canRewrap={props.canRewrap}
-        status={status}
-        changedKids={props.changedKids}
-        blocked={problems.length > 0}
-      />
-    </>
-  );
-}
-
 /**
- * Re-encryption needs a loaded keyring and every stored credential readable (the op is
- * all-or-nothing), so the button is offered only when nothing above is reported as a problem.
- * It is also the recovery path for a changed key check value, so it is offered for that alone.
+ * A rewrap needs a loaded keyring and every stored secret readable (all or nothing), so it is
+ * offered only without blocking problems. It is also how a changed key check value is accepted.
  */
-function RewrapControl(props: {
-  csrf: string;
-  canRewrap: boolean;
-  status: Awaited<ReturnType<typeof keyringStatus>>;
+function Rewrap(props: {
+  ctx: Parameters<typeof AskSomeone>[0]['ctx'];
+  error: boolean;
+  needsRewrap: number;
   changedKids: string[];
   blocked: boolean;
 }) {
-  const { status } = props;
-  if (status.error !== null) return null;
-  if (status.needsRewrap === 0 && props.changedKids.length === 0) {
-    return <p class="muted">Every stored credential uses the active key.</p>;
+  if (props.error) return <p class="muted">Re-encryption needs a loaded keyring.</p>;
+  const count = props.needsRewrap;
+  if (count === 0 && props.changedKids.length === 0) {
+    return <p class="muted">Every stored secret uses the active key.</p>;
+  }
+  const intro = (
+    <>
+      {count > 0
+        ? `${plural(count, 'secret is', 'secrets are')} still encrypted with an older key. Re-encrypt them with the active key before removing old keys from the keyring. `
+        : ''}
+      {props.changedKids.length > 0
+        ? `Re-encrypting also opens every secret under key ${props.changedKids.join(', ')} with the loaded key; when all of them open, the new check value is accepted.`
+        : ''}
+    </>
+  );
+  if (props.blocked) {
+    return (
+      <p>
+        {intro} Fix the problems above first: re-encryption changes nothing while a stored secret
+        cannot be opened.
+      </p>
+    );
+  }
+  if (!props.ctx.can('keyring:rewrap')) {
+    return (
+      <>
+        <p>{intro}</p>
+        <AskSomeone permission="keyring:rewrap" ctx={props.ctx} verb="re-encrypt the secrets" />
+      </>
+    );
   }
   return (
     <>
-      {status.needsRewrap > 0 ? (
-        <p>
-          {status.needsRewrap} credential(s) are still encrypted with an older key. Re-encrypt them
-          with the active key before removing old keys from the keyring
-          (docs/operations/key-rotation.md).
-        </p>
-      ) : null}
-      {props.changedKids.length > 0 ? (
-        <p>
-          Re-encrypting also opens every credential under key(s){' '}
-          {props.changedKids.map((kid, index) => (
-            <>
-              {index > 0 ? ', ' : ''}
-              <code>{kid}</code>
-            </>
-          ))}{' '}
-          with the loaded key. If all of them open, the new check value is accepted and the alert
-          clears; otherwise nothing changes and the services that still need the old key are listed.
-        </p>
-      ) : null}
-      {props.blocked ? (
-        <p class="muted">
-          Fix the problems listed above first: re-encryption changes nothing while any stored
-          credential cannot be opened.
-        </p>
-      ) : props.canRewrap ? (
-        <form method="post" action={`${PAGE}/rewrap`} class="inline">
-          <Csrf token={props.csrf} />
-          <button type="submit">Re-encrypt credentials with the active key</button>
-        </form>
-      ) : (
-        <p class="muted">Only owners can re-encrypt credentials.</p>
-      )}
+      <p>{intro}</p>
+      <ConfirmDialog
+        id="rewrap"
+        variant="standalone"
+        action="/admin/tokens/keys/rewrap"
+        csrf={props.ctx.csrf}
+        returnTo="detail"
+        trigger={
+          count > 0 ? `Re-encrypt ${plural(count, 'secret', 'secrets')}…` : 'Accept the new key…'
+        }
+        title={
+          count > 0 ? `Re-encrypt ${plural(count, 'secret', 'secrets')}?` : 'Accept the new key?'
+        }
+        body={
+          props.changedKids.length > 0
+            ? 'Every stored secret is opened and sealed again with the active key. Confirming also accepts the new check value of the changed key, if every secret under it opens. Nothing changes otherwise.'
+            : 'Every stored secret is opened and sealed again with the active key. Consumers keep working.'
+        }
+        confirmLabel="Re-encrypt"
+      />
     </>
   );
-}
-
-function noticeKey(raw: string | undefined): NoticeKey | null {
-  return raw !== undefined && Object.hasOwn(NOTICES, raw) ? (raw as NoticeKey) : null;
 }

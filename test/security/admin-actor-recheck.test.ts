@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Permission } from '../../src/admin/auth/rbac';
 import type { AdminActor } from '../../src/admin/auth/types';
 import { createGrant } from '../../src/admin/ops/grants';
-import { testServiceCredential } from '../../src/admin/ops/services';
+import { destinationFingerprint, testServiceCredential } from '../../src/admin/ops/services';
 import { updateSettings } from '../../src/admin/ops/settings';
 import { inviteUser, updateUser } from '../../src/admin/ops/users';
+import { getService } from '../../src/db/services';
 import {
   anchoredConditions,
   CONTEXT,
@@ -16,9 +17,12 @@ import {
   createAdminWorldApp,
   resetAdminWorld,
   seedAdminWorld,
+  TOKEN_FIXTURE_VARIANTS,
   WORLD_SECRET,
 } from '../fixtures/admin-forms';
 import { type AdminSession, adminPost, createUser, loginAs } from '../helpers/admin-auth';
+import { createTestApp } from '../helpers/app';
+import { KEK_1 } from '../unit/admin/ops/helpers';
 
 beforeEach(resetAdminWorld);
 
@@ -63,7 +67,7 @@ async function world() {
 }
 
 async function repoint(app: Parameters<typeof adminPost>[0], session: AdminSession, id: string) {
-  return adminPost(app, session, `/admin/tokens/${id}/credential`, {
+  return adminPost(app, session, `/admin/tokens/${id}/destination`, {
     base_url: `https://${ATTACKER_HOST}`,
     injection_kind: 'bearer',
     credential: 'attacker-token-0123456789',
@@ -364,5 +368,123 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
       ]);
       expect(await credentialTests(w.admin.id)).toBe(1);
     });
+  });
+});
+
+/**
+ * A DB whose next audited write (the batch that starts with the actor check) first runs `run`:
+ * a change that lands after the middleware passed the request but before its first commit.
+ */
+function armedDb() {
+  const db = env.DB;
+  let pending: (() => Promise<unknown>) | null = null;
+  let armed = false;
+  const proxy = new Proxy(db, {
+    get(target, property, receiver) {
+      if (property === 'prepare') {
+        return (sql: string) => {
+          if (pending && sql.startsWith("SELECT json_extract('{}'")) armed = true;
+          return target.prepare(sql);
+        };
+      }
+      if (property === 'batch') {
+        return async (statements: D1PreparedStatement[]) => {
+          if (armed && pending) {
+            const run = pending;
+            pending = null;
+            armed = false;
+            await run();
+          }
+          return target.batch(statements);
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  return {
+    db: proxy,
+    beforeNextAuditedWrite(run: () => Promise<unknown>) {
+      pending = run;
+    },
+  };
+}
+
+describe('I-SESS-1: token writes stop when the role changes mid-request', () => {
+  it('an admin demoted to access_manager while the rotate check is in flight writes nothing (POST /admin/tokens/:id/secret)', async () => {
+    const w = await world();
+    const before = await serviceState(w.serviceId, w.admin.id);
+    w.whileInFlight(async () => {
+      const res = await adminPost(w.app, w.ownerSession, `/admin/users/${w.admin.id}`, {
+        role: 'access_manager',
+      });
+      expect(res.status).toBe(303);
+    }, 'api.github.com');
+    const row = await getService(env.DB, w.serviceId);
+    if (!row) throw new Error('service missing');
+    const res = await adminPost(w.app, w.adminSession, `/admin/tokens/${w.serviceId}/secret`, {
+      expected_destination: await destinationFingerprint(row),
+      credential: 'ghp_rotatedWhileDemoted0123456789',
+    });
+    expect(res.status).toBe(409);
+    expect(await serviceState(w.serviceId, w.admin.id)).toEqual(before);
+  });
+
+  it('an owner demoted to admin before the allowlist commit: neither row is written and nothing is sent (POST /admin/tokens with allow_host)', async () => {
+    const armed = armedDb();
+    const network = fakeNetwork();
+    const app = createTestApp({
+      fetch: network.fetch,
+      env: { TOKENGATE_KEK: KEK_1, DB: armed.db },
+    });
+    await seedAdminWorld(app);
+    const owner = await createUser({ email: 'owner@example.com', role: 'owner' });
+    await createUser({ email: 'owner2@example.com', role: 'owner' });
+    const session = await loginAs(app, owner);
+    const request = await TOKEN_FIXTURE_VARIANTS.createWithAllowHost();
+    armed.beforeNextAuditedWrite(() =>
+      env.DB.prepare("UPDATE users SET role = 'admin' WHERE id = ?").bind(owner.id).run(),
+    );
+    const calls = network.calls.length;
+    const res = await adminPost(app, session, request.path, request.fields);
+    expect(res.status).toBe(409);
+    expect(
+      await env.DB.prepare("SELECT value FROM settings WHERE key = 'allowed_upstream_hosts'").first(
+        'value',
+      ),
+    ).toBe('["api.github.com"]');
+    expect(
+      await env.DB.prepare(
+        "SELECT count(*) AS n FROM services WHERE base_url = 'https://api.openai.com/v1'",
+      ).first('n'),
+    ).toBe(0);
+    expect(network.calls.slice(calls)).toEqual([]);
+  });
+
+  it('an admin demoted to token_manager before a cascade delete commits deletes nothing', async () => {
+    const armed = armedDb();
+    const app = createTestApp({
+      fetch: fakeNetwork().fetch,
+      env: { TOKENGATE_KEK: KEK_1, DB: armed.db },
+    });
+    const seeded = await seedAdminWorld(app);
+    const admin = await createUser({ email: 'admin@example.com', role: 'admin' });
+    const session = await loginAs(app, admin);
+    const request = await TOKEN_FIXTURE_VARIANTS.deleteWithAccesses(seeded);
+    armed.beforeNextAuditedWrite(() =>
+      env.DB.prepare("UPDATE users SET role = 'token_manager' WHERE id = ?").bind(admin.id).run(),
+    );
+    const res = await adminPost(app, session, request.path, request.fields);
+    expect(res.status).toBe(409);
+    expect(
+      await env.DB.prepare('SELECT count(*) AS n FROM services WHERE id = ?')
+        .bind(seeded.serviceId)
+        .first('n'),
+    ).toBe(1);
+    expect(
+      await env.DB.prepare('SELECT count(*) AS n FROM grants WHERE id = ?')
+        .bind(seeded.grantId)
+        .first('n'),
+    ).toBe(1);
   });
 });

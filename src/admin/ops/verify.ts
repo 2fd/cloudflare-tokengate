@@ -56,6 +56,9 @@ export async function runVerifyCheck(
   const timeoutMs = Math.min(target.timeout_ms, VERIFY_TIMEOUT_MS);
   const headers = new Headers({ accept: 'application/json', 'user-agent': VERIFY_USER_AGENT });
   try {
+    // Template check headers (validated: never reserved, never the injected one) go first, so the
+    // credential injected next always wins.
+    for (const [name, value] of Object.entries(verify.headers ?? {})) headers.set(name, value);
     injectCredentialHeaders(headers, injection, secret);
   } catch {
     return failed('the credential is not a valid header value');

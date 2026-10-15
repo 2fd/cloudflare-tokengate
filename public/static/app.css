@@ -342,5 +342,33 @@ button.current { border-width: 2px; }
   outline: 3px solid var(--focus); outline-offset: 2px; }
 
 /* == section: tokens == */
+.lead { max-inline-size: 45rem; }
+.status-line { margin: -.5rem 0 1rem; color: var(--muted); }
+.token-types { display: grid; gap: .75rem; max-inline-size: 48rem; }
+.token-types h2 { margin-block-start: .5rem; }
+details.type-card > summary { display: flex; flex-wrap: wrap; gap: .25rem .6rem; align-items: baseline;
+  min-block-size: 2.5rem; padding: .25rem 0; }
+details.type-card[open] { border: 2px solid var(--accent); }
+details.type-card .card-body { margin-block-start: .75rem; }
+details.add-token { margin: 1rem 0 1.5rem; }
+details.add-token > summary { font-weight: 600; font-size: 1.1rem; min-block-size: 2.5rem; }
+details.advanced { border-inline-start: 3px solid var(--line); padding-inline-start: .75rem; }
+details.advanced > summary { min-block-size: 2.5rem; display: flex; align-items: center; }
+details.advanced[open] > .stack { margin-block-start: .75rem; }
+#destination-edit, #details { margin: 1rem 0; }
+#destination-edit > summary, #details > summary { font-weight: 600; min-block-size: 2.5rem;
+  display: flex; align-items: center; }
+#destination-edit[open] > form, #details[open] > form { margin-block-start: .75rem; }
+.check-result { padding: .6rem .9rem; margin: .5rem 0; border-inline-start: 4px solid var(--muted);
+  background: var(--panel); }
+.check-result.passed { border-inline-start-color: var(--ok); background: var(--ok-bg); }
+.check-result.failed { border-inline-start-color: var(--bad); background: var(--bad-bg); }
+.check-result p { margin: .25rem 0; }
+.check-result .check-result { margin: 0; padding: 0; border: 0; background: none; }
+.keyring-gate { padding: .6rem .9rem; border-inline-start: 4px solid var(--bad); background: var(--bad-bg); }
+.handoff { display: grid; gap: .5rem; max-inline-size: 45rem; }
+.disabled-note .actions, .disabled-note form { margin: .25rem 0; }
+.blocked ul { margin: .25rem 0; }
+#danger .actions { margin: .5rem 0; }
 
 /* == section: consumers == */

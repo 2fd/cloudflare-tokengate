@@ -266,7 +266,7 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
   'POST /admin/tokens/hosts': async () => ({
     path: '/admin/tokens/hosts',
     action: 'settings.upstream_hosts',
-    fields: { allowed_upstream_hosts: `${unique('host')}.example.com` },
+    fields: { mode: 'list', host: [`${unique('host')}.example.com`] },
   }),
   // A rewrap with nothing to re-encrypt changes nothing and is not audited, so this request is
   // served with a rotated keyring: the world credential, sealed under k1, moves to k2.
@@ -279,20 +279,12 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
       env: { TOKENGATE_KEK: '', TOKENGATE_KEYRING: KEYRING_1_2 },
     }),
   }),
+  // A template card: the destination, headers and check come from the template; slug and name
+  // are derived (openai, openai-2, …).
   'POST /admin/tokens': async () => ({
     path: '/admin/tokens',
     action: 'service.create',
-    fields: {
-      slug: unique('svc'),
-      name: 'Fixture service',
-      description: '',
-      base_url: 'https://api.openai.com/v1',
-      injection_kind: 'bearer',
-      forward_headers: '',
-      timeout_ms: '60000',
-      verify_method: '',
-      credential: 'sk-fixture-create-0123456789abcdef',
-    },
+    fields: { template: 'openai', credential: 'sk-proj-fixtureCreate0123456789abcdef' },
   }),
   'POST /admin/tokens/:id': async (w) => ({
     path: `/admin/tokens/${w.serviceId}`,
@@ -307,13 +299,34 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
       verify_expect_status: String(WORLD_VERIFY.expect_status),
     },
   }),
-  'POST /admin/tokens/:id/credential': async (w) => ({
-    path: `/admin/tokens/${w.serviceId}/credential`,
+  // Rotate: only the secret; the destination is the stored one, named by the digest the form
+  // carries (imported here so the shared import list stays untouched).
+  'POST /admin/tokens/:id/secret': async (w) => {
+    const { destinationFingerprint } = await import('../../src/admin/ops/services');
+    const row = await env.DB.prepare('SELECT base_url, injection FROM services WHERE id = ?')
+      .bind(w.serviceId)
+      .first<{ base_url: string; injection: string }>();
+    if (!row) throw new Error('world service missing');
+    return {
+      path: `/admin/tokens/${w.serviceId}/secret`,
+      action: 'service.credential.set',
+      fields: {
+        expected_destination: await destinationFingerprint({
+          base_url: row.base_url,
+          injection_json: row.injection,
+        }),
+        credential: 'ghp_fixtureRotated0123456789abcdef',
+      },
+    };
+  },
+  'POST /admin/tokens/:id/destination': async (w) => ({
+    path: `/admin/tokens/${w.serviceId}/destination`,
     action: 'service.credential.set',
     fields: {
       base_url: 'https://api.github.com',
       injection_kind: 'bearer',
-      credential: 'ghp_fixtureRotated0123456789abcdef',
+      credential: 'ghp_fixtureRepointed0123456789abcdef',
+      confirm_destination: 'api.github.com',
     },
   }),
   'POST /admin/tokens/:id/test': async (w) => ({
@@ -435,6 +448,49 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
     successStatus: [200],
   }),
 };
+
+// == tokens ==
+/**
+ * Token submissions that use a field permission, for the token tests (each is a second form of a
+ * route above): an owner allowing a blocked template host on the way, and an admin deleting a
+ * token together with its consumer access.
+ */
+export const TOKEN_FIXTURE_VARIANTS = {
+  /** settings.upstream_hosts, then service.create (two batches, the allowlist first). */
+  createWithAllowHost: async (): Promise<MutationRequest> => {
+    await env.DB.prepare(
+      `INSERT INTO settings (key, value, updated_at, updated_by)
+       VALUES ('allowed_upstream_hosts', '["api.github.com"]', 0, NULL)
+       ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+    ).run();
+    return {
+      path: '/admin/tokens',
+      action: ['settings.upstream_hosts', 'service.create'],
+      fields: {
+        template: 'openai',
+        credential: 'sk-proj-fixtureAllowHost0123456789abcdef',
+        allow_host: 'api.openai.com',
+      },
+    };
+  },
+  /** One service.delete row whose diff holds every deleted access. */
+  deleteWithAccesses: async (w: AdminWorld): Promise<MutationRequest> => {
+    const { results } = await env.DB.prepare(
+      'SELECT id FROM grants WHERE service_id = ? ORDER BY id',
+    )
+      .bind(w.serviceId)
+      .all<{ id: string }>();
+    return {
+      path: `/admin/tokens/${w.serviceId}/delete`,
+      action: 'service.delete',
+      fields: {
+        confirm: '1',
+        with_accesses: '1',
+        access_ids: results.map((row) => row.id).join(','),
+      },
+    };
+  },
+} as const;
 
 /**
  * Seeded ids for the `:id` GET routes of the RBAC table, one block per admin section (add or

@@ -1,28 +1,44 @@
-// Admin pages for services: list, create (optionally from a template), detail, settings edit, and a
-// separate credential form. The destination (base URL + injection) changes only together with a
-// re-entered credential (I-CRED-2); submitted credentials are never rendered back (I-CRED-1).
+// Service tokens (A13): the list with the "Add a token" accordion, the standalone accordion, create,
+// the token page and its forms. The destination (base URL + injection) changes only on
+// /destination, together with the secret (I-CRED-2); /secret rotates with the stored destination;
+// template cards never read the destination from the form (I-SSRF-1). Submitted secrets are never
+// rendered back (I-CRED-1): a re-render carries a sealed draft (A13.6).
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { App } from '../../app';
-import { loadKeyring } from '../../crypto/keyring';
-import { listCallerProviders } from '../../db/caller-providers';
-import { grantCountsByService, listGrants } from '../../db/grants';
+import { upstreamHostAllowed } from '../../config';
+import { sealedKid } from '../../crypto/envelope';
+import { KID_PATTERN, type KeyringError, loadKeyring } from '../../crypto/keyring';
 import { getService, listServices } from '../../db/services';
+import { getAllowedUpstreamHosts } from '../../db/settings';
 import type { Service } from '../../db/types';
-import type { AppEnv } from '../../env';
-import type { Injection, Rule, VerifyCheck } from '../../policy/types';
+import { normalizeCredential, normalizeInjection, validateBaseUrl } from '../../policy/validate';
 import { EXPIRY_WARNING_MS } from '../../telemetry/dashboard';
 import { can } from '../auth/rbac';
+import { type AccessEdge, loadConnections } from '../connections';
+import { type NoticeContext, type NoticeTable, resolveNotice } from '../notice';
+import { openCredentialDraft, sealCredentialDraft } from '../ops/credential-draft';
 import {
+  checkServiceCreate,
+  checkServiceCredential,
   createService,
   deleteService,
+  destinationFingerprint,
+  freeName,
+  freeSlug,
+  lastSecretChange,
   opContextFor,
-  type StoredBinding,
+  rotateServiceSecret,
+  rotationSiblings,
+  type ServiceCreateInput,
+  serviceFieldErrors,
   setServiceCredential,
+  slugBaseFor,
   storedBinding,
   testServiceCredential,
   updateServiceFields,
 } from '../ops/services';
-import type { OpFailure, OpFailureReason } from '../ops/shared';
+import { type FieldError, fieldError, type OpFailure, type OpFailureReason } from '../ops/shared';
+import { addUpstreamHost, storedHostOutside, storedUpstreamHost } from '../ops/upstream-hosts';
 import type { VerifyOutcome } from '../ops/verify';
 import { paths, returnPath } from '../paths';
 import {
@@ -32,48 +48,60 @@ import {
   redirectWithNotice,
   renderPage,
   submittedVersion,
+  type ViewContext,
 } from '../render';
 import {
   getServiceTemplate,
-  type OperationPreset,
-  presetRules,
-  SERVICE_TEMPLATES,
   type ServiceTemplate,
+  secretFromTemplateInput,
+  templateForService,
+  templateIdFor,
 } from '../service-templates';
-import { formatTime } from '../views/format';
 import {
-  ActionButton,
-  Badge,
-  Checkbox,
-  Csrf,
-  Details,
+  type Alert,
+  AlertList,
+  AskSomeone,
+  type ChipProps,
+  ChipList,
+  DataTable,
   EmptyState,
-  EnabledBadge,
-  Field,
-  Messages,
+  FilterChips,
+  NotFound,
   Select,
-  TextArea,
-  VersionField,
-  type Banner,
-  legacyNotice,
-} from '../views/legacy';
-
-const DEFAULT_TIMEOUT_MS = 120_000;
-
-const NOTICES: Record<string, string> = {
-  created: 'Service created without a credential.',
-  created_with_credential: 'Service created and its credential stored.',
-  created_verified: 'Service created; the credential check against the upstream passed.',
-  created_unverified: 'Service created. The credential was stored although its check failed.',
-  updated: 'Settings saved.',
-  unchanged: 'Nothing changed: the submitted values are the current ones.',
-  credential_saved: 'Credential saved.',
-  credential_verified: 'Credential saved; the check against the upstream passed.',
-  credential_unverified: 'Credential saved although its check failed.',
-  enabled: 'Service enabled. Callers with a matching grant can use it again.',
-  disabled: 'Service disabled. Proxied requests to it are refused from now on.',
-  deleted: 'Service deleted.',
-};
+  StatusBadge,
+  Time,
+} from '../views/components';
+import { docsUrl } from '../views/docs';
+import { type CardsData, CUSTOM, type FailedCard, TokenTypeCards } from '../views/token-cards';
+import {
+  dateInput,
+  draftHint,
+  EXPIRY_FORMAT_ERROR,
+  type FormState,
+  flag,
+  forwardHeadersFromValues,
+  inSentence,
+  injectionFromValues,
+  parseDateInput,
+  summaryErrors,
+  type TokenFormValues,
+  text,
+  texts,
+  timeoutFromValues,
+  valuesFromForm,
+  verifyFromValues,
+} from '../views/token-forms';
+import {
+  type BindingState,
+  LastUsed,
+  SecretBadge,
+  TokenPage,
+  type TokenPageData,
+  type TokenPageState,
+  type TokenAlso,
+  typeLabel,
+  upstreamHost,
+} from '../views/token-page';
 
 const FAILURE_STATUS: Record<OpFailureReason, ContentfulStatusCode> = {
   invalid: 400,
@@ -85,19 +113,32 @@ const FAILURE_STATUS: Record<OpFailureReason, ContentfulStatusCode> = {
   unavailable: 503,
 };
 
-const INJECTION_KINDS: Array<{ value: Injection['kind']; label: string }> = [
-  { value: 'bearer', label: 'Bearer token: "Authorization: Bearer <credential>" (most APIs)' },
-  { value: 'header', label: 'Custom header, e.g. "x-api-key: <credential>"' },
-  { value: 'basic', label: 'HTTP Basic authentication' },
-  { value: 'path', label: 'Part of the URL path (webhooks such as Slack or Discord)' },
-  { value: 'query', label: 'Query parameter (not recommended)' },
-];
+/** Fields a template card posts; an op error about any other field belongs to the whole form. */
+const TEMPLATE_CARD_FIELDS = new Set([
+  'credential',
+  'credential_draft',
+  'slug',
+  'name',
+  'description',
+  'credential_expires_at',
+  'allow_host',
+  'also_uploads',
+]);
 
-const QUERY_WARNING =
-  'Query parameter injection puts the credential in the URL. Upstreams may echo URLs in error messages or logs; prefer header injection when the API supports it.';
+const STATUS_FILTERS = [
+  'credential_unreadable',
+  'expiring',
+  'no_credential',
+  'outside_hosts',
+] as const;
+type StatusFilter = (typeof STATUS_FILTERS)[number];
 
-const PATH_WARNING =
-  'With URL path injection the credential is part of the webhook URL. Some webhook APIs return it in the response body: Discord GET and PATCH on the webhook URL return the webhook token. Response bodies are not redacted, so grant only POST / for these services.';
+const STATUS_FILTER_LABELS: Readonly<Record<StatusFilter, string>> = {
+  credential_unreadable: 'Secret does not open',
+  expiring: 'Secret expired or expiring',
+  no_credential: 'No secret',
+  outside_hosts: 'Not an allowed host',
+};
 
 export function registerTokensRoutes(app: App): void {
   app.get('/admin/tokens', listPage);
@@ -106,430 +147,1377 @@ export function registerTokensRoutes(app: App): void {
   app.post('/admin/tokens', create);
   app.get('/admin/tokens/:id', detailPage);
   app.post('/admin/tokens/:id', update);
-  app.post('/admin/tokens/:id/credential', setCredential);
-  app.post('/admin/tokens/:id/test', testCredential);
+  app.post('/admin/tokens/:id/secret', rotate);
+  app.post('/admin/tokens/:id/destination', changeDestination);
+  app.post('/admin/tokens/:id/test', testSecret);
   app.post('/admin/tokens/:id/toggle', toggle);
   app.post('/admin/tokens/:id/delete', remove);
 }
 
 // ---------------------------------------------------------------------------------------------
-// Form values as submitted strings, so a rejected form re-renders what was typed. The credential
-// is not part of this shape: it is never rendered back (I-CRED-1).
+// Notices
 
-interface ServiceForm {
-  template: string;
-  slug: string;
-  name: string;
-  description: string;
-  base_url: string;
-  injection_kind: string;
-  injection_header_name: string;
-  injection_header_prefix: string;
-  injection_username: string;
-  injection_param: string;
-  injection_path_prefix: string;
-  forward_headers: string;
-  timeout_ms: string;
-  verify_method: string;
-  verify_path: string;
-  verify_expect_status: string;
-  verify_expect_ok_field: boolean;
-  credential_expires_at: string;
-  /** `updated_at` the settings form was opened at; empty on create. */
-  expected_updated_at: string;
-  /** Host typed to confirm the destination when the stored binding is unattested (I-CRED-2). */
-  confirm_destination: string;
+interface TokenNoticeData {
+  service: Service | null;
+  also: string | null;
 }
 
-const EMPTY_FORM: ServiceForm = {
-  template: '',
-  slug: '',
-  name: '',
-  description: '',
-  base_url: '',
-  injection_kind: 'bearer',
-  injection_header_name: '',
-  injection_header_prefix: '',
-  injection_username: '',
-  injection_param: '',
-  injection_path_prefix: '',
-  forward_headers: '',
-  timeout_ms: String(DEFAULT_TIMEOUT_MS),
-  verify_method: '',
-  verify_path: '',
-  verify_expect_status: '200',
-  verify_expect_ok_field: false,
-  credential_expires_at: '',
-  expected_updated_at: '',
-  confirm_destination: '',
+const UPLOADS_HOST = 'uploads.github.com';
+
+/** " api.github.com was added to Allowed hosts." for the `also` codes of a host added on the way. */
+function hostsAddedText(data: TokenNoticeData): string {
+  if (!data.service) return '';
+  const own = upstreamHost(data.service.base_url);
+  if (data.also === 'host_added') return ` ${own} was added to Allowed hosts.`;
+  if (data.also === 'uploads_host_added') return ` ${UPLOADS_HOST} was added to Allowed hosts.`;
+  if (data.also === 'hosts_added') {
+    return ` ${own} and ${UPLOADS_HOST} were added to Allowed hosts.`;
+  }
+  return '';
+}
+
+const createdText = (data: TokenNoticeData, check: string) =>
+  `${data.service?.name ?? 'Token'} created (slug ${data.service?.slug ?? '?'})${check}.${hostsAddedText(
+    data,
+  )} No consumer can use it until someone gives access.`;
+
+const TOKEN_NOTICES: NoticeTable<NoticeContext & TokenNoticeData> = {
+  created_verified: (ctx) => ({
+    text: createdText(ctx, '; the secret check passed'),
+    ...giveAccessNext(ctx),
+  }),
+  created_unverified: (ctx) => ({
+    text: createdText(ctx, '. The secret was saved although its check failed'),
+    ...giveAccessNext(ctx),
+  }),
+  created: (ctx) => ({ text: createdText(ctx, ''), ...giveAccessNext(ctx) }),
+  updated: () => ({ text: 'Changes saved.' }),
+  unchanged: () => ({ text: 'Nothing changed: the submitted values are the current ones.' }),
+  secret_verified: (ctx) => ({
+    text: `Secret replaced; the check against the upstream passed.${siblingText(ctx)}`,
+  }),
+  secret_unverified: (ctx) => ({
+    text: `Secret replaced although its check failed.${siblingText(ctx)}`,
+  }),
+  secret_saved: (ctx) => ({ text: `Secret replaced.${siblingText(ctx)}` }),
+  destination_changed: (ctx) => ({
+    text: `Destination saved with the new secret.${ctx.also === 'host_added' ? hostsAddedText(ctx) : ''}`,
+  }),
+  enabled: () => ({ text: 'Token enabled. Consumers with access can use it again.' }),
+  disabled: (ctx) => ({
+    text: 'Token disabled. Requests through it are refused from now on.',
+    ...(ctx.service && !ctx.service.enabled && ctx.view.can('tokens:write')
+      ? {
+          undo: {
+            action: `${paths.token(ctx.service.id)}/toggle`,
+            fields: { enabled: '1', _return: 'detail' },
+            label: 'Enable again',
+          },
+        }
+      : {}),
+  }),
 };
 
-type FormFields = Awaited<ReturnType<typeof formData>>;
-
-function text(form: FormFields, name: string): string {
-  const value = form[name];
-  return typeof value === 'string' ? value : (value?.[0] ?? '');
+/** A rotate whose sibling replacement failed: the main token was replaced, a sibling was not. */
+function siblingText(ctx: TokenNoticeData): string {
+  return ctx.also === 'sibling_failed'
+    ? ' It was not replaced in every other token that held the same secret: replace it there too.'
+    : '';
 }
 
-function flag(form: FormFields, name: string): boolean {
-  const value = text(form, name);
-  return value === '1' || value === 'on';
+function giveAccessNext(ctx: NoticeContext & TokenNoticeData) {
+  return ctx.service && ctx.view.can('access:write')
+    ? {
+        next: { href: paths.accessNew({ token: ctx.service.id }), label: 'Give a consumer access' },
+      }
+    : {};
 }
 
-function formFromRequest(form: FormFields): ServiceForm {
-  const out = { ...EMPTY_FORM };
-  for (const key of Object.keys(EMPTY_FORM) as Array<keyof ServiceForm>) {
-    if (key === 'verify_expect_ok_field') out[key] = flag(form, key);
-    else out[key] = text(form, key);
-  }
-  return out;
-}
+const LIST_NOTICES: NoticeTable = {
+  deleted: () => ({ text: 'Token deleted.' }),
+  deleted_with_accesses: () => ({ text: 'Token and its consumer access deleted.' }),
+  enabled: () => ({ text: 'Token enabled. Consumers with access can use it again.' }),
+  disabled: () => ({ text: 'Token disabled. Requests through it are refused from now on.' }),
+};
 
-function injectionFields(injection: Injection): Partial<ServiceForm> {
-  const fields: Partial<ServiceForm> = { injection_kind: injection.kind };
-  if (injection.kind === 'header') {
-    fields.injection_header_name = injection.name;
-    fields.injection_header_prefix = injection.prefix ?? '';
-  } else if (injection.kind === 'basic') {
-    fields.injection_username = injection.username ?? '';
-  } else if (injection.kind === 'query') {
-    fields.injection_param = injection.param;
-  } else if (injection.kind === 'path') {
-    fields.injection_path_prefix = injection.prefix ?? '';
-  }
-  return fields;
-}
+const ALSO_KEYS: ReadonlySet<string> = new Set<TokenAlso>([
+  'host_added',
+  'uploads_host_added',
+  'hosts_added',
+  'pair_failed',
+  'pair_failed_hosts',
+  'pair_failed_conflict',
+  'pair_failed_check',
+  'sibling_failed',
+]);
 
-function verifyFields(verify: VerifyCheck | null): Partial<ServiceForm> {
-  if (!verify) return { verify_method: '', verify_path: '', verify_expect_status: '200' };
-  return {
-    verify_method: verify.method,
-    verify_path: verify.path,
-    verify_expect_status: String(verify.expect_status),
-    verify_expect_ok_field: verify.expect_ok_field === true,
-  };
+function alsoParam(c: AdminContext): TokenAlso | null {
+  const raw = c.req.query('also');
+  return raw !== undefined && ALSO_KEYS.has(raw) ? (raw as TokenAlso) : null;
 }
-
-function formFromTemplate(template: ServiceTemplate): ServiceForm {
-  return {
-    ...EMPTY_FORM,
-    template: template.id,
-    slug: template.slug,
-    name: template.name,
-    base_url: template.base_url,
-    ...injectionFields(template.injection),
-    forward_headers: template.forward_headers.join('\n'),
-    timeout_ms: String(template.timeout_ms),
-    ...verifyFields(template.verify),
-  };
-}
-
-function formFromService(service: Service): ServiceForm {
-  return {
-    ...EMPTY_FORM,
-    slug: service.slug,
-    name: service.name,
-    description: service.description,
-    base_url: service.base_url,
-    ...injectionFields(service.injection),
-    forward_headers: service.forward_headers.join('\n'),
-    timeout_ms: String(service.timeout_ms),
-    ...verifyFields(service.verify),
-    credential_expires_at: dateInput(service.credential_expires_at),
-    expected_updated_at: String(service.updated_at),
-  };
-}
-
-/** The injection object for the selected kind; ops validate it (normalizeInjection). */
-function injectionFromForm(values: ServiceForm): unknown {
-  switch (values.injection_kind) {
-    case 'bearer':
-      return { kind: 'bearer' };
-    case 'header':
-      // HTTP header names are case-insensitive; the stored form is lower case.
-      return {
-        kind: 'header',
-        name: values.injection_header_name.trim().toLowerCase(),
-        prefix: values.injection_header_prefix,
-      };
-    case 'basic':
-      return { kind: 'basic', username: values.injection_username.trim() };
-    case 'query':
-      return { kind: 'query', param: values.injection_param.trim() };
-    case 'path':
-      return { kind: 'path', prefix: values.injection_path_prefix.trim() };
-    default:
-      return { kind: values.injection_kind };
-  }
-}
-
-function forwardHeadersFromForm(values: ServiceForm): string[] {
-  return values.forward_headers
-    .split(/[\n,]/)
-    .map((name) => name.trim().toLowerCase())
-    .filter((name) => name !== '');
-}
-
-/** Empty means "use the default" (create) or "keep the current value" (edit). */
-function timeoutFromForm(values: ServiceForm): number | undefined {
-  const raw = values.timeout_ms.trim();
-  return raw === '' ? undefined : Number(raw);
-}
-
-function verifyFromForm(values: ServiceForm): VerifyCheck | null {
-  if (values.verify_method === '') return null;
-  return {
-    method: values.verify_method as VerifyCheck['method'],
-    path: values.verify_path.trim(),
-    expect_status: Number(values.verify_expect_status.trim()),
-    expect_ok_field: values.verify_expect_ok_field,
-  };
-}
-
-/** `YYYY-MM-DD` (UTC midnight) → ms; empty → null. */
-function parseDateInput(raw: string): { ok: true; value: number | null } | { ok: false } {
-  const value = raw.trim();
-  if (value === '') return { ok: true, value: null };
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) return { ok: false };
-  const [year, month, day] = match.slice(1).map(Number) as [number, number, number];
-  const ms = Date.UTC(year, month - 1, day);
-  const date = new Date(ms);
-  if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return { ok: false };
-  return { ok: true, value: ms };
-}
-
-function dateInput(ms: number | null): string {
-  return ms === null ? '' : new Date(ms).toISOString().slice(0, 10);
-}
-
-const EXPIRY_FORMAT_ERROR = 'the credential expiry must be a date such as 2027-01-31';
 
 // ---------------------------------------------------------------------------------------------
-// Handlers
+// Shared loading
+
+function todayUtc(now: number): string {
+  return new Date(now).toISOString().slice(0, 10);
+}
+
+async function cardsData(c: AdminContext, tokens?: Service[]): Promise<CardsData> {
+  const deps = c.get('deps');
+  const [list, allowlist, keyring] = await Promise.all([
+    tokens ? Promise.resolve(tokens) : listServices(deps.env.DB),
+    getAllowedUpstreamHosts(deps.env.DB),
+    loadKeyring(deps.env),
+  ]);
+  return {
+    tokens: list,
+    allowlist,
+    keyringError: keyring.ok ? null : keyring.error,
+    proxyOrigin: new URL(c.req.url).origin,
+    today: todayUtc(deps.now()),
+  };
+}
+
+const notFound = (c: AdminContext) =>
+  renderPage(
+    c,
+    {
+      title: 'Token not found',
+      section: 'tokens',
+      subsection: 'tokens',
+      status: 404,
+      breadcrumbs: [{ href: paths.tokens(), label: 'Service tokens' }],
+    },
+    () => <NotFound what="token" />,
+  );
+
+/** The op's errors as UI copy (A7.3), with `secretLabel` naming the secret ("API key"). */
+function failureErrors(failure: OpFailure, secretLabel = 'secret'): FieldError[] {
+  return (failure.fieldErrors ?? serviceFieldErrors(failure.errors)).map((error) =>
+    uiCopy(error, secretLabel),
+  );
+}
+
+const BASE_URL_EXAMPLE = 'like https://api.example.com/v1';
+
+/**
+ * Op messages ("injection: header name must be …", "credential check failed: …") rewritten to name
+ * the field's label and say how to fix it (A7.3). Unknown messages keep their text, capitalized.
+ * The confirm-destination text stays as the op wrote it (I-CRED-2).
+ */
+function uiCopy(error: FieldError, secretLabel: string): FieldError {
+  if (error.field === 'confirm_destination') return error;
+  const label = inSentence(secretLabel);
+  const m = error.message;
+  const rules: ReadonlyArray<readonly [RegExp, (match: RegExpExecArray) => string]> = [
+    [
+      /^credential check failed: (.*)$/s,
+      (match) =>
+        `The check of the ${label} failed (${match[1]}). Check the ${label}, or choose Save without a passing check`,
+    ],
+    [/^credential (is empty|is required)$/, () => `Enter the ${label}`],
+    [
+      /^credential must be printable ASCII/,
+      () => `Paste the ${label} without spaces, line breaks or control characters`,
+    ],
+    [
+      /^credential is longer than (\d+) characters$/,
+      (match) => `Paste only the ${label}: it is longer than ${match[1]} characters`,
+    ],
+    [
+      /^credential without a configured username/,
+      () =>
+        `Enter the ${label} as username:password, like apikey:XXXXXXXX, or set a username under How the secret is sent`,
+    ],
+    [
+      /^credential for path injection/,
+      () =>
+        `Enter the ${label} as the path segments after the base URL, like T000/B000/XXXX (letters, digits and - . _ ~ ! $ & ' ( ) * + , = : @; no empty or dot segments)`,
+    ],
+    [
+      /^injection: header name must be a lower-case HTTP token/,
+      () => 'Enter the header name in lower case, like x-api-key (at most 64 characters)',
+    ],
+    [
+      /^injection: header name "(.+)" is reserved$/,
+      (match) => `Header name "${match[1]}" is reserved: enter another one, like x-api-key`,
+    ],
+    [
+      /^injection: query parameter must be/,
+      () =>
+        'Enter the query parameter name with 1-64 letters, digits and . _ ~ - only, like api_key',
+    ],
+    [/^injection: username must not contain ":"$/, () => 'Enter the username without ":"'],
+    [/^injection: kind must be one of/, () => 'Choose how the secret is sent'],
+    [/^base URL is required$/, () => `Enter the base URL, ${BASE_URL_EXAMPLE}`],
+    [
+      /^base URL (must start with https:\/\/|must use https)$/,
+      () => `Enter a base URL that starts with https://, ${BASE_URL_EXAMPLE}`,
+    ],
+    [
+      /^base URL must not contain a query string$/,
+      () => 'Remove the query string (?…) from the base URL',
+    ],
+    [
+      /^slug must be 1-63 characters/,
+      () =>
+        'Enter a slug of 1-63 lower-case letters, digits and dashes, starting with a letter or digit, like slack',
+    ],
+  ];
+  for (const [pattern, copy] of rules) {
+    const match = pattern.exec(m);
+    if (match) return { field: error.field, message: copy(match) };
+  }
+  const text = m
+    .replace(/^injection: /, '')
+    .replace(/^credential /, `${secretLabel} `)
+    .replace(/^verify /, 'check ')
+    .replace(/^forward header/, 'extra header');
+  return { field: error.field, message: `${text.charAt(0).toUpperCase()}${text.slice(1)}` };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Secrets and drafts
+
+interface ResolvedSecret {
+  /** The secret to send to the op, or null with `error`. */
+  secret: string | null;
+  /** Typed in this request (only fresh plaintext is ever sealed into a draft). */
+  fresh: boolean;
+  /** The draft string this request used, echoed unchanged so it is never renewed. */
+  usedDraft: string | null;
+  error: FieldError | null;
+  /** The template the pasted value seems to belong to (wrong-type guard). */
+  likely: string | null;
+}
+
+interface SecretTarget {
+  template: ServiceTemplate | null;
+  label: string;
+  /** As submitted or stored; only normalized here to bind a draft. */
+  baseUrl: string;
+  injection: unknown;
+  /** `new`, or the service id. */
+  target: string;
+}
+
+/** The draft binding of the viewer and destination, or null when the destination is invalid. */
+function draftContext(c: AdminContext, target: SecretTarget) {
+  const base = validateBaseUrl(target.baseUrl, { gatewayHosts: [], allowedUpstreamHosts: null });
+  const injection = normalizeInjection(target.injection);
+  if (!base.ok || !injection.ok) return null;
+  const authority = adminActor(c).authority;
+  return {
+    context: {
+      userId: authority.userId,
+      loginProvider: authority.loginProvider,
+      subject: authority.subject,
+      target: target.target,
+      baseUrl: base.normalized,
+      injectionJson: injection.json,
+    },
+    injection: injection.injection,
+  };
+}
+
+/**
+ * The secret of a form: a typed value wins (through the wrong-type guard), else the sealed draft
+ * of an earlier re-render, else an error at the field.
+ */
+async function resolveSecret(
+  c: AdminContext,
+  form: Awaited<ReturnType<typeof formData>>,
+  target: SecretTarget,
+): Promise<ResolvedSecret> {
+  const raw = text(form, 'credential');
+  const draft = text(form, 'credential_draft');
+  const none = { fresh: false, usedDraft: null, likely: null };
+  if (raw.trim() !== '') {
+    if (target.template) {
+      const guarded = secretFromTemplateInput(target.template, raw);
+      return guarded.ok
+        ? { ...none, secret: guarded.secret, fresh: true, error: null }
+        : {
+            ...none,
+            secret: null,
+            error: fieldError('credential', guarded.error),
+            likely: guarded.likely,
+          };
+    }
+    const kind = (target.injection as { kind?: unknown } | null)?.kind;
+    if (kind !== 'path' && /^https?:\/\//i.test(raw.trim())) {
+      return {
+        ...none,
+        secret: null,
+        error: fieldError(
+          'credential',
+          'This is a URL, not a secret. Paste the API key or token itself; for a webhook URL choose URL path as how the secret is sent',
+        ),
+      };
+    }
+    return { ...none, secret: raw, fresh: true, error: null };
+  }
+  if (draft !== '') {
+    const bound = draftContext(c, target);
+    if (!bound) {
+      return {
+        ...none,
+        secret: null,
+        error: fieldError(
+          'credential',
+          `Enter the ${inSentence(target.label)} again: the destination changed`,
+        ),
+      };
+    }
+    const opened = await openCredentialDraft(c.get('deps'), bound.context, draft);
+    if (opened.ok) return { ...none, secret: opened.credential, usedDraft: draft, error: null };
+    return {
+      ...none,
+      secret: null,
+      error: fieldError(
+        'credential',
+        opened.reason === 'mismatch'
+          ? `Enter the ${inSentence(target.label)} again: the destination changed`
+          : `Enter the ${inSentence(target.label)} again`,
+      ),
+    };
+  }
+  return {
+    ...none,
+    secret: null,
+    error: fieldError('credential', `Enter the ${inSentence(target.label)}`),
+  };
+}
+
+/**
+ * The draft for a re-render (A13.6): the same string when the request used one; a new one only for
+ * a fresh secret that passes the local format check, bound to the destination of this form.
+ */
+async function draftFor(
+  c: AdminContext,
+  resolved: ResolvedSecret,
+  target: SecretTarget,
+): Promise<FormState['draft']> {
+  if (resolved.secret === null) return null;
+  const bound = draftContext(c, target);
+  if (!bound) return null;
+  const normalized = normalizeCredential(resolved.secret, bound.injection);
+  if (!normalized.ok) return null;
+  if (resolved.usedDraft !== null) {
+    return { value: resolved.usedDraft, hint: draftHint(normalized.hint) };
+  }
+  if (!resolved.fresh) return null;
+  const sealed = await sealCredentialDraft(c.get('deps'), bound.context, normalized.value);
+  return sealed === null ? null : { value: sealed, hint: draftHint(normalized.hint) };
+}
+
+// ---------------------------------------------------------------------------------------------
+// List
 
 async function listPage(c: AdminContext) {
   const deps = c.get('deps');
-  const [services, grantCounts] = await Promise.all([
-    listServices(deps.env.DB),
-    grantCountsByService(deps.env.DB),
-  ]);
-  const canWrite = can(c.get('viewer').user.role, 'tokens:write');
   const now = deps.now();
+  const [connections, cards] = await Promise.all([loadConnections(deps), cardsData(c)]);
+  const tokens = [...connections.tokens].sort((a, b) => a.name.localeCompare(b.name));
+  const rawStatus = c.req.query('status');
+  const status = STATUS_FILTERS.find((value) => value === rawStatus) ?? null;
+  const usedKids = new Set(
+    tokens.map((token) => sealedKid(token.credential_sealed)).filter(Boolean),
+  );
+  const rawKey = c.req.query('key');
+  const key =
+    rawKey !== undefined && KID_PATTERN.test(rawKey) && usedKids.has(rawKey) ? rawKey : null;
+  const allowlist = cards.allowlist;
+  const facts = (token: Service) => {
+    const unreadable = cards.keyringError !== null || connections.unreadableTokenIds.has(token.id);
+    // A stored base URL that does not parse (written straight into D1) fails closed as outside.
+    const outside = storedHostOutside(token.base_url, allowlist);
+    return { unreadable, outside };
+  };
+  const matches = (token: Service) => {
+    const { unreadable, outside } = facts(token);
+    if (key !== null && sealedKid(token.credential_sealed) !== key) return false;
+    if (status === 'credential_unreadable') return token.credential_sealed !== null && unreadable;
+    if (status === 'no_credential') return token.credential_sealed === null;
+    if (status === 'outside_hosts') return outside;
+    if (status === 'expiring') {
+      return (
+        token.credential_sealed !== null &&
+        token.credential_expires_at !== null &&
+        token.credential_expires_at - now <= EXPIRY_WARNING_MS
+      );
+    }
+    return true;
+  };
+  const rows = tokens.filter(matches);
+  const byToken = new Map<string, AccessEdge[]>();
+  for (const edge of connections.accesses) {
+    const list = byToken.get(edge.grant.service_id) ?? [];
+    list.push(edge);
+    byToken.set(edge.grant.service_id, list);
+  }
+  const done = null;
+  // `?open=add` opens the accordion (A7.1); a bare `#add` fragment never reaches the server.
+  // Deviation from A13.1: paths.tokens (WP0) has no `open` option yet, so a link built with
+  // `hash: 'add'` alone leaves it closed once tokens exist. WP5 item: add `open?: 'add'`.
+  const openAdd = c.req.query('open') === 'add';
   return renderPage(
     c,
     {
-      title: 'Services',
+      title: 'Service tokens',
       section: 'tokens',
       subsection: 'tokens',
-      notice: legacyNotice(noticeFor(c)),
+      notice: resolveNotice(LIST_NOTICES, c.req.query('notice'), done),
     },
-    () => (
-      <>
-        <p class="muted">
-          A service is an upstream API (for example Slack or OpenAI) plus the credential the gateway
-          attaches to requests. Callers never see the credential.
-        </p>
-        {canWrite ? (
-          <p class="actions">
-            <a href={paths.tokenNew()}>Add a service</a>
+    (ctx) => {
+      const canWrite = ctx.can('tokens:write');
+      const empty = tokens.length === 0;
+      const filters = [
+        ...(status
+          ? [
+              {
+                label: STATUS_FILTER_LABELS[status],
+                removeHref: paths.tokens({ key: key ?? undefined }),
+              },
+            ]
+          : []),
+        ...(key
+          ? [{ label: `Key ${key}`, removeHref: paths.tokens({ status: status ?? undefined }) }]
+          : []),
+      ];
+      return (
+        <>
+          <p class="lead">
+            Secrets of the upstream APIs the gateway can call for consumers. Loading a token gives
+            nobody access; <a href={docsUrl('concepts.md#grant')}>consumer access</a> is granted
+            separately.
           </p>
-        ) : null}
-        {services.length === 0 ? (
-          <EmptyState>
-            No services yet.{' '}
-            {canWrite ? (
-              <>
-                <a href={paths.tokenNew()}>Add your first service</a> — templates for Slack, OpenAI,
-                Anthropic and GitHub are available.
-              </>
-            ) : (
-              'Ask an admin to add one.'
-            )}{' '}
-            See <code>docs/getting-started.md</code> for a walkthrough.
-          </EmptyState>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th scope="col">Slug</th>
-                <th scope="col">Name</th>
-                <th scope="col">Upstream host</th>
-                <th scope="col">Injection</th>
-                <th scope="col">Credential</th>
-                <th scope="col">Status</th>
-                <th scope="col">Grants</th>
-              </tr>
-            </thead>
-            <tbody>
-              {services.map((service) => (
-                <tr>
-                  <td>
-                    <a href={paths.token(service.id)}>
-                      <code>{service.slug}</code>
-                    </a>
-                  </td>
-                  <td>{service.name}</td>
-                  <td>{upstreamHost(service.base_url)}</td>
-                  <td>{service.injection.kind}</td>
-                  <td>
-                    <CredentialStatus service={service} now={now} />
-                  </td>
-                  <td>
-                    <EnabledBadge enabled={service.enabled} />
-                  </td>
-                  <td>{grantCounts.get(service.id) ?? 0}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+          <ListAlerts ctx={ctx} tokens={tokens} facts={facts} keyringError={cards.keyringError} />
+          {canWrite ? (
+            <details id="add" class="add-token" open={empty || openAdd}>
+              <summary>{empty ? 'Add your first token' : 'Add a token'}</summary>
+              <TokenTypeCards ctx={ctx} data={cards} open={null} failed={null} />
+            </details>
+          ) : empty ? (
+            <EmptyState action={<AskSomeone permission="tokens:write" ctx={ctx} verb="add one" />}>
+              No service tokens yet.
+            </EmptyState>
+          ) : (
+            <AskSomeone permission="tokens:write" ctx={ctx} verb="add a token" />
+          )}
+          {tokens.length > 10 ? (
+            <form
+              method="get"
+              action={paths.tokens()}
+              class="filters"
+              aria-label="Filter service tokens"
+            >
+              {key ? <input type="hidden" name="key" value={key} /> : null}
+              <Select
+                name="status"
+                label="Show"
+                value={status}
+                options={[
+                  { value: '', label: 'All tokens' },
+                  ...STATUS_FILTERS.map((value) => ({ value, label: STATUS_FILTER_LABELS[value] })),
+                ]}
+              />
+              <button type="submit" class="secondary">
+                Filter
+              </button>
+            </form>
+          ) : null}
+          <FilterChips items={filters} clearHref={paths.tokens()} />
+          {empty ? null : (
+            <DataTable
+              id="tokens"
+              caption={`Service tokens (${rows.length})`}
+              rowHeader="token"
+              rows={rows}
+              empty={<p>No token matches these filters.</p>}
+              columns={[
+                {
+                  key: 'token',
+                  header: 'Token',
+                  render: (token) => (
+                    <>
+                      <a href={paths.token(token.id)}>{token.name}</a> <code>{token.slug}</code>
+                      <br />
+                      <span class="muted">{typeLabel(templateForService(token))}</span>
+                    </>
+                  ),
+                },
+                {
+                  key: 'upstream',
+                  header: 'Upstream',
+                  render: (token) => (
+                    <>
+                      {upstreamHost(token.base_url)}
+                      {facts(token).outside ? (
+                        <>
+                          {' '}
+                          <StatusBadge status="outside_hosts" />
+                        </>
+                      ) : null}
+                    </>
+                  ),
+                },
+                {
+                  key: 'secret',
+                  header: 'Secret',
+                  render: (token) => (
+                    <>
+                      <SecretBadge service={token} unreadable={facts(token).unreadable} now={now} />
+                      {token.credential_expires_at !== null ? (
+                        <>
+                          <br />
+                          <span class="muted">
+                            expires <Time ms={token.credential_expires_at} />
+                          </span>
+                        </>
+                      ) : null}
+                    </>
+                  ),
+                },
+                {
+                  key: 'used',
+                  header: 'Used by',
+                  render: (token) => <UsedBy token={token} edges={byToken.get(token.id) ?? []} />,
+                },
+                {
+                  key: 'last',
+                  header: 'Last used',
+                  render: (token) => (
+                    <LastUsed
+                      hour={lastUsedHour(byToken.get(token.id) ?? [])}
+                      now={now}
+                      usageAvailable={connections.usageAvailable}
+                      sampleRate={connections.sampleRate}
+                    />
+                  ),
+                },
+                {
+                  key: 'status',
+                  header: 'Status',
+                  render: (token) => <StatusBadge status={token.enabled ? 'active' : 'disabled'} />,
+                },
+              ]}
+            />
+          )}
+        </>
+      );
+    },
+  );
+}
+
+function lastUsedHour(edges: readonly AccessEdge[]): number | null {
+  const hours = edges
+    .map((edge) => edge.lastUsedHour)
+    .filter((hour): hour is number => hour !== null);
+  return hours.length > 0 ? Math.max(...hours) : null;
+}
+
+function UsedBy(props: { token: Service; edges: AccessEdge[] }) {
+  if (props.edges.length === 0) return <span class="muted">0 consumers</span>;
+  const items: ChipProps[] = props.edges.map((edge) => {
+    const consumer = edge.consumer?.name ?? 'deleted consumer';
+    return {
+      href: paths.accessItem(edge.grant.id),
+      text: `${consumer} · ${edge.subject} · ${edge.context}`,
+      status: edge.status,
+      ...(edge.statusDetail ? { statusDetail: edge.statusDetail } : {}),
+      // The accessible name starts with the visible text (WCAG 2.5.3).
+      srText: `${consumer} · ${edge.subject} · ${edge.context}: can use ${props.token.name}, ${edge.statusDetail ?? edge.status}`,
+    };
+  });
+  return (
+    <ChipList
+      label={`Consumers that can use ${props.token.name}`}
+      items={items}
+      max={3}
+      moreHref={paths.access({ token: props.token.id })}
+      moreText={`+${items.length - 3} more`}
+    />
+  );
+}
+
+function ListAlerts(props: {
+  ctx: ViewContext;
+  tokens: Service[];
+  facts: (token: Service) => { unreadable: boolean; outside: boolean };
+  keyringError: KeyringError | null;
+}) {
+  const { ctx, tokens, facts } = props;
+  const now = ctx.now;
+  const link = (hash: 'secret' | 'destination') => (token: Service) => ({
+    href:
+      hash === 'destination'
+        ? paths.token(token.id, { open: 'destination', hash })
+        : paths.token(token.id, { hash }),
+    label: token.name,
+  });
+  const alerts: Alert[] = [];
+  if (props.keyringError !== null) {
+    alerts.push({
+      code: 'keyring_unavailable',
+      level: 'error',
+      title: 'Encryption keys are not loaded: no secret can be used or changed.',
+      detail: '',
+      objects: [{ href: paths.tokenKeys(), label: 'Encryption keys' }],
+    });
+  }
+  const unreadable =
+    props.keyringError === null
+      ? tokens.filter((token) => token.credential_sealed !== null && facts(token).unreadable)
+      : [];
+  if (unreadable.length > 0) {
+    alerts.push({
+      code: 'credential_malformed',
+      level: 'error',
+      title: `${unreadable.length === 1 ? '1 secret does' : `${unreadable.length} secrets do`} not open.`,
+      detail: 'Set them again under Change destination.',
+      objects: unreadable.map(link('destination')),
+    });
+  }
+  const missing = tokens.filter((token) => token.credential_sealed === null);
+  if (missing.length > 0) {
+    alerts.push({
+      code: 'credential_missing_used',
+      level: 'error',
+      title: `${missing.length === 1 ? '1 token has' : `${missing.length} tokens have`} no secret.`,
+      detail: 'Set it under Destination; you will be asked to confirm the host.',
+      objects: missing.map(link('destination')),
+    });
+  }
+  const unparsed = tokens.filter((token) => storedUpstreamHost(token.base_url) === null);
+  if (unparsed.length > 0) {
+    alerts.push({
+      code: 'config_problem',
+      level: 'error',
+      title: `${unparsed.length === 1 ? '1 token has a base URL' : `${unparsed.length} tokens have base URLs`} that cannot be read, so requests through ${unparsed.length === 1 ? 'it' : 'them'} are refused.`,
+      detail: 'Set the destination again under Change destination.',
+      objects: unparsed.map(link('destination')),
+    });
+  }
+  const outside = tokens.filter(
+    (token) => facts(token).outside && storedUpstreamHost(token.base_url) !== null,
+  );
+  if (outside.length > 0) {
+    alerts.push({
+      code: 'outside_hosts',
+      level: 'error',
+      title: `${outside.length === 1 ? '1 token points' : `${outside.length} tokens point`} at a host that is not allowed, so requests through ${outside.length === 1 ? 'it' : 'them'} are refused.`,
+      detail: '',
+      objects: outside.map((token) => ({ href: paths.token(token.id), label: token.name })),
+      fix: { href: paths.tokenHosts(), label: 'Open allowed hosts', permission: 'settings:write' },
+    });
+  }
+  const sealed = tokens.filter(
+    (token) => token.credential_sealed !== null && token.credential_expires_at !== null,
+  );
+  const expired = sealed.filter((token) => (token.credential_expires_at ?? 0) <= now);
+  const expiring = sealed.filter((token) => {
+    const at = token.credential_expires_at ?? 0;
+    return at > now && at - now <= EXPIRY_WARNING_MS;
+  });
+  if (expired.length > 0) {
+    alerts.push({
+      code: 'credential_expired',
+      level: 'error',
+      title: `${expired.length === 1 ? '1 secret has' : `${expired.length} secrets have`} expired.`,
+      detail: 'Replace them on the token page.',
+      objects: expired.map(link('secret')),
+    });
+  }
+  if (expiring.length > 0) {
+    alerts.push({
+      code: 'credential_expiring',
+      level: 'warning',
+      title: `${expiring.length === 1 ? '1 secret expires' : `${expiring.length} secrets expire`} within 14 days.`,
+      detail: 'Replace them before then.',
+      objects: expiring.map(link('secret')),
+    });
+  }
+  if (alerts.length === 0) return null;
+  return (
+    <section aria-labelledby="attention-h">
+      <h2 id="attention-h">Needs attention</h2>
+      <AlertList alerts={alerts} ctx={ctx} />
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Create
+
+async function newPage(c: AdminContext) {
+  const raw = c.req.query('template') ?? '';
+  const open = raw === CUSTOM || getServiceTemplate(raw) ? raw : null;
+  return renderNew(c, { open, failed: null, errors: [] });
+}
+
+async function renderNew(
+  c: AdminContext,
+  o: {
+    open: string | null;
+    failed: FailedCard | null;
+    errors: FieldError[];
+    status?: ContentfulStatusCode;
+  },
+) {
+  const cards = await cardsData(c);
+  return renderPage(
+    c,
+    {
+      title: 'Add a service token',
+      section: 'tokens',
+      subsection: 'tokens',
+      breadcrumbs: [
+        { href: paths.tokens(), label: 'Service tokens' },
+        { href: paths.tokenNew(), label: 'Add a token' },
+      ],
+      errors: o.errors,
+      status: o.status,
+    },
+    (ctx) => (
+      <>
+        <TokenTypeCards ctx={ctx} data={cards} open={o.open} failed={o.failed} />
+        <p>
+          <a href={paths.tokens()}>Cancel</a>
+        </p>
       </>
     ),
   );
 }
 
-async function newPage(c: AdminContext) {
-  const template = getServiceTemplate(c.req.query('template') ?? '');
-  const values = template ? formFromTemplate(template) : { ...EMPTY_FORM };
-  return renderNewForm(c, { values });
-}
-
 async function create(c: AdminContext) {
   const deps = c.get('deps');
+  const db = deps.env.DB;
   const form = await formData(c);
-  const values = formFromRequest(form);
-  const expiry = parseDateInput(values.credential_expires_at);
-  if (!expiry.ok) return renderNewForm(c, { values, errors: [EXPIRY_FORMAT_ERROR], status: 400 });
-
-  const secret = text(form, 'credential');
-  const result = await createService(
-    deps,
-    adminActor(c),
-    {
-      slug: values.slug.trim(),
-      name: values.name,
-      description: values.description,
-      base_url: values.base_url,
-      injection: injectionFromForm(values),
-      forward_headers: forwardHeadersFromForm(values),
-      timeout_ms: timeoutFromForm(values),
-      verify: verifyFromForm(values),
-      credential_expires_at: expiry.value,
-      secret,
-      save_anyway: flag(form, 'save_anyway'),
-    },
-    opContextFor(new URL(c.req.url)),
-  );
-  if (!result.ok) {
-    return renderNewForm(c, {
-      values,
-      ...failureView(result),
-      credentialEntered: secret.trim() !== '',
-      status: FAILURE_STATUS[result.reason],
+  const values = valuesFromForm(form);
+  const template = getServiceTemplate(values.template);
+  if (!template && values.template !== CUSTOM) {
+    return renderNew(c, {
+      open: null,
+      failed: null,
+      errors: [fieldError(null, 'Choose which API the token unlocks')],
+      status: 400,
     });
   }
-  const notice = !result.service.credential_set
-    ? 'created'
-    : result.verify === null
-      ? 'created_with_credential'
+  const card = template?.id ?? CUSTOM;
+  const context = opContextFor(new URL(c.req.url));
+  // Template cards never read the destination, headers, timeout or check from the form (I-SSRF-1).
+  const destination = template
+    ? {
+        base_url: template.base_url,
+        injection: template.injection,
+        forward_headers: [...template.forward_headers],
+        timeout_ms: template.timeout_ms,
+        verify: template.verify,
+      }
+    : {
+        base_url: values.base_url.trim(),
+        injection: injectionFromValues(values),
+        forward_headers: forwardHeadersFromValues(values),
+        timeout_ms: timeoutFromValues(values),
+        verify: verifyFromValues(values),
+      };
+  const target: SecretTarget = {
+    template,
+    label: template?.secret.label ?? 'secret',
+    baseUrl: destination.base_url,
+    injection: destination.injection,
+    target: 'new',
+  };
+  // 1. Field formats and the secret format (A7.4).
+  const errors: FieldError[] = [];
+  const expiry = template?.expiry_from_check
+    ? ({ ok: true, value: null } as const)
+    : parseDateInput(values.credential_expires_at);
+  if (!expiry.ok) errors.push(fieldError('credential_expires_at', EXPIRY_FORMAT_ERROR));
+  const secret = await resolveSecret(c, form, target);
+  if (secret.error) errors.push(secret.error);
+
+  // 3. The allowlist, after an owner's allow_host. A template card may allow its own host and, on
+  // the GitHub card, uploads.github.com for the uploads token (that box is also_uploads for an
+  // owner whose allowlist blocks it).
+  const allowlist = await getAllowedUpstreamHosts(db);
+  const host = hostOf(destination.base_url);
+  const covered = host === null || upstreamHostAllowed(host, allowlist);
+  const canAllow = can(c.get('viewer').user.role, 'settings:write');
+  const allowValues = texts(form, 'allow_host').filter((value) => value !== '');
+  const uploads = template?.id === 'github' ? getServiceTemplate('github-uploads') : null;
+  const uploadsHost = uploads ? hostOf(uploads.base_url) : null;
+  const uploadsAllowRequested = uploadsHost !== null && allowValues.includes(uploadsHost);
+  const alsoUploads = uploads !== null && (values.also_uploads || uploadsAllowRequested);
+  const uploadsCovered = uploadsHost === null || upstreamHostAllowed(uploadsHost, allowlist);
+  const allowRequested = template
+    ? host !== null && allowValues.includes(host)
+    : allowValues.length > 0;
+  // A template card's box names the host it allows; another value is a stale form.
+  const stale = template
+    ? allowValues.filter((value) => value !== host && value !== uploadsHost)
+    : [];
+  const hostErrors: FieldError[] = [];
+  if (!covered && stale.length > 0) {
+    hostErrors.push(fieldError('allow_host', 'Check the box again: the host it allows changed'));
+  } else if (!covered && !allowRequested) {
+    hostErrors.push(
+      fieldError(
+        template ? 'allow_host' : 'base_url',
+        `${host} is not an allowed host. ${
+          canAllow
+            ? `Tick "Also allow" to add it to Allowed hosts, ${template ? 'or choose another type' : 'or use another base URL'}`
+            : 'Ask an owner to allow it, or use an allowed host'
+        }`,
+      ),
+    );
+  }
+  if (alsoUploads && !uploadsCovered && !uploadsAllowRequested) {
+    hostErrors.push(
+      fieldError(
+        'also_uploads',
+        `${uploadsHost} is not an allowed host, so the uploads token cannot be added. ${
+          canAllow
+            ? 'Tick the uploads box again: it now also allows the host'
+            : 'Untick the box, or ask an owner to allow it'
+        }`,
+      ),
+    );
+  }
+  const allowHost = !covered && allowRequested && host !== null;
+  const allowUploadsHost = alsoUploads && !uploadsCovered && uploadsAllowRequested;
+  // A re-render ticks each box again as submitted (`allow_host` may hold both hosts).
+  values.also_uploads = alsoUploads;
+  if (template) values.allow_host = allowRequested && host !== null ? host : '';
+
+  const fail = async (
+    failure: FieldError[],
+    status: ContentfulStatusCode,
+    verify: VerifyOutcome | null = null,
+  ) => {
+    const scoped = template
+      ? failure.map((error) =>
+          error.field !== null && !TEMPLATE_CARD_FIELDS.has(error.field)
+            ? fieldError(null, error.message)
+            : error,
+        )
+      : failure;
+    const draft = await draftFor(c, secret, target);
+    const state: FormState = { values, errors: scoped, draft, verify };
+    return renderNew(c, {
+      open: card,
+      failed: { template: card, state, likely: secret.likely },
+      errors: summaryErrors(card, scoped),
+      status,
+    });
+  };
+  const slugBase = template ? template.slug : slugBaseFor(destination.base_url);
+  const slug = values.slug.trim() === '' ? await freeSlug(db, slugBase) : values.slug.trim();
+  const name =
+    values.name.trim() === ''
+      ? await freeName(db, template ? template.name : slug)
+      : values.name.trim();
+  const input: ServiceCreateInput = {
+    slug,
+    name,
+    description: values.description,
+    ...destination,
+    credential_expires_at: expiry.ok ? expiry.value : null,
+    secret: secret.secret,
+    save_anyway: flag(form, 'save_anyway'),
+  };
+  // 1-2. The op's formats and the slug pre-check (SELECTs only), reported together with the
+  // route's errors and the allowlist (step 3) in one re-render. The route checks the allowlist
+  // itself, so the op skips it; createService enforces it again.
+  const checked = await checkServiceCreate(deps, input, context, { hostAllowed: true });
+  const all = [
+    ...errors,
+    ...(!checked.ok && checked.reason !== 'unavailable'
+      ? failureErrors(checked, target.label)
+      : []),
+    ...hostErrors,
+  ];
+  if (all.length > 0) {
+    const onlyOp = errors.length === 0 && hostErrors.length === 0 && !checked.ok;
+    return fail(all, onlyOp ? FAILURE_STATUS[checked.reason] : 400);
+  }
+  // 4. The keyring.
+  if (!checked.ok)
+    return fail(failureErrors(checked, target.label), FAILURE_STATUS[checked.reason]);
+
+  // Everything that sends nothing has passed; only now the hosts are added, each its own op.
+  const actor = adminActor(c);
+  const added: string[] = [];
+  for (const [allow, value] of [
+    [allowHost, host],
+    [allowUploadsHost, uploadsHost],
+  ] as const) {
+    if (!allow || value === null) continue;
+    const result = await addUpstreamHost(deps, actor, value);
+    if (!result.ok) return fail(failureErrors(result, target.label), FAILURE_STATUS[result.reason]);
+    if (result.changed) added.push(value);
+  }
+  const result = await createService(deps, actor, input, context);
+  if (!result.ok) {
+    const failure = failureErrors(result, target.label);
+    return fail(
+      added.length > 0
+        ? [
+            fieldError(
+              null,
+              `${added.join(' and ')} ${added.length === 1 ? 'was' : 'were'} added to Allowed hosts; the token was not saved:`,
+            ),
+            ...failure,
+          ]
+        : failure,
+      FAILURE_STATUS[result.reason],
+      result.verify ?? null,
+    );
+  }
+
+  let pairFailure: TokenAlso | null = null;
+  if (alsoUploads && uploads) {
+    const pair = await createService(
+      deps,
+      actor,
+      {
+        slug: await freeSlug(db, uploads.slug),
+        name: await freeName(db, uploads.name),
+        description: values.description,
+        base_url: uploads.base_url,
+        injection: uploads.injection,
+        forward_headers: [...uploads.forward_headers],
+        timeout_ms: uploads.timeout_ms,
+        verify: uploads.verify,
+        credential_expires_at: result.service.credential_expires_at,
+        secret: secret.secret,
+        save_anyway: input.save_anyway,
+      },
+      context,
+    );
+    if (!pair.ok) pairFailure = pairFailureAlso(pair);
+  }
+  const notice =
+    result.verify === null
+      ? 'created'
       : result.verify.passed
         ? 'created_verified'
         : 'created_unverified';
-  return redirectWithNotice(c, paths.token(result.service.id), notice);
+  const hostsAlso: TokenAlso | undefined =
+    added.length === 2
+      ? 'hosts_added'
+      : added[0] === uploadsHost && uploadsHost !== null
+        ? 'uploads_host_added'
+        : added.length === 1
+          ? 'host_added'
+          : undefined;
+  return redirectWithNotice(c, paths.token(result.service.id), notice, {
+    also: pairFailure ?? hostsAlso,
+  });
+}
+
+/** Why the uploads token of a GitHub create failed, as a closed `also` code (no free text in URLs). */
+function pairFailureAlso(failure: OpFailure): TokenAlso {
+  if (failure.errors.some((error) => error.startsWith('base URL'))) return 'pair_failed_hosts';
+  if (failure.reason === 'conflict') return 'pair_failed_conflict';
+  if (failure.reason === 'verify_failed') return 'pair_failed_check';
+  return 'pair_failed';
+}
+
+function hostOf(baseUrl: string): string | null {
+  try {
+    return new URL(baseUrl.trim()).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Token page
+
+async function loadPage(c: AdminContext, service: Service): Promise<TokenPageData> {
+  const deps = c.get('deps');
+  const [connections, allowlist, keyring, lastSet, tokens] = await Promise.all([
+    loadConnections(deps, { tokenId: service.id }),
+    getAllowedUpstreamHosts(deps.env.DB),
+    loadKeyring(deps.env),
+    lastSecretChange(deps.env.DB, service.id),
+    listServices(deps.env.DB),
+  ]);
+  const binding: BindingState = keyring.ok
+    ? await storedBinding(deps.env.DB, keyring.keyring, service)
+    : { status: 'unknown' };
+  const siblings = binding.status === 'attested' ? await rotationSiblings(deps, service) : [];
+  return {
+    service,
+    template: templateForService(service),
+    binding,
+    keyringError: keyring.ok ? null : keyring.error,
+    allowlist,
+    outside: storedHostOutside(service.base_url, allowlist),
+    accesses: connections.accesses,
+    usageAvailable: connections.usageAvailable,
+    sampleRate: connections.sampleRate,
+    lastSet,
+    siblings,
+    destinationFingerprint: await destinationFingerprint(service),
+    tokens,
+    proxyOrigin: new URL(c.req.url).origin,
+    today: todayUtc(deps.now()),
+    also: alsoParam(c),
+  };
+}
+
+async function renderToken(
+  c: AdminContext,
+  service: Service,
+  o: {
+    state?: TokenPageState;
+    errors?: FieldError[];
+    status?: ContentfulStatusCode;
+    withNotice?: boolean;
+  } = {},
+) {
+  const data = await loadPage(c, service);
+  const rawOpen = c.req.query('open');
+  const open = rawOpen === 'destination' || rawOpen === 'details' ? rawOpen : null;
+  return renderPage(
+    c,
+    {
+      title: service.name,
+      section: 'tokens',
+      subsection: 'tokens',
+      breadcrumbs: [
+        { href: paths.tokens(), label: 'Service tokens' },
+        { href: paths.token(service.id), label: service.name },
+      ],
+      errors: o.errors,
+      status: o.status,
+      notice: o.withNotice
+        ? resolveNotice(TOKEN_NOTICES, c.req.query('notice'), null, {
+            service,
+            also: data.also,
+          })
+        : null,
+    },
+    (ctx) => <TokenPage ctx={ctx} data={data} state={{ open, ...o.state }} />,
+  );
 }
 
 async function detailPage(c: AdminContext) {
   const service = await getService(c.get('deps').env.DB, c.req.param('id') ?? '');
   if (!service) return notFound(c);
-  return renderDetail(c, service, { notice: noticeFor(c) });
+  return renderToken(c, service, { withNotice: true });
+}
+
+/** A form of the token page failed: re-render it open, with its errors in the summary. */
+function pageFailure(
+  c: AdminContext,
+  service: Service,
+  formName: 'secret' | 'destination' | 'details',
+  state: FormState,
+  status: ContentfulStatusCode,
+) {
+  return renderToken(c, service, {
+    state: { [formName]: state },
+    errors: summaryErrors(formName, state.errors),
+    status,
+  });
 }
 
 async function update(c: AdminContext) {
   const deps = c.get('deps');
   const service = await getService(deps.env.DB, c.req.param('id') ?? '');
   if (!service) return notFound(c);
-  const values = formFromRequest(await formData(c));
-  const editState = (errors: string[], warnings: string[] = []) => ({
-    edit: { values, errors, warnings },
+  const values = valuesFromForm(await formData(c));
+  const state = (errors: FieldError[]): FormState => ({
+    values,
+    errors,
+    draft: null,
+    verify: null,
   });
   const expiry = parseDateInput(values.credential_expires_at);
-  if (!expiry.ok)
-    return renderDetail(c, service, { ...editState([EXPIRY_FORMAT_ERROR]), status: 400 });
-
+  if (!expiry.ok) {
+    return pageFailure(
+      c,
+      service,
+      'details',
+      state([fieldError('credential_expires_at', EXPIRY_FORMAT_ERROR)]),
+      400,
+    );
+  }
   // The form shows dates only; an unchanged date keeps the stored time of day.
   const expiresAt =
     values.credential_expires_at.trim() === dateInput(service.credential_expires_at)
       ? service.credential_expires_at
       : expiry.value;
+  // Template check headers have no input: they are kept with the check.
+  const posted = verifyFromValues(values);
+  const verify =
+    posted && service.verify?.headers ? { ...posted, headers: service.verify.headers } : posted;
   const result = await updateServiceFields(deps, adminActor(c), service.id, {
     name: values.name,
     description: values.description,
-    forward_headers: forwardHeadersFromForm(values),
-    timeout_ms: timeoutFromForm(values),
-    verify: verifyFromForm(values),
+    forward_headers: forwardHeadersFromValues(values),
+    timeout_ms: timeoutFromValues(values),
+    verify,
     credential_expires_at: expiresAt,
     expected_updated_at: submittedVersion(values.expected_updated_at),
   });
   if (!result.ok) {
     if (result.reason === 'not_found') return notFound(c);
-    return renderDetail(c, service, {
-      ...editState(result.errors, result.warnings),
-      status: FAILURE_STATUS[result.reason],
-    });
+    return pageFailure(
+      c,
+      service,
+      'details',
+      state(failureErrors(result)),
+      FAILURE_STATUS[result.reason],
+    );
   }
   return redirectWithNotice(
     c,
     paths.token(service.id),
     result.changed === false ? 'unchanged' : 'updated',
+    { fragment: 'details' },
   );
 }
 
-async function setCredential(c: AdminContext) {
+async function rotate(c: AdminContext) {
   const deps = c.get('deps');
   const service = await getService(deps.env.DB, c.req.param('id') ?? '');
   if (!service) return notFound(c);
   const form = await formData(c);
-  const values = formFromRequest(form);
-  const expiry = parseDateInput(values.credential_expires_at);
-  if (!expiry.ok) {
-    return renderDetail(c, service, {
-      credential: { values, errors: [EXPIRY_FORMAT_ERROR], warnings: [], verify: null },
-      status: 400,
-    });
+  const values = valuesFromForm(form);
+  const template = templateForService(service);
+  // The destination is the stored one; posted base_url or injection fields are ignored (I-CRED-2).
+  const target: SecretTarget = {
+    template,
+    label: template?.secret.label ?? 'secret',
+    baseUrl: service.base_url,
+    injection: service.injection,
+    target: service.id,
+  };
+  const errors: FieldError[] = [];
+  const expiry = template?.expiry_from_check
+    ? ({ ok: true, value: null } as const)
+    : parseDateInput(values.credential_expires_at);
+  if (!expiry.ok) errors.push(fieldError('credential_expires_at', EXPIRY_FORMAT_ERROR));
+  const secret = await resolveSecret(c, form, target);
+  if (secret.error) errors.push(secret.error);
+  const fail = async (
+    failure: FieldError[],
+    status: ContentfulStatusCode,
+    verify: VerifyOutcome | null = null,
+  ) =>
+    pageFailure(
+      c,
+      service,
+      'secret',
+      { values, errors: failure, draft: await draftFor(c, secret, target), verify },
+      status,
+    );
+  // The destination the form showed (a digest, never a posted destination): a token repointed
+  // since the page was loaded is refused before anything is sent, and without a draft, so a
+  // second click cannot send the kept secret to the new destination (I-CRED-2).
+  const expected = text(form, 'expected_destination');
+  if (expected !== (await destinationFingerprint(service))) {
+    return pageFailure(
+      c,
+      service,
+      'secret',
+      {
+        values,
+        errors: [
+          fieldError(
+            null,
+            `The destination of this token changed since the page was loaded: it now sends the secret to ${upstreamHost(service.base_url)}. Nothing was sent or saved. Check the destination below, then enter the secret again`,
+          ),
+        ],
+        draft: null,
+        verify: null,
+      },
+      409,
+    );
   }
-  const result = await setServiceCredential(
+  if (errors.length > 0 || secret.secret === null) return fail(errors, 400);
+  const result = await rotateServiceSecret(
     deps,
     adminActor(c),
     service.id,
     {
-      base_url: values.base_url,
-      injection: injectionFromForm(values),
-      secret: text(form, 'credential'),
+      secret: secret.secret,
       save_anyway: flag(form, 'save_anyway'),
-      // Undefined: the op uses the expiry the credential check reports (GitHub), else none.
-      credential_expires_at: expiry.value ?? undefined,
-      confirm_destination: values.confirm_destination,
+      credential_expires_at: (expiry.ok ? expiry.value : null) ?? undefined,
+      siblings: texts(form, 'also_replace'),
+      expected_destination: expected,
     },
     opContextFor(new URL(c.req.url)),
   );
   if (!result.ok) {
     if (result.reason === 'not_found') return notFound(c);
-    return renderDetail(c, service, {
-      credential: { values, ...failureView(result) },
-      status: FAILURE_STATUS[result.reason],
-    });
+    // Repointed or changed between the route's read and the op's: no draft either.
+    if (result.reason === 'conflict') {
+      return pageFailure(
+        c,
+        (await getService(deps.env.DB, service.id)) ?? service,
+        'secret',
+        { values, errors: failureErrors(result, target.label), draft: null, verify: null },
+        409,
+      );
+    }
+    if (result.reason === 'confirmation_required') {
+      return renderToken(c, service, {
+        state: { open: 'destination' },
+        errors: [
+          fieldError(
+            'destination.base_url',
+            `${result.errors.join('. ')}. Set the secret under Change destination`,
+          ),
+        ],
+        status: 422,
+      });
+    }
+    return fail(
+      failureErrors(result, target.label),
+      FAILURE_STATUS[result.reason],
+      result.verify ?? null,
+    );
   }
   const notice =
     result.verify === null
-      ? 'credential_saved'
+      ? 'secret_saved'
       : result.verify.passed
-        ? 'credential_verified'
-        : 'credential_unverified';
-  return redirectWithNotice(c, paths.token(service.id), notice);
+        ? 'secret_verified'
+        : 'secret_unverified';
+  return redirectWithNotice(c, paths.token(service.id), notice, {
+    fragment: 'secret',
+    also: result.siblings.some((sibling) => !sibling.ok) ? 'sibling_failed' : undefined,
+  });
 }
 
-async function testCredential(c: AdminContext) {
+async function changeDestination(c: AdminContext) {
+  const deps = c.get('deps');
+  const db = deps.env.DB;
+  const service = await getService(db, c.req.param('id') ?? '');
+  if (!service) return notFound(c);
+  const form = await formData(c);
+  const values: TokenFormValues = valuesFromForm(form);
+  const injection = injectionFromValues(values);
+  const normalizedInjection = normalizeInjection(injection);
+  const base = validateBaseUrl(values.base_url, { gatewayHosts: [], allowedUpstreamHosts: null });
+  // The wrong-type guard of the template this destination is (if any).
+  const template =
+    base.ok && normalizedInjection.ok
+      ? getServiceTemplate(templateIdFor(base.normalized, normalizedInjection.json) ?? '')
+      : null;
+  const target: SecretTarget = {
+    template,
+    label: template?.secret.label ?? 'secret',
+    baseUrl: values.base_url,
+    injection,
+    target: service.id,
+  };
+  const errors: FieldError[] = [];
+  const expiry = parseDateInput(values.credential_expires_at);
+  if (!expiry.ok) errors.push(fieldError('credential_expires_at', EXPIRY_FORMAT_ERROR));
+  const secret = await resolveSecret(c, form, target);
+  if (secret.error) errors.push(secret.error);
+  // The allowlist (A7.4 step 3): the owner's box is shown from the start (value 1) and applies
+  // only when the submitted host is not covered; a box naming another host is stale.
+  const host = hostOf(values.base_url);
+  const allowlist = await getAllowedUpstreamHosts(db);
+  const covered = host === null || upstreamHostAllowed(host, allowlist);
+  const allowRequested = values.allow_host !== '';
+  const hostErrors: FieldError[] = [];
+  if (!covered && allowRequested && values.allow_host !== '1' && values.allow_host !== host) {
+    hostErrors.push(fieldError('allow_host', 'Check the box again: the base URL changed'));
+  } else if (!covered && !allowRequested) {
+    const canAllow = can(c.get('viewer').user.role, 'settings:write');
+    hostErrors.push(
+      fieldError(
+        'base_url',
+        `${host} is not an allowed host. ${canAllow ? 'Tick "Also allow" below, or use another base URL' : 'Use an allowed host, or ask an owner to allow it'}`,
+      ),
+    );
+  }
+  const fail = async (
+    failure: FieldError[],
+    status: ContentfulStatusCode,
+    verify: VerifyOutcome | null = null,
+  ) =>
+    pageFailure(
+      c,
+      service,
+      'destination',
+      { values, errors: failure, draft: await draftFor(c, secret, target), verify },
+      status,
+    );
+  const input = {
+    base_url: values.base_url,
+    injection,
+    secret: secret.secret ?? '',
+    save_anyway: flag(form, 'save_anyway'),
+    // Undefined: the op uses the expiry the check reports (GitHub), else none.
+    credential_expires_at:
+      expiry.ok && !template?.expiry_from_check ? (expiry.value ?? undefined) : undefined,
+    confirm_destination: values.confirm_destination,
+  };
+  const context = opContextFor(new URL(c.req.url));
+  const allowHost = !covered && allowRequested && host !== null;
+  // Everything that sends nothing (formats, keyring, the host confirmation) before the host is
+  // added, so a destination refused anyway never changes the allowlist (A7.4). The op's errors
+  // come back together with the route's and the allowlist's, in one re-render; the route checks
+  // the allowlist itself, and setServiceCredential enforces it again.
+  const checked = await checkServiceCredential(deps, service.id, input, context, {
+    hostAllowed: true,
+    withoutSecret: secret.secret === null,
+  });
+  if (!checked.ok && checked.reason === 'not_found') return notFound(c);
+  const all = [
+    ...errors,
+    ...(!checked.ok && checked.reason !== 'unavailable'
+      ? failureErrors(checked, target.label)
+      : []),
+    ...hostErrors,
+  ];
+  if (all.length > 0) {
+    const onlyOp = errors.length === 0 && hostErrors.length === 0 && !checked.ok;
+    return fail(all, onlyOp ? FAILURE_STATUS[checked.reason] : 400);
+  }
+  if (!checked.ok)
+    return fail(failureErrors(checked, target.label), FAILURE_STATUS[checked.reason]);
+  if (secret.secret === null) return fail(errors, 400);
+  const actor = adminActor(c);
+  let hostAdded = false;
+  if (allowHost) {
+    const added = await addUpstreamHost(deps, actor, host);
+    if (!added.ok) return fail(failureErrors(added, target.label), FAILURE_STATUS[added.reason]);
+    hostAdded = added.changed;
+  }
+  const result = await setServiceCredential(deps, actor, service.id, input, context);
+  if (!result.ok) {
+    if (result.reason === 'not_found') return notFound(c);
+    const failure = failureErrors(result, target.label);
+    return fail(
+      hostAdded
+        ? [
+            fieldError(null, `${host} was added to Allowed hosts; the destination was not saved:`),
+            ...failure,
+          ]
+        : failure,
+      FAILURE_STATUS[result.reason],
+      result.verify ?? null,
+    );
+  }
+  return redirectWithNotice(c, paths.token(service.id), 'destination_changed', {
+    fragment: 'destination',
+    also: hostAdded ? 'host_added' : undefined,
+  });
+}
+
+async function testSecret(c: AdminContext) {
   const deps = c.get('deps');
   const service = await getService(deps.env.DB, c.req.param('id') ?? '');
   if (!service) return notFound(c);
@@ -541,13 +1529,25 @@ async function testCredential(c: AdminContext) {
   );
   if (!result.ok) {
     if (result.reason === 'not_found') return notFound(c);
-    return renderDetail(c, service, {
-      actionErrors: result.errors,
+    return renderToken(c, service, {
+      errors: result.errors.map((message) => fieldError(null, message)),
       status: FAILURE_STATUS[result.reason],
     });
   }
-  // Rendered directly (no redirect): the result is shown once and not stored.
-  return renderDetail(c, service, { test: result.verify });
+  // Rendered directly (no redirect): the result is shown once and not stored. A changed GitHub
+  // expiry was saved by the op, so the page reads the row again.
+  const current = (await getService(deps.env.DB, service.id)) ?? service;
+  return renderToken(c, current, {
+    state: { test: result.verify },
+    errors: result.verify.passed
+      ? []
+      : [
+          fieldError(
+            null,
+            `The check of the stored secret failed: ${result.verify.error ?? 'unknown error'}`,
+          ),
+        ],
+  });
 }
 
 async function toggle(c: AdminContext) {
@@ -557,8 +1557,8 @@ async function toggle(c: AdminContext) {
   const form = await formData(c);
   const requested = text(form, 'enabled');
   if (requested !== '1' && requested !== '0') {
-    return renderDetail(c, service, {
-      actionErrors: ['choose whether to enable or disable the service'],
+    return renderToken(c, service, {
+      errors: [fieldError(null, 'Choose whether to enable or disable the token')],
       status: 400,
     });
   }
@@ -567,8 +1567,8 @@ async function toggle(c: AdminContext) {
   const result = await updateServiceFields(deps, adminActor(c), service.id, { enabled });
   if (!result.ok) {
     if (result.reason === 'not_found') return notFound(c);
-    return renderDetail(c, service, {
-      actionErrors: result.errors,
+    return renderToken(c, service, {
+      errors: failureErrors(result),
       status: FAILURE_STATUS[result.reason],
     });
   }
@@ -580,935 +1580,30 @@ async function remove(c: AdminContext) {
   const deps = c.get('deps');
   const service = await getService(deps.env.DB, c.req.param('id') ?? '');
   if (!service) return notFound(c);
-  if (!flag(await formData(c), 'confirm')) {
-    return renderDetail(c, service, {
-      actionErrors: ['tick the confirmation box to delete the service'],
+  const form = await formData(c);
+  if (text(form, 'confirm') !== '1') {
+    return renderToken(c, service, {
+      errors: [fieldError(null, `Confirm the delete in the "Delete ${service.name}" dialog`)],
       status: 400,
     });
   }
-  const result = await deleteService(deps, adminActor(c), service.id);
+  const result = await deleteService(deps, adminActor(c), service.id, {
+    withAccesses: flag(form, 'with_accesses'),
+    accessIds: text(form, 'access_ids')
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id !== ''),
+  });
   if (!result.ok) {
     if (result.reason === 'not_found') return notFound(c);
-    return renderDetail(c, service, {
-      actionErrors: result.errors,
+    return renderToken(c, service, {
+      errors: result.errors.map((message) => fieldError(null, message)),
       status: FAILURE_STATUS[result.reason],
     });
   }
-  return redirectWithNotice(c, paths.tokens(), 'deleted');
-}
-
-function noticeFor(c: AdminContext): string | null {
-  const key = c.req.query('notice');
-  return key !== undefined && Object.hasOwn(NOTICES, key) ? (NOTICES[key] ?? null) : null;
-}
-
-/** A failed op as form messages; a failed check is shown by <VerifyResult> instead of as text. */
-function failureView(failure: OpFailure & { verify?: VerifyOutcome }) {
-  const verify = failure.verify ?? null;
-  return {
-    errors: failure.reason === 'verify_failed' ? [] : failure.errors,
-    warnings: failure.warnings,
-    verify,
-  };
-}
-
-function notFound(c: AdminContext) {
-  return renderPage(
+  return redirectWithNotice(
     c,
-    { title: 'Service not found', section: 'tokens', subsection: 'tokens', status: 404 },
-    () => (
-      <p>
-        This service does not exist or was deleted. <a href={paths.tokens()}>Back to services</a>
-      </p>
-    ),
+    paths.tokens(),
+    result.deletedAccesses > 0 ? 'deleted_with_accesses' : 'deleted',
   );
-}
-
-// ---------------------------------------------------------------------------------------------
-// New service page
-
-function renderNewForm(
-  c: AdminContext,
-  state: {
-    values: ServiceForm;
-    errors?: string[];
-    warnings?: string[];
-    verify?: VerifyOutcome | null;
-    /** A credential was submitted; it is not rendered back and must be entered again. */
-    credentialEntered?: boolean;
-    status?: ContentfulStatusCode;
-  },
-) {
-  const { values } = state;
-  const template = getServiceTemplate(values.template);
-  const csrf = c.get('viewer').csrfToken;
-  return renderPage(
-    c,
-    { title: 'Add a service', section: 'tokens', subsection: 'tokens', status: state.status },
-    () => (
-      <>
-        {template ? <TemplateGuidance template={template} /> : <TemplatePicker />}
-        {state.verify && !state.verify.passed ? (
-          <p class="banner error" role="alert">
-            The credential check failed, so nothing was saved. The result is shown above the Create
-            button.
-          </p>
-        ) : null}
-        <Messages errors={state.errors} warnings={state.warnings} />
-        <form method="post" action={paths.tokens()} class="stack">
-          <Csrf token={csrf} />
-          <input type="hidden" name="template" value={template?.id ?? ''} />
-          <fieldset>
-            <legend>Basics</legend>
-            <Field
-              label="Slug"
-              name="slug"
-              value={values.slug}
-              required
-              placeholder="openai"
-              hint={
-                <>
-                  Short name used in the proxy address: callers send requests to{' '}
-                  <code>/proxy/&lt;slug&gt;/…</code>. Lower-case letters, digits and dashes. It
-                  cannot be changed later.
-                </>
-              }
-            />
-            <NameFields values={values} />
-          </fieldset>
-          <fieldset>
-            <legend>Upstream API</legend>
-            <DestinationFields values={values} />
-          </fieldset>
-          <fieldset>
-            <legend>Credential</legend>
-            <CredentialInput required={false} reentry={state.credentialEntered === true} />
-            <ExpiryField values={values} />
-          </fieldset>
-          <OptionsFields values={values} />
-          <VerifyFields values={values} />
-          {state.verify ? <VerifyResult verify={state.verify} /> : null}
-          {state.verify && !state.verify.passed ? <SaveAnyway /> : null}
-          <p class="actions">
-            <button type="submit">Create service</button>
-            <a href={paths.tokens()}>Cancel</a>
-          </p>
-        </form>
-      </>
-    ),
-  );
-}
-
-function TemplatePicker() {
-  return (
-    <section>
-      <h2>Start from a template</h2>
-      <p class="muted">
-        Templates fill in the address, injection and a credential check for common APIs. You can
-        change every value before saving, or fill in the form below from scratch.
-      </p>
-      <ul>
-        {SERVICE_TEMPLATES.map((template) => (
-          <li>
-            <a href={paths.tokenNew({ template: template.id })}>{template.label}</a>{' '}
-            <span class="muted">{template.base_url}</span>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function TemplateGuidance(props: { template: ServiceTemplate }) {
-  const { template } = props;
-  return (
-    <section>
-      <p>
-        Using the <strong>{template.label}</strong> template.{' '}
-        <a href={paths.tokenNew()}>Choose another template or start from scratch</a>
-      </p>
-      <p class="muted">
-        {template.notes} Provider documentation: <a href={template.docs_url}>{template.docs_url}</a>
-      </p>
-      <StarterRules presets={template.operation_presets} />
-    </section>
-  );
-}
-
-function StarterRules(props: { presets: readonly OperationPreset[] }) {
-  if (props.presets.length === 0) return null;
-  const rules = props.presets.flatMap((p) => presetRules(p, 'OWNER/REPO'));
-  return (
-    <>
-      <h2>Suggested grant rules</h2>
-      <p class="muted">
-        A grant decides which callers may use this service and which requests they may make. When
-        you create one, these rules are a starting point; narrow them to what callers need (one rule
-        per line: methods, then path pattern; replace OWNER/REPO with the repository).
-      </p>
-      <pre>{rules.map(ruleText).join('\n')}</pre>
-    </>
-  );
-}
-
-function ruleText(rule: Rule): string {
-  return `${rule.methods.join(',')} ${rule.path}`;
-}
-
-// ---------------------------------------------------------------------------------------------
-// Form sections shared by the create and detail pages
-
-function NameFields(props: { values: ServiceForm }) {
-  return (
-    <>
-      <Field
-        label="Name"
-        name="name"
-        value={props.values.name}
-        required
-        placeholder="OpenAI"
-        hint="Display name shown in this admin UI."
-      />
-      <TextArea
-        label="Description (optional)"
-        name="description"
-        value={props.values.description}
-        rows={2}
-        hint="Notes for other admins, e.g. which account the credential belongs to and who owns it."
-      />
-    </>
-  );
-}
-
-function DestinationFields(props: { values: ServiceForm }) {
-  const { values } = props;
-  return (
-    <>
-      <Field
-        label="Base URL"
-        name="base_url"
-        type="url"
-        value={values.base_url}
-        required
-        placeholder="https://api.example.com/v1"
-        hint="The upstream API address. Callers can only reach paths under it. Must start with https:// and contain no query string."
-      />
-      <Select
-        label="How the credential is sent"
-        name="injection_kind"
-        value={values.injection_kind}
-        options={INJECTION_KINDS}
-        hint="Check the API's authentication docs. Fill in the matching option below; the others are ignored."
-      />
-      {values.injection_kind === 'query' ? <p class="banner warning">{QUERY_WARNING}</p> : null}
-      {values.injection_kind === 'path' ? <p class="banner warning">{PATH_WARNING}</p> : null}
-      <Field
-        label="Header name (custom header only)"
-        name="injection_header_name"
-        value={values.injection_header_name}
-        placeholder="x-api-key"
-        hint="The request header that carries the credential, e.g. x-api-key."
-      />
-      <Field
-        label="Header value prefix (custom header only, optional)"
-        name="injection_header_prefix"
-        value={values.injection_header_prefix}
-        placeholder="Token "
-        hint='Text placed before the credential, including any space, e.g. "Token ". Leave empty for none.'
-      />
-      <Field
-        label="Username (Basic authentication only, optional)"
-        name="injection_username"
-        value={values.injection_username}
-        hint='Leave empty if you enter the credential as "username:password".'
-      />
-      <Field
-        label="Query parameter name (query parameter only)"
-        name="injection_param"
-        value={values.injection_param}
-        placeholder="api_key"
-        hint={QUERY_WARNING}
-      />
-      <Field
-        label="Path prefix (URL path only, optional)"
-        name="injection_path_prefix"
-        value={values.injection_path_prefix}
-        placeholder="/bot"
-        hint="Text before the credential in the URL path, e.g. /bot for Telegram. Leave empty for Slack and Discord webhooks. Grant only POST / on webhook services: Discord GET and PATCH on the webhook URL return the token in the response body."
-      />
-    </>
-  );
-}
-
-function CredentialInput(props: { required: boolean; reentry: boolean }) {
-  return (
-    <>
-      {props.reentry ? (
-        <p class="banner warning">
-          For safety the credential you entered is not shown again. Enter it again to save.
-        </p>
-      ) : null}
-      <Field
-        label={props.required ? 'Credential' : 'Credential (optional)'}
-        name="credential"
-        type="password"
-        autocomplete="new-password"
-        required={props.required}
-        hint={
-          <>
-            The API key or token from the upstream provider. It is encrypted before it is stored and
-            can never be viewed again; only its length and last 4 characters are shown.
-            {props.required ? '' : ' Leave empty to add it later.'}
-          </>
-        }
-      />
-    </>
-  );
-}
-
-function ExpiryField(props: { values: ServiceForm }) {
-  return (
-    <Field
-      label="Credential expires on (optional, UTC)"
-      name="credential_expires_at"
-      type="date"
-      value={props.values.credential_expires_at}
-      hint="When the credential stops working, if the provider told you. The dashboard warns 14 days before. GitHub tokens report this automatically when checked."
-    />
-  );
-}
-
-function OptionsFields(props: { values: ServiceForm }) {
-  const { values } = props;
-  return (
-    <fieldset>
-      <legend>Request options</legend>
-      <TextArea
-        label="Extra headers callers may send (optional)"
-        name="forward_headers"
-        value={values.forward_headers}
-        rows={3}
-        hint="One lower-case header name per line, e.g. openai-beta. Common headers such as content-type and accept are always passed through; all others are dropped."
-      />
-      <Field
-        label="Timeout (milliseconds)"
-        name="timeout_ms"
-        type="number"
-        value={values.timeout_ms}
-        hint="How long to wait for the upstream to start answering: 1000 to 900000. 120000 is 2 minutes; use more for slow APIs such as AI models."
-      />
-    </fieldset>
-  );
-}
-
-function VerifyFields(props: { values: ServiceForm }) {
-  const { values } = props;
-  return (
-    <fieldset>
-      <legend>Credential check (optional)</legend>
-      <p class="muted">
-        A request the gateway makes to confirm a credential works when you save or test it. Pick a
-        cheap, read-only endpoint, e.g. <code>GET /models</code>.
-      </p>
-      <Select
-        label="Check method"
-        name="verify_method"
-        value={values.verify_method}
-        options={[
-          { value: '', label: 'No check' },
-          { value: 'GET', label: 'GET' },
-          { value: 'POST', label: 'POST' },
-        ]}
-      />
-      <Field
-        label="Check path"
-        name="verify_path"
-        value={values.verify_path}
-        placeholder="/models"
-        hint="Path under the base URL."
-      />
-      <Field
-        label="Expected HTTP status"
-        name="verify_expect_status"
-        type="number"
-        value={values.verify_expect_status}
-        hint="The status that means the credential works, usually 200."
-      />
-      <Checkbox
-        label='Also require "ok": true in the JSON response'
-        name="verify_expect_ok_field"
-        checked={values.verify_expect_ok_field}
-        hint="For Slack-style APIs that answer 200 even when the token is wrong."
-      />
-    </fieldset>
-  );
-}
-
-function SaveAnyway() {
-  return (
-    <Checkbox
-      label="Save the credential even though the check failed"
-      name="save_anyway"
-      hint="Use this only if you know the credential works, e.g. the check endpoint is temporarily down."
-    />
-  );
-}
-
-function VerifyResult(props: { verify: VerifyOutcome }) {
-  const { verify } = props;
-  const status = verify.status === null ? '' : ` (HTTP ${verify.status})`;
-  return (
-    <section>
-      {verify.passed ? (
-        <p class="banner info" role="status">
-          Credential check passed{status}.
-        </p>
-      ) : (
-        <p class="banner error" role="alert">
-          Credential check failed{status}: {verify.error ?? 'unknown error'}
-        </p>
-      )}
-      {verify.bodyPreview ? (
-        <>
-          <p class="muted">
-            Start of the upstream response (any copy of the credential is masked):
-          </p>
-          <pre>{verify.bodyPreview}</pre>
-        </>
-      ) : null}
-      {verify.expiresAt !== null ? (
-        <p>The upstream reports that this credential expires {formatTime(verify.expiresAt)}.</p>
-      ) : null}
-    </section>
-  );
-}
-
-// ---------------------------------------------------------------------------------------------
-// Detail page
-
-interface DetailState {
-  status?: ContentfulStatusCode;
-  notice?: string | null;
-  /** Errors of the single-button actions (test, toggle, delete). */
-  actionErrors?: string[];
-  test?: VerifyOutcome;
-  edit?: { values: ServiceForm; errors: string[]; warnings: string[] };
-  credential?: {
-    values: ServiceForm;
-    errors: string[];
-    warnings: string[];
-    verify: VerifyOutcome | null;
-  };
-}
-
-async function renderDetail(c: AdminContext, service: Service, state: DetailState) {
-  const deps = c.get('deps');
-  const [grants, callerProviders] = await Promise.all([
-    listGrants(deps.env.DB, { service_id: service.id }),
-    listCallerProviders(deps.env.DB),
-  ]);
-  const providerNames = new Map(callerProviders.map((provider) => [provider.id, provider.name]));
-  const viewer = c.get('viewer');
-  const canWrite = can(viewer.user.role, 'tokens:write');
-  const csrf = viewer.csrfToken;
-  const now = deps.now();
-  const proxyUrl = `${new URL(c.req.url).origin}/proxy/${service.slug}`;
-  const template = SERVICE_TEMPLATES.find(
-    (candidate) =>
-      candidate.base_url === service.base_url &&
-      candidate.injection.kind === service.injection.kind,
-  );
-  const stored = formFromService(service);
-  const banners: Banner[] = [];
-  const binding = await loadBinding(deps.env, service);
-  if (binding.status === 'unattested') {
-    banners.push({ level: 'error', text: bindingBannerText(binding, canWrite) });
-  }
-  if (!service.credential_sealed) {
-    banners.push({
-      level: 'warning',
-      text: `No credential is stored yet, so proxied requests to this service fail. ${
-        canWrite
-          ? 'Add it under "Change credential or destination" below.'
-          : 'Ask an admin to add it.'
-      }`,
-    });
-  }
-  if (service.injection.kind === 'query') banners.push({ level: 'warning', text: QUERY_WARNING });
-  if (service.injection.kind === 'path') banners.push({ level: 'info', text: PATH_WARNING });
-
-  return renderPage(
-    c,
-    {
-      title: `Service: ${service.name}`,
-      section: 'tokens',
-      subsection: 'tokens',
-      notice: legacyNotice(state.notice ?? null),
-      status: state.status,
-      legacyBanners: banners,
-    },
-    () => (
-      <>
-        <p>
-          <a href={paths.tokens()}>← All services</a>
-        </p>
-        {/* Results of the action just submitted go first: the re-rendered page opens at the top. */}
-        <Messages errors={state.actionErrors} />
-        {state.test ? <VerifyResult verify={state.test} /> : null}
-        {state.edit ? <FormProblem anchor="settings" section="Settings" /> : null}
-        {state.credential ? (
-          <FormProblem
-            anchor="change-credential"
-            section="Change credential or destination"
-            verifyFailed={state.credential.verify?.passed === false}
-          />
-        ) : null}
-        <Details
-          rows={[
-            ['Slug', <code>{service.slug}</code>],
-            ['ID', <code>{service.id}</code>],
-            ['Status', <EnabledBadge enabled={service.enabled} />],
-            [
-              'Proxy address',
-              <>
-                <code>{proxyUrl}</code>
-                <br />
-                <small class="muted">
-                  Callers send requests here; the rest of the path is appended to the base URL.
-                </small>
-              </>,
-            ],
-            // An unattested stored destination is shown as unconfirmed so it is not copied into the
-            // credential form as if it were known good (I-CRED-2).
-            [
-              'Base URL',
-              <>
-                <code>{service.base_url}</code>
-                {binding.status === 'unattested' ? <Unconfirmed /> : null}
-              </>,
-            ],
-            [
-              'Credential sent as',
-              <>
-                {injectionText(service.injection)}
-                {binding.status === 'unattested' ? <Unconfirmed /> : null}
-              </>,
-            ],
-            [
-              'Extra forwarded headers',
-              service.forward_headers.length ? (
-                service.forward_headers.map((name) => <code>{name} </code>)
-              ) : (
-                <span class="muted">none</span>
-              ),
-            ],
-            ['Timeout', `${service.timeout_ms} ms`],
-            ['Credential check', verifyText(service.verify)],
-            ['Description', service.description || <span class="muted">none</span>],
-            ['Created', formatTime(service.created_at)],
-            ['Updated', formatTime(service.updated_at)],
-          ]}
-        />
-
-        <h2>Credential</h2>
-        <Details
-          rows={[
-            [
-              'Status',
-              <CredentialStatus
-                service={service}
-                now={now}
-                unusable={binding.status === 'unattested'}
-              />,
-            ],
-            ['Last set', formatTime(service.credential_updated_at)],
-            ['Expires', formatTime(service.credential_expires_at)],
-          ]}
-        />
-        {canWrite ? <TestButton service={service} csrf={csrf} /> : null}
-
-        <h2>Grants using this service</h2>
-        <GrantsTable grants={grants} providerNames={providerNames} />
-        {canWrite ? (
-          <p>
-            <a href={paths.accessNew({ token: service.id })}>Create a grant for this service</a>
-          </p>
-        ) : null}
-        {template ? <StarterRules presets={template.operation_presets} /> : null}
-
-        {canWrite ? (
-          <>
-            <h2>Enable or disable</h2>
-            <p class="muted">
-              {service.enabled
-                ? 'Disabling refuses every proxied request to this service from the next request on. Grants and the credential are kept.'
-                : 'This service is disabled: proxied requests to it are refused.'}
-            </p>
-            <p class="actions">
-              <ActionButton
-                action={`${paths.token(service.id)}/toggle`}
-                csrf={csrf}
-                label={service.enabled ? 'Disable service' : 'Enable service'}
-                danger={service.enabled}
-                fields={{ enabled: service.enabled ? '0' : '1' }}
-              />
-            </p>
-
-            <h2 id="settings">Settings</h2>
-            <EditForm
-              service={service}
-              csrf={csrf}
-              values={state.edit?.values ?? stored}
-              errors={state.edit?.errors}
-              warnings={state.edit?.warnings}
-            />
-
-            <h2 id="change-credential">Change credential or destination</h2>
-            <CredentialForm
-              service={service}
-              csrf={csrf}
-              values={state.credential?.values ?? credentialFormValues(stored, binding)}
-              errors={state.credential?.errors}
-              warnings={state.credential?.warnings}
-              verify={state.credential?.verify ?? null}
-              reentry={state.credential !== undefined}
-              confirmDestination={binding.status === 'unattested'}
-            />
-
-            <h2>Delete</h2>
-            <DeleteSection service={service} grantCount={grants.length} csrf={csrf} />
-          </>
-        ) : null}
-      </>
-    ),
-  );
-}
-
-/** Binding state for the page; unknown (no banner) when the keyring does not load. */
-async function loadBinding(
-  appEnv: AppEnv,
-  service: Service,
-): Promise<StoredBinding | { status: 'unknown' }> {
-  const keyring = await loadKeyring(appEnv);
-  if (!keyring.ok) return { status: 'unknown' };
-  return storedBinding(appEnv.DB, keyring.keyring, service);
-}
-
-function bindingBannerText(
-  binding: Extract<StoredBinding, { status: 'unattested' }>,
-  canWrite: boolean,
-): string {
-  const cause =
-    binding.error === 'credential_binding_mismatch'
-      ? binding.keyChanged === false
-        ? 'The base URL or the way the credential is sent was changed outside the admin UI: the stored credential no longer matches them, and the encryption key is unchanged.'
-        : 'The stored credential does not match this service: either its base URL or the way the credential is sent was changed outside the admin UI, or the key behind its key id was replaced (see Settings).'
-      : binding.error === 'keyring_missing_key'
-        ? 'The stored credential was encrypted with a key that is no longer in the keyring, so the stored base URL and injection cannot be confirmed.'
-        : 'The stored credential is damaged, so the stored base URL and injection cannot be confirmed.';
-  return `${cause} Treat this as possible tampering: a credential entered now goes to the base URL you submit. ${
-    canWrite
-      ? "Check the base URL and injection against an out-of-band source (the provider's documentation, your configuration as code) before you enter the credential again. The audit log is not a reliable reference: anyone who can edit the database can edit it too."
-      : 'Ask an admin to check the service.'
-  }`;
-}
-
-/**
- * Credential form defaults. An unattested stored destination is not prefilled: the admin enters
- * it from an out-of-band source instead of resubmitting a possibly tampered value (I-CRED-2).
- */
-function credentialFormValues(
-  stored: ServiceForm,
-  binding: StoredBinding | { status: 'unknown' },
-): ServiceForm {
-  if (binding.status !== 'unattested') return { ...stored, credential_expires_at: '' };
-  return {
-    ...stored,
-    base_url: '',
-    injection_kind: EMPTY_FORM.injection_kind,
-    injection_header_name: '',
-    injection_header_prefix: '',
-    injection_username: '',
-    injection_param: '',
-    injection_path_prefix: '',
-    credential_expires_at: '',
-  };
-}
-
-function Unconfirmed() {
-  return (
-    <>
-      {' '}
-      <Badge tone="bad">not confirmed</Badge>
-      <br />
-      <small class="muted">
-        May have been changed outside the admin UI. Do not copy it into the credential form.
-      </small>
-    </>
-  );
-}
-
-function ConfirmDestinationField(props: { values: ServiceForm }) {
-  return (
-    <Field
-      name="confirm_destination"
-      label="Confirm destination host"
-      value={props.values.confirm_destination}
-      required
-      hint="The stored destination cannot be confirmed. After you check the base URL above against an out-of-band source, type its host, for example api.github.com. Nothing is sent to the upstream until this matches."
-    />
-  );
-}
-
-/** Points from the top of the page to a form further down that was re-shown with errors. */
-function FormProblem(props: { anchor: string; section: string; verifyFailed?: boolean }) {
-  return (
-    <p class="banner error" role="alert">
-      {props.verifyFailed ? 'The credential check failed, so nothing was saved.' : 'Not saved.'} See{' '}
-      <a href={`#${props.anchor}`}>{props.section}</a> below.
-    </p>
-  );
-}
-
-function TestButton(props: { service: Service; csrf: string }) {
-  const { service } = props;
-  if (!service.credential_sealed) {
-    return <p class="muted">No credential is stored yet. Add one below.</p>;
-  }
-  if (!service.verify) {
-    return (
-      <p class="muted">
-        Configure a credential check under Settings to test the stored credential from here.
-      </p>
-    );
-  }
-  return (
-    <p class="actions">
-      <ActionButton
-        action={`${paths.token(service.id)}/test`}
-        csrf={props.csrf}
-        label="Test credential"
-      />
-      <small class="muted">
-        Sends the credential check ({verifyText(service.verify)}) to the upstream now.
-      </small>
-    </p>
-  );
-}
-
-function GrantsTable(props: {
-  grants: Array<{
-    id: string;
-    name: string;
-    caller_provider_id: string;
-    enabled: boolean;
-    expires_at: number | null;
-  }>;
-  providerNames: Map<string, string>;
-}) {
-  if (props.grants.length === 0) {
-    return (
-      <EmptyState>
-        No grant uses this service yet, so no caller can reach it. A grant says which callers (for
-        example which repositories) may call it and which requests they may make.
-      </EmptyState>
-    );
-  }
-  return (
-    <table>
-      <thead>
-        <tr>
-          <th scope="col">Grant</th>
-          <th scope="col">Caller provider</th>
-          <th scope="col">Status</th>
-          <th scope="col">Expires</th>
-        </tr>
-      </thead>
-      <tbody>
-        {props.grants.map((grant) => (
-          <tr>
-            <td>
-              <a href={paths.accessItem(grant.id)}>{grant.name}</a>
-            </td>
-            <td>
-              <a href={paths.consumer(grant.caller_provider_id)}>
-                {props.providerNames.get(grant.caller_provider_id) ?? grant.caller_provider_id}
-              </a>
-            </td>
-            <td>
-              <EnabledBadge enabled={grant.enabled} />
-            </td>
-            <td>{formatTime(grant.expires_at)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function EditForm(props: {
-  service: Service;
-  csrf: string;
-  values: ServiceForm;
-  errors?: string[];
-  warnings?: string[];
-}) {
-  const { values } = props;
-  return (
-    <form method="post" action={paths.token(props.service.id)} class="stack">
-      <Csrf token={props.csrf} />
-      <VersionField value={values.expected_updated_at} />
-      <p class="muted">
-        These settings do not affect the stored credential. The slug cannot be changed; the base URL
-        and the way the credential is sent are changed together with the credential below.
-      </p>
-      <Messages errors={props.errors} warnings={props.warnings} />
-      <NameFields values={values} />
-      <OptionsFields values={values} />
-      <VerifyFields values={values} />
-      <ExpiryField values={values} />
-      <p class="actions">
-        <button type="submit">Save settings</button>
-      </p>
-    </form>
-  );
-}
-
-function CredentialForm(props: {
-  service: Service;
-  csrf: string;
-  values: ServiceForm;
-  errors?: string[];
-  warnings?: string[];
-  verify: VerifyOutcome | null;
-  reentry: boolean;
-  /** The stored binding is unattested: ask for the destination host (I-CRED-2). */
-  confirmDestination: boolean;
-}) {
-  const { service, values } = props;
-  return (
-    <form method="post" action={`${paths.token(service.id)}/credential`} class="stack">
-      <Csrf token={props.csrf} />
-      <p class="muted">
-        Use this form to replace the credential, or to change where and how it is sent. The
-        credential is encrypted together with the base URL and the way it is sent, so changing the
-        destination or injection requires re-entering the credential. The expiry date applies to the
-        new credential: leave it empty if it does not expire.
-        {service.verify ? ' The credential check runs before anything is saved.' : ''}
-      </p>
-      <Messages errors={props.errors} warnings={props.warnings} />
-      <DestinationFields values={values} />
-      {props.confirmDestination ? <ConfirmDestinationField values={values} /> : null}
-      <CredentialInput required reentry={props.reentry} />
-      <ExpiryField values={values} />
-      {props.verify ? <VerifyResult verify={props.verify} /> : null}
-      {props.verify && !props.verify.passed ? <SaveAnyway /> : null}
-      <p class="actions">
-        <button type="submit">Save credential</button>
-      </p>
-    </form>
-  );
-}
-
-function DeleteSection(props: { service: Service; grantCount: number; csrf: string }) {
-  if (props.grantCount > 0) {
-    return (
-      <p class="muted">
-        This service is used by {props.grantCount} grant(s). Delete those grants first; then the
-        service can be deleted. To stop all traffic right away, disable the service instead.
-      </p>
-    );
-  }
-  return (
-    <form method="post" action={`${paths.token(props.service.id)}/delete`} class="stack">
-      <Csrf token={props.csrf} />
-      <Checkbox
-        name="confirm"
-        label={
-          <>
-            Delete <code>{props.service.slug}</code> and its stored credential permanently
-          </>
-        }
-        hint="The audit log keeps a record of the configuration, never the credential."
-      />
-      <p class="actions">
-        <button type="submit" class="danger">
-          Delete service
-        </button>
-      </p>
-    </form>
-  );
-}
-
-// ---------------------------------------------------------------------------------------------
-// Display helpers
-
-/** `unusable`: the stored credential does not open under the stored row (proxied calls fail). */
-function CredentialStatus(props: { service: Service; now: number; unusable?: boolean }) {
-  const { service, now } = props;
-  if (!service.credential_sealed) return <Badge tone="bad">missing</Badge>;
-  if (props.unusable) return <Badge tone="bad">does not open</Badge>;
-  const hint = service.credential_hint ? (
-    <>
-      {' '}
-      <code>{service.credential_hint}</code>
-    </>
-  ) : null;
-  const expires = service.credential_expires_at;
-  if (expires !== null && expires <= now) {
-    return (
-      <>
-        <Badge tone="bad">expired</Badge>
-        {hint}
-      </>
-    );
-  }
-  if (expires !== null && expires - now <= EXPIRY_WARNING_MS) {
-    return (
-      <>
-        <Badge tone="warn">expires {formatTime(expires)}</Badge>
-        {hint}
-      </>
-    );
-  }
-  return (
-    <>
-      <Badge tone="ok">set</Badge>
-      {hint}
-    </>
-  );
-}
-
-function injectionText(injection: Injection): string {
-  switch (injection.kind) {
-    case 'bearer':
-      return 'Authorization: Bearer <credential>';
-    case 'header':
-      return `${injection.name}: ${injection.prefix ?? ''}<credential>`;
-    case 'basic':
-      return injection.username
-        ? `HTTP Basic authentication as user "${injection.username}"`
-        : 'HTTP Basic authentication (credential is "username:password")';
-    case 'query':
-      return `query parameter ?${injection.param}=<credential>`;
-    case 'path':
-      // Same layout as credentialPathSegment (proxy/path.ts).
-      return `URL path: <base URL>/${(injection.prefix ?? '').replace(/^\//, '')}<credential>/…`;
-    default:
-      return 'invalid stored injection; set the credential again';
-  }
-}
-
-function verifyText(verify: VerifyCheck | null): string {
-  if (!verify) return 'none';
-  const okField = verify.expect_ok_field ? ' and "ok": true' : '';
-  return `${verify.method} ${verify.path}, expecting HTTP ${verify.expect_status}${okField}`;
-}
-
-function upstreamHost(baseUrl: string): string {
-  try {
-    return new URL(baseUrl).host;
-  } catch {
-    return baseUrl;
-  }
 }

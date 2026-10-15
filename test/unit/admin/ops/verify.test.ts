@@ -140,3 +140,28 @@ describe('parseGithubTokenExpiration', () => {
     },
   );
 });
+
+describe('runVerifyCheck: template check headers', () => {
+  it('sends them, and the credential injected after them always wins', async () => {
+    const network = fakeNetwork(() => Response.json({ data: [] }));
+    const check: VerifyCheck = {
+      method: 'GET',
+      path: '/v1/models',
+      expect_status: 200,
+      headers: { 'anthropic-version': '2023-06-01' },
+    };
+    const outcome = await runVerifyCheck(
+      deps(network.fetch),
+      {
+        base_url: 'https://api.anthropic.com',
+        injection: { kind: 'header', name: 'x-api-key' },
+        timeout_ms: 60_000,
+        verify: check,
+      },
+      SECRET,
+    );
+    expect(outcome.passed).toBe(true);
+    expect(network.calls[0]?.headers.get('anthropic-version')).toBe('2023-06-01');
+    expect(network.calls[0]?.headers.get('x-api-key')).toBe(SECRET);
+  });
+});
