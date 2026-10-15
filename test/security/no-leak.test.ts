@@ -579,7 +579,12 @@ async function driveAdmin(): Promise<void> {
   ];
   const usersVariants: string[] = [];
   const tokensVariants = ['/admin/tokens/new?template=github'];
-  const consumersVariants = requestRows.map((row) => `/admin/access/new?from_request=${row.id}`);
+  const consumersVariants = [
+    ...requestRows.map((row) => `/admin/access/new?from_request=${row.id}`),
+    '/admin/access?view=list',
+    // The token cards of the access form show the credential state, never its hint.
+    ...[...serviceIds.values()].map((id) => `/admin/access/new?token=${id}`),
+  ];
   for (const url of [
     ...monitoringVariants,
     ...usersVariants,

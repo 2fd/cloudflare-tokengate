@@ -445,7 +445,7 @@ async function create(c: AdminContext) {
       [
         {
           field,
-          message: `${tenantList(parsed.input.tenants)} already ${parsed.input.tenants.length === 1 ? 'is' : 'are'} allowed for ${result.callerProvider.name}.`,
+          message: `${tenantList(parsed.input.tenants)} ${parsed.input.tenants.length === 1 ? 'is' : 'are'} already allowed for ${result.callerProvider.name}.`,
         },
       ],
       422,
