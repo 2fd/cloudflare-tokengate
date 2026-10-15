@@ -11,6 +11,7 @@ import {
   findRedeemableInvite,
   findUserByIdentity,
   getUser,
+  getUserByEmail,
   joinStatements,
   linkInvitedUserStatements,
 } from '../../db/users';
@@ -42,7 +43,17 @@ export type LoginResolution =
       user: User;
       via: 'identity' | 'invite' | 'bootstrap' | 'join';
     }
-  | { ok: false; reason: 'email_taken' | 'pending' | 'suspended' };
+  | {
+      ok: false;
+      reason: LoginRefusal;
+      /** The known user the sign-in was refused for, so the refusal can be recorded on it. */
+      userId?: string;
+      /** That user's last recorded refusal (the caller skips a write it would throttle anyway). */
+      lastRefusedAt?: number | null;
+    };
+
+/** Why a verified sign-in was refused. `email_taken_expired`: the email's invitation expired. */
+export type LoginRefusal = 'email_taken' | 'email_taken_expired' | 'pending' | 'suspended';
 
 const NAME_MAX = 200;
 
@@ -51,9 +62,10 @@ const NAME_MAX = 200;
  * 2) Else an invited, unexpired user matching an authoritative email is linked and activated.
  * 3) Else, while no owner exists and bootstrap has never run, this person becomes the first owner,
  * and `host` (the request hostname) becomes the admin host allowlist unless one is already set.
- * 4) Else a user is created for the first authoritative email with the join defaults (role
- * viewer or admin; status active, pending or suspended; set by owners on the users page).
- * 5) Else (that email already belongs to another user, e.g. an expired invitation) `email_taken`.
+ * 4) Else a user is created for the first authoritative email with the join policy (any role but
+ * owner; status active, pending or suspended; set by owners in Users › Sign-in).
+ * 5) Else (that email already belongs to another user) `email_taken`, or `email_taken_expired`
+ * when that user is an expired invitation; the refusal names the user so it can be recorded.
  */
 export async function resolveLogin(
   deps: Deps,
@@ -173,13 +185,40 @@ export async function resolveLogin(
     if (raced) return byStatus(raced, 'identity');
   }
 
-  return { ok: false, reason: 'email_taken' };
+  return emailTaken(db, input.emails[0], deps.now());
+}
+
+/**
+ * The email already belongs to another user (I-LINK-1: never linked by email outside a redeemable
+ * invitation). Names that user, and tells an expired invitation apart so the message can say so.
+ */
+async function emailTaken(
+  db: D1Database,
+  email: string | undefined,
+  now: number,
+): Promise<LoginResolution> {
+  const holder = email === undefined ? null : await getUserByEmail(db, email);
+  if (!holder) return { ok: false, reason: 'email_taken' };
+  const expired =
+    holder.status === 'invited' &&
+    (holder.invite_expires_at === null || holder.invite_expires_at <= now);
+  return {
+    ok: false,
+    reason: expired ? 'email_taken_expired' : 'email_taken',
+    userId: holder.id,
+    lastRefusedAt: holder.last_refused_at,
+  };
 }
 
 /** Only active users get in; a pending user waits for an owner, anyone else is suspended. */
 function byStatus(user: User, via: 'identity' | 'join'): LoginResolution {
   if (user.status === 'active') return { ok: true, user, via };
-  return { ok: false, reason: user.status === 'pending' ? 'pending' : 'suspended' };
+  return {
+    ok: false,
+    reason: user.status === 'pending' ? 'pending' : 'suspended',
+    userId: user.id,
+    lastRefusedAt: user.last_refused_at,
+  };
 }
 
 function actorFor(userId: string, email: string, meta: RequestMeta): Actor {

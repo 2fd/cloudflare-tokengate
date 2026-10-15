@@ -149,20 +149,25 @@ If a variable is half-configured or malformed, Access login stays off. `/admin` 
 
 1. Open `<gateway>/admin`. Access asks you to sign in.
 2. Sign in. The Access policy from step 8 lets in only you, so you are the first person to sign in.
-3. The gateway creates your user with the role `owner` and opens the Dashboard.
+3. The gateway creates your user with the role `owner` and opens Monitoring › Overview.
 
-The bootstrap creates at most one owner, once ([I-BOOT-1](threat-model.md#i-boot-1)). The Audit log shows a `user.bootstrap` event. The same sign-in stores its hostname as the only admin host: from now on, `/admin` answers `404` on every other hostname ([I-DEPLOY-1](threat-model.md#i-deploy-1)). To add hostnames, use Settings > "Admin hosts", and put each one behind your Access application ([configuration](configuration.md#admin-hosts)).
+The bootstrap creates at most one owner, once ([I-BOOT-1](threat-model.md#i-boot-1)). The Audit log shows a `user.bootstrap` event. The same sign-in stores its hostname as the only admin host: from now on, `/admin` answers `404` on every other hostname ([I-DEPLOY-1](threat-model.md#i-deploy-1)). To add hostnames, open Users › Sign-in › "Admin hosts", and put each one behind your Access application first ([configuration](configuration.md#admin-hosts)).
 
 The gateway keeps no session of its own. "Sign out" ends the Access session for the hostname.
 
 ## 11. Open the admin UI to your team and add a second owner
 
-1. Settings > System status shows "First owner: done: an owner exists".
-2. Optional: in Users > "New users", choose the role (any role except owner) and status (active, pending or suspended) that people get on their first sign-in. With "Pending", each new person waits in "Waiting for approval" until you click "Approve" or "Reject".
-3. Widen the Access policy to the people who may reach the admin UI.
-4. Ask a second person to open `<gateway>/admin`. They join as an active viewer (or as pending, then you approve them). In Users > "All users", set their role to "Owner" and click "Save". If the only owner loses access, recovery needs a manual database edit ([operations/break-glass.md](operations/break-glass.md)).
+1. Open Users › Sign-in. Under "When someone new signs in", choose what people get on their first sign-in. One click saves it:
+   - "Ask an owner first": each new person waits under Users › People › "Needs your decision" until an owner approves them with a role.
+   - "Let them in as Viewer" (the default), or as Token manager, Access manager or Admin. The last three ask you to confirm, because everyone your Access policy admits gets that role.
+   - "Only invited people": everyone else is refused.
+2. Widen the Access policy to the people who may reach the admin UI.
+3. Send them the console address that Users › Sign-in shows. The gateway sends no email.
+4. Invite the second owner: open Users › People › "Invite someone", enter their email, select "Owner…" and confirm. If the only owner loses access, recovery needs a manual database edit ([operations/break-glass.md](operations/break-glass.md)).
 
-To give someone a role before their first sign-in, open Users and use "Invite a user". The gateway sends no email: send `<gateway>/admin` to the person yourself. They must open it with the invited email address within 7 days. The gateway links a login to an invited user only through the email address in the Access token ([I-LINK-1](threat-model.md#i-link-1)).
+To give someone a role before their first sign-in, enter their email under "Invite someone" and select the role. The role button is the submit, and Enter invites as Viewer. The notice after the invite has an "Email … the sign-in link" link that opens your mail program. The person must sign in with the invited email address within 7 days. The gateway links a login to an invited user only through the email address in the Access token ([I-LINK-1](threat-model.md#i-link-1)).
+
+When someone is refused (an expired invitation, a cancelled invitation, a different Access account for a known email), the gateway records the attempt. Owners see it under "Needs your decision", with the action that fixes it: "Renew invitation", "Invite again as <role>" (a dialog for Owner) or "Reset sign-in…", plus "Dismiss".
 
 ## 12. Add a service consumer
 

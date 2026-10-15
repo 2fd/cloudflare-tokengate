@@ -152,10 +152,10 @@ domain change, or when the stored list is not valid. `/admin` answers only on th
    ```
 
 4. Make sure the hostname is behind your Cloudflare Access application, then open
-   `https://<hostname>/admin` and sign in. Add other hostnames in Settings > "Admin hosts".
+   `https://<hostname>/admin` and sign in. Add other hostnames in Users › Sign-in › "Admin hosts".
 
 Deleting the row (`DELETE FROM settings WHERE key = 'admin_hosts'`) also restores access, but it
-opens `/admin` on every hostname except `workers.dev` until an owner saves a list in Settings. Every
+opens `/admin` on every hostname except `workers.dev` until an owner pins it in Users › Sign-in ("Answer only on <host>" or "Add host"). Every
 request still needs a valid Access JWT. Bootstrap runs only once, so no later sign-in sets the list
 again.
 

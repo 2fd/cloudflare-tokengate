@@ -5,7 +5,7 @@ import type { AdminActor } from '../../src/admin/auth/types';
 import { createGrant } from '../../src/admin/ops/grants';
 import { testServiceCredential } from '../../src/admin/ops/services';
 import { updateSettings } from '../../src/admin/ops/settings';
-import { inviteUser } from '../../src/admin/ops/users';
+import { inviteUser, updateUser } from '../../src/admin/ops/users';
 import {
   anchoredConditions,
   CONTEXT,
@@ -107,7 +107,10 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
       'demotes the user to viewer',
       (id: string) => [`/admin/users/${id}`, { role: 'viewer' }] as const,
     ],
-    ['resets the user’s login', (id: string) => [`/admin/users/${id}/reset-login`, {}] as const],
+    [
+      'resets the user’s login',
+      (id: string) => [`/admin/users/${id}/reset-login`, { confirm: '1' }] as const,
+    ],
   ])('writes nothing when an owner %s mid-request', async (_label, ownerAction) => {
     const w = await world();
     const before = await serviceState(w.serviceId, w.admin.id);
@@ -268,6 +271,41 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
       );
       expect(result).toMatchObject({ ok: false, reason: 'conflict' });
       expect(await grantCount()).toBe(before);
+    });
+
+    it('an owner demoted to token_manager mid-request cannot change people (users:write)', async () => {
+      const w = await world();
+      const target = await createUser({ email: 'target@example.com', role: 'viewer' });
+      const actor: AdminActor = {
+        type: 'user',
+        id: w.owner.id,
+        email: w.owner.email,
+        ip: null,
+        userAgent: null,
+        authority: {
+          userId: w.owner.id,
+          loginProvider: 'access',
+          subject: w.ownerSession.subject,
+          permissions: ['users:write'],
+        },
+      };
+      // Another owner exists, so the demotion itself passes the last-owner trigger.
+      await createUser({ email: 'owner2@example.com', role: 'owner' });
+      const demoted = racingDeps(w.app.deps, () =>
+        env.DB.prepare("UPDATE users SET role = 'token_manager' WHERE id = ?")
+          .bind(w.owner.id)
+          .run(),
+      );
+      const result = await updateUser(demoted, actor, target.id, { role: 'admin' });
+      expect(result).toMatchObject({ ok: false, reason: 'conflict' });
+      expect(
+        await env.DB.prepare('SELECT role FROM users WHERE id = ?').bind(target.id).first('role'),
+      ).toBe('viewer');
+      expect(
+        await env.DB.prepare(
+          "SELECT count(*) AS n FROM audit_log WHERE action = 'user.update'",
+        ).first('n'),
+      ).toBe(0);
     });
 
     it('an authority without permissions never commits (fail closed)', async () => {

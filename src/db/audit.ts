@@ -200,3 +200,61 @@ export const SYSTEM_ACTOR: Actor = {
   ip: null,
   userAgent: null,
 };
+
+/** Audit events written by each user since `since` (People: the "Changes" column). */
+export async function auditCountByActor(
+  db: D1Database,
+  since: number,
+): Promise<Map<string, number>> {
+  const { results } = await db
+    .prepare(
+      `SELECT actor_id, count(*) AS n FROM audit_log
+       WHERE actor_type = 'user' AND actor_id IS NOT NULL AND ts >= ? GROUP BY actor_id`,
+    )
+    .bind(since)
+    .all<{ actor_id: string; n: number }>();
+  return new Map(results.map((row) => [row.actor_id, Number(row.n)]));
+}
+
+/**
+ * What one user changed since `since`, counted per audit category (the Audit log's categories:
+ * tokens, consumers, access, users, system). Sign-in events (user.bootstrap, user.join, user.link)
+ * are the user's own sign-ins, not changes, and are left out.
+ */
+export async function auditCountByActorAndCategory(
+  db: D1Database,
+  actorId: string,
+  since: number,
+): Promise<Record<'tokens' | 'consumers' | 'access' | 'users' | 'system', number>> {
+  const { results } = await db
+    .prepare(
+      `SELECT action, count(*) AS n FROM audit_log
+       WHERE actor_type = 'user' AND actor_id = ? AND ts >= ? GROUP BY action`,
+    )
+    .bind(actorId, since)
+    .all<{ action: string; n: number }>();
+  const counts = { tokens: 0, consumers: 0, access: 0, users: 0, system: 0 };
+  for (const row of results) {
+    const category = changeCategory(row.action);
+    if (category) counts[category] += Number(row.n);
+  }
+  return counts;
+}
+
+function changeCategory(
+  action: string,
+): keyof Awaited<ReturnType<typeof auditCountByActorAndCategory>> | null {
+  if (
+    action.startsWith('service.') ||
+    action.startsWith('credential.') ||
+    action.startsWith('keyring.') ||
+    action === 'settings.upstream_hosts'
+  ) {
+    return 'tokens';
+  }
+  if (action.startsWith('caller_provider.')) return 'consumers';
+  if (action.startsWith('grant.')) return 'access';
+  if (['user.bootstrap', 'user.join', 'user.link'].includes(action)) return null;
+  if (action.startsWith('user.') || action === 'settings.admin_hosts') return 'users';
+  return 'system';
+}

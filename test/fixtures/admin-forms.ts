@@ -37,6 +37,8 @@ export interface AdminWorld {
   serviceId: string;
   grantId: string;
   requestId: string;
+  /** A person (an invitation) for the Users read routes. */
+  userId: string;
 }
 
 export interface MutationRequest {
@@ -90,7 +92,8 @@ export async function seedAdminWorld(app: TestApp): Promise<AdminWorld> {
       worldRequestRecord({ id: requestId, service_id: serviceId, provider_id: provider.id }),
     ]),
   );
-  return { app, provider, serviceId, grantId: grant.id, requestId };
+  const person = await seedWorldPerson();
+  return { app, provider, serviceId, grantId: grant.id, requestId, userId: person.id };
 }
 
 function worldRequestRecord(ids: {
@@ -137,6 +140,27 @@ function worldRequestRecord(ids: {
 let sequence = 0;
 const unique = (prefix: string) => `${prefix}-${++sequence}-${crypto.randomUUID().slice(0, 8)}`;
 
+// == users == seeds
+
+/** A person waiting for approval (a pending row with a linked identity). */
+function seedPendingUser() {
+  return createUser({
+    email: `${unique('pending')}@example.com`,
+    role: 'viewer',
+    status: 'pending',
+    identity: { loginProvider: 'access', subject: unique('subject') },
+  });
+}
+
+/** The person every read of `/admin/users/:id` shows: an invitation, so no session is affected. */
+export function seedWorldPerson(): Promise<{ id: string }> {
+  return createUser({
+    email: `${unique('person')}@example.com`,
+    role: 'viewer',
+    status: 'invited',
+  });
+}
+
 /**
  * One successful submission per mutating route of ROUTE_PERMISSIONS, keyed exactly like the table.
  * A mutating route without an entry here fails test/security/audit-coverage-routes.test.ts.
@@ -151,6 +175,11 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
   }),
 
   // == users ==
+  'POST /admin/users/sign-in/policy': async () => ({
+    path: '/admin/users/sign-in/policy',
+    action: 'user.join_defaults',
+    fields: { join_policy: 'pending' },
+  }),
   'POST /admin/users/sign-in/hosts': async () => ({
     path: '/admin/users/sign-in/hosts',
     action: 'settings.admin_hosts',
@@ -165,28 +194,17 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
     const target = await createUser({ email: `${unique('target')}@example.com`, role: 'admin' });
     return { path: `/admin/users/${target.id}`, action: 'user.update', fields: { role: 'viewer' } };
   },
-  'POST /admin/users/defaults': async () => ({
-    path: '/admin/users/defaults',
-    action: 'user.join_defaults',
-    fields: { role: 'admin', status: 'pending' },
-  }),
   'POST /admin/users/:id/approve': async () => {
-    const target = await createUser({
-      email: `${unique('pending')}@example.com`,
-      role: 'viewer',
-      status: 'pending',
-      identity: { loginProvider: 'access', subject: unique('subject') },
-    });
-    return { path: `/admin/users/${target.id}/approve`, action: 'user.update', fields: {} };
+    const target = await seedPendingUser();
+    return {
+      path: `/admin/users/${target.id}/approve`,
+      action: 'user.approve',
+      fields: { role: 'access_manager' },
+    };
   },
   'POST /admin/users/:id/reject': async () => {
-    const target = await createUser({
-      email: `${unique('pending')}@example.com`,
-      role: 'viewer',
-      status: 'pending',
-      identity: { loginProvider: 'access', subject: unique('subject') },
-    });
-    return { path: `/admin/users/${target.id}/reject`, action: 'user.update', fields: {} };
+    const target = await seedPendingUser();
+    return { path: `/admin/users/${target.id}/reject`, action: 'user.reject', fields: {} };
   },
   'POST /admin/users/:id/reset-login': async () => {
     const target = await createUser({
@@ -197,7 +215,7 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
     return {
       path: `/admin/users/${target.id}/reset-login`,
       action: 'user.reset_login',
-      fields: {},
+      fields: { confirm: '1' },
     };
   },
   'POST /admin/users/:id/resend-invite': async () => {
@@ -210,6 +228,37 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
       path: `/admin/users/${target.id}/resend-invite`,
       action: 'user.resend_invite',
       fields: {},
+    };
+  },
+  'POST /admin/users/:id/delete': async () => {
+    const target = await createUser({
+      email: `${unique('cancelled')}@example.com`,
+      role: 'viewer',
+      status: 'invited',
+    });
+    return {
+      path: `/admin/users/${target.id}/delete`,
+      action: 'user.delete',
+      fields: { confirm: '1' },
+    };
+  },
+  'POST /admin/users/:id/dismiss-attempt': async () => {
+    const target = await createUser({
+      email: `${unique('refused')}@example.com`,
+      role: 'viewer',
+      status: 'invited',
+      inviteExpiresAt: 1,
+    });
+    const at = Date.now();
+    await env.DB.prepare(
+      'UPDATE users SET last_refused_at = ?, last_refused_subject = ? WHERE id = ?',
+    )
+      .bind(at, unique('subject'), target.id)
+      .run();
+    return {
+      path: `/admin/users/${target.id}/dismiss-attempt`,
+      action: 'user.dismiss_attempt',
+      fields: { expected_refused_at: String(at) },
     };
   },
 
@@ -394,7 +443,7 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
 const READ_IDS: Readonly<Record<string, Readonly<Record<string, (world: AdminWorld) => string>>>> =
   {
     monitoring: { '/admin/requests/:id': (w) => w.requestId },
-    users: {},
+    users: { '/admin/users/:id': (w) => w.userId },
     tokens: { '/admin/tokens/:id': (w) => w.serviceId },
     consumers: {
       '/admin/consumers/:id': (w) => w.provider.id,

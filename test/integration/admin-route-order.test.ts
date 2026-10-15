@@ -30,7 +30,8 @@ describe('I-RBAC-1: static admin routes are registered before their :id siblings
   it.each([
     ['GET /admin/users/sign-in', 'POST /admin/users/:id'],
     ['POST /admin/users/sign-in/hosts', 'POST /admin/users/:id'],
-    ['POST /admin/users/defaults', 'POST /admin/users/:id'],
+    ['POST /admin/users/sign-in/policy', 'POST /admin/users/:id'],
+    ['GET /admin/users/sign-in', 'GET /admin/users/:id'],
     ['GET /admin/tokens/hosts', 'GET /admin/tokens/:id'],
     ['POST /admin/tokens/hosts', 'POST /admin/tokens/:id'],
     ['GET /admin/tokens/keys', 'GET /admin/tokens/:id'],

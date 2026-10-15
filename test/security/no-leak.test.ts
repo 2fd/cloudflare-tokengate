@@ -544,6 +544,7 @@ async function driveAdmin(): Promise<void> {
   const { results: grantRows } = await env.DB.prepare('SELECT id FROM grants').all<{
     id: string;
   }>();
+  const { results: userRows } = await env.DB.prepare('SELECT id FROM users').all<{ id: string }>();
   // Seeded ids (or full URLs) per `:id` route, one block per admin section.
   const ids: Record<string, string[]> = {
     // == monitoring ==
@@ -551,6 +552,8 @@ async function driveAdmin(): Promise<void> {
       `/admin/requests/${row.id}`,
       `/admin/requests/${row.id}?reevaluate=1`,
     ]),
+    // == users ==
+    '/admin/users/:id': userRows.map((row) => row.id),
     // == tokens ==
     '/admin/tokens/:id': [...serviceIds.values()],
     // == consumers ==
@@ -584,7 +587,12 @@ async function driveAdmin(): Promise<void> {
     `/admin/audit?target=${firstService}&category=tokens`,
     '/admin/retention',
   ];
-  const usersVariants: string[] = [];
+  const usersVariants = [
+    '/admin/users?role=owner',
+    '/admin/users?status=expired',
+    '/admin/users?q=owner',
+    '/admin/users?notice=invited',
+  ];
   const tokensVariants = ['/admin/tokens/new?template=github'];
   const consumersVariants = requestRows.map((row) => `/admin/access/new?from_request=${row.id}`);
   for (const url of [

@@ -73,8 +73,8 @@ you add services, and do not change them after.
 There is no variable for it. While no owner exists, the first person to sign in becomes an active
 owner, once per deployment ([I-BOOT-1](threat-model.md#i-boot-1)). Keep the Access policy limited to
 your own email until you have signed in, then widen it. The hostname of that sign-in becomes the first
-[admin host](#admin-hosts). Everyone after joins with the join defaults
-and is managed by owners on the Users page. The bootstrap is recorded in settings and does not run
+[admin host](#admin-hosts). Everyone after joins with the join policy
+and is managed by owners in Users › People. The bootstrap is recorded in settings and does not run
 again, even if every owner is later removed: recover with
 [operations/break-glass.md](operations/break-glass.md).
 
@@ -156,15 +156,16 @@ answer `503 not_configured` and Settings shows the error. Replace it with a key 
 - Access decides who can authenticate and how long the Access session lasts. The Access policy is the
   list of people who can reach the admin UI: the first person becomes owner, and everyone else joins
   on their first request (audit action `user.join`) with the role and status for new users. These
-  join defaults are not variables: owners set them on the Users page ("New users"; by default an
-  active viewer; any role except `owner`; status `active`, `pending` or `suspended`). With
-  `pending`, nobody new gets in until an owner approves them. Viewers see every page, but no page
+  join defaults are not variables: owners set them in Users › Sign-in › "When someone new signs in"
+  (one click: "Ask an owner first", "Let them in as" Viewer, Token manager, Access manager or Admin,
+  or "Only invited people"; by default "Let them in as Viewer"; never `owner`). With "Ask an owner
+  first", nobody new gets in until an owner approves them with a role. Viewers see every page, but no page
   shows a secret. An owner can change roles later, or invite an email with another role from the
   start.
 - "Sign out" in the admin UI opens `/cdn-cgi/access/logout`, which ends the Access session for the
   hostname. To end a user's sessions on every device, revoke them in Zero Trust.
 - Users are linked to `<team domain>|<sub>`. A different team is a different identity: after a team
-  change, each user needs "Reset login" and a new sign-in. Every credential must also be entered again
+  change, each user needs "Reset sign-in" and a new sign-in. Every credential must also be entered again
   ([login binding](#login-binding)).
 - Errors: only one of the pair set; an invalid team domain or AUD; `AUTH_ACCESS_DEVELOPMENT` also set.
 
@@ -190,15 +191,16 @@ is `dev` and the configuration feature is `login.dev`.
 
 The hostnames that `/admin` answers on ([I-DEPLOY-1](threat-model.md#i-deploy-1),
 [ADR 0016](adr/0016-admin-hosts-in-settings.md)). It is a setting in the admin UI, not a variable:
-Settings > "Admin hosts". Only owners can change it (permission `settings:write`). Each change writes
-a `settings.admin_hosts` audit event.
+Users › Sign-in › "Admin hosts". Only owners can change it (permission `settings:write`). Each change
+adds or removes one host and writes a `settings.admin_hosts` audit event.
 
 - **Initial value:** the hostname of the first sign-in, which creates the first owner
   ([I-BOOT-1](threat-model.md#i-boot-1)). The same D1 batch stores it, only if no list is set yet. The
   `user.bootstrap` audit event records it as `host`. If that hostname is not a valid entry, nothing
   is stored.
 - **Before the first sign-in:** `/admin` answers on every hostname except `workers.dev`. Access still
-  guards sign-in.
+  guards sign-in. While no list is set, Users › Sign-in offers one button, "Answer only on <host>",
+  that pins the console to the hostname in use.
 - **After:** `/admin` answers only on a listed hostname. Every other hostname gets `404 Not Found`.
   A hostname other than a loopback host must use https; over http it gets 404. The port is ignored.
 - **Always:** `/admin` never answers on `workers.dev` or `*.workers.dev`. `/proxy/*`, `/healthz` and
@@ -206,10 +208,12 @@ a `settings.admin_hosts` audit event.
 - **Entries:** the same format as the [upstream host allowlist](#upstream-host-allowlist): an exact
   hostname (`tokengate.example.com`) or `*.<domain>`, which matches the hosts below the domain but not
   the domain itself. `localhost`, `127.0.0.1` and `[::1]` are also valid. No scheme, port or path.
-  Entries on `workers.dev` are refused.
-- **Save rules:** the list cannot be empty, and it must keep the hostname you use at that moment. So an
-  owner cannot lock themselves out. Put every hostname you add behind your Cloudflare Access
-  application.
+  Entries on `workers.dev` are refused. A pasted URL is reduced to its hostname: the scheme, port,
+  path, query and a trailing dot are dropped (`https://Admin.Acme.com:8443/x` becomes `admin.acme.com`).
+- **Save rules:** the list cannot be empty, and it must still cover the hostname you use at that
+  moment (wildcards count). So an owner cannot lock themselves out: "Remove…" is offered only for
+  entries whose removal keeps it covered. A change that races another owner's change is refused
+  (`409`). Put every hostname you add behind your Cloudflare Access application first.
 - **Self-exclusion:** a service base URL can never point at an admin host (wildcards included) or at the
   host the request arrived on ([I-SSRF-1](threat-model.md#i-ssrf-1)).
 - **Request origin:** the admin UI has no fixed origin. The CSRF `Origin` check, invitation links and
@@ -217,7 +221,8 @@ a `settings.admin_hosts` audit event.
 - **Stored value:** key `admin_hosts` in the `settings` table, a JSON array. A stored value that is not
   a valid list denies every host (fail closed). To recover, see
   [operations/break-glass.md](operations/break-glass.md#lost-admin-host).
-- Settings > System status shows the list, or "not set yet: set on the first sign-in."
+- Users › Sign-in shows the list ("· you are here" marks the entry that matches the hostname in use),
+  or "Not pinned" while none is set.
 
 ## Upstream host allowlist
 
@@ -414,6 +419,21 @@ These are constants in the code, not settings.
 | Service timeout (time to response headers) | 1,000–900,000 ms; default 120,000 | `src/admin/ops/services.ts` |
 | Caller token clock skew | 30 seconds | `src/identity/jwt.ts` |
 | Pre-trust request records | 10 per minute per isolate | `src/telemetry/sinks.ts` |
+
+## Supported browsers
+
+The admin UI runs no JavaScript ([ADR 0007](adr/0007-server-rendered-admin-ui-without-client-javascript.md)).
+It uses two recent HTML features, each with a fallback:
+
+- **Confirmation dialogs** open with invoker commands (`commandfor`, Chrome 135, Safari 26.2,
+  Firefox 144). Older browsers open the same dialog as a popover. Without either, the dialog content
+  is shown inline on the page and its trigger is hidden. For these actions the server also requires
+  the confirmation, so a crafted request without it is refused: delete, reset sign-in, suspend an
+  owner, invite a cancelled owner again, remove an admin host, and the join policies that let
+  everyone Access admits change something. Owner role changes (invite, approve or make someone
+  Owner, or demote an owner) are confirmed by their dialog only.
+- **One open row at a time** (`<details name>`, Chrome 120, Safari 17.2, Firefox 130). Older browsers
+  let several rows stay open.
 
 ## Related pages
 

@@ -346,8 +346,14 @@ describe('_return: row actions go back to a fixed page', () => {
     });
     const res = await adminPost(world.app, owner, `/admin/users/${pending.id}/${decision}`, {
       _return: value,
+      role: 'viewer',
     });
     expect(res.status).toBe(303);
-    expect(res.headers.get('location')).toBe(location);
+    // The `done` id and the row fragment are the Users notice details (A7.2).
+    const bare = res.headers
+      .get('location')
+      ?.replace(/&done=aud_[0-9A-Z]{26}/, '')
+      .replace(/#.*$/, '');
+    expect(bare).toBe(location);
   });
 });

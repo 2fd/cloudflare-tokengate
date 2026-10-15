@@ -26,15 +26,18 @@ const DOCUMENTED_ADMIN_ROUTES = [
 
   // == users ==
   'GET /admin/users/sign-in',
+  'POST /admin/users/sign-in/policy',
   'POST /admin/users/sign-in/hosts',
   'GET /admin/users',
   'POST /admin/users',
-  'POST /admin/users/defaults',
+  'GET /admin/users/:id',
   'POST /admin/users/:id',
   'POST /admin/users/:id/approve',
   'POST /admin/users/:id/reject',
   'POST /admin/users/:id/reset-login',
   'POST /admin/users/:id/resend-invite',
+  'POST /admin/users/:id/delete',
+  'POST /admin/users/:id/dismiss-attempt',
 
   // == tokens ==
   'GET /admin/tokens/hosts',

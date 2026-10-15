@@ -149,7 +149,7 @@ describe('I-BOOT-1: bootstrap creates at most one owner, once', () => {
       name: null,
       host: 'gw.test',
     });
-    expect(result).toEqual({ ok: false, reason: 'email_taken' });
+    expect(result).toMatchObject({ ok: false, reason: 'email_taken' });
     expect(await owners()).toEqual([]);
   });
 

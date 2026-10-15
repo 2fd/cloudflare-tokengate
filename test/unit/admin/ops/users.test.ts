@@ -2,13 +2,19 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   decidePending,
+  deleteUser,
+  dismissRefusedAttempt,
   inviteUser,
+  JOIN_POLICIES,
+  joinPolicyOf,
   LAST_OWNER_MESSAGE,
-  ROLES,
-  updateJoinDefaults,
   normalizeEmail,
+  parseJoinPolicy,
+  ROLE_MESSAGE,
+  ROLES,
   resendInvite,
   resetLogin,
+  updateJoinDefaults,
   updateUser,
 } from '../../../../src/admin/ops/users';
 import { auditFromRow } from '../../../../src/db/audit';
@@ -113,16 +119,17 @@ describe('inviteUser', () => {
     expect(await audits()).toHaveLength(0);
   });
 
-  it('maps a duplicate email (any case) to a friendly error and writes no audit row', async () => {
+  it('refuses the email (any case) of a user who signed in, naming that user', async () => {
     const result = await inviteUser(deps(), actorFor(owner), {
       email: 'OWNER@example.com',
       role: 'viewer',
     });
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
       reason: 'invalid',
-      errors: [expect.stringContaining('A user with this email address already exists;')],
-      warnings: [],
+      errors: ['owner@example.com already signed in with an account (Active).'],
+      fieldErrors: [{ field: 'email' }],
+      existingUserId: owner.id,
     });
     expect(await audits()).toHaveLength(0);
   });
@@ -350,19 +357,19 @@ describe('roles of the role split (ADR 0018)', () => {
 });
 
 describe('decidePending', () => {
-  async function pendingUser() {
+  async function pendingUser(email = 'p@example.com', identity = true) {
     return createUser(
       {
-        email: 'p@example.com',
+        email,
         role: 'viewer',
         status: 'pending',
-        identity: { loginProvider: 'access', subject: 'team|p' },
+        ...(identity ? { identity: { loginProvider: 'access', subject: `team|${email}` } } : {}),
       },
       T0 - 1000,
     );
   }
 
-  it('approves with the role it was given, in one user.update row', async () => {
+  it('approves with a role in one statement and one user.approve row', async () => {
     const pending = await pendingUser();
     const result = await decidePending(
       deps(),
@@ -371,51 +378,306 @@ describe('decidePending', () => {
       'approve',
       'access_manager',
     );
-    expect(result).toMatchObject({ ok: true, changed: true });
+    expect(result).toMatchObject({ ok: true, changed: true, auditId: expect.any(String) });
     expect(await getUser(env.DB, pending.id)).toMatchObject({
       status: 'active',
       role: 'access_manager',
     });
     const rows = await audits();
-    expect(rows.map((row) => row.action)).toEqual(['user.update']);
+    expect(rows.map((row) => row.action)).toEqual(['user.approve']);
     expect(rows[0]?.diff).toEqual({
       before: { role: 'viewer', status: 'pending' },
       after: { role: 'access_manager', status: 'active' },
     });
+    if (result.ok) expect(rows[0]?.id).toBe(result.auditId);
   });
 
-  it('approves with the stored role when none is given', async () => {
-    const pending = await pendingUser();
-    await decidePending(deps(), actorFor(owner), pending.id, 'approve');
-    expect(await getUser(env.DB, pending.id)).toMatchObject({ status: 'active', role: 'viewer' });
-  });
+  it.each([undefined, '', 'superuser'])(
+    'refuses to approve without a valid role (%j)',
+    async (role) => {
+      const pending = await pendingUser();
+      const result = await decidePending(deps(), actorFor(owner), pending.id, 'approve', role);
+      expect(result).toMatchObject({ ok: false, reason: 'invalid', errors: [ROLE_MESSAGE] });
+      expect(await getUser(env.DB, pending.id)).toMatchObject({ status: 'pending' });
+      expect(await audits()).toHaveLength(0);
+    },
+  );
 
-  it('refuses an unknown role without writing', async () => {
-    const pending = await pendingUser();
-    const result = await decidePending(
-      deps(),
-      actorFor(owner),
-      pending.id,
-      'approve',
-      'superuser' as never,
-    );
-    expect(result).toMatchObject({ ok: false, reason: 'invalid' });
+  it('never approves a pending row without a login identity', async () => {
+    const pending = await pendingUser('noid@example.com', false);
+    const result = await decidePending(deps(), actorFor(owner), pending.id, 'approve', 'viewer');
+    expect(result).toMatchObject({ ok: false });
     expect(await getUser(env.DB, pending.id)).toMatchObject({ status: 'pending' });
     expect(await audits()).toHaveLength(0);
   });
 
-  it('rejects to suspended and keeps the role', async () => {
+  it('rejects to suspended, keeps the role and writes user.reject', async () => {
     const pending = await pendingUser();
-    await decidePending(deps(), actorFor(owner), pending.id, 'reject', 'admin');
+    const result = await decidePending(deps(), actorFor(owner), pending.id, 'reject', 'admin');
+    expect(result).toMatchObject({ ok: true, changed: true });
     expect(await getUser(env.DB, pending.id)).toMatchObject({
       status: 'suspended',
       role: 'viewer',
     });
+    expect((await audits()).map((row) => row.action)).toEqual(['user.reject']);
   });
 
-  it('refuses users who are no longer pending', async () => {
+  it('refuses users who are no longer pending, naming their status', async () => {
     const admin = await createUser({ email: 'a@example.com', role: 'admin' }, T0);
     const result = await decidePending(deps(), actorFor(owner), admin.id, 'approve', 'viewer');
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'conflict',
+      errors: ['a@example.com was already approved or rejected (now Active).'],
+    });
+  });
+
+  it('a plain role or status change never decides a pending user', async () => {
+    const pending = await pendingUser();
+    for (const input of [{ status: 'active' as const }, { role: 'admin' as const }]) {
+      const result = await updateUser(deps(), actorFor(owner), pending.id, input);
+      expect(result).toMatchObject({ ok: false, reason: 'invalid' });
+    }
+    expect(await getUser(env.DB, pending.id)).toMatchObject({ status: 'pending', role: 'viewer' });
+    expect(await audits()).toEqual([]);
+  });
+
+  it('a reset sign-in never decides a pending user (it would activate them on next sign-in)', async () => {
+    const pending = await pendingUser();
+    const result = await resetLogin(deps(), actorFor(owner), pending.id, pending.updated_at);
+    expect(result).toMatchObject({ ok: false, reason: 'invalid' });
+    if (!result.ok) expect(result.errors.join()).toMatch(/waiting for approval/);
+    expect(await getUser(env.DB, pending.id)).toMatchObject({ status: 'pending', role: 'viewer' });
+    expect(await listIdentities(env.DB, pending.id)).toHaveLength(1);
+    expect(await audits()).toEqual([]);
+  });
+
+  it('a decision that loses the race to another owner writes nothing', async () => {
+    const pending = await pendingUser();
+    const racing = racingDeps("UPDATE users SET status = 'suspended' WHERE id = ?", pending.id);
+    const result = await decidePending(racing, actorFor(owner), pending.id, 'approve', 'admin');
     expect(result).toMatchObject({ ok: false, reason: 'conflict' });
+    expect(await getUser(env.DB, pending.id)).toMatchObject({
+      status: 'suspended',
+      role: 'viewer',
+    });
+    expect(await audits()).toEqual([]);
+  });
+});
+
+describe('expectedUpdatedAt: a change decided on a stale page is a conflict', () => {
+  it.each(['updateUser', 'resetLogin', 'deleteUser'] as const)('%s', async (op) => {
+    const target = await createUser(
+      { email: 't@example.com', role: 'admin', status: op === 'deleteUser' ? 'invited' : 'active' },
+      T0,
+    );
+    const stale = target.updated_at - 1;
+    const result =
+      op === 'updateUser'
+        ? await updateUser(deps(), actorFor(owner), target.id, {
+            role: 'viewer',
+            expectedUpdatedAt: stale,
+          })
+        : op === 'resetLogin'
+          ? await resetLogin(deps(), actorFor(owner), target.id, stale)
+          : await deleteUser(deps(), actorFor(owner), target.id, stale);
+    expect(result).toMatchObject({ ok: false, reason: 'conflict' });
+    if (!result.ok) expect(result.errors.join()).toContain('was changed by someone else at');
+    expect(await getUser(env.DB, target.id)).toMatchObject({ role: 'admin' });
+    expect(await audits()).toEqual([]);
+  });
+
+  it('the current version passes, and every write bumps it', async () => {
+    const target = await createUser({ email: 't@example.com', role: 'admin' }, T0);
+    const first = await updateUser(deps(), actorFor(owner), target.id, {
+      status: 'suspended',
+      expectedUpdatedAt: target.updated_at,
+    });
+    expect(first).toMatchObject({ ok: true, changed: true });
+    const after = await getUser(env.DB, target.id);
+    // The clock did not move (T0), yet the version did: a page opened before is stale.
+    expect(after?.updated_at).toBe(target.updated_at + 1);
+    const stale = await updateUser(deps(), actorFor(owner), target.id, {
+      status: 'active',
+      expectedUpdatedAt: target.updated_at,
+    });
+    expect(stale).toMatchObject({ ok: false, reason: 'conflict' });
+  });
+});
+
+describe('I-LINK-1: inviting an email again', () => {
+  it.each([
+    ['an expired invitation', { status: 'invited' as const, inviteExpiresAt: T0 - 1 }],
+    ['a cancelled invitation (suspended, never signed in)', { status: 'suspended' as const }],
+  ])('re-invites %s with the new role and one user.invite row', async (_label, seed) => {
+    const row = await createUser({ email: 'again@example.com', role: 'viewer', ...seed }, T0 - 10);
+    const result = await inviteUser(deps(), actorFor(owner), {
+      email: 'Again@Example.com',
+      role: 'token_manager',
+    });
+    expect(result).toMatchObject({ ok: true, again: true, user: { id: row.id } });
+    expect(await getUser(env.DB, row.id)).toMatchObject({
+      role: 'token_manager',
+      status: 'invited',
+      invite_expires_at: T0 + INVITE_TTL_MS,
+    });
+    const rows = await audits();
+    expect(rows.map((r) => r.action)).toEqual(['user.invite']);
+    expect(rows[0]?.summary).toBe('Invited again@example.com again as Token manager');
+  });
+
+  it('never re-invites a user who signed in (has an identity), whatever their status', async () => {
+    for (const status of ['suspended', 'active', 'pending'] as const) {
+      const email = `linked-${status}@example.com`;
+      const row = await createUser(
+        { email, role: 'viewer', status, identity: { loginProvider: 'access', subject: email } },
+        T0,
+      );
+      const result = await inviteUser(deps(), actorFor(owner), { email, role: 'admin' });
+      expect(result, status).toMatchObject({
+        ok: false,
+        reason: 'invalid',
+        existingUserId: row.id,
+      });
+      if (!result.ok) expect(result.errors[0]).toContain('already signed in with an account');
+      expect(await getUser(env.DB, row.id)).toMatchObject({ role: 'viewer', status });
+    }
+    expect(await audits()).toEqual([]);
+  });
+});
+
+describe('deleteUser (cancel an invitation)', () => {
+  it('deletes an invited user who never signed in, with one user.delete row', async () => {
+    const invited = await createUser({ email: 'i@example.com', status: 'invited' }, T0);
+    const result = await deleteUser(deps(), actorFor(owner), invited.id, invited.updated_at);
+    expect(result).toMatchObject({ ok: true, changed: true });
+    expect(await getUser(env.DB, invited.id)).toBeNull();
+    const rows = await audits();
+    expect(rows.map((r) => r.action)).toEqual(['user.delete']);
+    expect(rows[0]?.diff).toEqual({
+      before: { email: 'i@example.com', role: 'admin', status: 'invited' },
+    });
+  });
+
+  it('refuses users who signed in (suspended with an identity) and active users', async () => {
+    const linked = await createUser(
+      {
+        email: 'l@example.com',
+        status: 'suspended',
+        identity: { loginProvider: 'access', subject: 'team|l' },
+      },
+      T0,
+    );
+    const active = await createUser({ email: 'a@example.com' }, T0);
+    for (const user of [linked, active]) {
+      const result = await deleteUser(deps(), actorFor(owner), user.id);
+      expect(result).toMatchObject({ ok: false, reason: 'invalid' });
+      if (!result.ok) expect(result.errors[0]).toContain('Suspend them instead');
+      expect(await getUser(env.DB, user.id)).not.toBeNull();
+    }
+    expect(await audits()).toEqual([]);
+  });
+
+  it('refuses when an identity was linked between read and write', async () => {
+    const invited = await createUser({ email: 'i@example.com', status: 'invited' }, T0);
+    const racing = racingDeps(
+      "INSERT INTO user_identities (login_provider, subject, user_id, created_at) VALUES ('access', 'team|race', ?, 0)",
+      invited.id,
+    );
+    const result = await deleteUser(racing, actorFor(owner), invited.id);
+    expect(result).toMatchObject({ ok: false, reason: 'conflict' });
+    expect(await getUser(env.DB, invited.id)).not.toBeNull();
+    expect(await audits()).toEqual([]);
+  });
+});
+
+describe('dismissRefusedAttempt', () => {
+  async function refused(at: number) {
+    const user = await createUser({ email: 'r@example.com', status: 'invited' }, T0 - 1000);
+    await env.DB.prepare(
+      "UPDATE users SET last_refused_at = ?, last_refused_subject = 'team|x' WHERE id = ?",
+    )
+      .bind(at, user.id)
+      .run();
+    return user;
+  }
+
+  it('clears the attempt it was shown, with one row, and leaves updated_at alone', async () => {
+    const user = await refused(T0 - 10);
+    const result = await dismissRefusedAttempt(deps(), actorFor(owner), user.id, T0 - 10);
+    expect(result).toMatchObject({ ok: true });
+    expect(await getUser(env.DB, user.id)).toMatchObject({
+      last_refused_at: null,
+      last_refused_subject: null,
+      updated_at: user.updated_at,
+    });
+    expect((await audits()).map((r) => r.action)).toEqual(['user.dismiss_attempt']);
+  });
+
+  it('refuses a stale or missing attempt, writing nothing', async () => {
+    const user = await refused(T0 - 10);
+    for (const expected of [T0 - 20, undefined, Number.NaN]) {
+      const result = await dismissRefusedAttempt(deps(), actorFor(owner), user.id, expected);
+      expect(result).toMatchObject({ ok: false });
+    }
+    // A newer attempt arrives between read and write.
+    const racing = racingDeps(
+      'UPDATE users SET last_refused_at = last_refused_at + 5 WHERE id = ?',
+      user.id,
+    );
+    expect(await dismissRefusedAttempt(racing, actorFor(owner), user.id, T0 - 10)).toMatchObject({
+      ok: false,
+      reason: 'conflict',
+    });
+    expect((await getUser(env.DB, user.id))?.last_refused_at).toBe(T0 - 5);
+    expect(await audits()).toEqual([]);
+  });
+});
+
+describe('join policy (I-LINK-1: any role except owner)', () => {
+  it('parses the six options', () => {
+    expect(JOIN_POLICIES.map((value) => [value, parseJoinPolicy(value)])).toEqual([
+      ['pending', { role: 'viewer', status: 'pending' }],
+      ['active:viewer', { role: 'viewer', status: 'active' }],
+      ['active:token_manager', { role: 'token_manager', status: 'active' }],
+      ['active:access_manager', { role: 'access_manager', status: 'active' }],
+      ['active:admin', { role: 'admin', status: 'active' }],
+      ['closed', { role: 'viewer', status: 'suspended' }],
+    ]);
+    for (const value of JOIN_POLICIES) {
+      const parsed = parseJoinPolicy(value);
+      if (parsed) expect(joinPolicyOf(parsed)).toBe(value);
+    }
+  });
+
+  it.each(['active:owner', 'owner', 'active', 'pending:admin', '', ['pending', 'pending'], 1])(
+    'rejects %j',
+    (raw) => {
+      expect(parseJoinPolicy(raw)).toBeNull();
+    },
+  );
+
+  it('saves with one audit row, and an unchanged policy writes nothing', async () => {
+    const saved = await updateJoinDefaults(deps(), actorFor(owner), {
+      role: 'token_manager',
+      status: 'active',
+    });
+    expect(saved).toMatchObject({ ok: true, changed: true });
+    const again = await updateJoinDefaults(deps(), actorFor(owner), {
+      role: 'token_manager',
+      status: 'active',
+    });
+    expect(again).toMatchObject({ ok: true, changed: false, auditId: null });
+    const rows = await audits();
+    expect(rows.map((row) => row.action)).toEqual(['user.join_defaults']);
+    expect(rows[0]?.summary).toBe('New people: Let them in as Token manager');
+  });
+
+  it('stores the role viewer unless people are let in', async () => {
+    const result = await updateJoinDefaults(deps(), actorFor(owner), {
+      role: 'admin',
+      status: 'pending',
+    });
+    expect(result).toMatchObject({ ok: true, defaults: { role: 'viewer', status: 'pending' } });
   });
 });
