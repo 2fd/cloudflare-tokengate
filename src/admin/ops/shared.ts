@@ -6,7 +6,7 @@ import type { Actor, AuditEvent } from '../../db/types';
 import { liveIdentityGuard } from '../../db/users';
 import type { Deps } from '../../deps';
 import type { Condition, Rule } from '../../policy/types';
-import { rolesWith } from '../auth/rbac';
+import { rolesWithAll } from '../auth/rbac';
 import type { ActorAuthority } from '../auth/types';
 
 /** Boolean SQL expression plus its binds (same shape as auditStatement's `onlyIf`). */
@@ -27,19 +27,48 @@ export type OpFailureReason =
   /** The keyring is missing or invalid, or a stored credential cannot be opened. */
   | 'unavailable';
 
+/** An error tied to one form field (`field` is the form field name), or to the whole form (null). */
+export interface FieldError {
+  field: string | null;
+  message: string;
+}
+
+export function fieldError(field: string | null, message: string): FieldError {
+  return { field, message };
+}
+
 export interface OpFailure {
   ok: false;
   reason: OpFailureReason;
   errors: string[];
   warnings: string[];
+  /**
+   * The same errors, with the form field each belongs to, when the op knows it. Pages that link
+   * errors to fields read these; `errors` stays the plain-text list.
+   */
+  fieldErrors?: FieldError[];
 }
 
+/**
+ * Failure with plain-text `errors`. Pass `fieldErrors` instead of strings to say which form field
+ * each error belongs to; `errors` then holds their messages.
+ */
 export function opFailure(
   reason: OpFailureReason,
-  errors: string[],
+  errors: string[] | FieldError[],
   warnings: string[] = [],
 ): OpFailure {
-  return { ok: false, reason, errors, warnings };
+  if (errors.every((error): error is string => typeof error === 'string')) {
+    return { ok: false, reason, errors, warnings };
+  }
+  const fieldErrors = errors.filter((error): error is FieldError => typeof error !== 'string');
+  return {
+    ok: false,
+    reason,
+    errors: fieldErrors.map((error) => error.message),
+    warnings,
+    fieldErrors,
+  };
 }
 
 export interface CommitOutcome {
@@ -69,7 +98,8 @@ const ACTOR_CHECK_MARKER = 'tokengate:actor_not_authorized';
  *
  * When `actor` carries an authority (every admin request, see AdminActor), an actor check runs
  * first in the same batch. Unless the request's login identity is still linked to its active user
- * and that user's current role still holds the route's permission, the check raises an SQL error,
+ * and that user's current role still holds every permission the request was authorized with (the
+ * route's, plus any field permission it used), the check raises an SQL error,
  * the whole batch rolls back and ActorNotAuthorizedError is thrown. So a disable, demotion or login
  * reset that commits while the request is in flight (e.g. during a credential check) stops its write.
  */
@@ -109,7 +139,11 @@ function actorCheckStatement(db: D1Database, authority: ActorAuthority): D1Prepa
     userId: authority.userId,
     loginProvider: authority.loginProvider,
     subject: authority.subject,
-    roles: rolesWith(authority.permission),
+    // An authority without permissions matches no role (fail closed), never every role.
+    roles:
+      Array.isArray(authority.permissions) && authority.permissions.length > 0
+        ? rolesWithAll(authority.permissions)
+        : [],
   });
   return db
     .prepare(`SELECT json_extract('{}', ?) WHERE NOT (${live.sql})`)

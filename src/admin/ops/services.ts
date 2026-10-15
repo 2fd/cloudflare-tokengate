@@ -196,6 +196,7 @@ export async function createService(
   const after = serviceView({
     ...row,
     injection: injection.injection,
+    template_id: null,
     updated_at: now,
   });
   const outcome = await commitOrConstraintFailure(

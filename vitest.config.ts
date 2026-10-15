@@ -13,6 +13,8 @@ export default defineConfig(async () => {
         wrangler: { configPath: './wrangler.jsonc' },
         miniflare: {
           bindings: { TEST_MIGRATIONS: migrations, TEST_TELEMETRY_MIGRATIONS: telemetryMigrations },
+          // Empty database for migration tests, which apply the migrations themselves.
+          d1Databases: { MIGRATION_TEST_DB: 'migration-test' },
         },
       }),
     ],

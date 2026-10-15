@@ -372,3 +372,51 @@ export function recordSeenStatements(
       .bind(input.now, input.loginProvider, input.subject, ...guard.binds),
   ];
 }
+
+/** A refused sign-in counts as needing a decision for this long, unless the user changed since. */
+export const REFUSED_ATTEMPT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Users an owner should decide on: pending users, plus users with a refused sign-in in the last
+ * REFUSED_ATTEMPT_TTL_MS that no change to the user answered yet. A deliberately suspended user
+ * who has signed in before is left out. One count over `users` (index `users_status`).
+ */
+export async function countNeedsDecision(db: D1Database, now: number): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT count(*) AS n FROM users
+       WHERE status = 'pending'
+         OR (last_refused_at > updated_at AND last_refused_at > ?
+           AND (status <> 'suspended'
+             OR NOT EXISTS (SELECT 1 FROM user_identities WHERE user_id = users.id)))`,
+    )
+    .bind(now - REFUSED_ATTEMPT_TTL_MS)
+    .first<{ n: number }>();
+  return Number(row?.n ?? 0);
+}
+
+/** Users waiting for approval, oldest first. */
+export async function listPendingUsers(db: D1Database, limit: number): Promise<User[]> {
+  const { results } = await db
+    .prepare("SELECT * FROM users WHERE status = 'pending' ORDER BY created_at, id LIMIT ?")
+    .bind(limit)
+    .all<Record<string, unknown>>();
+  return results.map(userFromRow);
+}
+
+/** Active users with one of `roles`, by email (who to ask for a change the viewer cannot make). */
+export async function activeUsersWithRoles(
+  db: D1Database,
+  roles: readonly Role[],
+  limit: number,
+): Promise<User[]> {
+  if (roles.length === 0) return [];
+  const { results } = await db
+    .prepare(
+      `SELECT * FROM users WHERE status = 'active' AND role IN (${roles.map(() => '?').join(', ')})
+       ORDER BY email LIMIT ?`,
+    )
+    .bind(...roles, limit)
+    .all<Record<string, unknown>>();
+  return results.map(userFromRow);
+}

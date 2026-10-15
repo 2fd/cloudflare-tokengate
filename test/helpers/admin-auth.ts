@@ -43,6 +43,7 @@ export async function resetControlPlane(): Promise<void> {
     db.prepare('DELETE FROM audit_log'),
     db.prepare('DELETE FROM settings'),
     db.prepare('DELETE FROM grants'),
+    db.prepare('DELETE FROM claim_labels'),
     db.prepare('DELETE FROM services'),
     db.prepare('DELETE FROM caller_providers'),
     db.prepare('DELETE FROM users'),

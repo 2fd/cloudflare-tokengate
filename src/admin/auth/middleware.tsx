@@ -1,8 +1,9 @@
 // Gate for every /admin route, in order: verified identity from the Cloudflare Access JWT, on every
 // request (I-SESS-1) → linked, active user (or invite link / first-owner bootstrap, I-LINK-1,
 // I-BOOT-1) → route listed in the RBAC table (I-RBAC-1) → body cap and CSRF for unsafe methods or
-// mutating routes (I-CSRF-1) → role permission. Only then is `viewer` set and the handler run. The
-// actor carries the identity and permission so audited writes re-check both at commit (I-SESS-1).
+// mutating routes (I-CSRF-1) → role permission, plus the field permissions of submitted fields
+// (I-RBAC-1). Only then is `viewer` set and the handler run. The actor carries the identity and
+// permissions so audited writes re-check both at commit (I-SESS-1).
 // There are no gateway sessions: Access owns sign-in, sign-out and session lifetime.
 import type { MiddlewareHandler } from 'hono';
 import { matchedRoutes } from 'hono/route';
@@ -12,11 +13,11 @@ import { parseConfig } from '../../config';
 import type { User } from '../../db/types';
 import { recordSeenStatements } from '../../db/users';
 import type { Deps } from '../../deps';
-import { ADMIN_FORM_MAX_BYTES, type AdminContext, parsedForm } from '../render';
+import { ADMIN_FORM_MAX_BYTES, type AdminContext, type FormFields, parsedForm } from '../render';
 import { Layout } from '../views/layout';
 import { CSRF_FIELD, csrfCheck, ensureCsrfCookie, isUnsafeMethod, readCsrfCookie } from './csrf';
 import { type IdentityError, requestIdentity, requestMeta, signOutUrl } from './identity';
-import { can, routePermission } from './rbac';
+import { can, requestPermissions, routePermission } from './rbac';
 import { type LoginIdentity, type LoginProviderId, resolveLogin } from './resolve-login';
 import { SetupInstructions } from './setup';
 
@@ -90,12 +91,14 @@ export const adminMiddleware: MiddlewareHandler<AppContext> = async (c, next) =>
     );
   }
 
+  let fields: FormFields = Object.create(null);
   if (isUnsafeMethod(c.req.method) || rule.mutates) {
     // Bounded read: any role's oversized body is refused before it is buffered in full.
     const form = await parsedForm(c);
     if (!form.ok) {
       return c.text(`Request body too large (limit ${ADMIN_FORM_MAX_BYTES} bytes).`, 413);
     }
+    fields = form.fields;
     const passed = await csrfCheck({
       headers: c.req.raw.headers,
       expectedOrigin: requestUrl.origin,
@@ -112,7 +115,10 @@ export const adminMiddleware: MiddlewareHandler<AppContext> = async (c, next) =>
     }
   }
 
-  if (!can(user.role, rule.permission)) {
+  // The route's permission, then the field permissions of the fields the form submits (only
+  // mutating routes declare them, and their form was read above).
+  const permissions = requestPermissions(rule, fields);
+  if (!permissions.every((permission) => can(user.role, permission))) {
     return forbidden(c, user, identity.loginProvider, 'Your role does not allow this action.');
   }
 
@@ -130,7 +136,7 @@ export const adminMiddleware: MiddlewareHandler<AppContext> = async (c, next) =>
         userId: user.id,
         loginProvider: identity.loginProvider,
         subject: identity.subject,
-        permission: rule.permission,
+        permissions,
       },
     },
   });

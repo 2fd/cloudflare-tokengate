@@ -32,7 +32,7 @@ Non-goals and future work are listed in [docs/roadmap.md](docs/roadmap.md).
 - **Encrypted credentials.** AES-256-GCM envelope encryption under a key-encryption key that you generate and keep outside Cloudflare. The ciphertext is bound to the service and its destination.
 - **Request log.** Every proxied call can produce a request record with the outcome, the reason, the verified caller and the policy evaluation. Hourly rollups feed the dashboard. An optional archive writes every record to R2 through Basin Pipelines.
 - **Audit log.** Every admin change writes one audit event, also emitted as an `audit.event` log line for your SIEM.
-- **Admin UI behind Cloudflare Access.** Server-rendered pages without client-side JavaScript. Roles `owner`, `admin` and `viewer`, given by invitation. Denied requests offer a "Create grant from this request" button.
+- **Admin UI behind Cloudflare Access.** Server-rendered pages without client-side JavaScript. Roles `owner`, `admin`, `token_manager`, `access_manager` and `viewer`, given by invitation; token and access duties are separate roles. Denied requests offer a "Create grant from this request" button.
 - **Self-hosted.** Apache-2.0. Runs on Workers and two D1 databases in your account.
 
 ## Quick start

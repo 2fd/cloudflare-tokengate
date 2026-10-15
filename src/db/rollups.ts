@@ -213,3 +213,60 @@ export function recentDenialsStatement(
     )
     .bind(idLowerBound('req', sinceMs), limit);
 }
+
+export interface GrantUsage {
+  grant_id: string;
+  /** Newest hour with an allowed request. */
+  last_hour: number;
+  /** Allowed requests in the window. */
+  requests: number;
+}
+
+/**
+ * Allowed requests per grant in stored rollups for hours in [sinceHour, beforeHour) (a primary-key
+ * range scan: `hour` leads the key). The hours not rolled up yet come from
+ * aggregateRequestLogStatement; mergeGrantUsage combines both. The rollup retention minimum
+ * (30 days, SETTING_BOUNDS) keeps a 30-day window available.
+ */
+export function grantUsageStatement(
+  db: D1Database,
+  sinceHour: number,
+  beforeHour: number = Number.MAX_SAFE_INTEGER,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `SELECT grant_id, MAX(hour) AS last_hour, SUM(requests) AS requests
+       FROM request_rollup_hourly
+       WHERE hour >= ? AND hour < ? AND grant_id <> '' AND outcome = 'allowed'
+       GROUP BY grant_id`,
+    )
+    .bind(sinceHour, beforeHour);
+}
+
+/**
+ * Usage per grant id from grantUsageStatement rows plus live aggregates (rollupFromRow of
+ * aggregateRequestLogStatement) for the hours after them. Live rows count at their window start.
+ */
+export function mergeGrantUsage(
+  stored: ReadonlyArray<Record<string, unknown>>,
+  live: readonly RollupRow[],
+): Map<string, GrantUsage> {
+  const usage = new Map<string, GrantUsage>();
+  const add = (grantId: string, hour: number, requests: number) => {
+    if (grantId === '' || requests <= 0) return;
+    const current = usage.get(grantId);
+    usage.set(grantId, {
+      grant_id: grantId,
+      last_hour: Math.max(current?.last_hour ?? hour, hour),
+      requests: (current?.requests ?? 0) + requests,
+    });
+  };
+  for (const row of stored) {
+    // oxlint-disable-next-line typescript/no-base-to-string -- D1 TEXT
+    add(String(row.grant_id ?? ''), Number(row.last_hour), Number(row.requests ?? 0));
+  }
+  for (const row of live) {
+    if (row.outcome === 'allowed') add(row.grant_id, row.hour, row.requests);
+  }
+  return usage;
+}

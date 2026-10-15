@@ -3,7 +3,8 @@
 import type { ProfileId } from '../identity/types';
 import type { Condition, Injection, Rule, VerifyCheck } from '../policy/types';
 
-export type Role = 'owner' | 'admin' | 'viewer';
+/** Admin roles (ADR 0018); src/admin/auth/rbac.ts maps each to its permissions. */
+export type Role = 'owner' | 'admin' | 'token_manager' | 'access_manager' | 'viewer';
 export type UserStatus = 'invited' | 'pending' | 'active' | 'suspended';
 
 export interface User {
@@ -16,6 +17,10 @@ export interface User {
   created_at: number;
   updated_at: number;
   last_login_at: number | null;
+  /** Last refused sign-in of this user (not audited, like last_login_at). */
+  last_refused_at: number | null;
+  /** Login subject of that refused sign-in. */
+  last_refused_subject: string | null;
 }
 
 export interface CallerProvider {
@@ -50,6 +55,11 @@ export interface Service {
   credential_updated_at: number | null;
   credential_expires_at: number | null;
   verify: VerifyCheck | null;
+  /**
+   * The template the service was made from (src/admin/service-templates.ts), or null. Display and
+   * preset data only, never part of the credential AAD (ADR 0004).
+   */
+  template_id: string | null;
   enabled: boolean;
   created_at: number;
   updated_at: number;
@@ -92,4 +102,20 @@ export interface Actor {
   email: string | null;
   ip: string | null;
   userAgent: string | null;
+}
+
+/** Claims whose numeric IDs can carry a display label (`claim_labels`). */
+export type LabelledClaim = 'repository_owner_id' | 'repository_id' | 'namespace_id' | 'project_id';
+
+/**
+ * Human label for one numeric claim value, per caller provider, e.g. repository_id 987654321 →
+ * "acme/api". Display and form derivation only: policy evaluation never reads it.
+ */
+export interface ClaimLabel {
+  caller_provider_id: string;
+  claim: LabelledClaim;
+  value: string;
+  label: string;
+  updated_at: number;
+  updated_by: string | null;
 }

@@ -269,7 +269,7 @@ async function listPage(c: AdminContext) {
   ]);
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const serviceById = new Map(services.map((service) => [service.id, service]));
-  const canWrite = can(c.get('viewer').user.role, 'config:write');
+  const canWrite = can(c.get('viewer').user.role, 'access:write');
   const now = c.get('deps').now();
   const filtered = serviceFilter !== undefined || providerFilter !== undefined;
 
@@ -830,7 +830,7 @@ async function renderDetail(
   status: ContentfulStatusCode = 200,
 ) {
   const viewer = c.get('viewer');
-  const canWrite = can(viewer.user.role, 'config:write');
+  const canWrite = can(viewer.user.role, 'access:write');
   const { provider, profile, service } = target;
   const now = c.get('deps').now();
   return renderPage(

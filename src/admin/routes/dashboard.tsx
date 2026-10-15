@@ -3,6 +3,7 @@
 import type { App } from '../../app';
 import type { RecentDenial } from '../../db/rollups';
 import { settingsFromRows, settingsStatement } from '../../db/settings';
+import type { Role } from '../../db/types';
 import type { AppEnv } from '../../env';
 import {
   type DashboardData,
@@ -12,7 +13,7 @@ import {
   type ServiceTraffic,
   type TrafficStats,
 } from '../../telemetry/dashboard';
-import { can } from '../auth/rbac';
+import { can, type Permission } from '../auth/rbac';
 import { renderPage } from '../render';
 import { Badge, Code, EmptyState } from '../views/components';
 import { formatCount, formatDuration, formatPercent, formatTime, withQuery } from '../views/format';
@@ -25,11 +26,7 @@ export function registerDashboardRoutes(app: App): void {
     return renderPage(
       c,
       { title: 'Dashboard', section: '/admin', banners: dashboardBanners(data) },
-      <DashboardPage
-        data={data}
-        setup={setup}
-        canConfigure={can(c.get('viewer').user.role, 'config:write')}
-      />,
+      <DashboardPage data={data} setup={setup} role={c.get('viewer').user.role} />,
     );
   });
 }
@@ -72,13 +69,13 @@ async function loadSetupState(env: Pick<AppEnv, 'DB' | 'TELEMETRY_DB'>): Promise
   };
 }
 
-function DashboardPage(props: { data: DashboardData; setup: SetupState; canConfigure: boolean }) {
-  const { data, setup, canConfigure } = props;
+function DashboardPage(props: { data: DashboardData; setup: SetupState; role: Role }) {
+  const { data, setup, role } = props;
   const setupDone =
     setup.callerProviders > 0 && setup.services > 0 && setup.grants > 0 && setup.verifiedCall;
   return (
     <>
-      {setupDone ? null : <SetupChecklist setup={setup} canConfigure={canConfigure} />}
+      {setupDone ? null : <SetupChecklist setup={setup} role={role} />}
 
       <h2>Last 24 hours</h2>
       <p class="muted">
@@ -115,32 +112,47 @@ function DashboardPage(props: { data: DashboardData; setup: SetupState; canConfi
   );
 }
 
-function SetupChecklist(props: { setup: SetupState; canConfigure: boolean }) {
-  const { setup, canConfigure } = props;
-  const steps: Array<{ done: boolean; title: string; what: string; href: string; action: string }> =
-    [
-      {
-        done: setup.callerProviders > 0,
-        title: 'Add a caller provider',
-        what: 'Tells the gateway which CI tokens to trust, for example GitHub Actions in your organization.',
-        href: '/admin/caller-providers/new',
-        action: 'Add a caller provider',
-      },
-      {
-        done: setup.services > 0,
-        title: 'Add a service',
-        what: 'The upstream API (Slack, OpenAI, GitHub, …) and the credential the gateway attaches for callers.',
-        href: '/admin/services/new',
-        action: 'Add a service',
-      },
-      {
-        done: setup.grants > 0,
-        title: 'Create a grant',
-        what: 'Decides which callers (for example, which repositories and branches) may call which service.',
-        href: '/admin/grants/new',
-        action: 'Create a grant',
-      },
-    ];
+/** Who holds the permission of a setup step, for viewers who cannot do it themselves. */
+const ASK_WHOM: Partial<Record<Permission, string>> = {
+  'tokens:write': 'a token manager, admin or owner',
+  'access:write': 'an access manager, admin or owner',
+};
+
+function SetupChecklist(props: { setup: SetupState; role: Role }) {
+  const { setup, role } = props;
+  const steps: Array<{
+    done: boolean;
+    title: string;
+    what: string;
+    href: string;
+    action: string;
+    permission: Permission;
+  }> = [
+    {
+      done: setup.callerProviders > 0,
+      title: 'Add a caller provider',
+      what: 'Tells the gateway which CI tokens to trust, for example GitHub Actions in your organization.',
+      href: '/admin/caller-providers/new',
+      action: 'Add a caller provider',
+      permission: 'access:write',
+    },
+    {
+      done: setup.services > 0,
+      title: 'Add a service',
+      what: 'The upstream API (Slack, OpenAI, GitHub, …) and the credential the gateway attaches for callers.',
+      href: '/admin/services/new',
+      action: 'Add a service',
+      permission: 'tokens:write',
+    },
+    {
+      done: setup.grants > 0,
+      title: 'Create a grant',
+      what: 'Decides which callers (for example, which repositories and branches) may call which service.',
+      href: '/admin/grants/new',
+      action: 'Create a grant',
+      permission: 'access:write',
+    },
+  ];
   return (
     <section aria-labelledby="setup-heading">
       <h2 id="setup-heading">Get started</h2>
@@ -153,10 +165,10 @@ function SetupChecklist(props: { setup: SetupState; canConfigure: boolean }) {
             {step.done ? null : (
               <>
                 <br />
-                {canConfigure ? (
+                {can(role, step.permission) ? (
                   <a href={step.href}>{step.action}</a>
                 ) : (
-                  <span>Ask an admin or owner to do this step.</span>
+                  <span>Ask {ASK_WHOM[step.permission]} to do this step.</span>
                 )}
               </>
             )}

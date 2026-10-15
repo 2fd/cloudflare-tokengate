@@ -227,7 +227,9 @@ describe('request log with records from the proxy', () => {
       await adminGet(fixture.app, viewerSession, `/admin/requests/${noGrant.id}`)
     ).text();
     expect(html).toContain('Next step:');
-    expect(html).toContain('An admin or owner can create a grant from this request.');
+    expect(html).toContain(
+      'An access manager, admin or owner can create a grant from this request.',
+    );
     expect(html).not.toContain('/admin/grants/new');
   });
 

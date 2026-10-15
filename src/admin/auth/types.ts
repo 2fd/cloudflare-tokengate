@@ -7,13 +7,14 @@ import type { LoginProviderId } from './resolve-login';
 /**
  * What the request was authorized with. Audited writes re-check it inside their D1 batch, so a
  * request that passed the middleware cannot commit after its user is disabled, loses the login
- * identity it signed in with, or loses the permission (see commitAudited in admin/ops/shared.ts).
+ * identity it signed in with, or loses a permission (see commitAudited in admin/ops/shared.ts).
  */
 export interface ActorAuthority {
   userId: string;
   loginProvider: LoginProviderId;
   subject: string;
-  permission: Permission;
+  /** The route's permission plus every field permission the request used (rbac.ts). */
+  permissions: readonly Permission[];
 }
 
 /** Audit actor of an admin request. */

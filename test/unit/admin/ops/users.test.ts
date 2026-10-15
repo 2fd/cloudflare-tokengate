@@ -1,8 +1,11 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  decidePending,
   inviteUser,
   LAST_OWNER_MESSAGE,
+  ROLES,
+  updateJoinDefaults,
   normalizeEmail,
   resendInvite,
   resetLogin,
@@ -318,5 +321,101 @@ describe('resendInvite', () => {
     const result = await resendInvite(deps(), actorFor(owner), admin.id);
     expect(result).toMatchObject({ ok: false, reason: 'invalid' });
     expect(await audits()).toHaveLength(0);
+  });
+});
+
+describe('roles of the role split (ADR 0018)', () => {
+  it('ROLES has the five roles', () => {
+    expect([...ROLES].sort()).toEqual(
+      ['access_manager', 'admin', 'owner', 'token_manager', 'viewer'].sort(),
+    );
+  });
+
+  it.each(['token_manager', 'access_manager'] as const)('invites a %s', async (role) => {
+    const result = await inviteUser(deps(), actorFor(owner), { email: 'r@example.com', role });
+    expect(result).toMatchObject({ ok: true, user: { role } });
+  });
+
+  it('new users can join with any role except owner', async () => {
+    for (const role of ['token_manager', 'access_manager', 'admin', 'viewer']) {
+      const result = await updateJoinDefaults(deps(), actorFor(owner), { role, status: 'active' });
+      expect(result, role).toMatchObject({ ok: true });
+    }
+    const refused = await updateJoinDefaults(deps(), actorFor(owner), {
+      role: 'owner',
+      status: 'active',
+    });
+    expect(refused).toMatchObject({ ok: false, reason: 'invalid' });
+  });
+});
+
+describe('decidePending', () => {
+  async function pendingUser() {
+    return createUser(
+      {
+        email: 'p@example.com',
+        role: 'viewer',
+        status: 'pending',
+        identity: { loginProvider: 'access', subject: 'team|p' },
+      },
+      T0 - 1000,
+    );
+  }
+
+  it('approves with the role it was given, in one user.update row', async () => {
+    const pending = await pendingUser();
+    const result = await decidePending(
+      deps(),
+      actorFor(owner),
+      pending.id,
+      'approve',
+      'access_manager',
+    );
+    expect(result).toMatchObject({ ok: true, changed: true });
+    expect(await getUser(env.DB, pending.id)).toMatchObject({
+      status: 'active',
+      role: 'access_manager',
+    });
+    const rows = await audits();
+    expect(rows.map((row) => row.action)).toEqual(['user.update']);
+    expect(rows[0]?.diff).toEqual({
+      before: { role: 'viewer', status: 'pending' },
+      after: { role: 'access_manager', status: 'active' },
+    });
+  });
+
+  it('approves with the stored role when none is given', async () => {
+    const pending = await pendingUser();
+    await decidePending(deps(), actorFor(owner), pending.id, 'approve');
+    expect(await getUser(env.DB, pending.id)).toMatchObject({ status: 'active', role: 'viewer' });
+  });
+
+  it('refuses an unknown role without writing', async () => {
+    const pending = await pendingUser();
+    const result = await decidePending(
+      deps(),
+      actorFor(owner),
+      pending.id,
+      'approve',
+      'superuser' as never,
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'invalid' });
+    expect(await getUser(env.DB, pending.id)).toMatchObject({ status: 'pending' });
+    expect(await audits()).toHaveLength(0);
+  });
+
+  it('rejects to suspended and keeps the role', async () => {
+    const pending = await pendingUser();
+    await decidePending(deps(), actorFor(owner), pending.id, 'reject', 'admin');
+    expect(await getUser(env.DB, pending.id)).toMatchObject({
+      status: 'suspended',
+      role: 'viewer',
+    });
+  });
+
+  it('refuses users who are no longer pending', async () => {
+    const admin = await createUser({ email: 'a@example.com', role: 'admin' }, T0);
+    const result = await decidePending(deps(), actorFor(owner), admin.id, 'approve', 'viewer');
+    expect(result).toMatchObject({ ok: false, reason: 'conflict' });
   });
 });

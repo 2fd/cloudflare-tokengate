@@ -1,5 +1,5 @@
 // I-RBAC-1 against the real app: the routes createApp() registers under /admin are exactly the
-// RBAC table's keys, and for every route × role (anonymous, viewer, admin, owner) the response is
+// RBAC table's keys, and for every route × role (anonymous and the five roles) the response is
 // sign-in, 403 with no side effect, or success. Successful mutations reuse the I-AUDIT-1 fixtures.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -17,7 +17,8 @@ import {
 import { type AdminSession, adminGet, adminPost, createUser, loginAs } from '../helpers/admin-auth';
 
 type Actor = 'anonymous' | Role;
-const ACTORS: Actor[] = ['anonymous', 'viewer', 'admin', 'owner'];
+const ROLES: Role[] = ['viewer', 'token_manager', 'access_manager', 'admin', 'owner'];
+const ACTORS: Actor[] = ['anonymous', ...ROLES];
 
 /** `METHOD path` of every concrete (non-middleware) route the real app registers under /admin. */
 function registeredAdminRoutes(): string[] {
@@ -35,7 +36,15 @@ async function auditCount(): Promise<number> {
 
 /** Every control-plane row except identities (sign-ins touch them), for "no side effect" checks. */
 async function controlPlaneDump(): Promise<string> {
-  const tables = ['users', 'caller_providers', 'services', 'grants', 'settings', 'audit_log'];
+  const tables = [
+    'users',
+    'caller_providers',
+    'services',
+    'grants',
+    'claim_labels',
+    'settings',
+    'audit_log',
+  ];
   const dumps = await Promise.all(tables.map((t) => env.DB.prepare(`SELECT * FROM ${t}`).all()));
   return JSON.stringify(dumps.map((d) => d.results));
 }
@@ -47,7 +56,7 @@ beforeEach(async () => {
   await resetAdminWorld();
   world = await seedAdminWorld(createAdminWorldApp());
   const entries = await Promise.all(
-    (['viewer', 'admin', 'owner'] as const).map(async (role) => {
+    ROLES.map(async (role) => {
       const user = await createUser({ email: `${role}@example.com`, role });
       return [role, await loginAs(world.app, user)] as const;
     }),
@@ -150,6 +159,8 @@ describe('I-RBAC-1: routes outside the table are denied (fail closed)', () => {
         redirect: 'manual',
       });
     expect((await head('viewer')).status).toBe(403);
+    expect((await head('access_manager')).status).toBe(403);
+    expect((await head('token_manager')).status).toBe(200);
     expect((await head('admin')).status).toBe(200);
   });
 

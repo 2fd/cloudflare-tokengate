@@ -28,8 +28,11 @@ export const SETTING_BOUNDS: Record<keyof Settings, { min: number; max: number }
   request_log_max_rows: { min: 10_000, max: 50_000_000 },
 };
 
-/** Role and status of a user created by their first sign-in (not the first owner). */
-export const JOIN_ROLES = ['viewer', 'admin'] as const;
+/**
+ * Role and status of a user created by their first sign-in (not the first owner). The role is any
+ * role except owner (I-LINK-1).
+ */
+export const JOIN_ROLES = ['viewer', 'token_manager', 'access_manager', 'admin'] as const;
 export const JOIN_STATUSES = ['active', 'pending', 'suspended'] as const;
 export type JoinRole = (typeof JOIN_ROLES)[number];
 export type JoinStatus = (typeof JOIN_STATUSES)[number];

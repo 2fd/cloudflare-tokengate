@@ -217,7 +217,7 @@ async function listPage(c: AdminContext) {
   const db = c.get('deps').env.DB;
   const [providers, grants] = await Promise.all([listCallerProviders(db), listGrants(db)]);
   const grantCounts = countBy(grants, (grant) => grant.caller_provider_id);
-  const canWrite = can(c.get('viewer').user.role, 'config:write');
+  const canWrite = can(c.get('viewer').user.role, 'access:write');
   return renderPage(
     c,
     { title: 'Caller providers', section: SECTION, notice: noticeText(c) },
@@ -490,7 +490,7 @@ async function renderDetail(
 ) {
   const deps = c.get('deps');
   const viewer = c.get('viewer');
-  const canWrite = can(viewer.user.role, 'config:write');
+  const canWrite = can(viewer.user.role, 'access:write');
   const grants = await listGrants(deps.env.DB, { caller_provider_id: provider.id });
   const origin = new URL(c.req.url).origin;
   // Re-check the stored configuration so standing risks (e.g. no tenant pin) stay visible.

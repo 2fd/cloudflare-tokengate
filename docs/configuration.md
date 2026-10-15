@@ -157,7 +157,7 @@ answer `503 not_configured` and Settings shows the error. Replace it with a key 
   list of people who can reach the admin UI: the first person becomes owner, and everyone else joins
   on their first request (audit action `user.join`) with the role and status for new users. These
   join defaults are not variables: owners set them on the Users page ("New users"; by default an
-  active viewer; role `viewer` or `admin`; status `active`, `pending` or `suspended`). With
+  active viewer; any role except `owner`; status `active`, `pending` or `suspended`). With
   `pending`, nobody new gets in until an owner approves them. Viewers see every page, but no page
   shows a secret. An owner can change roles later, or invite an email with another role from the
   start.

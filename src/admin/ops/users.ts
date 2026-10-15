@@ -32,7 +32,13 @@ import {
   type SqlGuard,
 } from './shared';
 
-export const ROLES: readonly Role[] = ['owner', 'admin', 'viewer'];
+export const ROLES: readonly Role[] = [
+  'owner',
+  'admin',
+  'token_manager',
+  'access_manager',
+  'viewer',
+];
 /**
  * Statuses an owner may set directly. `invited` is reached only by invite or login reset, `pending`
  * only by a first sign-in while the join status is pending.
@@ -92,6 +98,8 @@ export async function inviteUser(
     created_at: now,
     updated_at: now,
     last_login_at: null,
+    last_refused_at: null,
+    last_refused_subject: null,
   };
   const outcome = await commitUserChange(
     deps,
@@ -270,7 +278,9 @@ export async function resendInvite(deps: Deps, actor: Actor, id: string): Promis
 }
 
 function roleErrors(role: unknown): string[] {
-  return ROLES.includes(role as Role) ? [] : ['Role must be owner, admin or viewer.'];
+  return ROLES.includes(role as Role)
+    ? []
+    : ['Role must be owner, admin, token_manager, access_manager or viewer.'];
 }
 
 /**
@@ -330,7 +340,9 @@ export async function updateJoinDefaults(
   const errors = [
     ...((JOIN_ROLES as readonly unknown[]).includes(input.role)
       ? []
-      : ['New users can get the role viewer or admin.']),
+      : [
+          'New users can get any role except owner: viewer, token_manager, access_manager or admin.',
+        ]),
     ...((JOIN_STATUSES as readonly unknown[]).includes(input.status)
       ? []
       : ['New users can start active, pending or suspended.']),
@@ -365,14 +377,20 @@ export async function updateJoinDefaults(
 
 /**
  * Approves (→ active) or rejects (→ suspended) a user waiting for approval. Refused when the user is
- * no longer pending, so a stale page cannot reactivate someone suspended meanwhile.
+ * no longer pending, so a stale page cannot reactivate someone suspended meanwhile. An approval may
+ * also set the role: one guarded update and one `user.update` audit row for both.
  */
 export async function decidePending(
   deps: Deps,
   actor: Actor,
   id: string,
   decision: 'approve' | 'reject',
+  role?: Role,
 ): Promise<{ ok: true; user: User; changed: boolean } | OpFailure> {
+  if (decision === 'approve' && role !== undefined) {
+    const errors = roleErrors(role);
+    if (errors.length > 0) return opFailure('invalid', errors);
+  }
   const existing = await getUser(deps.env.DB, id);
   if (!existing) return opFailure('not_found', ['User not found.']);
   if (existing.status !== 'pending') {
@@ -380,5 +398,6 @@ export async function decidePending(
       `${existing.email} is no longer waiting for approval. Reload the page.`,
     ]);
   }
-  return updateUser(deps, actor, id, { status: decision === 'approve' ? 'active' : 'suspended' });
+  if (decision === 'reject') return updateUser(deps, actor, id, { status: 'suspended' });
+  return updateUser(deps, actor, id, { status: 'active', ...(role === undefined ? {} : { role }) });
 }

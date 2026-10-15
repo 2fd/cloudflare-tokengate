@@ -70,7 +70,7 @@ const NEXT_STEP: Readonly<Record<string, string>> = {
   tenant_mismatch:
     "The caller is outside the organization or namespace pinned on the caller provider (tenant pin). Check the caller provider's tenant pin.",
   no_matching_grant:
-    'No grant allows this caller to make this request. Read the policy evaluation below to see which check failed. An admin or owner can create a grant from this request.',
+    'No grant allows this caller to make this request. Read the policy evaluation below to see which check failed. An access manager, admin or owner can create a grant from this request.',
   event_not_trusted:
     'The workflow event (for example pull_request_target) is not trusted by default. A grant must list it explicitly, which is risky for events that run untrusted code.',
   service_not_found: 'Check the service slug in the URL.',
@@ -215,7 +215,7 @@ export function registerRequestsRoutes(app: App): void {
         ? reevaluate(record, { service, provider, grants, now: deps.now() })
         : null;
     const canCreateGrant =
-      can(c.get('viewer').user.role, 'config:write') &&
+      can(c.get('viewer').user.role, 'access:write') &&
       record.claims_verified === 1 &&
       record.reason !== null &&
       GRANT_FIXABLE.has(record.reason);

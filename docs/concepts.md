@@ -117,17 +117,21 @@ A user is a person who signs in to the admin UI. A user has a role and a status:
 | `active` | Can use the admin UI with their role. |
 | `suspended` | Refused on every request. An owner can make them active again. |
 
-| Role | Can |
-|---|---|
-| `viewer` | Read every page. No page shows secret material. |
-| `admin` | Also create, change and delete caller providers, services and grants; download the configuration export. |
-| `owner` | Also invite, approve and reject users, change roles and statuses, reset logins, set the role and status of new users, change settings, re-encrypt credentials. |
+There are five roles. Token duties and access duties are separate roles ([ADR 0018](adr/0018-role-split-and-field-permissions.md)):
 
-Every admin route has an entry in the permission table, and unknown routes are denied ([I-RBAC-1](threat-model.md#i-rbac-1)). The database refuses to remove the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). IDs start with `usr_`. Admin UI: Users. Code: `src/admin/auth/rbac.ts`.
+| Role | Permissions | Can |
+|---|---|---|
+| `viewer` | `read` | Read every page. No page shows secret material. |
+| `token_manager` | `read`, `tokens:write` | Also create, change, disable and delete services; enter, rotate and test credentials. Cannot give any caller access to a service. |
+| `access_manager` | `read`, `access:write` | Also create, change and delete caller providers and grants, for any service. Never sees a credential. |
+| `admin` | `read`, `tokens:write`, `access:write`, `config:export` | Token manager and access manager together, plus the configuration export. |
+| `owner` | The admin's, plus `users:write`, `settings:write`, `keyring:rewrap` | Also invite, approve and reject users, change roles and statuses, reset logins, set the role and status of new users, change settings (including the upstream host allowlist and the admin hosts), re-encrypt credentials. |
+
+Some form fields need a further permission, on top of the route's: allowing a new upstream host while saving a service needs `settings:write`, and deleting a service together with its grants needs `access:write`. Every admin route has an entry in the permission table, and unknown routes are denied ([I-RBAC-1](threat-model.md#i-rbac-1)). The database refuses to remove the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). IDs start with `usr_`. Admin UI: Users. Code: `src/admin/auth/rbac.ts`.
 
 ### Login provider
 
-Users sign in through Cloudflare Access (login provider `access`), configured with Worker variables, not in the database ([configuration.md](configuration.md), [ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). The gateway keeps no session: it verifies the Access token on every admin request. The token proves a stable subject (`<team domain>|<sub>`) and an email address. On a new login, the gateway links an existing user only when that user is invited, the invitation is not expired, and the email in the token matches ([I-LINK-1](threat-model.md#i-link-1)). Otherwise the first person to sign in becomes the owner, at most once ([I-BOOT-1](threat-model.md#i-boot-1)). Everyone after that joins with the role and status that owners set for new users on the Users page: by default an active `viewer`; the role can be `admin`, and the status `pending` (wait for approval) or `suspended`. So the Access policy decides who can reach the admin UI, and the join status decides whether they get in at once. An email that already belongs to another user is refused. For local development only, `AUTH_ACCESS_DEVELOPMENT` (login provider `dev`) signs every request to `localhost` in as one email. It never works together with Access: with both set, no login works ([I-CFG-1](threat-model.md#i-cfg-1)). Code: `src/admin/auth/`.
+Users sign in through Cloudflare Access (login provider `access`), configured with Worker variables, not in the database ([configuration.md](configuration.md), [ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). The gateway keeps no session: it verifies the Access token on every admin request. The token proves a stable subject (`<team domain>|<sub>`) and an email address. On a new login, the gateway links an existing user only when that user is invited, the invitation is not expired, and the email in the token matches ([I-LINK-1](threat-model.md#i-link-1)). Otherwise the first person to sign in becomes the owner, at most once ([I-BOOT-1](threat-model.md#i-boot-1)). Everyone after that joins with the role and status that owners set for new users on the Users page: by default an active `viewer`; the role can be any role except `owner`, and the status `pending` (wait for approval) or `suspended`. So the Access policy decides who can reach the admin UI, and the join status decides whether they get in at once. An email that already belongs to another user is refused. For local development only, `AUTH_ACCESS_DEVELOPMENT` (login provider `dev`) signs every request to `localhost` in as one email. It never works together with Access: with both set, no login works ([I-CFG-1](threat-model.md#i-cfg-1)). Code: `src/admin/auth/`.
 
 ### Request record
 

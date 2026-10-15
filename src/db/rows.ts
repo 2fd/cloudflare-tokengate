@@ -30,6 +30,8 @@ export function userFromRow(row: Row): User {
     created_at: num(row.created_at),
     updated_at: num(row.updated_at),
     last_login_at: numOrNull(row.last_login_at),
+    last_refused_at: numOrNull(row.last_refused_at),
+    last_refused_subject: strOrNull(row.last_refused_subject),
   };
 }
 
@@ -73,6 +75,7 @@ export function serviceFromRow(row: Row): Service {
     credential_updated_at: numOrNull(row.credential_updated_at),
     credential_expires_at: numOrNull(row.credential_expires_at),
     verify: verify && typeof verify === 'object' ? (verify as VerifyCheck) : null,
+    template_id: strOrNull(row.template_id),
     enabled: num(row.enabled) === 1,
     created_at: num(row.created_at),
     updated_at: num(row.updated_at),

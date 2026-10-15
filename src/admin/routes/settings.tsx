@@ -363,7 +363,7 @@ async function settingsPage(
         A JSON file with every caller provider, service, grant and user, for review or backup. It
         contains no credentials or other secrets. Each download is recorded in the audit log.
       </p>
-      {can(role, 'config:write') ? (
+      {can(role, 'config:export') ? (
         <form method="post" action="/admin/export">
           <Csrf token={viewer.csrfToken} />
           <button type="submit">Download configuration export</button>

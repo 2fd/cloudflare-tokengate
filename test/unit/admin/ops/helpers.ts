@@ -84,6 +84,7 @@ export function opsDeps(
 export async function resetControlPlane(): Promise<void> {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM grants'),
+    env.DB.prepare('DELETE FROM claim_labels'),
     env.DB.prepare('DELETE FROM services'),
     env.DB.prepare('DELETE FROM caller_providers'),
     env.DB.prepare('DELETE FROM audit_log'),

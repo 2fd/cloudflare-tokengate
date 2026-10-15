@@ -158,7 +158,7 @@ The gateway keeps no session of its own. "Sign out" ends the Access session for 
 ## 11. Open the admin UI to your team and add a second owner
 
 1. Settings > System status shows "First owner: done: an owner exists".
-2. Optional: in Users > "New users", choose the role (viewer or admin) and status (active, pending or suspended) that people get on their first sign-in. With "Pending", each new person waits in "Waiting for approval" until you click "Approve" or "Reject".
+2. Optional: in Users > "New users", choose the role (any role except owner) and status (active, pending or suspended) that people get on their first sign-in. With "Pending", each new person waits in "Waiting for approval" until you click "Approve" or "Reject".
 3. Widen the Access policy to the people who may reach the admin UI.
 4. Ask a second person to open `<gateway>/admin`. They join as an active viewer (or as pending, then you approve them). In Users > "All users", set their role to "Owner" and click "Save". If the only owner loses access, recovery needs a manual database edit ([operations/break-glass.md](operations/break-glass.md)).
 
@@ -268,7 +268,7 @@ The step fails with HTTP 403. The body contains `"code":"no_matching_grant"` and
    - If `main` is a protected branch, add the line `ref_protected exact true` to "Conditions" and click "Create grant" again.
    - Otherwise, check "I have read the warnings above and want to save this grant anyway" and click "Create grant" again.
 
-Only requests with a verified token that were denied with `no_matching_grant` or `event_not_trusted` offer this button ([I-LOG-2](threat-model.md#i-log-2)). The button requires the role `admin` or `owner`.
+Only requests with a verified token that were denied with `no_matching_grant` or `event_not_trusted` offer this button ([I-LOG-2](threat-model.md#i-log-2)). The button requires the role `access_manager`, `admin` or `owner`.
 
 ## 16. Call again
 

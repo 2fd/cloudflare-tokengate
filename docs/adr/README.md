@@ -23,6 +23,7 @@ Each ADR uses the format from [0001](0001-record-architecture-decisions.md): Sta
 | [0015](0015-cloudflare-access-only-admin-login.md) | Cloudflare Access as the only admin login, without gateway sessions | Accepted |
 | [0016](0016-admin-hosts-in-settings.md) | Admin hosts in Settings instead of `PUBLIC_URL` | Accepted |
 | [0017](0017-kek-bound-to-login-variables.md) | Key-encryption keys bound to the login variables | Accepted |
+| [0018](0018-role-split-and-field-permissions.md) | Role split (token and access duties) and field permissions | Accepted |
 
 ## Adding an ADR
 

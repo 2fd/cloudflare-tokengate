@@ -307,7 +307,7 @@ async function listPage(c: AdminContext) {
     listServices(deps.env.DB),
     grantCountsByService(deps.env.DB),
   ]);
-  const canWrite = can(c.get('viewer').user.role, 'config:write');
+  const canWrite = can(c.get('viewer').user.role, 'tokens:write');
   const now = deps.now();
   return renderPage(
     c,
@@ -990,7 +990,7 @@ async function renderDetail(c: AdminContext, service: Service, state: DetailStat
   ]);
   const providerNames = new Map(callerProviders.map((provider) => [provider.id, provider.name]));
   const viewer = c.get('viewer');
-  const canWrite = can(viewer.user.role, 'config:write');
+  const canWrite = can(viewer.user.role, 'tokens:write');
   const csrf = viewer.csrfToken;
   const now = deps.now();
   const proxyUrl = `${new URL(c.req.url).origin}/proxy/${service.slug}`;

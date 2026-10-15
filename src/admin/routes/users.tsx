@@ -50,11 +50,25 @@ type NoticeKey = keyof typeof NOTICES;
 
 const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
   { value: 'viewer', label: 'Viewer: can look at everything, change nothing' },
-  { value: 'admin', label: 'Admin: manages services, caller providers and grants' },
+  {
+    value: 'token_manager',
+    label: 'Token manager: manages services and their credentials, cannot grant access to them',
+  },
+  {
+    value: 'access_manager',
+    label: 'Access manager: manages caller providers and grants, never sees a credential',
+  },
+  { value: 'admin', label: 'Admin: token manager and access manager together, plus the export' },
   { value: 'owner', label: 'Owner: everything, plus users, settings and keys' },
 ];
 
-const ROLE_NAMES: Record<Role, string> = { viewer: 'Viewer', admin: 'Admin', owner: 'Owner' };
+const ROLE_NAMES: Record<Role, string> = {
+  viewer: 'Viewer',
+  token_manager: 'Token manager',
+  access_manager: 'Access manager',
+  admin: 'Admin',
+  owner: 'Owner',
+};
 
 const STATUS_LABELS: Record<JoinDefaults['status'], string> = {
   active: 'Active: they can use the console right away',
@@ -109,7 +123,15 @@ export function registerUsersRoutes(app: App): void {
 
   for (const decision of ['approve', 'reject'] as const) {
     app.post(`/admin/users/:id/${decision}`, async (c) => {
-      const result = await decidePending(c.get('deps'), adminActor(c), c.req.param('id'), decision);
+      // An approval may set the role in the same change (optional until the Users section redesign).
+      const role = decision === 'approve' ? text(await formData(c), 'role') : undefined;
+      const result = await decidePending(
+        c.get('deps'),
+        adminActor(c),
+        c.req.param('id'),
+        decision,
+        role === undefined || role === '' ? undefined : (role as Role),
+      );
       if (!result.ok) return failurePage(c, result);
       return redirectWithNotice(c, SECTION, decision === 'approve' ? 'approved' : 'rejected');
     });

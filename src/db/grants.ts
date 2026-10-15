@@ -155,3 +155,38 @@ export function setGrantEnabledStatement(
 export function grantExistsGuard(id: string): SqlGuard {
   return { sql: 'EXISTS (SELECT 1 FROM grants WHERE id = ?)', binds: [id] };
 }
+
+/** Deletes the grants with these ids while `guard` holds (cascade deletes, see exactGrantSetGuard). */
+export function deleteGrantsByIdsStatement(
+  db: D1Database,
+  ids: readonly string[],
+  guard: SqlGuard,
+): D1PreparedStatement {
+  const unique = [...new Set(ids)];
+  const match = unique.length === 0 ? '0' : `id IN (${unique.map(() => '?').join(', ')})`;
+  return db
+    .prepare(`DELETE FROM grants WHERE ${match} AND (${guard.sql})`)
+    .bind(...unique, ...guard.binds);
+}
+
+/**
+ * The grants that reference `ownerId` (a service or a caller provider) are exactly `ids`: none was
+ * added or removed since the admin confirmed the list. A cascade delete carries it on every
+ * statement, so it deletes exactly what the confirmation showed, or nothing.
+ */
+export function exactGrantSetGuard(
+  column: 'service_id' | 'caller_provider_id',
+  ownerId: string,
+  ids: readonly string[],
+): SqlGuard {
+  if (column !== 'service_id' && column !== 'caller_provider_id') {
+    throw new Error(`exactGrantSetGuard: unknown column ${String(column)}`);
+  }
+  const unique = [...new Set(ids)];
+  const others = unique.length === 0 ? '' : ` AND id NOT IN (${unique.map(() => '?').join(', ')})`;
+  return {
+    sql: `(SELECT count(*) FROM grants WHERE ${column} = ?) = ?
+      AND NOT EXISTS (SELECT 1 FROM grants WHERE ${column} = ?${others})`,
+    binds: [ownerId, unique.length, ownerId, ...unique],
+  };
+}

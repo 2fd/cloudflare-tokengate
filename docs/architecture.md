@@ -124,11 +124,12 @@ Timestamps are integer milliseconds since the Unix epoch. IDs are `<prefix>_<ULI
 
 | Table | Content | Notes |
 |---|---|---|
-| `users` | Users: email, role (`owner`, `admin`, `viewer`), status (`invited`, `pending`, `active`, `suspended`), invite expiry. | Triggers `users_last_owner_update` and `users_last_owner_delete` abort any change that removes the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). |
+| `users` | Users: email, role (`owner`, `admin`, `token_manager`, `access_manager`, `viewer`), status (`invited`, `pending`, `active`, `suspended`), invite expiry, last refused sign-in. | Triggers `users_last_owner_update` and `users_last_owner_delete` abort any change that removes the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). |
 | `user_identities` | Login identity `(login_provider, subject)` → User. | Created only by invite linking or bootstrap ([I-LINK-1](threat-model.md#i-link-1), [I-BOOT-1](threat-model.md#i-boot-1)). |
 | `caller_providers` | Issuer, `jwks_uri`, audience (16 chars or more), profile, allowed algorithms, max token age, tenant pin, anchor claims. | `profile` cannot change after creation. |
-| `services` | Slug, base URL, injection (canonical JSON), forwarded headers, timeout, sealed credential, hint, expiry, verify check. | `credential_sealed` is bound to `(id, base_url, injection)` ([I-CRED-2](threat-model.md#i-cred-2)). |
+| `services` | Slug, base URL, injection (canonical JSON), forwarded headers, timeout, sealed credential, hint, expiry, verify check, template. | `credential_sealed` is bound to `(id, base_url, injection)` ([I-CRED-2](threat-model.md#i-cred-2)). `template_id` is display data only and not part of the binding. |
 | `grants` | Caller provider, service, conditions (JSON), rules (JSON), enabled, expiry. | Partial index `grants_lookup` serves the proxy query. |
+| `claim_labels` | Display label per caller provider, claim and numeric ID, for example `repository_id` 987654321 → `acme/api`. | Display and form input only: policy evaluation never reads it. |
 | `settings` | Key → JSON value. | Runtime settings and internal state (see below). |
 | `audit_log` | Audit events: actor, action, target, summary, redacted diff. | Diffs never contain secrets ([I-CRED-1](threat-model.md#i-cred-1)). |
 

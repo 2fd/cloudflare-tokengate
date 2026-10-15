@@ -2,10 +2,16 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Permission } from '../../src/admin/auth/rbac';
 import type { AdminActor } from '../../src/admin/auth/types';
+import { createGrant } from '../../src/admin/ops/grants';
 import { testServiceCredential } from '../../src/admin/ops/services';
 import { updateSettings } from '../../src/admin/ops/settings';
 import { inviteUser } from '../../src/admin/ops/users';
-import { CONTEXT, fakeNetwork } from '../../test/unit/admin/ops/helpers';
+import {
+  anchoredConditions,
+  CONTEXT,
+  fakeNetwork,
+  racingDeps,
+} from '../../test/unit/admin/ops/helpers';
 import {
   createAdminWorldApp,
   resetAdminWorld,
@@ -43,6 +49,7 @@ async function world() {
   return {
     app,
     serviceId: seeded.serviceId,
+    providerId: seeded.provider.id,
     owner,
     admin,
     ownerSession,
@@ -126,7 +133,7 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
           userId: w.owner.id,
           loginProvider: 'access',
           subject: w.ownerSession.subject,
-          permission,
+          permissions: [permission],
         },
       };
       await env.DB.prepare('DELETE FROM user_identities WHERE user_id = ?').bind(w.owner.id).run();
@@ -145,7 +152,7 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
           userId: w.owner.id,
           loginProvider: 'access',
           subject: w.ownerSession.subject,
-          permission: 'users:write',
+          permissions: ['users:write'],
         },
       };
       const result = await inviteUser(w.app.deps, actor, { email: 'ok@acme.test', role: 'viewer' });
@@ -175,12 +182,122 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
     });
 
     it('cannot send the stored credential in a credential test', async () => {
-      const { w, deps, actor } = await revokedOwner('config:write');
+      const { w, deps, actor } = await revokedOwner('tokens:write');
       const calls = w.network.calls.length;
       const result = await testServiceCredential(deps, actor, w.serviceId, CONTEXT);
       expect(result).toMatchObject({ ok: false, reason: 'conflict' });
       expect(w.network.calls.slice(calls)).toEqual([]);
       expect(await credentialTests(w.owner.id)).toBe(0);
+    });
+  });
+
+  describe('a demotion to the other half of the role split stops the write (ADR 0018)', () => {
+    /** The admin's actor as the middleware builds it for a route needing `permissions`. */
+    function adminActor(w: Awaited<ReturnType<typeof world>>, permissions: Permission[]) {
+      const actor: AdminActor = {
+        type: 'user',
+        id: w.admin.id,
+        email: w.admin.email,
+        ip: null,
+        userAgent: null,
+        authority: {
+          userId: w.admin.id,
+          loginProvider: 'access',
+          subject: w.adminSession.subject,
+          permissions,
+        },
+      };
+      return actor;
+    }
+
+    /** Deps that demote the admin to `role` right before the op's first write. */
+    function demotedMidRequest(w: Awaited<ReturnType<typeof world>>, role: string) {
+      return racingDeps(w.app.deps, () =>
+        env.DB.prepare('UPDATE users SET role = ? WHERE id = ?').bind(role, w.admin.id).run(),
+      );
+    }
+
+    const grantCount = async () =>
+      env.DB.prepare('SELECT count(*) AS n FROM grants').first<number>('n');
+
+    it('an admin demoted to token_manager cannot create a grant (POST /admin/grants)', async () => {
+      const w = await world();
+      const before = await grantCount();
+      const result = await createGrant(
+        demotedMidRequest(w, 'token_manager'),
+        adminActor(w, ['access:write']),
+        {
+          name: 'demoted',
+          caller_provider_id: w.providerId,
+          service_id: w.serviceId,
+          conditions: anchoredConditions(),
+          rules: [{ methods: ['GET'], path: '/repos/**' }],
+        },
+      );
+      expect(result).toMatchObject({ ok: false, reason: 'conflict' });
+      expect(await grantCount()).toBe(before);
+    });
+
+    it('an admin demoted to access_manager cannot send the stored credential (POST /admin/services/:id/test)', async () => {
+      const w = await world();
+      const calls = w.network.calls.length;
+      const result = await testServiceCredential(
+        demotedMidRequest(w, 'access_manager'),
+        adminActor(w, ['tokens:write']),
+        w.serviceId,
+        CONTEXT,
+      );
+      expect(result).toMatchObject({ ok: false, reason: 'conflict' });
+      expect(w.network.calls.slice(calls)).toEqual([]);
+      expect(await credentialTests(w.admin.id)).toBe(0);
+    });
+
+    it('a field permission is re-checked at commit: tokens:write plus access:write needs admin or owner', async () => {
+      const w = await world();
+      const before = await grantCount();
+      const result = await createGrant(
+        demotedMidRequest(w, 'access_manager'),
+        adminActor(w, ['access:write', 'tokens:write']),
+        {
+          name: 'needs both',
+          caller_provider_id: w.providerId,
+          service_id: w.serviceId,
+          conditions: anchoredConditions(),
+          rules: [{ methods: ['GET'], path: '/repos/**' }],
+        },
+      );
+      expect(result).toMatchObject({ ok: false, reason: 'conflict' });
+      expect(await grantCount()).toBe(before);
+    });
+
+    it('an authority without permissions never commits (fail closed)', async () => {
+      const w = await world();
+      const before = await grantCount();
+      const result = await createGrant(w.app.deps, adminActor(w, []), {
+        name: 'no permissions',
+        caller_provider_id: w.providerId,
+        service_id: w.serviceId,
+        conditions: anchoredConditions(),
+        rules: [{ methods: ['GET'], path: '/repos/**' }],
+      });
+      expect(result).toMatchObject({ ok: false, reason: 'conflict' });
+      expect(await grantCount()).toBe(before);
+    });
+
+    it('control: the admin commits with both permissions while still an admin', async () => {
+      const w = await world();
+      const result = await createGrant(
+        w.app.deps,
+        adminActor(w, ['access:write', 'tokens:write']),
+        {
+          name: 'still admin',
+          caller_provider_id: w.providerId,
+          service_id: w.serviceId,
+          conditions: anchoredConditions(),
+          rules: [{ methods: ['GET'], path: '/repos/**' }],
+        },
+      );
+      expect(result).toMatchObject({ ok: true });
     });
   });
 

@@ -41,7 +41,8 @@ describe('GET /admin on a fresh deployment', () => {
   it('tells viewers to ask an admin instead of linking to forms they cannot use', async () => {
     const a = app();
     const html = await (await adminGet(a, await loginAs(a, viewer), '/admin')).text();
-    expect(html).toContain('Ask an admin or owner to do this step.');
+    expect(html).toContain('Ask a token manager, admin or owner to do this step.');
+    expect(html).toContain('Ask an access manager, admin or owner to do this step.');
     expect(html).not.toContain('href="/admin/services/new"');
   });
 
