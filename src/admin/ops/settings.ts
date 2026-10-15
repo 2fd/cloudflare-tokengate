@@ -5,7 +5,14 @@
 import { getSettings, putSettingStatement, SETTING_BOUNDS, type Settings } from '../../db/settings';
 import type { Actor } from '../../db/types';
 import type { Deps } from '../../deps';
-import { commitOrConstraintFailure, type OpFailure, opFailure, pick } from './shared';
+import {
+  commitOrConstraintFailure,
+  type FieldError,
+  fieldError,
+  type OpFailure,
+  opFailure,
+  pick,
+} from './shared';
 
 export const SETTING_LABELS: Record<keyof Settings, string> = {
   request_log_retention_days: 'Request log retention (days)',
@@ -50,12 +57,16 @@ export async function updateSettings(
   const keys = Object.keys(input) as Array<keyof Settings>;
   const unknown = keys.filter((key) => !EDITABLE_SETTINGS.includes(key));
   if (unknown.length > 0) return opFailure('invalid', [`unknown settings: ${unknown.join(', ')}`]);
-  const errors = keys.flatMap((key) => settingErrors(key, input[key]));
+  const errors = keys.flatMap((key) =>
+    settingErrors(key, input[key]).map((message) => fieldError(key, message)),
+  );
   if (errors.length > 0) return opFailure('invalid', errors);
 
   const db = deps.env.DB;
   const before = await getSettings(db);
   const after: Settings = { ...before, ...input };
+  const crossField = retentionOrderError(after);
+  if (crossField) return opFailure('invalid', [crossField]);
   const changed = keys.filter((key) => after[key] !== before[key]);
   if (changed.length === 0) return { ok: true, settings: before, changed };
 
@@ -78,4 +89,18 @@ export async function updateSettings(
     return opFailure('conflict', ['the settings were not saved; reload and retry']);
   }
   return { ok: true, settings: after, changed };
+}
+
+/**
+ * The hourly summaries back the Overview and "last used" for every stored request record, so they
+ * are kept at least as long as the records (checked on the merged values: a partial save counts).
+ */
+export function retentionOrderError(
+  settings: Pick<Settings, 'rollup_retention_days' | 'request_log_retention_days'>,
+): FieldError | null {
+  if (settings.rollup_retention_days >= settings.request_log_retention_days) return null;
+  return fieldError(
+    'rollup_retention_days',
+    `${SETTING_LABELS.rollup_retention_days} must be at least the request record retention (${settings.request_log_retention_days} days). Enter ${settings.request_log_retention_days} or more.`,
+  );
 }

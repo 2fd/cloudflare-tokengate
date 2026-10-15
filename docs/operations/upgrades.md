@@ -84,6 +84,10 @@ Each database has its own directory: `migrations/` for `DB`, `migrations-telemet
   and take a D1 backup ([backup-restore.md](backup-restore.md)) before you apply it. Every row is kept;
   the earlier code keeps working on the new schema, because it never writes the new roles and refuses
   roles it does not know.
+- `migrations-telemetry/0002_request_log_indexes.sql` adds two indexes to `request_log` (additive).
+  `CREATE INDEX` reads the whole table once, and a very large `request_log` can exceed the D1
+  statement time limit. Apply it while the table is small, or first lower "Maximum request log rows"
+  in Monitoring › Data retention and wait for the next hourly run to shrink the table.
 - The CHANGELOG lists every migration under "Upgrade notes".
 
 Migrations run before the new code is deployed. Because they are additive, the old code keeps working
@@ -96,10 +100,10 @@ The running code compares each database's applied migrations (wrangler's `d1_mig
 
 | State | Shown as | Meaning | Action |
 |---|---|---|---|
-| ok | "up to date" | The newest migration of this build is applied | None |
-| behind | Error banner "Database `<binding>` is missing migration ..." | The code expects a migration that is not applied | `pnpm wrangler d1 migrations apply <binding> --remote` |
-| ahead | Warning banner "has migrations newer than this deployment (rolled back?)" | A newer release's migration is applied | Expected after a rollback |
-| unknown | "could not be read" | The migrations table could not be read | Check the D1 binding |
+| ok | "Up to date." | The newest migration of this build is applied | None |
+| behind | Error alert "Database `<binding>` is missing migration ..." | The code expects a migration that is not applied | `pnpm wrangler d1 migrations apply <binding> --remote` |
+| ahead | Warning alert "has migrations newer than this deployment (rolled back?)" | A newer release's migration is applied | Expected after a rollback |
+| unknown | "Could not be read." | The migrations table could not be read | Check the D1 binding |
 
 `/readyz` reports `schema: false` only for behind and unknown. A behind state is re-checked every
 minute, so applying the migration clears it without a redeploy.

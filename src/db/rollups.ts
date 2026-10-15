@@ -2,7 +2,7 @@
 // dashboard needs. Request windows are id ranges (ids are time-ordered ULIDs, src/lib/ids.ts), so
 // every scan uses the primary key. Counts are sums of `weight` (1 / sample rate), not row counts.
 import { idLowerBound } from '../lib/ids';
-import type { Outcome, RequestRecord } from '../telemetry/types';
+import type { Outcome } from '../telemetry/types';
 
 /**
  * Disjoint latency buckets on `duration_ms` (time to response headers): each request falls in
@@ -180,40 +180,6 @@ export function upstreamAuthFailuresStatement(
     .bind(idLowerBound('req', sinceMs), minFailures, minRatio);
 }
 
-export type RecentDenial = Pick<
-  RequestRecord,
-  | 'id'
-  | 'ts'
-  | 'reason'
-  | 'status'
-  | 'method'
-  | 'path'
-  | 'service_slug'
-  | 'service_id'
-  | 'caller_provider_id'
-  | 'claims_verified'
-  | 'caller_subject'
-  | 'caller_repository'
-  | 'untrusted_iss'
->;
-
-/** Newest denied requests since `sinceMs` (the bound keeps the backwards scan finite). */
-export function recentDenialsStatement(
-  db: D1Database,
-  sinceMs: number,
-  limit: number,
-): D1PreparedStatement {
-  return db
-    .prepare(
-      `SELECT id, ts, reason, status, method, path, service_slug, service_id, caller_provider_id,
-         claims_verified, caller_subject, caller_repository, untrusted_iss
-       FROM request_log
-       WHERE id >= ? AND outcome = 'denied'
-       ORDER BY id DESC LIMIT ?`,
-    )
-    .bind(idLowerBound('req', sinceMs), limit);
-}
-
 export interface GrantUsage {
   grant_id: string;
   /** Newest hour with an allowed request. */
@@ -269,4 +235,163 @@ export function mergeGrantUsage(
     if (row.outcome === 'allowed') add(row.grant_id, row.hour, row.requests);
   }
   return usage;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Monitoring reads (the Overview). Stored rollups cover the closed hours; the hours not rolled up
+// yet come from aggregateRequestLogStatement, one statement per live hour.
+
+const VALUE_SUMS = [
+  'requests',
+  'upstream_auth_fail',
+  'duration_sum_ms',
+  ...LATENCY_BUCKETS.map((bucket) => bucket.column),
+]
+  .map((column) => `SUM(${column}) AS ${column}`)
+  .join(', ');
+
+/**
+ * Stored rollups for hours in [fromHour, toHour), summed per (service, grant, outcome, status
+ * class) and labelled with `fromHour`: the same shape as rollupFromRow reads, aggregated in SQL so
+ * a 30-day range reads one row per combination instead of one per hour.
+ */
+export function edgeTotalsStatement(
+  db: D1Database,
+  fromHour: number,
+  toHour: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `SELECT ?1 AS hour, service_id, grant_id, outcome, status_class, ${VALUE_SUMS}
+       FROM request_rollup_hourly WHERE hour >= ?1 AND hour < ?2
+       GROUP BY service_id, grant_id, outcome, status_class`,
+    )
+    .bind(fromHour, toHour);
+}
+
+export interface SeriesRow {
+  /** Start of the bucket (a UTC multiple of the bucket size). */
+  bucket: number;
+  outcome: Outcome;
+  status_class: number;
+  requests: number;
+}
+
+/** Stored requests per chart bucket of `bucketMs`, outcome and status class, for [fromHour, toHour). */
+export function seriesStatement(
+  db: D1Database,
+  fromHour: number,
+  toHour: number,
+  bucketMs: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `SELECT hour - hour % ?3 AS bucket, outcome, status_class, SUM(requests) AS requests
+       FROM request_rollup_hourly WHERE hour >= ?1 AND hour < ?2
+       GROUP BY hour - hour % ?3, outcome, status_class`,
+    )
+    .bind(fromHour, toHour, bucketMs);
+}
+
+export function seriesFromRow(row: Record<string, unknown>): SeriesRow {
+  return {
+    bucket: Number(row.bucket),
+    outcome: row.outcome as Outcome,
+    status_class: Number(row.status_class),
+    requests: Number(row.requests ?? 0),
+  };
+}
+
+/** Denied records grouped by caller, token and reason (Top denials). */
+export interface DenialGroup {
+  /** '' when no consumer was resolved. */
+  caller_provider_id: string;
+  /** '' when no token was resolved. */
+  service_id: string;
+  service_slug: string | null;
+  reason: string | null;
+  claims_verified: 0 | 1;
+  /** Verified: the repository, else the subject. Unverified: the unverified issuer. */
+  caller: string | null;
+  caller_kind: 'repository' | 'subject' | 'issuer' | 'none';
+  /** Weighted count. */
+  requests: number;
+  latest_id: string;
+  latest_ts: number;
+  /** Newest record of the group whose token was verified (the only one that may prefill a form). */
+  latest_verified_id: string | null;
+}
+
+export const DENIAL_SCAN_ROWS = 2000;
+export const DENIAL_GROUPS_LIMIT = 10;
+
+/**
+ * Top denied callers since `sinceMs`: the newest `scanRows` denied records (through the partial
+ * index request_log_problems, whose WHERE term is repeated literally), grouped by consumer, token,
+ * reason, verification and caller. Each row also says how many records were scanned, so the page
+ * can say when the bound was hit.
+ */
+export function denialGroupsStatement(
+  db: D1Database,
+  sinceMs: number,
+  scanRows: number = DENIAL_SCAN_ROWS,
+  limit: number = DENIAL_GROUPS_LIMIT,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `WITH scanned AS (
+         SELECT id, ts, reason, service_id, service_slug, caller_provider_id, claims_verified,
+           caller_repository, caller_subject, untrusted_iss, weight
+         FROM request_log
+         WHERE (outcome <> 'allowed' OR status >= 500) AND outcome = 'denied' AND id >= ?1
+         ORDER BY id DESC LIMIT ?2
+       )
+       SELECT COALESCE(caller_provider_id, '') AS caller_provider_id,
+         COALESCE(service_id, '') AS service_id, MAX(service_slug) AS service_slug, reason,
+         claims_verified,
+         COALESCE(caller_repository, caller_subject, untrusted_iss) AS caller,
+         CASE WHEN caller_repository IS NOT NULL THEN 'repository'
+              WHEN caller_subject IS NOT NULL THEN 'subject'
+              WHEN untrusted_iss IS NOT NULL THEN 'issuer' ELSE 'none' END AS caller_kind,
+         SUM(weight) AS requests, MAX(id) AS latest_id, MAX(ts) AS latest_ts,
+         MAX(CASE WHEN claims_verified = 1 THEN id END) AS latest_verified_id,
+         (SELECT COUNT(*) FROM scanned) AS scanned
+       FROM scanned
+       GROUP BY 1, 2, 4, 5, 6, 7
+       ORDER BY requests DESC, latest_id DESC
+       LIMIT ?3`,
+    )
+    .bind(idLowerBound('req', sinceMs), scanRows, limit);
+}
+
+export function denialGroupFromRow(row: Record<string, unknown>): DenialGroup {
+  const text = (value: unknown) => (typeof value === 'string' ? value : null);
+  const kind = row.caller_kind;
+  return {
+    caller_provider_id: text(row.caller_provider_id) ?? '',
+    service_id: text(row.service_id) ?? '',
+    service_slug: text(row.service_slug),
+    reason: text(row.reason),
+    claims_verified: Number(row.claims_verified) === 1 ? 1 : 0,
+    caller: text(row.caller),
+    caller_kind: kind === 'repository' || kind === 'subject' || kind === 'issuer' ? kind : 'none',
+    requests: Number(row.requests ?? 0),
+    latest_id: String(row.latest_id),
+    latest_ts: Number(row.latest_ts),
+    latest_verified_id: text(row.latest_verified_id),
+  };
+}
+
+/**
+ * Weighted allowed and other (denied, error) requests in stored rollups since `sinceHour`: the
+ * Data retention page turns them into records kept per day at the current sample rate.
+ */
+export function outcomeTotalsStatement(db: D1Database, sinceHour: number): D1PreparedStatement {
+  return db
+    .prepare(
+      `SELECT COALESCE(SUM(CASE WHEN outcome = 'allowed' THEN requests ELSE 0 END), 0) AS allowed,
+         COALESCE(SUM(CASE WHEN outcome <> 'allowed' THEN requests ELSE 0 END), 0) AS other
+       FROM request_rollup_hourly WHERE hour >= ?`,
+    )
+    .bind(sinceHour);
 }

@@ -130,7 +130,7 @@ async function deleteRequestLogBelow(
  * sums of weights (>= 1 per row) from the hour of the oldest stored row on. Reads one rollup row
  * per group and hour instead of one row per request.
  */
-const ROWS_ESTIMATE_SQL = `SELECT COALESCE(SUM(requests), 0) AS n FROM request_rollup_hourly
+export const ROWS_ESTIMATE_SQL = `SELECT COALESCE(SUM(requests), 0) AS n FROM request_rollup_hourly
   WHERE hour >= (SELECT ts - ts % ${HOUR_MS} FROM request_log ORDER BY id LIMIT 1)`;
 
 /**

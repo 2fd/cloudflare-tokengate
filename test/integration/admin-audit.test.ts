@@ -1,6 +1,9 @@
-// Audit log page end to end: listing, filters, keyset pagination, diff rendering, escaping, RBAC.
+// Audit log page end to end: listing, link-tab and select filters, keyset pagination both ways,
+// the diff table, escaping, the category map and RBAC.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { AUDIT_CATEGORIES, auditCategoriesOf } from '../../src/admin/routes/audit';
+import { AUDIT_ACTION_TEXT } from '../../src/admin/views/monitoring';
 import { auditStatement, buildAuditEvent, SYSTEM_ACTOR } from '../../src/db/audit';
 import type { Actor, User } from '../../src/db/types';
 import {
@@ -15,6 +18,9 @@ import { createTestApp, type TestApp } from '../helpers/app';
 import { createClock, TEST_EPOCH_MS } from '../helpers/jwt';
 
 const random = (n: number) => crypto.getRandomValues(new Uint8Array(n));
+const SVC_A = 'svc_01JAAAAAAAAAAAAAAAAAAAAAAA';
+const SVC_B = 'svc_01JBBBBBBBBBBBBBBBBBBBBBBB';
+const GRT_C = 'grt_01JCCCCCCCCCCCCCCCCCCCCCCC';
 
 let clock: ReturnType<typeof createClock>;
 let app: TestApp;
@@ -49,25 +55,29 @@ beforeEach(async () => {
 });
 
 describe('GET /admin/audit', () => {
-  it('lists events newest first with before/after JSON for a viewer', async () => {
+  it('lists events newest first with a diff table for a viewer', async () => {
     const created = await audit(actorFor(owner), {
       action: 'service.create',
       targetType: 'service',
-      targetId: 'svc_01JAAAAAAAAAAAAAAAAAAAAAAA',
+      targetId: SVC_A,
       summary: 'Created service slack',
       diff: { after: { slug: 'slack', credential_sealed: 'sealed-bytes' } },
     });
     const updated = await audit(actorFor(owner), {
       action: 'grant.update',
       targetType: 'grant',
-      targetId: 'grt_01JAAAAAAAAAAAAAAAAAAAAAAA',
+      targetId: GRT_C,
       summary: 'Updated grant deploy',
-      diff: { before: { name: 'old' }, after: { name: 'new' }, warnings: ['check me'] },
+      diff: {
+        before: { name: 'old', rules: [1] },
+        after: { name: 'new', rules: [1] },
+        warnings: ['check me'],
+      },
     });
     const system = await audit(SYSTEM_ACTOR, {
       action: 'credential.expiring',
       targetType: 'service',
-      targetId: 'svc_01JAAAAAAAAAAAAAAAAAAAAAAA',
+      targetId: SVC_A,
       summary: 'Credential of slack expires in 3 days',
     });
 
@@ -75,15 +85,37 @@ describe('GET /admin/audit', () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(eventIds(html)).toEqual([system, updated, created]);
-    expect(html).toContain('<span class="muted">system</span>');
-    expect(html).toContain('<b>Before</b>');
-    expect(html).toContain('&quot;name&quot;: &quot;old&quot;');
+    expect(html).toContain('System (hourly job)');
+    expect(html).toContain('<th scope="col">Before</th>');
+    // Changed keys only: `rules` did not change.
+    expect(html).toContain('Changes: name<span class="vh">');
+    expect(html).toContain('<td><code>old</code></td><td><code>new</code></td>');
     expect(html).toContain('&quot;warnings&quot;');
-    expect(html).toContain('href="/admin/tokens/svc_01JAAAAAAAAAAAAAAAAAAAAAAA"');
-    expect(html).toContain('href="/admin/access/grt_01JAAAAAAAAAAAAAAAAAAAAAAA"');
+    expect(html).toContain('Secret expires soon');
+    // Deleted (unknown) entities are named as such, with a History link.
+    expect(html).toContain(`deleted token <code>${SVC_A}</code>`);
+    expect(html).toContain(`href="/admin/audit?target=${SVC_A}"`);
     // Redacted at write time; the page never sees the value.
     expect(html).not.toContain('sealed-bytes');
     expect(html).toContain('[redacted]');
+  });
+
+  it('links targets that exist to their page by name', async () => {
+    await env.DB.prepare(
+      `INSERT INTO services (id, slug, name, base_url, injection, created_at, updated_at)
+       VALUES (?, 'slack', 'Slack bot', 'https://slack.com/api', '{"kind":"bearer"}', 0, 0)`,
+    )
+      .bind(SVC_A)
+      .run();
+    await audit(actorFor(owner), {
+      action: 'service.update',
+      targetType: 'service',
+      targetId: SVC_A,
+      summary: 'Updated',
+    });
+    const html = await (await adminGet(app, session, '/admin/audit')).text();
+    expect(html).toContain(`<a href="/admin/tokens/${SVC_A}">Slack bot</a>`);
+    expect(html).toContain(`<option value="${SVC_A}">Slack bot</option>`);
   });
 
   it('filters by target and actor', async () => {
@@ -91,70 +123,142 @@ describe('GET /admin/audit', () => {
     const a = await audit(actorFor(owner), {
       action: 'service.create',
       targetType: 'service',
-      targetId: 'svc_A',
+      targetId: SVC_A,
       summary: 'a',
     });
     const b = await audit(actorFor(other), {
       action: 'service.update',
       targetType: 'service',
-      targetId: 'svc_B',
+      targetId: SVC_B,
       summary: 'b',
     });
     const c = await audit(actorFor(other), {
       action: 'grant.create',
       targetType: 'grant',
-      targetId: 'grt_C',
+      targetId: GRT_C,
       summary: 'c',
+    });
+    const s = await audit(SYSTEM_ACTOR, {
+      action: 'settings.update',
+      targetType: 'settings',
+      targetId: null,
+      summary: 's',
     });
     const get = async (query: string) =>
       eventIds(await (await adminGet(app, session, `/admin/audit?${query}`)).text());
-    expect(await get('target_type=service')).toEqual([b, a]);
-    expect(await get('target_type=service&target_id=svc_A')).toEqual([a]);
+    expect(await get(`target=${SVC_A}`)).toEqual([a]);
+    expect(await get('target=settings')).toEqual([s]);
     expect(await get('actor=admin%40example.com')).toEqual([c, b]);
     expect(await get(`actor=${owner.id}`)).toEqual([a]);
-    expect(await get('target_type=user')).toEqual([]);
+    expect(await get('actor=system')).toEqual([s]);
   });
 
-  it('paginates with an "Older entries" link that keeps the filters', async () => {
+  it('filters by category through the action index', async () => {
+    const t = await audit(actorFor(owner), {
+      action: 'service.credential.set',
+      targetType: 'service',
+      targetId: SVC_A,
+      summary: 't',
+    });
+    const h = await audit(actorFor(owner), {
+      action: 'settings.upstream_hosts',
+      targetType: 'settings',
+      targetId: null,
+      summary: 'h',
+    });
+    const g = await audit(actorFor(owner), {
+      action: 'grant.create',
+      targetType: 'grant',
+      targetId: GRT_C,
+      summary: 'g',
+    });
+    const get = async (query: string) =>
+      eventIds(await (await adminGet(app, session, `/admin/audit?${query}`)).text());
+    expect(await get('category=tokens')).toEqual([h, t]);
+    expect(await get('category=access')).toEqual([g]);
+    expect(await get('category=users')).toEqual([]);
+    const { results } = await env.DB.prepare(
+      "EXPLAIN QUERY PLAN SELECT * FROM audit_log WHERE ((action >= 'service.' AND action < 'service/')) ORDER BY id DESC LIMIT 51",
+    ).all<{ detail: string }>();
+    expect(results.map((row) => row.detail).join('\n')).toContain('audit_log_action');
+  });
+
+  it('paginates both ways, keeping the filters', async () => {
     const ids: string[] = [];
     for (let i = 0; i < 53; i++) {
       ids.push(
         await audit(actorFor(owner), {
           action: 'grant.update',
           targetType: 'grant',
-          targetId: 'grt_X',
+          targetId: GRT_C,
           summary: `change ${i}`,
         }),
       );
     }
     const newest = [...ids].reverse();
-    const first = await (await adminGet(app, session, '/admin/audit?target_type=grant')).text();
+    const first = await (await adminGet(app, session, `/admin/audit?target=${GRT_C}`)).text();
     expect(eventIds(first)).toEqual(newest.slice(0, 50));
     const older = first.match(/href="(\/admin\/audit\?[^"]*before=[^"]*)"/)?.[1];
-    expect(older).toBeDefined();
+    expect(older).toContain(`target=${GRT_C}`);
     const second = await (
       await adminGet(app, session, (older ?? '').replaceAll('&amp;', '&'))
     ).text();
     expect(eventIds(second)).toEqual(newest.slice(50));
     expect(second).not.toContain('Older entries');
+    const newer = second.match(/href="(\/admin\/audit\?[^"]*after=[^"]*)"/)?.[1];
+    const back = await (
+      await adminGet(app, session, (newer ?? '').replaceAll('&amp;', '&'))
+    ).text();
+    expect(eventIds(back)).toEqual(newest.slice(0, 50));
   });
 
-  it('answers 400 for invalid filters without listing events', async () => {
-    await audit(actorFor(owner), { action: 'x', targetType: null, targetId: null, summary: 's' });
-    for (const query of ['before=aud_bad', 'target_type=%3Cscript%3E']) {
+  it('answers 400 for invalid filters, drops them and still lists events', async () => {
+    const id = await audit(actorFor(owner), {
+      action: 'x',
+      targetType: null,
+      targetId: null,
+      summary: 's',
+    });
+    for (const query of [
+      'before=aud_bad',
+      'target=%3Cscript%3E',
+      'actor=nobody',
+      'category=bogus',
+    ]) {
       const res = await adminGet(app, session, `/admin/audit?${query}`);
-      expect(res.status).toBe(400);
+      expect(res.status, query).toBe(400);
       const html = await res.text();
-      expect(html).toContain('class="banner error"');
-      expect(eventIds(html)).toEqual([]);
+      expect(html).toContain('class="error-summary"');
+      expect(eventIds(html)).toEqual([id]);
+      expect(html).not.toContain('<script>');
     }
+    const html = await (await adminGet(app, session, '/admin/audit?actor=nobody')).text();
+    expect(html).toContain('<a href="#f-actor">Choose a person from the list.</a>');
+    expect(html).toContain('aria-invalid="true"');
   });
 
   it('shows a helpful empty state', async () => {
     const html = await (await adminGet(app, session, '/admin/audit')).text();
     expect(html).toContain('No audit events yet');
-    const filtered = await (await adminGet(app, session, '/admin/audit?actor=nobody')).text();
+    const filtered = await (await adminGet(app, session, '/admin/audit?category=tokens')).text();
     expect(filtered).toContain('No audit events match these filters');
+  });
+
+  it('labels suspended users in the actor list and in the table', async () => {
+    const gone = await createUser({
+      email: 'gone@example.com',
+      role: 'admin',
+      status: 'suspended',
+    });
+    await audit(actorFor(gone), {
+      action: 'grant.create',
+      targetType: 'grant',
+      targetId: GRT_C,
+      summary: 'x',
+    });
+    const html = await (await adminGet(app, session, '/admin/audit')).text();
+    expect(html).toContain(`<option value="${gone.id}">gone@example.com (suspended)</option>`);
+    expect(html).toContain('gone@example.com (suspended)<span class="vh">');
   });
 
   it('escapes stored text (XSS)', async () => {
@@ -181,11 +285,11 @@ describe('GET /admin/audit', () => {
 });
 
 describe('GET /admin/audit filter handling', () => {
-  it('matches the actor email case-insensitively', async () => {
+  it('matches the actor email case-insensitively through users', async () => {
     const id = await audit(actorFor(owner), {
       action: 'service.create',
       targetType: 'service',
-      targetId: 'svc_A',
+      targetId: SVC_A,
       summary: 'a',
     });
     const html = await (
@@ -194,14 +298,61 @@ describe('GET /admin/audit filter handling', () => {
     expect(eventIds(html)).toEqual([id]);
   });
 
-  it('never turns an invalid target type into an option label', async () => {
+  it('never turns an invalid target into an option label', async () => {
     const spoof = 'Your session expired';
-    const res = await adminGet(
-      app,
-      session,
-      `/admin/audit?target_type=${encodeURIComponent(spoof)}`,
-    );
+    const res = await adminGet(app, session, `/admin/audit?target=${encodeURIComponent(spoof)}`);
     expect(res.status).toBe(400);
     expect(await res.text()).not.toContain(`>${spoof}<`);
+  });
+
+  it('gives a well-formed id of a deleted object its own option, and nothing else', async () => {
+    const html = await (await adminGet(app, session, `/admin/audit?target=${SVC_B}`)).text();
+    expect(html).toContain(`<option value="${SVC_B}" selected="">Deleted token ${SVC_B}</option>`);
+  });
+});
+
+describe('AUDIT_CATEGORIES', () => {
+  // Every audit action the ops, the routes and the cron write (string literals in src/).
+  const sources = import.meta.glob<string>(['../../src/**/*.ts', '../../src/**/*.tsx'], {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  });
+  const emitted = new Set<string>();
+  for (const [file, text] of Object.entries(sources)) {
+    if (file.includes('/admin/views/') || file.endsWith('/routes/audit.tsx')) continue;
+    for (const match of text.matchAll(
+      /\baction: (?:[a-z]+ \? )?'((?:service|grant|caller_provider|user|settings|keyring|credential|config)\.[a-z_.]+)'(?: : '([a-z_.]+)')?/g,
+    )) {
+      emitted.add(match[1] as string);
+      if (match[2]) emitted.add(match[2]);
+    }
+  }
+
+  it('finds the emitted actions', () => {
+    expect(emitted.size).toBeGreaterThan(25);
+    expect(emitted).toContain('grant.enable');
+    expect(emitted).toContain('grant.disable');
+  });
+
+  it('maps every emitted action to exactly one category, and every action has a text', () => {
+    for (const action of emitted) {
+      expect(auditCategoriesOf(action), action).toHaveLength(1);
+      expect(Object.hasOwn(AUDIT_ACTION_TEXT, action), action).toBe(true);
+    }
+  });
+
+  it('maps every action of the text table to exactly one category', () => {
+    for (const action of Object.keys(AUDIT_ACTION_TEXT)) {
+      expect(auditCategoriesOf(action), action).toHaveLength(1);
+    }
+    expect(Object.keys(AUDIT_CATEGORIES)).toEqual([
+      'tokens',
+      'consumers',
+      'access',
+      'users',
+      'signins',
+      'system',
+    ]);
   });
 });

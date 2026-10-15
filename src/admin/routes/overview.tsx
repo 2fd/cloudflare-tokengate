@@ -1,67 +1,62 @@
-// Admin overview (`GET /admin`): last-24 h traffic, per-service table, operational banners,
-// recent denials, a getting-started checklist and the system status (`#health`). Read-only. The
-// status shows names, counts and the admin hosts, never configured values that could be secret
-// (I-CFG-1).
+// Monitoring › Overview (`GET /admin`): health (every alert, and every check), the getting-started
+// steps, traffic for a range (KPIs and a chart), which consumers use which token, the top denials
+// and the latest changes. Read-only. Only names, counts and states are shown, never configured
+// values that could be secret (I-CFG-1, I-CRED-1). Denials from unverified tokens never prefill a
+// form (I-LOG-2).
+import type { Child } from 'hono/jsx';
 import type { App } from '../../app';
-import { type Config, parseConfig } from '../../config';
-import { type SchemaState, schemaStatusByDatabase } from '../../db/migrations';
-import type { RecentDenial } from '../../db/rollups';
-import {
-  getAdminHosts,
-  getAllowedUpstreamHosts,
-  settingsFromRows,
-  settingsStatement,
-} from '../../db/settings';
-import type { Role } from '../../db/types';
-import type { Deps } from '../../deps';
+import { parseConfig } from '../../config';
+import { getAdminHosts } from '../../db/settings';
+import type { Service } from '../../db/types';
 import type { AppEnv } from '../../env';
-import { cronHealth } from '../../health';
+import { SCHEMA_HEAD } from '../../generated/schema-head';
 import {
-  type DashboardData,
-  dashboardBanners,
-  loadDashboard,
-  type Percentile,
-  type ServiceTraffic,
-  type TrafficStats,
+  type AlertData,
+  alertsFor,
+  EXPIRY_WARNING_MS,
+  loadOverview,
+  type OverviewData,
+  outsideAllowedHosts,
+  overviewAlerts,
+  type TokenTraffic,
 } from '../../telemetry/dashboard';
-import { can, type Permission } from '../auth/rbac';
-import { paths } from '../paths';
-import { renderPage } from '../render';
 import {
-  formatCount,
-  formatDuration,
-  formatPercent,
-  formatTime,
-  loginProviderNames,
-} from '../views/format';
-import { Badge, Code, Details, EmptyState } from '../views/legacy';
-import { docsUrl, reasonText } from '../views/reasons';
+  OVERVIEW_RANGES,
+  type OverviewRange,
+  parseRange,
+  RANGE_LABEL,
+} from '../../telemetry/ranges';
+import { hourStart } from '../../telemetry/rollup';
+import { type AccessEdge, type Connections, loadConnections } from '../connections';
+import { loadDone, type NoticeTable, resolveNotice } from '../notice';
+import { paths } from '../paths';
+import { renderPage, type ViewContext } from '../render';
+import { TrafficChart } from '../views/chart';
+import {
+  AlertList,
+  AskSomeone,
+  type ChipProps,
+  ChipList,
+  DataTable,
+  EmptyState,
+  StatusBadge,
+  Tabs,
+  Time,
+} from '../views/components';
+import { formatCount, formatPercent, formatShortTime, loginProviderNames } from '../views/format';
+import {
+  actionText,
+  AuditTarget,
+  auditActorText,
+  DenialTable,
+  FindRequestForm,
+  KpiList,
+  percentileText,
+} from '../views/monitoring';
+import { type StatusKey, statusLabel } from '../views/status';
+import { auditTargetNames, loadAuditPeople } from './audit';
 
-export function registerOverviewRoutes(app: App): void {
-  app.get('/admin', async (c) => {
-    const deps = c.get('deps');
-    const [data, setup, status] = await Promise.all([
-      loadDashboard(deps),
-      loadSetupState(deps.env),
-      loadSystemStatus(deps),
-    ]);
-    return renderPage(
-      c,
-      {
-        title: 'Dashboard',
-        section: 'monitoring',
-        subsection: 'overview',
-        legacyBanners: dashboardBanners(data),
-      },
-      () => (
-        <>
-          <DashboardPage data={data} setup={setup} role={c.get('viewer').user.role} />
-          <SystemStatus status={status} env={deps.env} />
-        </>
-      ),
-    );
-  });
-}
+export { percentileText } from '../views/monitoring';
 
 /**
  * Whether any verified call exists. Pre-trust rejections (claims_verified = 0, e.g. anonymous
@@ -69,438 +64,795 @@ export function registerOverviewRoutes(app: App): void {
  */
 export const VERIFIED_CALL_SQL = 'SELECT id FROM request_log WHERE claims_verified = 1 LIMIT 1';
 
-interface SetupState {
-  callerProviders: number;
-  services: number;
-  grants: number;
-  /** A request with verified caller claims (any age): a call that reached policy evaluation. */
+/** Notices of the row actions that return to the Overview (`_return=overview`). */
+const NOTICES: NoticeTable = {
+  rewrapped: () => ({ text: 'Secrets re-encrypted with the active key.' }),
+  rewrapped_partial: () => ({
+    text: 'Secrets re-encrypted with the active key, except some that changed while this ran. Run it again to finish.',
+  }),
+  rewrap_none: () => ({ text: 'Nothing to re-encrypt: every secret already uses the active key.' }),
+  key_confirmed: () => ({ text: 'New key confirmed: every secret opens with it.' }),
+  approved: () => ({
+    text: 'Person approved. They can use the admin console from their next request.',
+  }),
+  rejected: () => ({ text: 'Person rejected and suspended.' }),
+};
+
+export function registerOverviewRoutes(app: App): void {
+  app.get('/admin', async (c) => {
+    const deps = c.get('deps');
+    const rawRange = c.req.query('range');
+    const parsed = parseRange(rawRange, OVERVIEW_RANGES);
+    const range: OverviewRange = parsed ?? '24h';
+    const [overview, connections, verifiedCall, adminHosts, people, done] = await Promise.all([
+      loadOverview(deps, range),
+      loadConnections(deps),
+      deps.env.TELEMETRY_DB.prepare(VERIFIED_CALL_SQL)
+        .first()
+        .then((row) => row !== null)
+        .catch(() => false),
+      getAdminHosts(deps.env.DB),
+      loadAuditPeople(deps.env.DB),
+      loadDone(deps, { userId: c.get('viewer').user.id }, c.req.query('done')),
+    ]);
+    return renderPage(
+      c,
+      {
+        title: `Overview (last ${RANGE_LABEL[range]})`,
+        section: 'monitoring',
+        subsection: 'overview',
+        notice: resolveNotice(NOTICES, c.req.query('notice'), done),
+        subnavExtra: <FindRequestForm />,
+      },
+      (ctx) => (
+        <OverviewPage
+          ctx={ctx}
+          data={overview}
+          connections={connections}
+          verifiedCall={verifiedCall}
+          adminHosts={adminHosts}
+          env={deps.env}
+          rangeNote={rawRange !== undefined && parsed === null}
+          names={auditTargetNames(connections, people)}
+          suspended={new Set(people.filter((p) => p.status === 'suspended').map((p) => p.id))}
+        />
+      ),
+    );
+  });
+}
+
+function OverviewPage(props: {
+  ctx: ViewContext;
+  data: OverviewData;
+  connections: Connections;
   verifiedCall: boolean;
-  sampleRate: number;
-}
-
-async function loadSetupState(env: Pick<AppEnv, 'DB' | 'TELEMETRY_DB'>): Promise<SetupState> {
-  const db = env.DB;
-  const [[providers, services, grants, settings], first] = await Promise.all([
-    db.batch([
-      db.prepare('SELECT COUNT(*) AS n FROM caller_providers'),
-      db.prepare('SELECT COUNT(*) AS n FROM services'),
-      db.prepare('SELECT COUNT(*) AS n FROM grants'),
-      settingsStatement(db),
-    ]),
-    env.TELEMETRY_DB.prepare(VERIFIED_CALL_SQL).first(),
-  ]);
-  const count = (result: D1Result | undefined) =>
-    Number((result?.results?.[0] as { n?: number } | undefined)?.n ?? 0);
-  return {
-    callerProviders: count(providers),
-    services: count(services),
-    grants: count(grants),
-    verifiedCall: first !== null,
-    sampleRate: settingsFromRows((settings?.results ?? []) as Array<{ key: string; value: string }>)
-      .allowed_sample_rate,
-  };
-}
-
-function DashboardPage(props: { data: DashboardData; setup: SetupState; role: Role }) {
-  const { data, setup, role } = props;
-  const setupDone =
-    setup.callerProviders > 0 && setup.services > 0 && setup.grants > 0 && setup.verifiedCall;
+  adminHosts: string[] | null;
+  env: AppEnv;
+  rangeNote: boolean;
+  names: ReadonlyMap<string, string>;
+  suspended: ReadonlySet<string>;
+}) {
+  const { ctx, data, connections } = props;
+  const { range } = data;
+  const sampleRate = data.alertData.sampleRate;
+  const alerts = overviewAlerts(data.alertData);
   return (
     <>
-      {setupDone ? null : <SetupChecklist setup={setup} role={role} />}
-
-      <h2>Last 24 hours</h2>
-      <p class="muted">
-        Traffic through the proxy since {formatTime(data.window.from)}.
-        {setup.sampleRate <= 0
-          ? ' Allowed requests are not recorded (sample rate 0 in Data retention), so allowed counts and latency stay at zero.'
-          : setup.sampleRate < 1
-            ? ` Allowed requests are sampled at ${formatPercent(setup.sampleRate)}, so counts are estimates.`
-            : null}
+      <p class="meta">
+        Updated <Time ms={data.generatedAt} /> ·{' '}
+        <a href={paths.overview({ range: range === '24h' ? undefined : range })}>Refresh</a>
       </p>
-      <Metrics totals={data.totals} />
+      <div class="range">
+        <Tabs
+          label="Time range"
+          current={range}
+          items={OVERVIEW_RANGES.map((key) => ({
+            key,
+            href: paths.overview(key === '24h' ? undefined : { range: key }),
+            label: RANGE_LABEL[key],
+          }))}
+        />
+        <p class="since">
+          since <Time ms={data.window.from} />
+        </p>
+      </div>
+      {props.rangeNote ? (
+        <p class="muted">That time range is not available; showing the last 24 hours.</p>
+      ) : null}
+      {sampleRate <= 0 ? (
+        <p class="note">
+          Allowed requests are not recorded (sample rate 0). Allowed counts and "last used" are not
+          available. <a href={paths.retention()}>Change in Data retention</a>
+        </p>
+      ) : sampleRate < 1 ? (
+        <p class="note">
+          Allowed requests are sampled at {formatPercent(sampleRate)}, so counts are estimates.{' '}
+          <a href={paths.retention()}>Change in Data retention</a>
+        </p>
+      ) : null}
 
-      <h2>Services</h2>
-      {data.services.length === 0 ? (
-        <EmptyState>
-          No requests in the last 24 hours. Requests appear here once a caller uses the proxy at{' '}
-          <Code>/proxy/&lt;service slug&gt;/…</Code>.
-        </EmptyState>
-      ) : (
-        <ServiceTable services={data.services} />
-      )}
+      <HealthSection
+        ctx={ctx}
+        alerts={alerts}
+        alertData={data.alertData}
+        adminHosts={props.adminHosts}
+        env={props.env}
+      />
+      <GetStarted
+        ctx={ctx}
+        connections={connections}
+        alertData={data.alertData}
+        verifiedCall={props.verifiedCall}
+      />
 
-      <h2>Recent denials</h2>
-      <p class="muted">
-        Requests the gateway refused in the last 24 hours. Open one to see why and, when a grant is
-        missing, to create it from the request.
-      </p>
-      {data.recentDenials.length === 0 ? (
-        <EmptyState>No denied requests in the last 24 hours.</EmptyState>
-      ) : (
-        <DenialTable denials={data.recentDenials} />
-      )}
+      <section aria-labelledby="traffic-h">
+        <h2 id="traffic-h">Traffic</h2>
+        {!data.telemetryAvailable ? (
+          <p class="note">The request log could not be read, so traffic is not shown.</p>
+        ) : null}
+        <KpiList totals={data.totals} range={range} />
+        {data.totals.requests === 0 ? (
+          <EmptyState>
+            No requests in the selected range. Requests appear once a consumer calls{' '}
+            <code>/proxy/&lt;token slug&gt;/…</code>.
+          </EmptyState>
+        ) : null}
+        <TrafficChart
+          id="traffic-chart"
+          title={`Requests per ${range === '24h' ? 'hour' : range === '7d' ? '6 hours' : 'day'}, last ${RANGE_LABEL[range]}`}
+          buckets={data.series}
+        />
+      </section>
+
+      <TokensInUse ctx={ctx} data={data} connections={connections} />
+
+      <section aria-labelledby="denials-h">
+        <h2 id="denials-h">Top denials</h2>
+        {data.denials.groups.length === 0 ? (
+          <EmptyState>No denied requests in the selected range.</EmptyState>
+        ) : (
+          <DenialTable
+            groups={data.denials.groups}
+            range={range}
+            since={data.window.from}
+            consumers={new Map(connections.consumers.map((c) => [c.id, c]))}
+            tokens={new Map(connections.tokens.map((t) => [t.id, t]))}
+            ctx={ctx}
+          />
+        )}
+        <p>
+          <a href={paths.requests({ range, outcome: 'denied' })}>See all denied requests</a>
+          {data.denials.bounded ? (
+            <span class="muted"> Grouped from the newest 2,000 denials.</span>
+          ) : null}
+        </p>
+      </section>
+
+      <section aria-labelledby="changes-h">
+        <h2 id="changes-h">Recent changes</h2>
+        <DataTable
+          id="recent-changes"
+          caption="The last 5 changes"
+          captionHidden
+          rowHeader="what"
+          rows={data.recentChanges}
+          empty={<EmptyState>No changes yet.</EmptyState>}
+          columns={[
+            { key: 'when', header: 'When', render: (e) => <Time ms={e.ts} /> },
+            { key: 'who', header: 'Who', render: (e) => auditActorText(e, props.suspended) },
+            {
+              key: 'what',
+              header: 'What',
+              render: (e) => (
+                <>
+                  {actionText(e.action) ?? e.action} <code>{e.action}</code>
+                </>
+              ),
+            },
+            {
+              key: 'target',
+              header: 'Target',
+              render: (e) => <AuditTarget event={e} names={props.names} />,
+            },
+          ]}
+        />
+        <p>
+          <a href={paths.audit()}>Open the audit log</a>
+        </p>
+      </section>
     </>
   );
 }
 
-/** Who holds the permission of a setup step, for viewers who cannot do it themselves. */
-const ASK_WHOM: Partial<Record<Permission, string>> = {
-  'tokens:write': 'a token manager, admin or owner',
-  'access:write': 'an access manager, admin or owner',
-};
+// ---------------------------------------------------------------------------------------------
+// Health
 
-function SetupChecklist(props: { setup: SetupState; role: Role }) {
-  const { setup, role } = props;
+const SCHEMA_TEXT = {
+  ok: 'Up to date.',
+  behind: 'Migrations missing.',
+  ahead: 'Newer than this code (a rollback?).',
+  unknown: 'Could not be read.',
+} as const;
+
+interface Check {
+  id: string;
+  name: string;
+  ok: boolean;
+  detail: Child;
+}
+
+function HealthSection(props: {
+  ctx: ViewContext;
+  alerts: ReturnType<typeof overviewAlerts>;
+  alertData: AlertData;
+  adminHosts: string[] | null;
+  env: AppEnv;
+}) {
+  const checks = healthChecks(props.alertData, props.adminHosts, props.env);
+  const problems = checks.filter((check) => !check.ok).length;
+  return (
+    <section id="health" aria-labelledby="health-h">
+      <h2 id="health-h">Health</h2>
+      {props.alerts.length === 0 ? (
+        <p>No problems found.</p>
+      ) : (
+        <AlertList alerts={props.alerts} ctx={props.ctx} />
+      )}
+      <details>
+        <summary>
+          All checks ({checks.length - problems} ok, {problems}{' '}
+          {problems === 1 ? 'problem' : 'problems'})
+        </summary>
+        <DataTable
+          id="checks"
+          caption="All checks"
+          captionHidden
+          rowHeader="name"
+          rows={checks}
+          columns={[
+            {
+              key: 'name',
+              header: 'Check',
+              render: (check) => <span id={`check-${check.id}`}>{check.name}</span>,
+            },
+            {
+              key: 'state',
+              header: 'State',
+              render: (check) =>
+                check.ok ? (
+                  <span class="badge ok">OK</span>
+                ) : (
+                  <span class="badge bad">Problem</span>
+                ),
+            },
+            { key: 'detail', header: 'Detail', render: (check) => check.detail },
+          ]}
+        />
+      </details>
+    </section>
+  );
+}
+
+function healthChecks(data: AlertData, adminHosts: string[] | null, env: AppEnv): Check[] {
+  const { cron, keyring } = data;
+  const nextRun = hourStart(data.now) + 3_600_000;
+  const login = loginProviderNames(parseConfig(env));
+  const binding = (
+    id: string,
+    name: string,
+    bound: boolean,
+    missing: string,
+    anchor: string,
+  ): Check => ({
+    id,
+    name,
+    ok: true,
+    detail: (
+      <>
+        {bound ? 'Bound.' : `Not bound: ${missing}.`}{' '}
+        <a href={paths.docs(`configuration.md#${anchor}`)}>
+          About {name}
+          <span class="vh"> (GitHub docs)</span>
+        </a>
+      </>
+    ),
+  });
+  return [
+    {
+      id: 'schema',
+      name: 'Control-plane schema (DB)',
+      ok: data.schema.DB === 'ok',
+      detail: <SchemaDetail database="DB" state={data.schema.DB} />,
+    },
+    {
+      id: 'telemetry-schema',
+      name: 'Telemetry schema (TELEMETRY_DB)',
+      ok: data.schema.TELEMETRY_DB === 'ok',
+      detail: <SchemaDetail database="TELEMETRY_DB" state={data.schema.TELEMETRY_DB} />,
+    },
+    {
+      id: 'maintenance',
+      name: 'Hourly maintenance job',
+      ok: !cron.failing && !(cron.stale && cron.lastSuccessAt !== null),
+      detail: (
+        <>
+          Last success: {cron.lastSuccessAt === null ? 'never' : <Time ms={cron.lastSuccessAt} />}.
+          {cron.failing ? (
+            <>
+              {' '}
+              Last failure
+              {cron.lastErrorAt === null ? (
+                ''
+              ) : (
+                <>
+                  {' '}
+                  at <Time ms={cron.lastErrorAt} />
+                </>
+              )}
+              : <code>{cron.lastError ?? 'unknown'}</code>.
+            </>
+          ) : null}{' '}
+          Next run expected a few minutes after {formatShortTime(nextRun)}.
+        </>
+      ),
+    },
+    {
+      id: 'keys',
+      name: 'Encryption keys',
+      ok: keyring.ok,
+      detail: (
+        <>
+          {keyring.error
+            ? `Not loaded (${keyring.error}).`
+            : `${formatCount(data.keyCount)} ${data.keyCount === 1 ? 'key' : 'keys'}, active ${keyring.activeKid ?? '—'}, ${formatCount(data.sealedKids.length)} ${data.sealedKids.length === 1 ? 'secret' : 'secrets'}.`}{' '}
+          <a href={paths.tokenKeys()}>Open encryption keys</a>
+        </>
+      ),
+    },
+    {
+      id: 'sign-in',
+      name: 'Sign-in',
+      ok: login.length > 0,
+      detail: (
+        <>
+          {login.length > 0 ? `${login.join(', ')}.` : 'No login configured: nobody can sign in.'}{' '}
+          <a href={paths.signIn('login')}>Open sign-in</a>
+        </>
+      ),
+    },
+    {
+      id: 'admin-hosts',
+      name: 'Admin hosts',
+      ok: true,
+      detail: (
+        <>
+          {adminHosts === null
+            ? 'Not set yet: set on the first sign-in.'
+            : `${adminHosts.join(', ')}.`}{' '}
+          <a href={paths.signIn('hosts')}>Open admin hosts</a>
+        </>
+      ),
+    },
+    binding(
+      'queue',
+      'REQUEST_LOG_QUEUE',
+      env.REQUEST_LOG_QUEUE !== undefined,
+      'request records are written to the database directly',
+      'request_log_queue',
+    ),
+    binding(
+      'archive',
+      'REQUEST_ARCHIVE',
+      env.REQUEST_ARCHIVE !== undefined,
+      'records are not archived to R2',
+      'request_archive',
+    ),
+    binding(
+      'rate-limiter',
+      'PROXY_RATE_LIMITER',
+      env.PROXY_RATE_LIMITER !== undefined,
+      'no per-access request cap',
+      'proxy_rate_limiter',
+    ),
+    {
+      id: 'config',
+      name: 'Configuration',
+      ok: data.config.length === 0,
+      detail:
+        data.config.length === 0 ? (
+          'No problems.'
+        ) : (
+          <ul>
+            {data.config.map((problem) => (
+              <li>
+                <code>{problem.variable}</code>: {problem.message}{' '}
+                <a href={paths.docs(`configuration.md#${problem.anchor}`)}>
+                  Reference<span class="vh"> for {problem.variable} (GitHub docs)</span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        ),
+    },
+  ];
+}
+
+function SchemaDetail(props: { database: 'DB' | 'TELEMETRY_DB'; state: keyof typeof SCHEMA_TEXT }) {
+  return (
+    <>
+      {SCHEMA_TEXT[props.state]}
+      {props.state === 'behind' ? (
+        <>
+          {' '}
+          Missing {SCHEMA_HEAD[props.database]}. Run:{' '}
+          <code>wrangler d1 migrations apply {props.database} --remote</code>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Get started
+
+function GetStarted(props: {
+  ctx: ViewContext;
+  connections: Connections;
+  alertData: AlertData;
+  verifiedCall: boolean;
+}) {
+  const { ctx, connections, alertData } = props;
+  const tokenDone = alertData.services.some((s) => s.has_credential);
+  const consumerDone = connections.consumers.length > 0;
+  const enabled = connections.accesses
+    .filter((edge) => edge.grant.enabled)
+    .sort(
+      (a, b) => b.grant.created_at - a.grant.created_at || b.grant.id.localeCompare(a.grant.id),
+    );
+  const accessDone = enabled.length > 0;
+  if (tokenDone && consumerDone && accessDone && props.verifiedCall) return null;
+  const [newest] = enabled;
   const steps: Array<{
     done: boolean;
     title: string;
-    what: string;
-    href: string;
-    action: string;
-    permission: Permission;
+    why: string;
+    action: Child;
   }> = [
     {
-      done: setup.callerProviders > 0,
-      title: 'Add a caller provider',
-      what: 'Tells the gateway which CI tokens to trust, for example GitHub Actions in your organization.',
-      href: paths.consumerNew(),
-      action: 'Add a caller provider',
-      permission: 'access:write',
+      done: tokenDone,
+      title: 'Add a service token',
+      why: 'The upstream API (Slack, OpenAI, GitHub, …) and the secret the gateway attaches for callers.',
+      action: ctx.can('tokens:write') ? (
+        <a class="button" href={paths.tokenNew()}>
+          Add a service token
+        </a>
+      ) : (
+        <AskSomeone permission="tokens:write" ctx={ctx} verb="add a service token" />
+      ),
     },
     {
-      done: setup.services > 0,
-      title: 'Add a service',
-      what: 'The upstream API (Slack, OpenAI, GitHub, …) and the credential the gateway attaches for callers.',
-      href: paths.tokenNew(),
-      action: 'Add a service',
-      permission: 'tokens:write',
+      done: consumerDone,
+      title: 'Add a service consumer',
+      why: 'Tells the gateway which CI tokens to trust, for example GitHub Actions in your organization.',
+      action: ctx.can('access:write') ? (
+        <a
+          class="button"
+          href={
+            connections.tokens.length > 0
+              ? paths.accessNew({ consumer: 'new' })
+              : paths.consumerNew({ type: 'github-actions' })
+          }
+        >
+          Add a service consumer
+        </a>
+      ) : (
+        <AskSomeone permission="access:write" ctx={ctx} verb="add a service consumer" />
+      ),
     },
     {
-      done: setup.grants > 0,
-      title: 'Create a grant',
-      what: 'Decides which callers (for example, which repositories and branches) may call which service.',
-      href: paths.accessNew(),
-      action: 'Create a grant',
-      permission: 'access:write',
+      done: accessDone,
+      title: 'Give a consumer access',
+      why: 'Decides which workloads (for example, which repositories and branches) may call which token.',
+      action: ctx.can('access:write') ? (
+        <a class="button" href={paths.accessNew()}>
+          Give access
+        </a>
+      ) : (
+        <AskSomeone permission="access:write" ctx={ctx} verb="give a consumer access" />
+      ),
+    },
+    {
+      done: props.verifiedCall,
+      title: 'Make the first call',
+      why: 'Call the gateway from a workflow. The request then shows up under Requests, with the reason when it is denied.',
+      action: (
+        <>
+          {newest ? (
+            <a class="button" href={paths.accessItem(newest.grant.id, { hash: 'use' })}>
+              Copy the workflow step
+              <span class="vh"> for {newest.grant.name}</span>
+            </a>
+          ) : null}{' '}
+          <a href={paths.docs('callers/github-actions.md')}>
+            How to call the gateway from GitHub Actions<span class="vh"> (GitHub docs)</span>
+          </a>
+        </>
+      ),
     },
   ];
   return (
-    <section aria-labelledby="setup-heading">
-      <h2 id="setup-heading">Get started</h2>
-      <ol class="checklist">
+    <section id="get-started" aria-labelledby="gs-h">
+      <h2 id="gs-h">Get started</h2>
+      <p class="muted">Steps 1 and 2 can be done in any order, and by different people.</p>
+      <ol class="steps">
         {steps.map((step) => (
           <li class={step.done ? 'done' : undefined}>
-            <b>{step.title}</b> {step.done ? <Badge tone="ok">done</Badge> : null}
-            <br />
-            <span class="muted">{step.what}</span>
-            {step.done ? null : (
-              <>
-                <br />
-                {can(role, step.permission) ? (
-                  <a href={step.href}>{step.action}</a>
-                ) : (
-                  <span>Ask {ASK_WHOM[step.permission]} to do this step.</span>
-                )}
-              </>
-            )}
+            <p class="step-title">
+              <StatusBadge status={step.done ? 'done' : 'todo'} /> <strong>{step.title}</strong>
+            </p>
+            <p class="hint">{step.why}</p>
+            {step.done ? null : <div class="actions">{step.action}</div>}
           </li>
         ))}
-        <li class={setup.verifiedCall ? 'done' : undefined}>
-          <b>Make the first call</b> {setup.verifiedCall ? <Badge tone="ok">done</Badge> : null}
-          <br />
-          <span class="muted">
-            Call the gateway from a workflow. The request then shows up under Requests, including
-            the reason when it is denied.
-          </span>
-          {setup.verifiedCall ? null : (
-            <>
-              <br />
-              <a href={docsUrl('callers/github-actions.md')}>
-                How to call the gateway from GitHub Actions
-              </a>
-            </>
-          )}
-        </li>
       </ol>
     </section>
   );
 }
 
-function Metrics(props: { totals: TrafficStats }) {
-  const t = props.totals;
-  const tiles: Array<[string, string, string]> = [
-    [formatCount(t.requests), 'Requests', 'All calls that reached the gateway.'],
-    [formatCount(t.allowed), 'Allowed', 'Forwarded to the upstream API.'],
-    [formatCount(t.denied), 'Denied', 'Refused: bad token, wrong tenant or no matching grant.'],
-    [
-      `${formatCount(t.errors)} (${formatPercent(t.errorRate)})`,
-      'Errors',
-      'Gateway errors plus upstream 5xx answers.',
-    ],
-    [percentileText(t.p50), 'Median latency (p50)', 'Time to response headers, allowed requests.'],
-    [percentileText(t.p95), 'p95 latency', '95% of allowed requests were faster than this.'],
-  ];
-  return (
-    <div class="metrics">
-      {tiles.map(([value, label, hint]) => (
-        <div class="metric">
-          <span>{label}</span>
-          <b>{value}</b>
-          <small class="muted">{hint}</small>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/** Percentiles in the open-ended bucket only have a lower bound. */
-export function percentileText(p: Percentile | null): string {
-  if (p === null) return '—';
-  if (p.overflow) return `≥ ${Math.round(p.ms / 1000)} s`;
-  return formatDuration(p.ms);
-}
-
-function ServiceTable(props: { services: ServiceTraffic[] }) {
-  return (
-    <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">Service</th>
-            <th scope="col">Requests</th>
-            <th scope="col">Allowed</th>
-            <th scope="col">Denied</th>
-            <th scope="col">Errors</th>
-            <th scope="col">Error rate</th>
-            <th scope="col">p50</th>
-            <th scope="col">p95</th>
-          </tr>
-        </thead>
-        <tbody>
-          {props.services.map((s) => (
-            <tr>
-              <td>
-                <ServiceLabel service={s} />
-              </td>
-              <td>
-                {s.serviceId ? (
-                  <a href={paths.requests({ token: s.serviceId })}>{formatCount(s.requests)}</a>
-                ) : (
-                  formatCount(s.requests)
-                )}
-              </td>
-              <td>{formatCount(s.allowed)}</td>
-              <td>{formatCount(s.denied)}</td>
-              <td>{formatCount(s.errors)}</td>
-              <td>{formatPercent(s.errorRate)}</td>
-              <td>{percentileText(s.p50)}</td>
-              <td>{percentileText(s.p95)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function ServiceLabel(props: { service: ServiceTraffic }) {
-  const s = props.service;
-  if (!s.serviceId) {
-    return <span class="muted">No service (refused before the service was looked up)</span>;
-  }
-  if (s.slug === null) {
-    return (
-      <span>
-        Deleted service <Code>{s.serviceId}</Code>
-      </span>
-    );
-  }
-  return (
-    <a href={paths.token(s.serviceId)}>
-      {s.name ?? s.slug} <Code>{s.slug}</Code>
-    </a>
-  );
-}
-
-function DenialTable(props: { denials: RecentDenial[] }) {
-  return (
-    <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">Time</th>
-            <th scope="col">Reason</th>
-            <th scope="col">Service</th>
-            <th scope="col">Caller</th>
-            <th scope="col">Request</th>
-          </tr>
-        </thead>
-        <tbody>
-          {props.denials.map((d) => (
-            <tr>
-              <td>
-                <a href={paths.request(d.id)}>{formatTime(d.ts)}</a>
-              </td>
-              <td>
-                <Code>{d.reason ?? '—'}</Code> <span class="muted">(HTTP {d.status})</span>
-                {reasonText(d.reason) ? (
-                  <>
-                    <br />
-                    <small class="muted">{reasonText(d.reason)}</small>
-                  </>
-                ) : null}
-              </td>
-              <td>{d.service_slug ? <Code>{d.service_slug}</Code> : '—'}</td>
-              <td class="wrap">
-                {Number(d.claims_verified) === 1 ? (
-                  (d.caller_repository ?? d.caller_subject ?? '—')
-                ) : (
-                  <span class="muted">
-                    unverified{d.untrusted_iss ? ` token from ${d.untrusted_iss}` : ''}
-                  </span>
-                )}
-              </td>
-              <td class="wrap">
-                <Code>
-                  {d.method} {d.path}
-                </Code>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 // ---------------------------------------------------------------------------------------------
-// System status (moved from the removed Settings page)
+// Tokens in use
 
-const SCHEMA_TEXT: Record<SchemaState, string> = {
-  ok: 'up to date',
-  behind: 'migrations missing: run "wrangler d1 migrations apply" (docs/operations/upgrades.md)',
-  ahead: 'newer than this code (a rollback?); see docs/operations/upgrades.md',
-  unknown: 'could not be read',
-};
-
-interface SystemStatusData {
-  config: Config;
-  cron: Awaited<ReturnType<typeof cronHealth>>;
-  schema: Awaited<ReturnType<typeof schemaStatusByDatabase>>;
-  upstreamHosts: string[] | null;
-  adminHosts: string[] | null;
+interface TokenRow {
+  id: string;
+  token: Service | null;
+  traffic: TokenTraffic | null;
+  status: StatusKey;
+  statusDetail?: string;
+  accesses: AccessEdge[];
+  lastUsedHour: number | null;
+  problem: boolean;
 }
 
-async function loadSystemStatus(deps: Deps): Promise<SystemStatusData> {
-  const [cron, schema, upstreamHosts, adminHosts] = await Promise.all([
-    cronHealth(deps),
-    schemaStatusByDatabase(deps),
-    getAllowedUpstreamHosts(deps.env.DB),
-    getAdminHosts(deps.env.DB),
-  ]);
-  return { config: parseConfig(deps.env), cron, schema, upstreamHosts, adminHosts };
+const DAY_MS = 86_400_000;
+const PROBLEM_STATUSES: ReadonlySet<StatusKey> = new Set([
+  'no_credential',
+  'credential_unreadable',
+  'upstream_rejecting',
+  'outside_hosts',
+  'expired',
+  'expiring',
+]);
+
+function tokenStatus(
+  token: Service,
+  data: OverviewData,
+  connections: Connections,
+): { status: StatusKey; detail?: string } {
+  const now = data.generatedAt;
+  if (!token.enabled) return { status: 'disabled' };
+  if (token.credential_sealed === null) return { status: 'no_credential' };
+  if (connections.unreadableTokenIds.has(token.id)) return { status: 'credential_unreadable' };
+  if (data.alertData.upstreamAuthFailures.some((row) => row.service_id === token.id)) {
+    return { status: 'upstream_rejecting' };
+  }
+  if (outsideAllowedHosts(token.base_url, data.alertData.allowedHosts)) {
+    return { status: 'outside_hosts' };
+  }
+  const expires = token.credential_expires_at;
+  if (expires !== null && expires <= now) return { status: 'expired' };
+  if (expires !== null && expires - now <= EXPIRY_WARNING_MS) {
+    return { status: 'expiring', detail: String(Math.ceil((expires - now) / DAY_MS)) };
+  }
+  return { status: 'active' };
 }
 
-function SystemStatus(props: { status: SystemStatusData; env: AppEnv }) {
-  const { config, cron, schema, upstreamHosts, adminHosts } = props.status;
-  const env = props.env;
-  return (
-    <details id="health">
-      <summary>System status</summary>
-      <Details
-        rows={[
-          [
-            'Database schema',
-            <>
-              Control plane (DB): {SCHEMA_TEXT[schema.DB]}
-              <br />
-              Telemetry (TELEMETRY_DB): {SCHEMA_TEXT[schema.TELEMETRY_DB]}
-            </>,
-          ],
-          ['Hourly maintenance job', <CronStatus cron={cron} />],
-          ['Admin hosts', adminHostsText(adminHosts)],
-          ['Login providers', loginStatusText(config)],
-          [
-            'Upstream host allowlist',
-            upstreamHosts === null
-              ? 'not set: services may use any public https host'
-              : `set (${upstreamHosts.length} entries)`,
-          ],
-          [
-            'Request log queue (REQUEST_LOG_QUEUE)',
-            bindingText(
-              env.REQUEST_LOG_QUEUE !== undefined,
-              'request records are written to the database directly',
-            ),
-          ],
-          [
-            'Request archive (REQUEST_ARCHIVE)',
-            bindingText(env.REQUEST_ARCHIVE !== undefined, 'records are not archived to R2'),
-          ],
-          [
-            'Proxy rate limiter (PROXY_RATE_LIMITER)',
-            bindingText(env.PROXY_RATE_LIMITER !== undefined, 'no per-grant request cap'),
-          ],
-        ]}
-      />
-      {config.errors.length > 0 ? (
-        <>
-          <h3>Configuration problems</h3>
-          <p>
-            These features are turned off until the variables are fixed (docs/configuration.md):
-          </p>
-          <ul>
-            {config.errors.map((error) => (
-              <li>
-                <code>{error.variable}</code>: {error.message}
-              </li>
-            ))}
-          </ul>
-        </>
-      ) : null}
-    </details>
+function TokensInUse(props: { ctx: ViewContext; data: OverviewData; connections: Connections }) {
+  const { ctx, data, connections } = props;
+  const traffic = new Map(data.tokens.map((t) => [t.serviceId, t]));
+  const rows: TokenRow[] = connections.tokens.map((token) => {
+    const accesses = connections.accesses.filter((edge) => edge.grant.service_id === token.id);
+    const { status, detail } = tokenStatus(token, data, connections);
+    const lastUsedHour = accesses.reduce<number | null>(
+      (max, edge) =>
+        edge.lastUsedHour !== null && (max === null || edge.lastUsedHour > max)
+          ? edge.lastUsedHour
+          : max,
+      null,
+    );
+    return {
+      id: token.id,
+      token,
+      traffic: traffic.get(token.id) ?? null,
+      status,
+      ...(detail === undefined ? {} : { statusDetail: detail }),
+      accesses,
+      lastUsedHour,
+      problem:
+        PROBLEM_STATUSES.has(status) || alertsFor(data.alertData, { tokenId: token.id }).length > 0,
+    };
+  });
+  // Traffic of tokens deleted since.
+  for (const t of data.tokens) {
+    if (t.serviceId !== '' && !connections.tokens.some((token) => token.id === t.serviceId)) {
+      rows.push({
+        id: t.serviceId,
+        token: null,
+        traffic: t,
+        status: 'disabled',
+        accesses: [],
+        lastUsedHour: null,
+        problem: false,
+      });
+    }
+  }
+  rows.sort(
+    (a, b) =>
+      Number(b.problem) - Number(a.problem) ||
+      (b.traffic?.requests ?? 0) - (a.traffic?.requests ?? 0) ||
+      (a.token?.name ?? a.id).localeCompare(b.token?.name ?? b.id),
   );
-}
-
-function CronStatus(props: { cron: Awaited<ReturnType<typeof cronHealth>> }) {
-  const { cron } = props;
+  const busy = rows.filter((row) => row.problem || (row.traffic?.requests ?? 0) > 0);
+  const idle = rows.filter((row) => !busy.includes(row));
+  const refused = traffic.get('')?.requests ?? 0;
+  const columns = tokenColumns(ctx, data, connections);
   return (
-    <>
-      {cron.failing ? (
-        <Badge tone="bad">failing</Badge>
-      ) : cron.lastSuccessAt === null ? (
-        <Badge tone="muted">not run yet</Badge>
-      ) : cron.stale ? (
-        <Badge tone="warn">late</Badge>
+    <section aria-labelledby="tokens-h">
+      <h2 id="tokens-h">Tokens in use</h2>
+      <p class="muted">
+        Which service consumers can use which token, and the traffic in the selected range.
+      </p>
+      {rows.length === 0 ? (
+        <EmptyState>No service tokens yet.</EmptyState>
       ) : (
-        <Badge tone="ok">running</Badge>
-      )}{' '}
-      Last success: {cron.lastSuccessAt === null ? 'never' : formatTime(cron.lastSuccessAt)}
-      {cron.failing ? (
-        <div>
-          Last failure at {formatTime(cron.lastErrorAt)}: <code>{cron.lastError ?? 'unknown'}</code>
-        </div>
+        <>
+          {busy.length > 0 ? (
+            <DataTable
+              id="tokens-in-use"
+              caption="Tokens with traffic or problems"
+              rowHeader="token"
+              rows={busy}
+              columns={columns}
+            />
+          ) : null}
+          {idle.length > 0 ? (
+            <details>
+              <summary>
+                {idle.length} idle {idle.length === 1 ? 'token' : 'tokens'}
+              </summary>
+              <DataTable
+                id="idle-tokens"
+                caption="Idle tokens: no traffic in the selected range"
+                rowHeader="token"
+                rows={idle}
+                columns={columns}
+              />
+            </details>
+          ) : null}
+        </>
+      )}
+      {refused > 0 ? (
+        <p>
+          Refused before a token was chosen: {formatCount(refused)}{' '}
+          <a href={paths.requests({ token: 'none', range: data.range })}>
+            See them<span class="vh"> (requests refused before a token was chosen)</span>
+          </a>
+        </p>
       ) : null}
-      {cron.lastSuccessAt === null && !cron.failing ? (
-        <div class="muted">It runs a few minutes past every hour.</div>
-      ) : null}
-    </>
+      <p>
+        <a href={paths.access()}>Open the access matrix</a>
+      </p>
+    </section>
   );
 }
 
-function loginStatusText(config: Config): string {
-  const names = loginProviderNames(config);
-  return names.length > 0
-    ? names.join(', ')
-    : 'none configured: nobody can sign in (docs/configuration.md)';
+function tokenColumns(ctx: ViewContext, data: OverviewData, connections: Connections) {
+  const range = data.range;
+  const currentHour = hourStart(data.generatedAt);
+  const count = (row: TokenRow, n: number, outcome?: 'denied' | 'error') =>
+    row.token || row.traffic ? (
+      <a href={paths.requests({ token: row.id, range, outcome })}>
+        {formatCount(n)}
+        <span class="vh">
+          {' '}
+          {outcome === undefined ? 'requests' : outcome === 'denied' ? 'denied' : 'errors'} on{' '}
+          {row.token?.name ?? row.id}
+        </span>
+      </a>
+    ) : (
+      formatCount(n)
+    );
+  return [
+    {
+      key: 'token',
+      header: 'Token',
+      render: (row: TokenRow) =>
+        row.token ? (
+          <>
+            <a href={paths.token(row.id)}>{row.token.name}</a> <code>{row.token.slug}</code>{' '}
+            <StatusBadge status={row.status} detail={row.statusDetail} />
+          </>
+        ) : (
+          <>
+            Deleted token <code>{row.id}</code>
+          </>
+        ),
+    },
+    {
+      key: 'used',
+      header: 'Used by',
+      render: (row: TokenRow) =>
+        !row.token ? (
+          '—'
+        ) : row.accesses.length === 0 ? (
+          <>
+            No consumer can use this token yet.
+            {ctx.can('access:write') ? (
+              <>
+                {' '}
+                <a href={paths.accessNew({ token: row.id })}>
+                  Give a consumer access<span class="vh"> to {row.token.name}</span>
+                </a>
+              </>
+            ) : null}
+          </>
+        ) : (
+          <ChipList
+            label={`Consumers that can use ${row.token.name}`}
+            max={3}
+            moreHref={paths.access({ token: row.id })}
+            items={row.accesses.map((edge) => accessChip(edge, row.token as Service))}
+          />
+        ),
+    },
+    {
+      key: 'requests',
+      header: 'Requests',
+      numeric: true,
+      render: (row: TokenRow) => count(row, row.traffic?.requests ?? 0),
+    },
+    {
+      key: 'denied',
+      header: 'Denied',
+      numeric: true,
+      render: (row: TokenRow) => count(row, row.traffic?.denied ?? 0, 'denied'),
+    },
+    {
+      key: 'errors',
+      header: 'Errors',
+      numeric: true,
+      render: (row: TokenRow) => count(row, row.traffic?.errors ?? 0, 'error'),
+    },
+    {
+      key: 'p95',
+      header: 'p95',
+      numeric: true,
+      render: (row: TokenRow) => percentileText(row.traffic?.p95 ?? null),
+    },
+    {
+      key: 'last',
+      header: 'Last used',
+      render: (row: TokenRow) =>
+        connections.sampleRate <= 0 ? (
+          'use not recorded'
+        ) : row.lastUsedHour === null ? (
+          '—'
+        ) : row.lastUsedHour >= currentHour ? (
+          'this hour'
+        ) : (
+          <Time ms={row.lastUsedHour} relative now={data.generatedAt} />
+        ),
+    },
+  ];
 }
 
-function adminHostsText(hosts: string[] | null): string {
-  if (hosts === null) return 'not set yet: set on the first sign-in.';
-  return `${hosts.join(', ')}.`;
-}
-
-function bindingText(bound: boolean, whenMissing: string): string {
-  return bound ? 'bound' : `not bound: ${whenMissing}`;
+function accessChip(edge: AccessEdge, token: Service): ChipProps {
+  const consumer = edge.consumer?.name ?? 'deleted consumer';
+  const flag = edge.flags[0];
+  return {
+    href: paths.accessItem(edge.grant.id),
+    text: `${consumer} · ${edge.subject} · ${edge.context}`,
+    status: edge.status,
+    ...(edge.statusDetail === undefined ? {} : { statusDetail: edge.statusDetail }),
+    srText: `${edge.subject} (${edge.context}) through ${consumer} can use ${token.name}: ${statusLabel(edge.status, edge.statusDetail)}${flag ? `, ${statusLabel(flag.status, flag.detail)}` : ''}.`,
+  };
 }

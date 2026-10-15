@@ -60,3 +60,36 @@ describe('updateSettings', () => {
     expect(await auditRows()).toHaveLength(0);
   });
 });
+
+describe('updateSettings: retention order', () => {
+  it('refuses summaries kept for less time than request records, on the merged values', async () => {
+    const result = await updateSettings(opsDeps(), ACTOR, { request_log_retention_days: 500 });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'invalid',
+      fieldErrors: [
+        {
+          field: 'rollup_retention_days',
+          message:
+            'Traffic summary retention (days) must be at least the request record retention (500 days). Enter 500 or more.',
+        },
+      ],
+    });
+    expect(await getSettings(env.DB)).toEqual(SETTING_DEFAULTS);
+    expect(await auditRows()).toHaveLength(0);
+    const both = await updateSettings(opsDeps(), ACTOR, {
+      request_log_retention_days: 500,
+      rollup_retention_days: 500,
+    });
+    expect(both).toMatchObject({ ok: true });
+  });
+
+  it('names the field of each bound error', async () => {
+    const result = await updateSettings(opsDeps(), ACTOR, { audit_log_retention_days: 10 });
+    expect(result).toMatchObject({
+      ok: false,
+      fieldErrors: [{ field: 'audit_log_retention_days' }],
+      errors: ['Audit log retention (days) must be between 90 and 3650.'],
+    });
+  });
+});

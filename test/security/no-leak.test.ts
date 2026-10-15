@@ -572,10 +572,17 @@ async function driveAdmin(): Promise<void> {
     }
   }
   // Query variants of the read pages, one array per admin section (append to your own only).
+  const firstService = [...serviceIds.values()][0] ?? '';
   const monitoringVariants = [
+    '/admin?range=7d',
+    '/admin?range=30d',
     '/admin/requests?outcome=denied',
     '/admin/requests?outcome=error',
-    '/admin/audit?target_type=service',
+    `/admin/requests?range=1h&outcome=denied&token=${firstService}`,
+    ...grantRows.map((row) => `/admin/requests?access=${row.id}`),
+    ...requestRows.slice(0, 3).map((row) => `/admin/requests?id=${row.id}`),
+    `/admin/audit?target=${firstService}&category=tokens`,
+    '/admin/retention',
   ];
   const usersVariants: string[] = [];
   const tokensVariants = ['/admin/tokens/new?template=github'];

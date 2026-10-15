@@ -3,7 +3,7 @@
 // fails when this drifts from migrations/ or migrations-telemetry/.
 export const SCHEMA_HEAD = {
   DB: '0002_admin_redesign.sql',
-  TELEMETRY_DB: '0001_initial.sql',
+  TELEMETRY_DB: '0002_request_log_indexes.sql',
 } as const;
 
 export type SchemaDatabase = keyof typeof SCHEMA_HEAD;

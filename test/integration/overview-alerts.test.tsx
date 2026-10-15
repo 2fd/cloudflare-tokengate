@@ -1,0 +1,293 @@
+// The Overview alert catalogue × the five roles: every alert links to its objects for everyone,
+// the fix only for holders of its permission (others are told whom to ask), the inline approve
+// and rewrap forms only with users:write and keyring:rewrap, no role=alert, same-code grouping
+// and the overflow details. Values shown are names and counts, never secrets.
+import { env } from 'cloudflare:workers';
+import type { Child } from 'hono/jsx';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { can, type Permission } from '../../src/admin/auth/rbac';
+import type { ViewContext } from '../../src/admin/render';
+import { type AlertCode, AlertList } from '../../src/admin/views/components';
+import type { Role } from '../../src/db/types';
+import { type AlertData, overviewAlerts } from '../../src/telemetry/dashboard';
+import { adminGet, createUser, loginAs, resetControlPlane } from '../helpers/admin-auth';
+import { createTestApp } from '../helpers/app';
+import { TEST_EPOCH_MS } from '../helpers/jwt';
+
+const NOW = Date.UTC(2026, 9, 14, 9);
+const DAY = 86_400_000;
+const ROLES: readonly Role[] = ['viewer', 'token_manager', 'access_manager', 'admin', 'owner'];
+const ALL_CODES: readonly AlertCode[] = [
+  'keyring_unavailable',
+  'key_missing',
+  'key_changed',
+  'credential_malformed',
+  'key_not_active',
+  'credential_expired',
+  'credential_expiring',
+  'credential_missing_used',
+  'upstream_auth',
+  'outside_hosts',
+  'schema_behind',
+  'schema_ahead',
+  'schema_unknown',
+  'config_problem',
+  'cron_failing',
+  'cron_stale',
+  'cron_never',
+  'access_expiring',
+  'users_need_decision',
+  'single_owner',
+];
+
+function base(): AlertData {
+  return {
+    now: NOW,
+    services: [],
+    grants: [],
+    sealedKids: [],
+    keyring: {
+      ok: true,
+      error: null,
+      activeKid: 'k1',
+      missingKids: [],
+      changedKids: [],
+      notActiveCount: 0,
+      malformedCount: 0,
+    },
+    keyCount: 1,
+    schema: { DB: 'ok', TELEMETRY_DB: 'ok' },
+    cron: {
+      lastSuccessAt: NOW - 60_000,
+      lastErrorAt: null,
+      lastError: null,
+      stale: false,
+      failing: false,
+    },
+    config: [],
+    activeOwners: 2,
+    needsDecision: 0,
+    pendingUsers: [],
+    upstreamAuthFailures: [],
+    allowedHosts: null,
+    sampleRate: 1,
+  };
+}
+
+const service = (id: string, name: string, extra: Partial<AlertData['services'][number]> = {}) => ({
+  id,
+  slug: name.toLowerCase(),
+  name,
+  enabled: true,
+  base_url: `https://${name.toLowerCase()}.example.com`,
+  credential_expires_at: null,
+  has_credential: true,
+  ...extra,
+});
+
+/** Three deployments that together raise every code of the catalogue. */
+function catalogue(): AlertData[] {
+  const broken: AlertData = {
+    ...base(),
+    keyring: { ...base().keyring, ok: false, error: 'keyring_absent', activeKid: null },
+    schema: { DB: 'behind', TELEMETRY_DB: 'ahead' },
+    cron: {
+      lastSuccessAt: null,
+      lastErrorAt: NOW - 600_000,
+      lastError: 'purge: Error: D1 overloaded',
+      stale: true,
+      failing: true,
+    },
+    config: [
+      {
+        variable: 'AUTH_ACCESS_AUD',
+        message: 'must be set',
+        anchor: 'cloudflare-access-login-auth_access_',
+      },
+    ],
+    activeOwners: 1,
+  };
+  const keys: AlertData = {
+    ...base(),
+    services: [
+      service('svc_A', 'Alpha', { credential_expires_at: NOW - DAY }),
+      service('svc_B', 'Beta', { credential_expires_at: NOW + 3 * DAY }),
+      service('svc_C', 'Gamma', { has_credential: false }),
+      service('svc_D', 'Delta', { base_url: 'https://evil.example.net' }),
+    ],
+    grants: [
+      {
+        id: 'grt_A',
+        name: 'Gamma for acme/api',
+        service_id: 'svc_C',
+        caller_provider_id: 'cpr_A',
+        enabled: true,
+        expires_at: NOW + 2 * DAY,
+      },
+    ],
+    sealedKids: [
+      { id: 'svc_A', slug: 'alpha', name: 'Alpha', kid: 'k0' },
+      { id: 'svc_B', slug: 'beta', name: 'Beta', kid: 'k1' },
+      { id: 'svc_D', slug: 'delta', name: 'Delta', kid: null },
+    ],
+    keyring: {
+      ok: false,
+      error: null,
+      activeKid: 'k1',
+      missingKids: ['k0'],
+      changedKids: ['k1'],
+      notActiveCount: 1,
+      malformedCount: 1,
+    },
+    schema: { DB: 'ok', TELEMETRY_DB: 'unknown' },
+    cron: {
+      lastSuccessAt: NOW - 3 * 3_600_000,
+      lastErrorAt: null,
+      lastError: null,
+      stale: true,
+      failing: false,
+    },
+    upstreamAuthFailures: [
+      { service_id: 'svc_B', service_slug: 'beta', forwarded: 14, auth_failures: 12 },
+    ],
+    allowedHosts: ['*.example.com'],
+    needsDecision: 2,
+    pendingUsers: [
+      { id: 'usr_01JAAAAAAAAAAAAAAAAAAAAAAA', email: 'new@example.com', updated_at: NOW - 1000 },
+    ],
+  };
+  const fresh: AlertData = {
+    ...base(),
+    cron: { ...base().cron, lastSuccessAt: null, stale: true },
+  };
+  return [broken, keys, fresh];
+}
+
+function view(role: Role): ViewContext {
+  return {
+    csrf: 'csrf-token',
+    userId: 'usr_viewer',
+    role,
+    host: 'gw.test',
+    now: NOW,
+    can: (permission: Permission) => can(role, permission),
+    askers: () => [{ email: 'owner@example.com' }],
+    askersMore: () => 0,
+  };
+}
+
+const html = (node: Child) => String(node);
+
+describe('the alert catalogue', () => {
+  it('raises every code across the three deployments, each code once per deployment', () => {
+    const codes = catalogue().flatMap((data) => {
+      const list = overviewAlerts(data).map((alert) => alert.code);
+      expect(new Set(list).size).toBe(list.length);
+      return list;
+    });
+    expect(new Set(codes)).toEqual(new Set(ALL_CODES));
+  });
+
+  it('orders errors, then warnings, then notes', () => {
+    for (const data of catalogue()) {
+      const levels = overviewAlerts(data).map(
+        (alert) => ({ error: 0, warning: 1, info: 2 })[alert.level],
+      );
+      expect(levels).toEqual([...levels].sort((a, b) => a - b));
+    }
+  });
+
+  for (const role of ROLES) {
+    it(`renders each alert for ${role}: objects always, the fix only with its permission`, () => {
+      const ctx = view(role);
+      for (const data of catalogue()) {
+        for (const alert of overviewAlerts(data)) {
+          const out = html(<AlertList alerts={[alert]} ctx={ctx} />);
+          expect(out, alert.code).toContain('<ul class="alerts">');
+          expect(out, alert.code).not.toContain('role="alert"');
+          for (const object of alert.objects) {
+            expect(out, `${alert.code} ${object.href}`).toContain(
+              `href="${object.href.replaceAll('&', '&amp;')}"`,
+            );
+          }
+          if (alert.fix) {
+            const fixLink = `href="${alert.fix.href.replaceAll('&', '&amp;')}">${alert.fix.label.replaceAll('"', '&quot;')}</a>`;
+            if (can(role, alert.fix.permission)) expect(out, alert.code).toContain(fixLink);
+            else {
+              expect(out, alert.code).not.toContain(fixLink);
+              expect(out, alert.code).toContain('class="ask"');
+            }
+          }
+          const rewrap = out.includes('action="/admin/tokens/keys/rewrap"');
+          expect(rewrap, alert.code).toBe(
+            alert.form?.kind === 'rewrap' && can(role, 'keyring:rewrap'),
+          );
+          const approve = out.includes('/approve"');
+          expect(approve, alert.code).toBe(
+            alert.form?.kind === 'approve-pending' && can(role, 'users:write'),
+          );
+          if (alert.form?.kind === 'approve-pending' && !can(role, 'users:write')) {
+            expect(out).not.toContain('new@example.com');
+          }
+        }
+      }
+    });
+  }
+
+  it('groups same-code alerts into one item and puts items after the tenth in a details', () => {
+    const many: AlertData = {
+      ...base(),
+      services: Array.from({ length: 7 }, (_, i) =>
+        service(`svc_${i}`, `Token${i}`, {
+          credential_expires_at: NOW - DAY,
+          base_url: 'https://elsewhere.example.org',
+        }),
+      ),
+      allowedHosts: ['*.example.com'],
+    };
+    const alerts = overviewAlerts(many);
+    expect(alerts.map((a) => a.code)).toEqual(['credential_expired', 'outside_hosts']);
+    expect(alerts[0]?.objects.map((o) => o.label)).toEqual([
+      'Token0',
+      'Token1',
+      'Token2',
+      'Token3',
+      'Token4',
+      '+2 more',
+    ]);
+    const all = catalogue().flatMap(overviewAlerts);
+    expect(all.length).toBeGreaterThan(10);
+    const out = html(<AlertList alerts={all} ctx={view('owner')} />);
+    expect(out).toContain(`<summary>${all.length - 10} more problems</summary>`);
+  });
+
+  it('never shows a secret value: the KEK and sealed values do not reach an alert', () => {
+    const text = JSON.stringify(catalogue().flatMap(overviewAlerts));
+    expect(text).not.toMatch(/TOKENGATE_KEK=|"ct"|wdek/);
+  });
+});
+
+describe('alerts on the Overview page', () => {
+  beforeEach(async () => {
+    await resetControlPlane();
+  });
+
+  it('offers the inline approve form to owners only, and never as role=alert', async () => {
+    const app = createTestApp({ now: () => TEST_EPOCH_MS });
+    const owner = await createUser({ email: 'owner@example.com', role: 'owner' }, TEST_EPOCH_MS);
+    const admin = await createUser({ email: 'admin@example.com', role: 'admin' }, TEST_EPOCH_MS);
+    const pending = await createUser(
+      { email: 'pending@example.com', role: 'viewer', status: 'pending' },
+      TEST_EPOCH_MS,
+    );
+    const ownerHtml = await (await adminGet(app, await loginAs(app, owner), '/admin')).text();
+    expect(ownerHtml).toContain('1 person needs a decision.');
+    expect(ownerHtml).toContain(`action="/admin/users/${pending.id}/approve"`);
+    expect(ownerHtml).not.toContain('role="alert"');
+    const adminHtml = await (await adminGet(app, await loginAs(app, admin), '/admin')).text();
+    expect(adminHtml).toContain('1 person needs a decision.');
+    expect(adminHtml).not.toContain('/approve"');
+    expect(adminHtml).not.toContain('pending@example.com');
+    await env.DB.prepare('DELETE FROM audit_log').run();
+  });
+});
