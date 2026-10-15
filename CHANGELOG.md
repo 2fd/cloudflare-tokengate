@@ -13,6 +13,7 @@ First public release (0.1.0).
 The admin UI has four sections: Monitoring, Users, Service tokens and Service consumers ([ADR 0019](docs/adr/0019-admin-information-architecture.md)). Token and access duties are separate roles ([ADR 0018](docs/adr/0018-role-split-and-field-permissions.md)).
 
 - **New URLs.** Services are at `/admin/tokens`, caller providers at `/admin/consumers` and grants at `/admin/access`. The Settings page is removed: Data retention (`/admin/retention`), Allowed hosts (`/admin/tokens/hosts`), Encryption keys (`/admin/tokens/keys`) and Sign-in (`/admin/users/sign-in`) replace it, the system status is on the Overview, and the configuration export is in the page footer for admins and owners. An unknown admin URL shows a "Page not found" page that links to the sections.
+- **Page shell.** Every admin page has a skip link, the four sections with their sub-pages, a Help link to the section's docs, the signed-in role, and a strip that names system problems such as missing encryption keys on every page. Owners see how many people need a decision on the Users link. The forbidden page names the roles that may make the change and who has them. The stylesheet meets WCAG 2.2 AA contrast in light and dark mode.
 
 <!-- WP1 -->
 <!-- WP2 -->

@@ -20,9 +20,9 @@ A request flows through these terms in a fixed order. The full pipeline is in [a
 
 ## Glossary
 
-### Service
+### Service token
 
-A service is one upstream API that callers reach through the gateway. It has a slug, a fixed `https` base URL, an injection, an optional credential, a timeout, an optional list of extra request headers to forward, and an optional credential check. Callers address it as `/proxy/<slug>/<path>`; the gateway appends `<path>` to the base URL and never leaves it ([I-PATH-1](threat-model.md#i-path-1)). The slug is 1 to 63 characters of `a-z`, `0-9` and `-` and cannot change. The base URL must use `https`, must not be an IP address, localhost, a `workers.dev` host or the gateway itself, and must match the upstream host allowlist when an owner has set one in Settings. The gateway checks this when the service is saved and again on every request ([I-SSRF-1](threat-model.md#i-ssrf-1)). Disabling a service refuses its requests from the next request on. IDs start with `svc_`. Admin UI: Services. Code: `src/admin/ops/services.ts`, `src/db/services.ts`.
+A service token (in the code and the database: a service, plus its credential) is one upstream API that callers reach through the gateway. It has a slug, a fixed `https` base URL, an injection, an optional credential, a timeout, an optional list of extra request headers to forward, and an optional credential check. Callers address it as `/proxy/<slug>/<path>`; the gateway appends `<path>` to the base URL and never leaves it ([I-PATH-1](threat-model.md#i-path-1)). The slug is 1 to 63 characters of `a-z`, `0-9` and `-` and cannot change. The base URL must use `https`, must not be an IP address, localhost, a `workers.dev` host or the gateway itself, and must match the upstream host allowlist when an owner has set one in Settings. The gateway checks this when the service is saved and again on every request ([I-SSRF-1](threat-model.md#i-ssrf-1)). Disabling a service refuses its requests from the next request on. IDs start with `svc_`. Admin UI: Service tokens (`/admin/tokens`). Code: `src/admin/ops/services.ts`, `src/db/services.ts`.
 
 ### Credential
 
@@ -42,9 +42,9 @@ The injection is how the gateway attaches the credential to the outbound request
 
 The gateway removes any copy of the injected header or query parameter that the caller sends, so a caller cannot replace or observe the credential ([I-INJ-1](threat-model.md#i-inj-1)). Code: `src/proxy/inject.ts`, `src/proxy/path.ts`.
 
-### Caller provider
+### Service consumer
 
-A caller provider is a workload-identity issuer that the gateway trusts, for example "GitHub Actions in organization 1234567". It stores the profile, the exact issuer (`iss`), the JWKS URI, the audience, the allowed signature algorithms, the maximum token age, the tenant pin and, for the `generic` profile, the anchor claims. The issuer is unique: the unverified `iss` of a token only selects which caller provider verifies it. The audience is random by default (`tokengate:` plus 26 characters), so tokens minted for other services do not work here. The gateway verifies the signature, the exact issuer, the audience, the algorithm allowlist (never `none` or `HS*`), the maximum token age and the required claims ([I-JWT-1](threat-model.md#i-jwt-1)). Disabling a caller provider refuses its tokens from the next request on. IDs start with `cpr_`. Admin UI: Caller providers. Code: `src/admin/ops/caller-providers.ts`, `src/identity/jwt.ts`.
+A service consumer (in the code and the database: a caller provider) is a workload-identity issuer that the gateway trusts, for example "GitHub Actions in organization 1234567". It stores the profile, the exact issuer (`iss`), the JWKS URI, the audience, the allowed signature algorithms, the maximum token age, the tenant pin and, for the `generic` profile, the anchor claims. The issuer is unique: the unverified `iss` of a token only selects which caller provider verifies it. The audience is random by default (`tokengate:` plus 26 characters), so tokens minted for other services do not work here. The gateway verifies the signature, the exact issuer, the audience, the algorithm allowlist (never `none` or `HS*`), the maximum token age and the required claims ([I-JWT-1](threat-model.md#i-jwt-1)). Disabling a caller provider refuses its tokens from the next request on. IDs start with `cpr_`. Admin UI: Service consumers (`/admin/consumers`). Code: `src/admin/ops/caller-providers.ts`, `src/identity/jwt.ts`.
 
 ### Profile
 

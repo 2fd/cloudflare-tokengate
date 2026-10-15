@@ -24,6 +24,7 @@ import type { Outcome, RequestRecord } from '../../telemetry/types';
 import { can } from '../auth/rbac';
 import { paths } from '../paths';
 import { renderPage } from '../render';
+import { formatCount, formatDuration, formatTime, withQuery } from '../views/format';
 import {
   Badge,
   Code,
@@ -33,8 +34,7 @@ import {
   Messages,
   NextPage,
   Select,
-} from '../views/components';
-import { formatCount, formatDuration, formatTime, withQuery } from '../views/format';
+} from '../views/legacy';
 import { docsUrl, reasonText } from '../views/reasons';
 
 const SECTION = '/admin/requests';
@@ -133,11 +133,13 @@ export function registerRequestsRoutes(app: App): void {
     if (!parsed.ok) {
       return renderPage(
         c,
-        { title: 'Requests', section: SECTION, status: 400 },
-        <>
-          <Messages errors={parsed.errors} />
-          <RequestFilters query={query} services={services} />
-        </>,
+        { title: 'Requests', section: 'monitoring', subsection: 'requests', status: 400 },
+        () => (
+          <>
+            <Messages errors={parsed.errors} />
+            <RequestFilters query={query} services={services} />
+          </>
+        ),
       );
     }
     const { records: rows, olderBefore } = await searchRequests(deps.env.TELEMETRY_DB, {
@@ -155,44 +157,46 @@ export function registerRequestsRoutes(app: App): void {
     const filtered = Boolean(query.token || query.outcome || query.repo || query.slug);
     return renderPage(
       c,
-      { title: 'Requests', section: SECTION },
-      <>
-        <p class="muted">
-          Every call that reached the gateway, newest first. Denied and failed requests are always
-          recorded; allowed requests may be sampled (see{' '}
-          <a href={paths.retention()}>Data retention</a>). Open a request to see why it was allowed
-          or denied.
-        </p>
-        <RequestFilters query={query} services={services} />
-        {query.before ? (
-          <p>
-            <a href={withQuery(SECTION, { ...query, before: '' })}>← Newest requests</a>
-          </p>
-        ) : null}
-        {olderBefore ? (
+      { title: 'Requests', section: 'monitoring', subsection: 'requests' },
+      () => (
+        <>
           <p class="muted">
-            Outcome and service slug filters search {formatCount(REQUEST_SCAN_ROWS)} requests at a
-            time. Use "Older entries" to search further back.
+            Every call that reached the gateway, newest first. Denied and failed requests are always
+            recorded; allowed requests may be sampled (see{' '}
+            <a href={paths.retention()}>Data retention</a>). Open a request to see why it was
+            allowed or denied.
           </p>
-        ) : null}
-        {page.length === 0 ? (
-          filtered || query.before ? (
-            <EmptyState>
-              No requests match these filters{olderBefore ? ' in this range' : ''}.{' '}
-              <a href={SECTION}>Clear filters</a>
-            </EmptyState>
+          <RequestFilters query={query} services={services} />
+          {query.before ? (
+            <p>
+              <a href={withQuery(SECTION, { ...query, before: '' })}>← Newest requests</a>
+            </p>
+          ) : null}
+          {olderBefore ? (
+            <p class="muted">
+              Outcome and service slug filters search {formatCount(REQUEST_SCAN_ROWS)} requests at a
+              time. Use "Older entries" to search further back.
+            </p>
+          ) : null}
+          {page.length === 0 ? (
+            filtered || query.before ? (
+              <EmptyState>
+                No requests match these filters{olderBefore ? ' in this range' : ''}.{' '}
+                <a href={SECTION}>Clear filters</a>
+              </EmptyState>
+            ) : (
+              <EmptyState>
+                No requests recorded yet. Once a service, a caller provider and a grant exist, call
+                the gateway from a workflow:{' '}
+                <a href={docsUrl('callers/github-actions.md')}>GitHub Actions guide</a>.
+              </EmptyState>
+            )
           ) : (
-            <EmptyState>
-              No requests recorded yet. Once a service, a caller provider and a grant exist, call
-              the gateway from a workflow:{' '}
-              <a href={docsUrl('callers/github-actions.md')}>GitHub Actions guide</a>.
-            </EmptyState>
-          )
-        ) : (
-          <RequestTable records={page} grantNames={namesById(grants)} />
-        )}
-        <NextPage href={next} />
-      </>,
+            <RequestTable records={page} grantNames={namesById(grants)} />
+          )}
+          <NextPage href={next} />
+        </>
+      ),
     );
   });
 
@@ -203,11 +207,13 @@ export function registerRequestsRoutes(app: App): void {
     if (!record) {
       return renderPage(
         c,
-        { title: 'Request not found', section: SECTION, status: 404 },
-        <EmptyState>
-          There is no request record with this id. It may have been removed by the retention policy.{' '}
-          <a href={SECTION}>Back to requests</a>
-        </EmptyState>,
+        { title: 'Request not found', section: 'monitoring', subsection: 'requests', status: 404 },
+        () => (
+          <EmptyState>
+            There is no request record with this id. It may have been removed by the retention
+            policy. <a href={SECTION}>Back to requests</a>
+          </EmptyState>
+        ),
       );
     }
     const db = deps.env.DB;
@@ -227,15 +233,17 @@ export function registerRequestsRoutes(app: App): void {
       GRANT_FIXABLE.has(record.reason);
     return renderPage(
       c,
-      { title: 'Request', section: SECTION },
-      <RequestDetail
-        record={record}
-        service={service}
-        provider={provider}
-        grants={grants}
-        reevaluation={reevaluation}
-        canCreateGrant={canCreateGrant}
-      />,
+      { title: 'Request', section: 'monitoring', subsection: 'requests' },
+      () => (
+        <RequestDetail
+          record={record}
+          service={service}
+          provider={provider}
+          grants={grants}
+          reevaluation={reevaluation}
+          canCreateGrant={canCreateGrant}
+        />
+      ),
     );
   });
 }

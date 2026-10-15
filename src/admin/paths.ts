@@ -112,7 +112,7 @@ export const paths = {
  * route). The value is never a URL: it picks one of the fixed paths below, and anything unknown
  * falls back to the route's default (the first entry). No open redirect.
  */
-const RETURN_PATHS = {
+export const RETURN_PATHS = {
   'POST /admin/tokens/keys/rewrap': {
     detail: () => paths.tokenKeys(),
     overview: () => paths.overview(),

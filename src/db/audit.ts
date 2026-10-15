@@ -129,6 +129,15 @@ export async function listAuditEvents(db: D1Database, query: AuditQuery): Promis
   return results.map(auditFromRow);
 }
 
+/** One audit event by id (a primary-key read). */
+export async function getAuditEvent(db: D1Database, id: string): Promise<AuditEvent | null> {
+  const row = await db
+    .prepare('SELECT * FROM audit_log WHERE id = ?')
+    .bind(id)
+    .first<Record<string, unknown>>();
+  return row ? auditFromRow(row) : null;
+}
+
 export function auditFromRow(row: Record<string, unknown>): AuditEvent {
   return {
     id: String(row.id),

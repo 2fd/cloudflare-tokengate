@@ -30,6 +30,7 @@ import {
   renderPage,
   submittedVersion,
 } from '../render';
+import { formatTime } from '../views/format';
 import {
   ActionButton,
   Badge,
@@ -43,8 +44,8 @@ import {
   Pre,
   TextArea,
   VersionField,
-} from '../views/components';
-import { formatTime } from '../views/format';
+  legacyNotice,
+} from '../views/legacy';
 
 const SECTION = paths.consumers();
 
@@ -221,75 +222,83 @@ async function listPage(c: AdminContext) {
   const canWrite = can(c.get('viewer').user.role, 'access:write');
   return renderPage(
     c,
-    { title: 'Caller providers', section: SECTION, notice: noticeText(c) },
-    <>
-      <p class="muted">
-        A caller provider tells the gateway which workload tokens to trust: who signs them (the
-        issuer), which audience they must carry, and which organization they must come from (the
-        tenant pin). Grants then decide what each caller may do.
-      </p>
-      {canWrite ? (
-        <p class="actions">
-          <a href={paths.consumerNew()}>Add a caller provider</a>
+    {
+      title: 'Caller providers',
+      section: 'consumers',
+      subsection: 'consumers',
+      notice: legacyNotice(noticeText(c)),
+    },
+    () => (
+      <>
+        <p class="muted">
+          A caller provider tells the gateway which workload tokens to trust: who signs them (the
+          issuer), which audience they must carry, and which organization they must come from (the
+          tenant pin). Grants then decide what each caller may do.
         </p>
-      ) : null}
-      {providers.length === 0 ? (
-        <EmptyState>
-          No caller providers yet.{' '}
-          {canWrite ? (
-            <>
-              Start with <a href={paths.consumerNew({ type: 'github-actions' })}>GitHub Actions</a>,{' '}
-              <a href={paths.consumerNew({ type: 'gitlab-ci' })}>GitLab CI</a> or{' '}
-              <a href={paths.consumerNew({ type: 'generic' })}>another OIDC issuer</a>.
-            </>
-          ) : (
-            'Ask an admin to add one.'
-          )}{' '}
-          See <code>docs/getting-started.md</code> for a walkthrough.
-        </EmptyState>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Issuer</th>
-              <th>Tenant pin</th>
-              <th>Grants</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {providers.map((provider) => (
+        {canWrite ? (
+          <p class="actions">
+            <a href={paths.consumerNew()}>Add a caller provider</a>
+          </p>
+        ) : null}
+        {providers.length === 0 ? (
+          <EmptyState>
+            No caller providers yet.{' '}
+            {canWrite ? (
+              <>
+                Start with{' '}
+                <a href={paths.consumerNew({ type: 'github-actions' })}>GitHub Actions</a>,{' '}
+                <a href={paths.consumerNew({ type: 'gitlab-ci' })}>GitLab CI</a> or{' '}
+                <a href={paths.consumerNew({ type: 'generic' })}>another OIDC issuer</a>.
+              </>
+            ) : (
+              'Ask an admin to add one.'
+            )}{' '}
+            See <code>docs/getting-started.md</code> for a walkthrough.
+          </EmptyState>
+        ) : (
+          <table>
+            <thead>
               <tr>
-                <td>
-                  <a href={paths.consumer(provider.id)}>{provider.name}</a>
-                </td>
-                <td>{profileLabel(provider.profile)}</td>
-                <td>
-                  <code>{provider.issuer}</code>
-                </td>
-                <td>
-                  {provider.tenant_pin.length === 0 ? (
-                    <Badge tone="warn">none</Badge>
-                  ) : (
-                    <code>{formatConditions(provider.tenant_pin)}</code>
-                  )}
-                </td>
-                <td>
-                  <a href={paths.access({ consumer: provider.id })}>
-                    {grantCounts.get(provider.id) ?? 0}
-                  </a>
-                </td>
-                <td>
-                  <EnabledBadge enabled={provider.enabled} />
-                </td>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Issuer</th>
+                <th>Tenant pin</th>
+                <th>Grants</th>
+                <th>Status</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </>,
+            </thead>
+            <tbody>
+              {providers.map((provider) => (
+                <tr>
+                  <td>
+                    <a href={paths.consumer(provider.id)}>{provider.name}</a>
+                  </td>
+                  <td>{profileLabel(provider.profile)}</td>
+                  <td>
+                    <code>{provider.issuer}</code>
+                  </td>
+                  <td>
+                    {provider.tenant_pin.length === 0 ? (
+                      <Badge tone="warn">none</Badge>
+                    ) : (
+                      <code>{formatConditions(provider.tenant_pin)}</code>
+                    )}
+                  </td>
+                  <td>
+                    <a href={paths.access({ consumer: provider.id })}>
+                      {grantCounts.get(provider.id) ?? 0}
+                    </a>
+                  </td>
+                  <td>
+                    <EnabledBadge enabled={provider.enabled} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </>
+    ),
   );
 }
 
@@ -410,19 +419,21 @@ async function rerenderDetail(c: AdminContext, failure: OpFailure) {
 function renderProfileChooser(c: AdminContext, status: 200 | 422 = 200) {
   return renderPage(
     c,
-    { title: 'Add a caller provider', section: SECTION, status },
-    <>
-      <p>Where do the workloads that will call the gateway run?</p>
-      <ul>
-        {PROFILE_ORDER.map((id) => (
-          <li>
-            <a href={paths.consumerNew({ type: id })}>{PROFILES[id].label}</a>
-            {' — '}
-            {PROFILE_INTRO[id]}
-          </li>
-        ))}
-      </ul>
-    </>,
+    { title: 'Add a caller provider', section: 'consumers', subsection: 'consumers', status },
+    () => (
+      <>
+        <p>Where do the workloads that will call the gateway run?</p>
+        <ul>
+          {PROFILE_ORDER.map((id) => (
+            <li>
+              <a href={paths.consumerNew({ type: id })}>{PROFILES[id].label}</a>
+              {' — '}
+              {PROFILE_INTRO[id]}
+            </li>
+          ))}
+        </ul>
+      </>
+    ),
   );
 }
 
@@ -441,20 +452,27 @@ function renderCreateForm(
   const csrf = c.get('viewer').csrfToken;
   return renderPage(
     c,
-    { title: `Add a ${profile.label} caller provider`, section: SECTION, status },
-    <>
-      <p class="muted">{PROFILE_INTRO[profile.id]}</p>
-      <Messages errors={messages.errors} warnings={messages.warnings} />
-      <form method="post" action={SECTION} class="stack">
-        <Csrf token={csrf} />
-        <input type="hidden" name="profile" value={profile.id} />
-        <ProviderFields profile={profile} form={form} editing={false} />
-        <p class="actions">
-          <button type="submit">Create caller provider</button>
-          <a href={paths.consumerNew()}>Choose another type</a>
-        </p>
-      </form>
-    </>,
+    {
+      title: `Add a ${profile.label} caller provider`,
+      section: 'consumers',
+      subsection: 'consumers',
+      status,
+    },
+    () => (
+      <>
+        <p class="muted">{PROFILE_INTRO[profile.id]}</p>
+        <Messages errors={messages.errors} warnings={messages.warnings} />
+        <form method="post" action={SECTION} class="stack">
+          <Csrf token={csrf} />
+          <input type="hidden" name="profile" value={profile.id} />
+          <ProviderFields profile={profile} form={form} editing={false} />
+          <p class="actions">
+            <button type="submit">Create caller provider</button>
+            <a href={paths.consumerNew()}>Choose another type</a>
+          </p>
+        </form>
+      </>
+    ),
   );
 }
 
@@ -468,20 +486,22 @@ function renderEditPage(
 ) {
   return renderPage(
     c,
-    { title: `Edit ${provider.name}`, section: SECTION, status },
-    <>
-      <Messages errors={messages.errors} warnings={messages.warnings} />
-      <EditForm
-        provider={provider}
-        profile={profile}
-        form={form}
-        csrf={c.get('viewer').csrfToken}
-        affected={messages.affected ?? null}
-      />
-      <p>
-        <a href={paths.consumer(provider.id)}>Cancel</a>
-      </p>
-    </>,
+    { title: `Edit ${provider.name}`, section: 'consumers', subsection: 'consumers', status },
+    () => (
+      <>
+        <Messages errors={messages.errors} warnings={messages.warnings} />
+        <EditForm
+          provider={provider}
+          profile={profile}
+          form={form}
+          csrf={c.get('viewer').csrfToken}
+          affected={messages.affected ?? null}
+        />
+        <p>
+          <a href={paths.consumer(provider.id)}>Cancel</a>
+        </p>
+      </>
+    ),
   );
 }
 
@@ -502,128 +522,136 @@ async function renderDetail(
 
   return renderPage(
     c,
-    { title: provider.name, section: SECTION, notice: noticeText(c), status },
-    <>
-      <Messages errors={messages.errors} warnings={messages.warnings} />
-      {[...stored.errors, ...stored.warnings].map((warning) => (
-        <p class="banner warning">{warning}</p>
-      ))}
-      <Details
-        rows={[
-          ['ID', <code>{provider.id}</code>],
-          ['Type', profile.label],
-          ['Status', <EnabledBadge enabled={provider.enabled} />],
-          ['Issuer', <code>{provider.issuer}</code>],
-          ['JWKS URI', <code>{provider.jwks_uri}</code>],
-          ['Audience', <code>{provider.audience}</code>],
-          ['Signature algorithms', provider.allowed_algs.join(', ')],
-          ['Maximum token age', `${provider.max_token_age_seconds} seconds`],
-          [
-            'Tenant pin',
-            provider.tenant_pin.length === 0 ? (
-              <Badge tone="warn">none</Badge>
-            ) : (
-              <Pre>{formatConditions(provider.tenant_pin)}</Pre>
-            ),
-          ],
-          ...(profile.id === 'generic'
-            ? ([['Anchor claims', <code>{provider.anchor_claims.join(', ')}</code>]] as Array<
-                [string, Child]
-              >)
-            : []),
-          ['Created', formatTime(provider.created_at)],
-          ['Last changed', formatTime(provider.updated_at)],
-        ]}
-      />
-      {canWrite ? (
-        <div class="actions">
-          <ActionButton
-            action={`${paths.consumer(provider.id)}/toggle`}
-            csrf={viewer.csrfToken}
-            label={provider.enabled ? 'Disable' : 'Enable'}
-            fields={{ enabled: provider.enabled ? '0' : '1' }}
-            danger={provider.enabled}
-          />
-        </div>
-      ) : null}
+    {
+      title: provider.name,
+      section: 'consumers',
+      subsection: 'consumers',
+      notice: legacyNotice(noticeText(c)),
+      status,
+    },
+    () => (
+      <>
+        <Messages errors={messages.errors} warnings={messages.warnings} />
+        {[...stored.errors, ...stored.warnings].map((warning) => (
+          <p class="banner warning">{warning}</p>
+        ))}
+        <Details
+          rows={[
+            ['ID', <code>{provider.id}</code>],
+            ['Type', profile.label],
+            ['Status', <EnabledBadge enabled={provider.enabled} />],
+            ['Issuer', <code>{provider.issuer}</code>],
+            ['JWKS URI', <code>{provider.jwks_uri}</code>],
+            ['Audience', <code>{provider.audience}</code>],
+            ['Signature algorithms', provider.allowed_algs.join(', ')],
+            ['Maximum token age', `${provider.max_token_age_seconds} seconds`],
+            [
+              'Tenant pin',
+              provider.tenant_pin.length === 0 ? (
+                <Badge tone="warn">none</Badge>
+              ) : (
+                <Pre>{formatConditions(provider.tenant_pin)}</Pre>
+              ),
+            ],
+            ...(profile.id === 'generic'
+              ? ([['Anchor claims', <code>{provider.anchor_claims.join(', ')}</code>]] as Array<
+                  [string, Child]
+                >)
+              : []),
+            ['Created', formatTime(provider.created_at)],
+            ['Last changed', formatTime(provider.updated_at)],
+          ]}
+        />
+        {canWrite ? (
+          <div class="actions">
+            <ActionButton
+              action={`${paths.consumer(provider.id)}/toggle`}
+              csrf={viewer.csrfToken}
+              label={provider.enabled ? 'Disable' : 'Enable'}
+              fields={{ enabled: provider.enabled ? '0' : '1' }}
+              danger={provider.enabled}
+            />
+          </div>
+        ) : null}
 
-      <h2>Use it from CI</h2>
-      <CallerSnippet provider={provider} origin={origin} />
+        <h2>Use it from CI</h2>
+        <CallerSnippet provider={provider} origin={origin} />
 
-      <h2>Grants for these callers</h2>
-      {grants.length === 0 ? (
-        <EmptyState>
-          No grants yet, so every caller is refused.{' '}
-          {canWrite ? (
-            <a href={paths.accessNew({ consumer: provider.id })}>Create a grant</a>
-          ) : null}
-        </EmptyState>
-      ) : (
-        <>
-          <table>
-            <thead>
-              <tr>
-                <th>Grant</th>
-                <th>Status</th>
-                <th>Expires</th>
-              </tr>
-            </thead>
-            <tbody>
-              {grants.map((grant) => (
+        <h2>Grants for these callers</h2>
+        {grants.length === 0 ? (
+          <EmptyState>
+            No grants yet, so every caller is refused.{' '}
+            {canWrite ? (
+              <a href={paths.accessNew({ consumer: provider.id })}>Create a grant</a>
+            ) : null}
+          </EmptyState>
+        ) : (
+          <>
+            <table>
+              <thead>
                 <tr>
-                  <td>
-                    <a href={paths.accessItem(grant.id)}>{grant.name}</a>
-                  </td>
-                  <td>
-                    <EnabledBadge enabled={grant.enabled} />
-                  </td>
-                  <td>{grant.expires_at === null ? 'never' : formatTime(grant.expires_at)}</td>
+                  <th>Grant</th>
+                  <th>Status</th>
+                  <th>Expires</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          {canWrite ? (
-            <p>
-              <a href={paths.accessNew({ consumer: provider.id })}>Create another grant</a>
-            </p>
-          ) : null}
-        </>
-      )}
-
-      {canWrite ? (
-        <>
-          <h2>Edit</h2>
-          <EditForm
-            provider={provider}
-            profile={profile}
-            form={storedForm(provider, profile)}
-            csrf={viewer.csrfToken}
-            affected={null}
-          />
-          <h2>Delete</h2>
-          {grants.length > 0 ? (
-            <p class="muted">
-              This caller provider is used by {grants.length} grant(s). Delete those grants first;
-              then it can be deleted. To refuse its tokens right away, disable it instead.
-            </p>
-          ) : (
-            <form method="post" action={`${paths.consumer(provider.id)}/delete`} class="stack">
-              <Csrf token={viewer.csrfToken} />
-              <Checkbox
-                name="confirm"
-                label="Delete this caller provider permanently"
-                hint="The audit log keeps a copy of its configuration."
-              />
-              <p class="actions">
-                <button type="submit" class="danger">
-                  Delete caller provider
-                </button>
+              </thead>
+              <tbody>
+                {grants.map((grant) => (
+                  <tr>
+                    <td>
+                      <a href={paths.accessItem(grant.id)}>{grant.name}</a>
+                    </td>
+                    <td>
+                      <EnabledBadge enabled={grant.enabled} />
+                    </td>
+                    <td>{grant.expires_at === null ? 'never' : formatTime(grant.expires_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {canWrite ? (
+              <p>
+                <a href={paths.accessNew({ consumer: provider.id })}>Create another grant</a>
               </p>
-            </form>
-          )}
-        </>
-      ) : null}
-    </>,
+            ) : null}
+          </>
+        )}
+
+        {canWrite ? (
+          <>
+            <h2>Edit</h2>
+            <EditForm
+              provider={provider}
+              profile={profile}
+              form={storedForm(provider, profile)}
+              csrf={viewer.csrfToken}
+              affected={null}
+            />
+            <h2>Delete</h2>
+            {grants.length > 0 ? (
+              <p class="muted">
+                This caller provider is used by {grants.length} grant(s). Delete those grants first;
+                then it can be deleted. To refuse its tokens right away, disable it instead.
+              </p>
+            ) : (
+              <form method="post" action={`${paths.consumer(provider.id)}/delete`} class="stack">
+                <Csrf token={viewer.csrfToken} />
+                <Checkbox
+                  name="confirm"
+                  label="Delete this caller provider permanently"
+                  hint="The audit log keeps a copy of its configuration."
+                />
+                <p class="actions">
+                  <button type="submit" class="danger">
+                    Delete caller provider
+                  </button>
+                </p>
+              </form>
+            )}
+          </>
+        ) : null}
+      </>
+    ),
   );
 }
 
@@ -914,10 +942,17 @@ async function loadProvider(
 function notFound(c: AdminContext) {
   return renderPage(
     c,
-    { title: 'Caller provider not found', section: SECTION, status: 404 },
-    <p>
-      It may have been deleted. <a href={SECTION}>Back to caller providers</a>
-    </p>,
+    {
+      title: 'Caller provider not found',
+      section: 'consumers',
+      subsection: 'consumers',
+      status: 404,
+    },
+    () => (
+      <p>
+        It may have been deleted. <a href={SECTION}>Back to caller providers</a>
+      </p>
+    ),
   );
 }
 

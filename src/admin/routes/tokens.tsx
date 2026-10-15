@@ -34,6 +34,7 @@ import {
   submittedVersion,
 } from '../render';
 import { getServiceTemplate, SERVICE_TEMPLATES, type ServiceTemplate } from '../service-templates';
+import { formatTime } from '../views/format';
 import {
   ActionButton,
   Badge,
@@ -47,11 +48,10 @@ import {
   Select,
   TextArea,
   VersionField,
-} from '../views/components';
-import { formatTime } from '../views/format';
-import type { Banner } from '../views/layout';
+  type Banner,
+  legacyNotice,
+} from '../views/legacy';
 
-const SECTION = paths.tokens();
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 const NOTICES: Record<string, string> = {
@@ -312,67 +312,74 @@ async function listPage(c: AdminContext) {
   const now = deps.now();
   return renderPage(
     c,
-    { title: 'Services', section: SECTION, notice: noticeFor(c) },
-    <>
-      <p class="muted">
-        A service is an upstream API (for example Slack or OpenAI) plus the credential the gateway
-        attaches to requests. Callers never see the credential.
-      </p>
-      {canWrite ? (
-        <p class="actions">
-          <a href={paths.tokenNew()}>Add a service</a>
+    {
+      title: 'Services',
+      section: 'tokens',
+      subsection: 'tokens',
+      notice: legacyNotice(noticeFor(c)),
+    },
+    () => (
+      <>
+        <p class="muted">
+          A service is an upstream API (for example Slack or OpenAI) plus the credential the gateway
+          attaches to requests. Callers never see the credential.
         </p>
-      ) : null}
-      {services.length === 0 ? (
-        <EmptyState>
-          No services yet.{' '}
-          {canWrite ? (
-            <>
-              <a href={paths.tokenNew()}>Add your first service</a> — templates for Slack, OpenAI,
-              Anthropic and GitHub are available.
-            </>
-          ) : (
-            'Ask an admin to add one.'
-          )}{' '}
-          See <code>docs/getting-started.md</code> for a walkthrough.
-        </EmptyState>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Slug</th>
-              <th scope="col">Name</th>
-              <th scope="col">Upstream host</th>
-              <th scope="col">Injection</th>
-              <th scope="col">Credential</th>
-              <th scope="col">Status</th>
-              <th scope="col">Grants</th>
-            </tr>
-          </thead>
-          <tbody>
-            {services.map((service) => (
+        {canWrite ? (
+          <p class="actions">
+            <a href={paths.tokenNew()}>Add a service</a>
+          </p>
+        ) : null}
+        {services.length === 0 ? (
+          <EmptyState>
+            No services yet.{' '}
+            {canWrite ? (
+              <>
+                <a href={paths.tokenNew()}>Add your first service</a> — templates for Slack, OpenAI,
+                Anthropic and GitHub are available.
+              </>
+            ) : (
+              'Ask an admin to add one.'
+            )}{' '}
+            See <code>docs/getting-started.md</code> for a walkthrough.
+          </EmptyState>
+        ) : (
+          <table>
+            <thead>
               <tr>
-                <td>
-                  <a href={paths.token(service.id)}>
-                    <code>{service.slug}</code>
-                  </a>
-                </td>
-                <td>{service.name}</td>
-                <td>{upstreamHost(service.base_url)}</td>
-                <td>{service.injection.kind}</td>
-                <td>
-                  <CredentialStatus service={service} now={now} />
-                </td>
-                <td>
-                  <EnabledBadge enabled={service.enabled} />
-                </td>
-                <td>{grantCounts.get(service.id) ?? 0}</td>
+                <th scope="col">Slug</th>
+                <th scope="col">Name</th>
+                <th scope="col">Upstream host</th>
+                <th scope="col">Injection</th>
+                <th scope="col">Credential</th>
+                <th scope="col">Status</th>
+                <th scope="col">Grants</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </>,
+            </thead>
+            <tbody>
+              {services.map((service) => (
+                <tr>
+                  <td>
+                    <a href={paths.token(service.id)}>
+                      <code>{service.slug}</code>
+                    </a>
+                  </td>
+                  <td>{service.name}</td>
+                  <td>{upstreamHost(service.base_url)}</td>
+                  <td>{service.injection.kind}</td>
+                  <td>
+                    <CredentialStatus service={service} now={now} />
+                  </td>
+                  <td>
+                    <EnabledBadge enabled={service.enabled} />
+                  </td>
+                  <td>{grantCounts.get(service.id) ?? 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </>
+    ),
   );
 }
 
@@ -602,10 +609,12 @@ function failureView(failure: OpFailure & { verify?: VerifyOutcome }) {
 function notFound(c: AdminContext) {
   return renderPage(
     c,
-    { title: 'Service not found', section: SECTION, status: 404 },
-    <p>
-      This service does not exist or was deleted. <a href={paths.tokens()}>Back to services</a>
-    </p>,
+    { title: 'Service not found', section: 'tokens', subsection: 'tokens', status: 404 },
+    () => (
+      <p>
+        This service does not exist or was deleted. <a href={paths.tokens()}>Back to services</a>
+      </p>
+    ),
   );
 }
 
@@ -629,56 +638,58 @@ function renderNewForm(
   const csrf = c.get('viewer').csrfToken;
   return renderPage(
     c,
-    { title: 'Add a service', section: SECTION, status: state.status },
-    <>
-      {template ? <TemplateGuidance template={template} /> : <TemplatePicker />}
-      {state.verify && !state.verify.passed ? (
-        <p class="banner error" role="alert">
-          The credential check failed, so nothing was saved. The result is shown above the Create
-          button.
-        </p>
-      ) : null}
-      <Messages errors={state.errors} warnings={state.warnings} />
-      <form method="post" action={paths.tokens()} class="stack">
-        <Csrf token={csrf} />
-        <input type="hidden" name="template" value={template?.id ?? ''} />
-        <fieldset>
-          <legend>Basics</legend>
-          <Field
-            label="Slug"
-            name="slug"
-            value={values.slug}
-            required
-            placeholder="openai"
-            hint={
-              <>
-                Short name used in the proxy address: callers send requests to{' '}
-                <code>/proxy/&lt;slug&gt;/…</code>. Lower-case letters, digits and dashes. It cannot
-                be changed later.
-              </>
-            }
-          />
-          <NameFields values={values} />
-        </fieldset>
-        <fieldset>
-          <legend>Upstream API</legend>
-          <DestinationFields values={values} />
-        </fieldset>
-        <fieldset>
-          <legend>Credential</legend>
-          <CredentialInput required={false} reentry={state.credentialEntered === true} />
-          <ExpiryField values={values} />
-        </fieldset>
-        <OptionsFields values={values} />
-        <VerifyFields values={values} />
-        {state.verify ? <VerifyResult verify={state.verify} /> : null}
-        {state.verify && !state.verify.passed ? <SaveAnyway /> : null}
-        <p class="actions">
-          <button type="submit">Create service</button>
-          <a href={paths.tokens()}>Cancel</a>
-        </p>
-      </form>
-    </>,
+    { title: 'Add a service', section: 'tokens', subsection: 'tokens', status: state.status },
+    () => (
+      <>
+        {template ? <TemplateGuidance template={template} /> : <TemplatePicker />}
+        {state.verify && !state.verify.passed ? (
+          <p class="banner error" role="alert">
+            The credential check failed, so nothing was saved. The result is shown above the Create
+            button.
+          </p>
+        ) : null}
+        <Messages errors={state.errors} warnings={state.warnings} />
+        <form method="post" action={paths.tokens()} class="stack">
+          <Csrf token={csrf} />
+          <input type="hidden" name="template" value={template?.id ?? ''} />
+          <fieldset>
+            <legend>Basics</legend>
+            <Field
+              label="Slug"
+              name="slug"
+              value={values.slug}
+              required
+              placeholder="openai"
+              hint={
+                <>
+                  Short name used in the proxy address: callers send requests to{' '}
+                  <code>/proxy/&lt;slug&gt;/…</code>. Lower-case letters, digits and dashes. It
+                  cannot be changed later.
+                </>
+              }
+            />
+            <NameFields values={values} />
+          </fieldset>
+          <fieldset>
+            <legend>Upstream API</legend>
+            <DestinationFields values={values} />
+          </fieldset>
+          <fieldset>
+            <legend>Credential</legend>
+            <CredentialInput required={false} reentry={state.credentialEntered === true} />
+            <ExpiryField values={values} />
+          </fieldset>
+          <OptionsFields values={values} />
+          <VerifyFields values={values} />
+          {state.verify ? <VerifyResult verify={state.verify} /> : null}
+          {state.verify && !state.verify.passed ? <SaveAnyway /> : null}
+          <p class="actions">
+            <button type="submit">Create service</button>
+            <a href={paths.tokens()}>Cancel</a>
+          </p>
+        </form>
+      </>
+    ),
   );
 }
 
@@ -1023,143 +1034,146 @@ async function renderDetail(c: AdminContext, service: Service, state: DetailStat
     c,
     {
       title: `Service: ${service.name}`,
-      section: SECTION,
-      notice: state.notice ?? null,
+      section: 'tokens',
+      subsection: 'tokens',
+      notice: legacyNotice(state.notice ?? null),
       status: state.status,
-      banners,
+      legacyBanners: banners,
     },
-    <>
-      <p>
-        <a href={paths.tokens()}>← All services</a>
-      </p>
-      {/* Results of the action just submitted go first: the re-rendered page opens at the top. */}
-      <Messages errors={state.actionErrors} />
-      {state.test ? <VerifyResult verify={state.test} /> : null}
-      {state.edit ? <FormProblem anchor="settings" section="Settings" /> : null}
-      {state.credential ? (
-        <FormProblem
-          anchor="change-credential"
-          section="Change credential or destination"
-          verifyFailed={state.credential.verify?.passed === false}
-        />
-      ) : null}
-      <Details
-        rows={[
-          ['Slug', <code>{service.slug}</code>],
-          ['ID', <code>{service.id}</code>],
-          ['Status', <EnabledBadge enabled={service.enabled} />],
-          [
-            'Proxy address',
-            <>
-              <code>{proxyUrl}</code>
-              <br />
-              <small class="muted">
-                Callers send requests here; the rest of the path is appended to the base URL.
-              </small>
-            </>,
-          ],
-          // An unattested stored destination is shown as unconfirmed so it is not copied into the
-          // credential form as if it were known good (I-CRED-2).
-          [
-            'Base URL',
-            <>
-              <code>{service.base_url}</code>
-              {binding.status === 'unattested' ? <Unconfirmed /> : null}
-            </>,
-          ],
-          [
-            'Credential sent as',
-            <>
-              {injectionText(service.injection)}
-              {binding.status === 'unattested' ? <Unconfirmed /> : null}
-            </>,
-          ],
-          [
-            'Extra forwarded headers',
-            service.forward_headers.length ? (
-              service.forward_headers.map((name) => <code>{name} </code>)
-            ) : (
-              <span class="muted">none</span>
-            ),
-          ],
-          ['Timeout', `${service.timeout_ms} ms`],
-          ['Credential check', verifyText(service.verify)],
-          ['Description', service.description || <span class="muted">none</span>],
-          ['Created', formatTime(service.created_at)],
-          ['Updated', formatTime(service.updated_at)],
-        ]}
-      />
-
-      <h2>Credential</h2>
-      <Details
-        rows={[
-          [
-            'Status',
-            <CredentialStatus
-              service={service}
-              now={now}
-              unusable={binding.status === 'unattested'}
-            />,
-          ],
-          ['Last set', formatTime(service.credential_updated_at)],
-          ['Expires', formatTime(service.credential_expires_at)],
-        ]}
-      />
-      {canWrite ? <TestButton service={service} csrf={csrf} /> : null}
-
-      <h2>Grants using this service</h2>
-      <GrantsTable grants={grants} providerNames={providerNames} />
-      {canWrite ? (
+    () => (
+      <>
         <p>
-          <a href={paths.accessNew({ token: service.id })}>Create a grant for this service</a>
+          <a href={paths.tokens()}>← All services</a>
         </p>
-      ) : null}
-      {template ? <StarterRules rules={template.starter_rules} /> : null}
+        {/* Results of the action just submitted go first: the re-rendered page opens at the top. */}
+        <Messages errors={state.actionErrors} />
+        {state.test ? <VerifyResult verify={state.test} /> : null}
+        {state.edit ? <FormProblem anchor="settings" section="Settings" /> : null}
+        {state.credential ? (
+          <FormProblem
+            anchor="change-credential"
+            section="Change credential or destination"
+            verifyFailed={state.credential.verify?.passed === false}
+          />
+        ) : null}
+        <Details
+          rows={[
+            ['Slug', <code>{service.slug}</code>],
+            ['ID', <code>{service.id}</code>],
+            ['Status', <EnabledBadge enabled={service.enabled} />],
+            [
+              'Proxy address',
+              <>
+                <code>{proxyUrl}</code>
+                <br />
+                <small class="muted">
+                  Callers send requests here; the rest of the path is appended to the base URL.
+                </small>
+              </>,
+            ],
+            // An unattested stored destination is shown as unconfirmed so it is not copied into the
+            // credential form as if it were known good (I-CRED-2).
+            [
+              'Base URL',
+              <>
+                <code>{service.base_url}</code>
+                {binding.status === 'unattested' ? <Unconfirmed /> : null}
+              </>,
+            ],
+            [
+              'Credential sent as',
+              <>
+                {injectionText(service.injection)}
+                {binding.status === 'unattested' ? <Unconfirmed /> : null}
+              </>,
+            ],
+            [
+              'Extra forwarded headers',
+              service.forward_headers.length ? (
+                service.forward_headers.map((name) => <code>{name} </code>)
+              ) : (
+                <span class="muted">none</span>
+              ),
+            ],
+            ['Timeout', `${service.timeout_ms} ms`],
+            ['Credential check', verifyText(service.verify)],
+            ['Description', service.description || <span class="muted">none</span>],
+            ['Created', formatTime(service.created_at)],
+            ['Updated', formatTime(service.updated_at)],
+          ]}
+        />
 
-      {canWrite ? (
-        <>
-          <h2>Enable or disable</h2>
-          <p class="muted">
-            {service.enabled
-              ? 'Disabling refuses every proxied request to this service from the next request on. Grants and the credential are kept.'
-              : 'This service is disabled: proxied requests to it are refused.'}
+        <h2>Credential</h2>
+        <Details
+          rows={[
+            [
+              'Status',
+              <CredentialStatus
+                service={service}
+                now={now}
+                unusable={binding.status === 'unattested'}
+              />,
+            ],
+            ['Last set', formatTime(service.credential_updated_at)],
+            ['Expires', formatTime(service.credential_expires_at)],
+          ]}
+        />
+        {canWrite ? <TestButton service={service} csrf={csrf} /> : null}
+
+        <h2>Grants using this service</h2>
+        <GrantsTable grants={grants} providerNames={providerNames} />
+        {canWrite ? (
+          <p>
+            <a href={paths.accessNew({ token: service.id })}>Create a grant for this service</a>
           </p>
-          <p class="actions">
-            <ActionButton
-              action={`${paths.token(service.id)}/toggle`}
+        ) : null}
+        {template ? <StarterRules rules={template.starter_rules} /> : null}
+
+        {canWrite ? (
+          <>
+            <h2>Enable or disable</h2>
+            <p class="muted">
+              {service.enabled
+                ? 'Disabling refuses every proxied request to this service from the next request on. Grants and the credential are kept.'
+                : 'This service is disabled: proxied requests to it are refused.'}
+            </p>
+            <p class="actions">
+              <ActionButton
+                action={`${paths.token(service.id)}/toggle`}
+                csrf={csrf}
+                label={service.enabled ? 'Disable service' : 'Enable service'}
+                danger={service.enabled}
+                fields={{ enabled: service.enabled ? '0' : '1' }}
+              />
+            </p>
+
+            <h2 id="settings">Settings</h2>
+            <EditForm
+              service={service}
               csrf={csrf}
-              label={service.enabled ? 'Disable service' : 'Enable service'}
-              danger={service.enabled}
-              fields={{ enabled: service.enabled ? '0' : '1' }}
+              values={state.edit?.values ?? stored}
+              errors={state.edit?.errors}
+              warnings={state.edit?.warnings}
             />
-          </p>
 
-          <h2 id="settings">Settings</h2>
-          <EditForm
-            service={service}
-            csrf={csrf}
-            values={state.edit?.values ?? stored}
-            errors={state.edit?.errors}
-            warnings={state.edit?.warnings}
-          />
+            <h2 id="change-credential">Change credential or destination</h2>
+            <CredentialForm
+              service={service}
+              csrf={csrf}
+              values={state.credential?.values ?? credentialFormValues(stored, binding)}
+              errors={state.credential?.errors}
+              warnings={state.credential?.warnings}
+              verify={state.credential?.verify ?? null}
+              reentry={state.credential !== undefined}
+              confirmDestination={binding.status === 'unattested'}
+            />
 
-          <h2 id="change-credential">Change credential or destination</h2>
-          <CredentialForm
-            service={service}
-            csrf={csrf}
-            values={state.credential?.values ?? credentialFormValues(stored, binding)}
-            errors={state.credential?.errors}
-            warnings={state.credential?.warnings}
-            verify={state.credential?.verify ?? null}
-            reentry={state.credential !== undefined}
-            confirmDestination={binding.status === 'unattested'}
-          />
-
-          <h2>Delete</h2>
-          <DeleteSection service={service} grantCount={grants.length} csrf={csrf} />
-        </>
-      ) : null}
-    </>,
+            <h2>Delete</h2>
+            <DeleteSection service={service} grantCount={grants.length} csrf={csrf} />
+          </>
+        ) : null}
+      </>
+    ),
   );
 }
 

@@ -15,8 +15,8 @@ import {
   redirectWithNotice,
   renderPage,
 } from '../render';
-import { ActionButton, Csrf, Details, Messages } from '../views/components';
 import { loginProviderNames } from '../views/format';
+import { ActionButton, Csrf, Details, Messages } from '../views/legacy';
 
 const PAGE = paths.signIn();
 
@@ -74,68 +74,71 @@ async function signInPage(
     c,
     {
       title: 'Sign-in',
-      section: PAGE,
-      notice: options.notice ? NOTICES[options.notice] : null,
+      section: 'users',
+      subsection: 'sign-in',
+      notice: options.notice ? { text: NOTICES[options.notice] } : null,
       status: options.status,
     },
-    <>
-      <Messages errors={options.errors} />
+    () => (
+      <>
+        <Messages errors={options.errors} />
 
-      <h2 id="hosts">Admin hosts</h2>
-      <p>
-        The admin console answers only on these hostnames; any other hostname gets 404. The hostname
-        of the first sign-in is the first entry. Put every hostname you add behind your Cloudflare
-        Access application. The admin console never answers on workers.dev.
-      </p>
-      {adminHosts === null ? (
-        <p class="muted">Not set yet: set on the first sign-in.</p>
-      ) : (
-        <ul>
-          {adminHosts.map((host) => (
-            <li>
-              <code>{host}</code>
-              {host === currentHost ? ' (the host you are using now)' : null}{' '}
-              {canWrite && adminHosts.length > 1 ? (
-                <ActionButton
-                  action={`${PAGE}/hosts`}
-                  csrf={viewer.csrfToken}
-                  label="Remove"
-                  danger
-                  fields={{ remove: host }}
-                />
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      )}
-      {canWrite ? (
-        <form method="post" action={`${PAGE}/hosts`} class="stack">
-          <Csrf token={viewer.csrfToken} />
-          <label class="field">
-            <span>Add an admin host</span>
-            <input
-              type="text"
-              name="add"
-              value={options.submittedAdd ?? ''}
-              placeholder={currentHost}
-            />
-            <small>
-              An exact hostname such as tokengate.example.com, or *.example.com for every host below
-              example.com. While no host is set, {currentHost} (the host you are using now) is kept
-              as well.
-            </small>
-          </label>
-          <div class="actions">
-            <button type="submit">Add host</button>
-          </div>
-        </form>
-      ) : (
-        <p class="muted">Only owners can change this.</p>
-      )}
+        <h2 id="hosts">Admin hosts</h2>
+        <p>
+          The admin console answers only on these hostnames; any other hostname gets 404. The
+          hostname of the first sign-in is the first entry. Put every hostname you add behind your
+          Cloudflare Access application. The admin console never answers on workers.dev.
+        </p>
+        {adminHosts === null ? (
+          <p class="muted">Not set yet: set on the first sign-in.</p>
+        ) : (
+          <ul>
+            {adminHosts.map((host) => (
+              <li>
+                <code>{host}</code>
+                {host === currentHost ? ' (the host you are using now)' : null}{' '}
+                {canWrite && adminHosts.length > 1 ? (
+                  <ActionButton
+                    action={`${PAGE}/hosts`}
+                    csrf={viewer.csrfToken}
+                    label="Remove"
+                    danger
+                    fields={{ remove: host }}
+                  />
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+        {canWrite ? (
+          <form method="post" action={`${PAGE}/hosts`} class="stack">
+            <Csrf token={viewer.csrfToken} />
+            <label class="field">
+              <span>Add an admin host</span>
+              <input
+                type="text"
+                name="add"
+                value={options.submittedAdd ?? ''}
+                placeholder={currentHost}
+              />
+              <small>
+                An exact hostname such as tokengate.example.com, or *.example.com for every host
+                below example.com. While no host is set, {currentHost} (the host you are using now)
+                is kept as well.
+              </small>
+            </label>
+            <div class="actions">
+              <button type="submit">Add host</button>
+            </div>
+          </form>
+        ) : (
+          <p class="muted">Only owners can change this.</p>
+        )}
 
-      <h2 id="login">Login provider</h2>
-      <Details rows={[['Login providers', loginStatusText(parseConfig(deps.env))]]} />
-    </>,
+        <h2 id="login">Login provider</h2>
+        <Details rows={[['Login providers', loginStatusText(parseConfig(deps.env))]]} />
+      </>
+    ),
   );
 }
 

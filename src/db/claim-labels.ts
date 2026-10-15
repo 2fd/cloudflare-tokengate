@@ -75,6 +75,60 @@ export async function repositoryLabelOptions(
   });
 }
 
+/** A typed numeric ID with its optional label. The ID stays a string (IDs can exceed 2^53). */
+export interface IdWithLabel {
+  id: string;
+  label: string | null;
+}
+
+const ID_DIGITS = '([0-9]{1,20})';
+const LABELLED_PAREN = new RegExp(`^(.+?)\\s*\\(${ID_DIGITS}\\)$`);
+const LABELLED_HASH = new RegExp(`^(.+?)\\s+#${ID_DIGITS}$`);
+const BARE = new RegExp(`^#?${ID_DIGITS}$`);
+
+/**
+ * Parses the ID input format (A7.8): `acme/api (987654321)`, also `acme/api #987654321` and the
+ * bare `987654321`. A bare ID has no label; callers accept it only when `claim_labels` already
+ * has a label for it (resolveIdWithLabel). Null when the text is none of these.
+ */
+export function parseIdWithLabel(raw: string): IdWithLabel | null {
+  const text = raw.trim();
+  const bare = BARE.exec(text);
+  if (bare) return { id: bare[1] as string, label: null };
+  const labelled = LABELLED_PAREN.exec(text) ?? LABELLED_HASH.exec(text);
+  if (!labelled) return null;
+  const label = (labelled[1] as string).trim();
+  return label === '' ? null : { id: labelled[2] as string, label };
+}
+
+/** A comma-separated list of parseIdWithLabel entries; null when any entry is invalid. */
+export function parseIdWithLabelList(raw: string): IdWithLabel[] | null {
+  const entries = raw
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '');
+  const parsed = entries.map(parseIdWithLabel);
+  return parsed.every((entry) => entry !== null) ? (parsed as IdWithLabel[]) : null;
+}
+
+/**
+ * A parsed ID with its label filled from the stored labels of the consumer: a bare ID needs an
+ * existing label for (claim, id), otherwise null. A typed label wins over the stored one.
+ */
+export function resolveIdWithLabel(
+  parsed: IdWithLabel,
+  labels: readonly ClaimLabel[],
+  claim: string,
+): { id: string; label: string } | null {
+  const label = parsed.label ?? labelFor(labels, claim, parsed.id);
+  return label === null ? null : { id: parsed.id, label };
+}
+
+/** The input format of an ID: `name (ID)`, or the bare ID without a label. */
+export function idWithLabelText(id: string, label: string | null): string {
+  return label ? `${label} (${id})` : id;
+}
+
 function claimLabelFromRow(row: Record<string, unknown>): ClaimLabel {
   return {
     caller_provider_id: String(row.caller_provider_id),

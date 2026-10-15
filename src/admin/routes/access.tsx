@@ -39,6 +39,7 @@ import {
   submittedVersion,
 } from '../render';
 import { SERVICE_TEMPLATES } from '../service-templates';
+import { formatTime, withQuery } from '../views/format';
 import {
   ActionButton,
   Badge,
@@ -53,8 +54,8 @@ import {
   Select,
   TextArea,
   VersionField,
-} from '../views/components';
-import { formatTime, withQuery } from '../views/format';
+  legacyNotice,
+} from '../views/legacy';
 
 const SECTION = paths.access();
 const NEW = paths.accessNew();
@@ -277,90 +278,97 @@ async function listPage(c: AdminContext) {
 
   return renderPage(
     c,
-    { title: 'Grants', section: SECTION, notice: noticeText(c) },
-    <>
-      <p class="muted">
-        A grant lets callers of one caller provider whose token claims match its conditions call one
-        service, for the methods and paths in its rules. Anything no grant allows is refused.
-      </p>
-      {canWrite ? (
-        <p class="actions">
-          <a href={paths.accessNew({ consumer: providerFilter, token: serviceFilter })}>
-            Create a grant
-          </a>
+    {
+      title: 'Grants',
+      section: 'consumers',
+      subsection: 'access',
+      notice: legacyNotice(noticeText(c)),
+    },
+    () => (
+      <>
+        <p class="muted">
+          A grant lets callers of one caller provider whose token claims match its conditions call
+          one service, for the methods and paths in its rules. Anything no grant allows is refused.
         </p>
-      ) : null}
-      <form method="get" action={SECTION} class="filters">
-        <Select
-          label="Service"
-          name="token"
-          value={serviceFilter ?? ''}
-          options={[
-            { value: '', label: 'All services' },
-            ...services.map((service) => ({ value: service.id, label: service.name })),
-          ]}
-        />
-        <Select
-          label="Caller provider"
-          name="consumer"
-          value={providerFilter ?? ''}
-          options={[
-            { value: '', label: 'All caller providers' },
-            ...providers.map((provider) => ({ value: provider.id, label: provider.name })),
-          ]}
-        />
-        <button type="submit" class="secondary">
-          Filter
-        </button>
-      </form>
-      {grants.length === 0 ? (
-        <EmptyState>
-          {filtered
-            ? 'No grants match these filters. '
-            : 'No grants yet, so every caller is refused. '}
-          {canWrite ? <NextStep providers={providers} services={services} /> : null}
-        </EmptyState>
-      ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Caller provider</th>
-              <th>Service</th>
-              <th>Conditions</th>
-              <th>Rules</th>
-              <th>Status</th>
-              <th>Expires</th>
-            </tr>
-          </thead>
-          <tbody>
-            {grants.map((grant) => (
+        {canWrite ? (
+          <p class="actions">
+            <a href={paths.accessNew({ consumer: providerFilter, token: serviceFilter })}>
+              Create a grant
+            </a>
+          </p>
+        ) : null}
+        <form method="get" action={SECTION} class="filters">
+          <Select
+            label="Service"
+            name="token"
+            value={serviceFilter ?? ''}
+            options={[
+              { value: '', label: 'All services' },
+              ...services.map((service) => ({ value: service.id, label: service.name })),
+            ]}
+          />
+          <Select
+            label="Caller provider"
+            name="consumer"
+            value={providerFilter ?? ''}
+            options={[
+              { value: '', label: 'All caller providers' },
+              ...providers.map((provider) => ({ value: provider.id, label: provider.name })),
+            ]}
+          />
+          <button type="submit" class="secondary">
+            Filter
+          </button>
+        </form>
+        {grants.length === 0 ? (
+          <EmptyState>
+            {filtered
+              ? 'No grants match these filters. '
+              : 'No grants yet, so every caller is refused. '}
+            {canWrite ? <NextStep providers={providers} services={services} /> : null}
+          </EmptyState>
+        ) : (
+          <table>
+            <thead>
               <tr>
-                <td>
-                  <a href={paths.accessItem(grant.id)}>{grant.name}</a>
-                </td>
-                <td>
-                  {providerById.get(grant.caller_provider_id)?.name ?? (
-                    <code>{grant.caller_provider_id}</code>
-                  )}
-                </td>
-                <td>
-                  {serviceById.get(grant.service_id)?.name ?? <code>{grant.service_id}</code>}
-                </td>
-                <td>
-                  <code>{summarizeConditions(grant.conditions)}</code>
-                </td>
-                <td>{grant.rules.length}</td>
-                <td>
-                  <GrantStatus grant={grant} now={now} />
-                </td>
-                <td>{grant.expires_at === null ? 'never' : formatTime(grant.expires_at)}</td>
+                <th>Name</th>
+                <th>Caller provider</th>
+                <th>Service</th>
+                <th>Conditions</th>
+                <th>Rules</th>
+                <th>Status</th>
+                <th>Expires</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </>,
+            </thead>
+            <tbody>
+              {grants.map((grant) => (
+                <tr>
+                  <td>
+                    <a href={paths.accessItem(grant.id)}>{grant.name}</a>
+                  </td>
+                  <td>
+                    {providerById.get(grant.caller_provider_id)?.name ?? (
+                      <code>{grant.caller_provider_id}</code>
+                    )}
+                  </td>
+                  <td>
+                    {serviceById.get(grant.service_id)?.name ?? <code>{grant.service_id}</code>}
+                  </td>
+                  <td>
+                    <code>{summarizeConditions(grant.conditions)}</code>
+                  </td>
+                  <td>{grant.rules.length}</td>
+                  <td>
+                    <GrantStatus grant={grant} now={now} />
+                  </td>
+                  <td>{grant.expires_at === null ? 'never' : formatTime(grant.expires_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </>
+    ),
   );
 }
 
@@ -576,16 +584,24 @@ async function prefillFromRequest(c: AdminContext, requestId: string) {
   if (!usable || !target || !isRecord(claims)) {
     return renderPage(
       c,
-      { title: 'Cannot create a grant from this request', section: SECTION, status: 400 },
-      <>
-        <p>
-          Only requests that were denied with “no matching grant” or “event not trusted”, whose
-          token was verified, and whose caller provider and service still exist can prefill a grant.
-        </p>
-        <p>
-          <a href={NEW}>Create a grant from scratch</a>
-        </p>
-      </>,
+      {
+        title: 'Cannot create a grant from this request',
+        section: 'consumers',
+        subsection: 'access',
+        status: 400,
+      },
+      () => (
+        <>
+          <p>
+            Only requests that were denied with “no matching grant” or “event not trusted”, whose
+            token was verified, and whose caller provider and service still exist can prefill a
+            grant.
+          </p>
+          <p>
+            <a href={NEW}>Create a grant from scratch</a>
+          </p>
+        </>
+      ),
     );
   }
 
@@ -648,45 +664,49 @@ async function renderChooser(
   if (providers.length === 0 || services.length === 0) {
     return renderPage(
       c,
-      { title: 'Create a grant', section: SECTION, status },
-      <EmptyState>
-        A grant connects a caller provider to a service.{' '}
-        <NextStep providers={providers} services={services} />
-      </EmptyState>,
+      { title: 'Create a grant', section: 'consumers', subsection: 'access', status },
+      () => (
+        <EmptyState>
+          A grant connects a caller provider to a service.{' '}
+          <NextStep providers={providers} services={services} />
+        </EmptyState>
+      ),
     );
   }
   return renderPage(
     c,
-    { title: 'Create a grant', section: SECTION, status },
-    <>
-      <Messages errors={errors} />
-      <p>Step 1 of 2: who may call, and which service?</p>
-      <form method="get" action={NEW} class="stack">
-        <Select
-          label="Caller provider"
-          name="consumer"
-          value={providerId}
-          options={providers.map((provider) => ({
-            value: provider.id,
-            label: `${provider.name} (${getProfile(provider.profile)?.label ?? provider.profile})`,
-          }))}
-          hint="The platform whose workloads will call, e.g. your GitHub organization's Actions."
-        />
-        <Select
-          label="Service"
-          name="token"
-          value={serviceId}
-          options={services.map((service) => ({
-            value: service.id,
-            label: `${service.name} (/proxy/${service.slug})`,
-          }))}
-          hint="The upstream API they may call through the gateway."
-        />
-        <p class="actions">
-          <button type="submit">Continue</button>
-        </p>
-      </form>
-    </>,
+    { title: 'Create a grant', section: 'consumers', subsection: 'access', status },
+    () => (
+      <>
+        <Messages errors={errors} />
+        <p>Step 1 of 2: who may call, and which service?</p>
+        <form method="get" action={NEW} class="stack">
+          <Select
+            label="Caller provider"
+            name="consumer"
+            value={providerId}
+            options={providers.map((provider) => ({
+              value: provider.id,
+              label: `${provider.name} (${getProfile(provider.profile)?.label ?? provider.profile})`,
+            }))}
+            hint="The platform whose workloads will call, e.g. your GitHub organization's Actions."
+          />
+          <Select
+            label="Service"
+            name="token"
+            value={serviceId}
+            options={services.map((service) => ({
+              value: service.id,
+              label: `${service.name} (/proxy/${service.slug})`,
+            }))}
+            hint="The upstream API they may call through the gateway."
+          />
+          <p class="actions">
+            <button type="submit">Continue</button>
+          </p>
+        </form>
+      </>
+    ),
   );
 }
 
@@ -713,81 +733,83 @@ function renderCreateForm(
   const base = { consumer: provider.id, token: service.id };
   return renderPage(
     c,
-    { title: 'Create a grant', section: SECTION, status },
-    <>
-      <FormBanners messages={messages} />
-      <Details
-        rows={[
-          ['Caller provider', <a href={paths.consumer(provider.id)}>{provider.name}</a>],
-          ['Service', <a href={paths.token(service.id)}>{service.name}</a>],
-        ]}
-      />
-      <p>
-        <a href={NEW}>Choose another caller provider or service</a>
-      </p>
-      {profile.id === 'github-actions' ? (
-        <p class="muted">
-          {preset ? (
-            <>
-              Using the GitHub builder.{' '}
-              <a href={withQuery(NEW, { ...base, mode: 'advanced' })}>
-                Write conditions as text instead
-              </a>{' '}
-              (clears this form).
-            </>
-          ) : (
-            <>
-              Writing conditions as text.{' '}
-              <a href={withQuery(NEW, { ...base, mode: 'preset' })}>
-                Use the GitHub builder instead
-              </a>{' '}
-              (clears this form).
-            </>
-          )}
+    { title: 'Create a grant', section: 'consumers', subsection: 'access', status },
+    () => (
+      <>
+        <FormBanners messages={messages} />
+        <Details
+          rows={[
+            ['Caller provider', <a href={paths.consumer(provider.id)}>{provider.name}</a>],
+            ['Service', <a href={paths.token(service.id)}>{service.name}</a>],
+          ]}
+        />
+        <p>
+          <a href={NEW}>Choose another caller provider or service</a>
         </p>
-      ) : null}
-      <form method="post" action={SECTION} class="stack">
-        <Csrf token={c.get('viewer').csrfToken} />
-        <input type="hidden" name="caller_provider_id" value={provider.id} />
-        <input type="hidden" name="service_id" value={service.id} />
-        <input type="hidden" name="mode" value={form.mode} />
-        <NameFields form={form} />
-        {preset ? (
-          <PresetFields form={form} provider={provider} />
-        ) : (
-          <ConditionsField form={form} target={target} />
-        )}
-        {computed ? (
-          <EventLine conditions={computed} profile={profile} />
-        ) : (
-          <TrustedEventsNote profile={profile} />
-        )}
-        {preset && computed ? (
-          <div>
-            <p>The builder produces these conditions:</p>
-            <Pre>{formatConditions(computed)}</Pre>
-          </div>
+        {profile.id === 'github-actions' ? (
+          <p class="muted">
+            {preset ? (
+              <>
+                Using the GitHub builder.{' '}
+                <a href={withQuery(NEW, { ...base, mode: 'advanced' })}>
+                  Write conditions as text instead
+                </a>{' '}
+                (clears this form).
+              </>
+            ) : (
+              <>
+                Writing conditions as text.{' '}
+                <a href={withQuery(NEW, { ...base, mode: 'preset' })}>
+                  Use the GitHub builder instead
+                </a>{' '}
+                (clears this form).
+              </>
+            )}
+          </p>
         ) : null}
-        <RulesField form={form} service={service} />
-        <Field
-          label="Expires (UTC, optional)"
-          name="expires_at"
-          value={form.expires_at}
-          type="datetime-local"
-          hint="After this time the grant stops matching. Leave empty for no expiry."
-        />
-        <Checkbox
-          name="enabled"
-          checked={form.enabled}
-          label="Enable this grant now"
-          hint="Leave unchecked to save it disabled and enable it later."
-        />
-        <AcknowledgeField messages={messages} />
-        <p class="actions">
-          <button type="submit">Create grant</button>
-        </p>
-      </form>
-    </>,
+        <form method="post" action={SECTION} class="stack">
+          <Csrf token={c.get('viewer').csrfToken} />
+          <input type="hidden" name="caller_provider_id" value={provider.id} />
+          <input type="hidden" name="service_id" value={service.id} />
+          <input type="hidden" name="mode" value={form.mode} />
+          <NameFields form={form} />
+          {preset ? (
+            <PresetFields form={form} provider={provider} />
+          ) : (
+            <ConditionsField form={form} target={target} />
+          )}
+          {computed ? (
+            <EventLine conditions={computed} profile={profile} />
+          ) : (
+            <TrustedEventsNote profile={profile} />
+          )}
+          {preset && computed ? (
+            <div>
+              <p>The builder produces these conditions:</p>
+              <Pre>{formatConditions(computed)}</Pre>
+            </div>
+          ) : null}
+          <RulesField form={form} service={service} />
+          <Field
+            label="Expires (UTC, optional)"
+            name="expires_at"
+            value={form.expires_at}
+            type="datetime-local"
+            hint="After this time the grant stops matching. Leave empty for no expiry."
+          />
+          <Checkbox
+            name="enabled"
+            checked={form.enabled}
+            label="Enable this grant now"
+            hint="Leave unchecked to save it disabled and enable it later."
+          />
+          <AcknowledgeField messages={messages} />
+          <p class="actions">
+            <button type="submit">Create grant</button>
+          </p>
+        </form>
+      </>
+    ),
   );
 }
 
@@ -802,21 +824,23 @@ function renderEditPage(
 ) {
   return renderPage(
     c,
-    { title: `Edit ${grant.name}`, section: SECTION, status },
-    <>
-      <FormBanners messages={messages} grantId={grant.id} />
-      <EditForm
-        grant={grant}
-        target={target}
-        form={form}
-        csrf={c.get('viewer').csrfToken}
-        messages={messages}
-        computed={computed}
-      />
-      <p>
-        <a href={paths.accessItem(grant.id)}>Cancel</a>
-      </p>
-    </>,
+    { title: `Edit ${grant.name}`, section: 'consumers', subsection: 'access', status },
+    () => (
+      <>
+        <FormBanners messages={messages} grantId={grant.id} />
+        <EditForm
+          grant={grant}
+          target={target}
+          form={form}
+          csrf={c.get('viewer').csrfToken}
+          messages={messages}
+          computed={computed}
+        />
+        <p>
+          <a href={paths.accessItem(grant.id)}>Cancel</a>
+        </p>
+      </>
+    ),
   );
 }
 
@@ -833,128 +857,136 @@ async function renderDetail(
   const now = c.get('deps').now();
   return renderPage(
     c,
-    { title: grant.name, section: SECTION, notice: noticeText(c), status },
-    <>
-      <FormBanners messages={messages} grantId={grant.id} />
-      <InactiveBanners grant={grant} target={target} now={now} />
-      <Details
-        rows={[
-          ['ID', <code>{grant.id}</code>],
-          ['Status', <GrantStatus grant={grant} now={now} />],
-          ['Caller provider', <a href={paths.consumer(provider.id)}>{provider.name}</a>],
-          [
-            'Service',
-            <>
-              <a href={paths.token(service.id)}>{service.name}</a>{' '}
-              <code>/proxy/{service.slug}</code>
-            </>,
-          ],
-          ['Description', grant.description || '—'],
-          ['Expires', grant.expires_at === null ? 'never' : formatTime(grant.expires_at)],
-          ['Created by', grant.created_by ?? '—'],
-          ['Created', formatTime(grant.created_at)],
-          ['Last changed', formatTime(grant.updated_at)],
-        ]}
-      />
-      {canWrite ? (
-        <div class="actions">
-          <ActionButton
-            action={`${paths.accessItem(grant.id)}/toggle`}
-            csrf={viewer.csrfToken}
-            label={grant.enabled ? 'Disable' : 'Enable'}
-            fields={{ enabled: grant.enabled ? '0' : '1' }}
-            danger={grant.enabled}
-          />
-          <a href={withQuery(NEW, { duplicate: grant.id })}>Duplicate</a>
-        </div>
-      ) : null}
-      <p class="muted">
-        <a href={paths.requests({ token: service.id })}>Recent requests to this service</a>
-      </p>
-
-      <h2>Conditions (all must match)</h2>
-      <EventLine conditions={grant.conditions} profile={profile} />
-      <table>
-        <thead>
-          <tr>
-            <th>Claim</th>
-            <th>Match</th>
-            <th>Values (any)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {grant.conditions.map((condition) => (
-            <tr>
-              <td>
-                <code>{condition.claim}</code>
-              </td>
-              <td>
-                {condition.negate ? 'not ' : ''}
-                {condition.match}
-              </td>
-              <td>
-                {condition.values.map((value, index) => (
-                  <>
-                    {index > 0 ? ', ' : ''}
-                    <code>{value}</code>
-                  </>
-                ))}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <Pre>{formatConditions(grant.conditions)}</Pre>
-
-      <h2>Rules (any may match)</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Methods</th>
-            <th>Path</th>
-          </tr>
-        </thead>
-        <tbody>
-          {grant.rules.map((rule) => (
-            <tr>
-              <td>{rule.methods.join(', ')}</td>
-              <td>
-                <code>{rule.path}</code>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <Pre>{formatRules(grant.rules)}</Pre>
-
-      {canWrite ? (
-        <>
-          <h2>Edit</h2>
-          <EditForm
-            grant={grant}
-            target={target}
-            form={grantForm(grant)}
-            csrf={viewer.csrfToken}
-            messages={{}}
-            computed={null}
-          />
-          <h2>Delete</h2>
-          <form method="post" action={`${paths.accessItem(grant.id)}/delete`} class="stack">
-            <Csrf token={viewer.csrfToken} />
-            <Checkbox
-              name="confirm"
-              label="Delete this grant permanently"
-              hint="Callers it allowed are refused from the next request on. To stop it temporarily, disable it instead. The audit log keeps a copy of its conditions and rules."
+    {
+      title: grant.name,
+      section: 'consumers',
+      subsection: 'access',
+      notice: legacyNotice(noticeText(c)),
+      status,
+    },
+    () => (
+      <>
+        <FormBanners messages={messages} grantId={grant.id} />
+        <InactiveBanners grant={grant} target={target} now={now} />
+        <Details
+          rows={[
+            ['ID', <code>{grant.id}</code>],
+            ['Status', <GrantStatus grant={grant} now={now} />],
+            ['Caller provider', <a href={paths.consumer(provider.id)}>{provider.name}</a>],
+            [
+              'Service',
+              <>
+                <a href={paths.token(service.id)}>{service.name}</a>{' '}
+                <code>/proxy/{service.slug}</code>
+              </>,
+            ],
+            ['Description', grant.description || '—'],
+            ['Expires', grant.expires_at === null ? 'never' : formatTime(grant.expires_at)],
+            ['Created by', grant.created_by ?? '—'],
+            ['Created', formatTime(grant.created_at)],
+            ['Last changed', formatTime(grant.updated_at)],
+          ]}
+        />
+        {canWrite ? (
+          <div class="actions">
+            <ActionButton
+              action={`${paths.accessItem(grant.id)}/toggle`}
+              csrf={viewer.csrfToken}
+              label={grant.enabled ? 'Disable' : 'Enable'}
+              fields={{ enabled: grant.enabled ? '0' : '1' }}
+              danger={grant.enabled}
             />
-            <p class="actions">
-              <button type="submit" class="danger">
-                Delete grant
-              </button>
-            </p>
-          </form>
-        </>
-      ) : null}
-    </>,
+            <a href={withQuery(NEW, { duplicate: grant.id })}>Duplicate</a>
+          </div>
+        ) : null}
+        <p class="muted">
+          <a href={paths.requests({ token: service.id })}>Recent requests to this service</a>
+        </p>
+
+        <h2>Conditions (all must match)</h2>
+        <EventLine conditions={grant.conditions} profile={profile} />
+        <table>
+          <thead>
+            <tr>
+              <th>Claim</th>
+              <th>Match</th>
+              <th>Values (any)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {grant.conditions.map((condition) => (
+              <tr>
+                <td>
+                  <code>{condition.claim}</code>
+                </td>
+                <td>
+                  {condition.negate ? 'not ' : ''}
+                  {condition.match}
+                </td>
+                <td>
+                  {condition.values.map((value, index) => (
+                    <>
+                      {index > 0 ? ', ' : ''}
+                      <code>{value}</code>
+                    </>
+                  ))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <Pre>{formatConditions(grant.conditions)}</Pre>
+
+        <h2>Rules (any may match)</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Methods</th>
+              <th>Path</th>
+            </tr>
+          </thead>
+          <tbody>
+            {grant.rules.map((rule) => (
+              <tr>
+                <td>{rule.methods.join(', ')}</td>
+                <td>
+                  <code>{rule.path}</code>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <Pre>{formatRules(grant.rules)}</Pre>
+
+        {canWrite ? (
+          <>
+            <h2>Edit</h2>
+            <EditForm
+              grant={grant}
+              target={target}
+              form={grantForm(grant)}
+              csrf={viewer.csrfToken}
+              messages={{}}
+              computed={null}
+            />
+            <h2>Delete</h2>
+            <form method="post" action={`${paths.accessItem(grant.id)}/delete`} class="stack">
+              <Csrf token={viewer.csrfToken} />
+              <Checkbox
+                name="confirm"
+                label="Delete this grant permanently"
+                hint="Callers it allowed are refused from the next request on. To stop it temporarily, disable it instead. The audit log keeps a copy of its conditions and rules."
+              />
+              <p class="actions">
+                <button type="submit" class="danger">
+                  Delete grant
+                </button>
+              </p>
+            </form>
+          </>
+        ) : null}
+      </>
+    ),
   );
 }
 
@@ -1298,10 +1330,12 @@ async function loadGrant(c: AdminContext): Promise<{ grant: Grant; target: Targe
 function notFound(c: AdminContext) {
   return renderPage(
     c,
-    { title: 'Grant not found', section: SECTION, status: 404 },
-    <p>
-      It may have been deleted. <a href={SECTION}>Back to grants</a>
-    </p>,
+    { title: 'Grant not found', section: 'consumers', subsection: 'access', status: 404 },
+    () => (
+      <p>
+        It may have been deleted. <a href={SECTION}>Back to grants</a>
+      </p>
+    ),
   );
 }
 

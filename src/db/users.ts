@@ -404,6 +404,31 @@ export async function listPendingUsers(db: D1Database, limit: number): Promise<U
   return results.map(userFromRow);
 }
 
+/**
+ * The first `perRole` active users of each of `roles` by email, each with the role's total count of
+ * active users. One bounded read however many users exist; enough to name "who to ask" for any
+ * permission and say how many more there are (AskSomeone).
+ */
+export async function activeUsersByRole(
+  db: D1Database,
+  roles: readonly Role[],
+  perRole: number,
+): Promise<Array<{ email: string; role: Role; roleTotal: number }>> {
+  if (roles.length === 0) return [];
+  const { results } = await db
+    .prepare(
+      `SELECT email, role, total FROM (
+         SELECT email, role,
+           ROW_NUMBER() OVER (PARTITION BY role ORDER BY email, id) AS position,
+           COUNT(*) OVER (PARTITION BY role) AS total
+         FROM users WHERE status = 'active' AND role IN (${roles.map(() => '?').join(', ')})
+       ) WHERE position <= ? ORDER BY email`,
+    )
+    .bind(...roles, perRole)
+    .all<{ email: string; role: Role; total: number }>();
+  return results.map((row) => ({ email: row.email, role: row.role, roleTotal: Number(row.total) }));
+}
+
 /** Active users with one of `roles`, by email (who to ask for a change the viewer cannot make). */
 export async function activeUsersWithRoles(
   db: D1Database,

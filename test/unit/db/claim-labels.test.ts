@@ -1,6 +1,14 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { labelFor, listClaimLabels, repositoryLabelOptions } from '../../../src/db/claim-labels';
+import {
+  idWithLabelText,
+  labelFor,
+  listClaimLabels,
+  parseIdWithLabel,
+  parseIdWithLabelList,
+  repositoryLabelOptions,
+  resolveIdWithLabel,
+} from '../../../src/db/claim-labels';
 import type { CallerProvider } from '../../../src/db/types';
 import { opsDeps, resetControlPlane, seedGithubProvider } from '../admin/ops/helpers';
 
@@ -62,5 +70,59 @@ describe('claim labels', () => {
     expect((await repositoryLabelOptions(env.DB, b.id)).map((option) => option.text)).toEqual([
       'group/project (77)',
     ]);
+  });
+});
+
+describe('the ID input format: name (ID)', () => {
+  it.each([
+    ['acme/api (987654321)', { id: '987654321', label: 'acme/api' }],
+    ['  acme/api(987654321) ', { id: '987654321', label: 'acme/api' }],
+    ['acme/api #987654321', { id: '987654321', label: 'acme/api' }],
+    ['987654321', { id: '987654321', label: null }],
+    ['#987654321', { id: '987654321', label: null }],
+    // Above 2^53: the digits are kept exactly, never through Number.
+    ['big/repo (12345678901234567890)', { id: '12345678901234567890', label: 'big/repo' }],
+  ])('parses %j', (raw, expected) => {
+    expect(parseIdWithLabel(raw)).toEqual(expected);
+  });
+
+  it.each(['', 'acme/api', 'acme/api (12a)', '(123)', 'acme (123456789012345678901)', '12 34'])(
+    'refuses %j',
+    (raw) => {
+      expect(parseIdWithLabel(raw)).toBeNull();
+    },
+  );
+
+  it('parses lists and refuses a list with one bad entry', () => {
+    expect(parseIdWithLabelList('acme (1234567), acme-labs (7654321),')).toEqual([
+      { id: '1234567', label: 'acme' },
+      { id: '7654321', label: 'acme-labs' },
+    ]);
+    expect(parseIdWithLabelList('acme (1234567), acme-labs')).toBeNull();
+  });
+
+  it('accepts a bare ID only when the consumer already has a label for it', () => {
+    const labels = [
+      {
+        caller_provider_id: 'cpr_x',
+        claim: 'repository_id' as const,
+        value: '42',
+        label: 'acme/api',
+        updated_at: 1,
+        updated_by: null,
+      },
+    ];
+    expect(resolveIdWithLabel({ id: '42', label: null }, labels, 'repository_id')).toEqual({
+      id: '42',
+      label: 'acme/api',
+    });
+    expect(resolveIdWithLabel({ id: '43', label: null }, labels, 'repository_id')).toBeNull();
+    expect(resolveIdWithLabel({ id: '42', label: null }, labels, 'project_id')).toBeNull();
+    expect(resolveIdWithLabel({ id: '42', label: 'acme/new' }, labels, 'repository_id')).toEqual({
+      id: '42',
+      label: 'acme/new',
+    });
+    expect(idWithLabelText('42', 'acme/api')).toBe('acme/api (42)');
+    expect(idWithLabelText('42', null)).toBe('42');
   });
 });

@@ -1,5 +1,6 @@
 // Setup instructions shown on /admin while no login is configured. Names variables and URLs only,
 // never values.
+import { docsUrl } from '../views/docs';
 
 export function SetupInstructions(props: { host: string }) {
   return (
@@ -9,8 +10,8 @@ export function SetupInstructions(props: { host: string }) {
         configured. Set the variables below in the dashboard (Workers & Pages &gt; tokengate &gt;
         Settings &gt; Variables and Secrets), redeploy, and reload this page. The first person to
         sign in becomes the owner, so keep the Access policy limited to yourself until you have
-        signed in. Everyone after that joins with the defaults an owner sets on the Users page. See{' '}
-        <code>docs/getting-started.md</code>.
+        signed in. Everyone after that joins with the defaults an owner sets on the Users page. See
+        the <a href={docsUrl('getting-started.md')}>getting started guide</a>.
       </p>
       <h2>Cloudflare Access</h2>
       <ul>

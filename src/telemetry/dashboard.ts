@@ -1,7 +1,7 @@
 // Data for the admin dashboard: last-24 h traffic per service from hourly rollups plus a live
 // aggregate of the hours not rolled up yet, recent denials, and operational alerts. Read-only.
 // Counts are weighted estimates when sampling is enabled.
-import type { Banner } from '../admin/views/layout';
+import type { Banner } from '../admin/views/legacy';
 import { loadKeyring } from '../crypto/keyring';
 import { type SchemaState, schemaStatusByDatabase } from '../db/migrations';
 import {

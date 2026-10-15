@@ -27,7 +27,6 @@ import {
 import { can, type Permission } from '../auth/rbac';
 import { paths } from '../paths';
 import { renderPage } from '../render';
-import { Badge, Code, Details, EmptyState } from '../views/components';
 import {
   formatCount,
   formatDuration,
@@ -35,6 +34,7 @@ import {
   formatTime,
   loginProviderNames,
 } from '../views/format';
+import { Badge, Code, Details, EmptyState } from '../views/legacy';
 import { docsUrl, reasonText } from '../views/reasons';
 
 export function registerOverviewRoutes(app: App): void {
@@ -47,11 +47,18 @@ export function registerOverviewRoutes(app: App): void {
     ]);
     return renderPage(
       c,
-      { title: 'Dashboard', section: paths.overview(), banners: dashboardBanners(data) },
-      <>
-        <DashboardPage data={data} setup={setup} role={c.get('viewer').user.role} />
-        <SystemStatus status={status} env={deps.env} />
-      </>,
+      {
+        title: 'Dashboard',
+        section: 'monitoring',
+        subsection: 'overview',
+        legacyBanners: dashboardBanners(data),
+      },
+      () => (
+        <>
+          <DashboardPage data={data} setup={setup} role={c.get('viewer').user.role} />
+          <SystemStatus status={status} env={deps.env} />
+        </>
+      ),
     );
   });
 }

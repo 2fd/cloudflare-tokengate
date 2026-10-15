@@ -51,7 +51,7 @@ describe('GET /admin/users/sign-in', () => {
     const res = await adminGet(app, await sessionFor('viewer'), '/admin/users/sign-in');
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('<title>Sign-in · tokengate</title>');
+    expect(html).toContain('<title>Sign-in – Users – tokengate</title>');
     expect(html).toContain('<code>gw.test</code> (the host you are using now)');
     expect(html).toContain('<dt>Login providers</dt><dd>Cloudflare Access</dd>');
     expect(html).toContain('Only owners can change this.');

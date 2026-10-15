@@ -47,7 +47,7 @@ describe('GET /admin/retention', () => {
     const res = await adminGet(app, await sessionFor('viewer'), '/admin/retention');
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('<title>Data retention · tokengate</title>');
+    expect(html).toContain('<title>Data retention – Monitoring – tokengate</title>');
     expect(html).toContain('Only owners can change these settings.');
     expect(html).not.toContain('name="request_log_retention_days"');
   });

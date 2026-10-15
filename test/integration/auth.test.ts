@@ -119,7 +119,10 @@ describe('Cloudflare Access login', () => {
     const jwt = await access.sign({ sub: 'new', email: 'new@acme.com' });
     const res = await app.request('/admin', { headers: { [ACCESS_JWT_HEADER]: jwt } });
     expect(res.status).toBe(code);
-    expect(await res.text()).toContain(text);
+    const html = await res.text();
+    expect(html).toContain(text);
+    // A refused user can switch accounts from the sign-in problem page.
+    if (code === 403) expect(html).toContain('<a href="/cdn-cgi/access/logout">Sign out</a>');
     const user = await env.DB.prepare(
       "SELECT role, status FROM users WHERE email = 'new@acme.com'",
     ).first();
@@ -221,7 +224,10 @@ describe('Cloudflare Access login', () => {
 
   it('links "Sign out" to the Access logout endpoint', async () => {
     const app = createAdminTestApp({
-      routes: (a) => a.get('/admin/users', (c) => renderPage(c, { title: 'Users' }, 'body')),
+      routes: (a) =>
+        a.get('/admin/users', (c) =>
+          renderPage(c, { title: 'Users', section: 'users', subsection: 'people' }, () => 'body'),
+        ),
     });
     const owner = await createUser({ email: 'o@acme.com', role: 'owner' });
     const html = await (await adminGet(app, await loginAs(app, owner), '/admin/users')).text();

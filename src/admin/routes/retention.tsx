@@ -13,7 +13,7 @@ import {
   redirectWithNotice,
   renderPage,
 } from '../render';
-import { Csrf, Details, Messages } from '../views/components';
+import { Csrf, Details, Messages } from '../views/legacy';
 
 const PAGE = paths.retention();
 
@@ -77,23 +77,26 @@ async function retentionPage(
     c,
     {
       title: 'Data retention',
-      section: PAGE,
-      notice: options.notice ? NOTICES[options.notice] : null,
+      section: 'monitoring',
+      subsection: 'retention',
+      notice: options.notice ? { text: NOTICES[options.notice] } : null,
       status: options.status,
     },
-    <>
-      <Messages errors={options.errors} />
-      {can(viewer.user.role, 'settings:write') ? (
-        <SettingsForm csrf={viewer.csrfToken} settings={settings} submitted={options.submitted} />
-      ) : (
-        <>
-          <Details
-            rows={EDITABLE_SETTINGS.map((key) => [SETTING_LABELS[key], String(settings[key])])}
-          />
-          <p class="muted">Only owners can change these settings.</p>
-        </>
-      )}
-    </>,
+    () => (
+      <>
+        <Messages errors={options.errors} />
+        {can(viewer.user.role, 'settings:write') ? (
+          <SettingsForm csrf={viewer.csrfToken} settings={settings} submitted={options.submitted} />
+        ) : (
+          <>
+            <Details
+              rows={EDITABLE_SETTINGS.map((key) => [SETTING_LABELS[key], String(settings[key])])}
+            />
+            <p class="muted">Only owners can change these settings.</p>
+          </>
+        )}
+      </>
+    ),
   );
 }
 

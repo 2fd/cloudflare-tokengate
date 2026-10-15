@@ -26,9 +26,9 @@ import {
   redirectWithNotice,
   renderPage,
 } from '../render';
-import { Badge, Csrf, Field, Messages, Select } from '../views/components';
 import { formatTime, loginProviderNames } from '../views/format';
-import type { Banner } from '../views/layout';
+import { Badge, type Banner, Csrf, Field, Messages, Select } from '../views/legacy';
+import { roleLabel } from '../views/roles';
 
 const SECTION = paths.users();
 const INVITE_DAYS = Math.round(INVITE_TTL_MS / 86_400_000);
@@ -62,14 +62,6 @@ const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
   { value: 'admin', label: 'Admin: token manager and access manager together, plus the export' },
   { value: 'owner', label: 'Owner: everything, plus users, settings and keys' },
 ];
-
-const ROLE_NAMES: Record<Role, string> = {
-  viewer: 'Viewer',
-  token_manager: 'Token manager',
-  access_manager: 'Access manager',
-  admin: 'Admin',
-  owner: 'Owner',
-};
 
 const STATUS_LABELS: Record<JoinDefaults['status'], string> = {
   active: 'Active: they can use the console right away',
@@ -194,81 +186,84 @@ async function usersPage(
     c,
     {
       title: 'Users',
-      section: SECTION,
-      banners,
-      notice: options.notice ? NOTICES[options.notice](providerText) : null,
+      section: 'users',
+      subsection: 'people',
+      legacyBanners: banners,
+      notice: options.notice ? { text: NOTICES[options.notice](providerText) } : null,
       status: options.status,
     },
-    <>
-      <p>
-        People who can sign in to this admin console. Callers (CI jobs) are not users: they are
-        authorized by <a href={paths.access()}>grants</a>.
-      </p>
-      <p class="muted">
-        Anyone your Cloudflare Access policy lets in joins on their first sign-in as{' '}
-        <strong>
-          {joinDefaults.status} {joinDefaults.role}
-        </strong>
-        . Invite people to give them another role from the start.
-      </p>
-      <Messages errors={options.errors} />
-      <h2>Waiting for approval</h2>
-      {pending.length === 0 ? (
-        <p class="empty">Nobody is waiting for approval.</p>
-      ) : (
-        <PendingTable users={pending} csrf={viewer.csrfToken} isOwner={isOwner} />
-      )}
-      <h2>All users</h2>
-      <UsersTable
-        users={listed}
-        viewer={viewer.user}
-        csrf={viewer.csrfToken}
-        isOwner={isOwner}
-        now={now}
-      />
-      {users.length === 1 && isOwner ? (
-        <p class="empty">
-          You are the only user. Invite a second owner below, so the deployment stays manageable if
-          you lose access to your account.
+    () => (
+      <>
+        <p>
+          People who can sign in to this admin console. Callers (CI jobs) are not users: they are
+          authorized by <a href={paths.access()}>grants</a>.
         </p>
-      ) : null}
-      {isOwner ? <ActionsHelp /> : null}
-
-      <h2>New users</h2>
-      {isOwner ? (
-        <JoinDefaultsForm csrf={viewer.csrfToken} defaults={joinDefaults} />
-      ) : (
         <p class="muted">
-          People join as {joinDefaults.status} {joinDefaults.role}. Only owners can change this.
+          Anyone your Cloudflare Access policy lets in joins on their first sign-in as{' '}
+          <strong>
+            {joinDefaults.status} {joinDefaults.role}
+          </strong>
+          . Invite people to give them another role from the start.
         </p>
-      )}
-
-      <h2>Roles</h2>
-      <dl class="details">
-        <dt>Viewer</dt>
-        <dd>Can see every page (no page ever shows a secret). Cannot change anything.</dd>
-        <dt>Admin</dt>
-        <dd>
-          Viewer, plus: create and change services, credentials, caller providers and grants, and
-          download the configuration export.
-        </dd>
-        <dt>Owner</dt>
-        <dd>Admin, plus: manage users, change settings and re-encrypt credentials.</dd>
-      </dl>
-
-      <h2>Invite a user</h2>
-      {isOwner ? (
-        <InviteForm
+        <Messages errors={options.errors} />
+        <h2>Waiting for approval</h2>
+        {pending.length === 0 ? (
+          <p class="empty">Nobody is waiting for approval.</p>
+        ) : (
+          <PendingTable users={pending} csrf={viewer.csrfToken} isOwner={isOwner} />
+        )}
+        <h2>All users</h2>
+        <UsersTable
+          users={listed}
+          viewer={viewer.user}
           csrf={viewer.csrfToken}
-          values={options.invite}
-          config={config}
-          providerText={providerText}
-          loginUrl={`${new URL(c.req.url).origin}${paths.overview()}`}
+          isOwner={isOwner}
+          now={now}
         />
-      ) : (
-        <p class="muted">Only owners can invite users or change their access.</p>
-      )}
-    </>,
+        {users.length === 1 && isOwner ? (
+          <p class="empty">
+            You are the only user. Invite a second owner below, so the deployment stays manageable
+            if you lose access to your account.
+          </p>
+        ) : null}
+        {isOwner ? <ActionsHelp /> : null}
+
+        <h2>New users</h2>
+        {isOwner ? (
+          <JoinDefaultsForm csrf={viewer.csrfToken} defaults={joinDefaults} />
+        ) : (
+          <p class="muted">
+            People join as {joinDefaults.status} {joinDefaults.role}. Only owners can change this.
+          </p>
+        )}
+
+        <h2>Roles</h2>
+        <dl class="details">
+          <dt>Viewer</dt>
+          <dd>Can see every page (no page ever shows a secret). Cannot change anything.</dd>
+          <dt>Admin</dt>
+          <dd>
+            Viewer, plus: create and change services, credentials, caller providers and grants, and
+            download the configuration export.
+          </dd>
+          <dt>Owner</dt>
+          <dd>Admin, plus: manage users, change settings and re-encrypt credentials.</dd>
+        </dl>
+
+        <h2>Invite a user</h2>
+        {isOwner ? (
+          <InviteForm
+            csrf={viewer.csrfToken}
+            values={options.invite}
+            config={config}
+            providerText={providerText}
+            loginUrl={`${new URL(c.req.url).origin}${paths.overview()}`}
+          />
+        ) : (
+          <p class="muted">Only owners can invite users or change their access.</p>
+        )}
+      </>
+    ),
   );
 }
 
@@ -301,7 +296,7 @@ function UsersTable(props: {
                 <code>{user.id}</code>
               </div>
             </td>
-            <td>{ROLE_NAMES[user.role] ?? user.role}</td>
+            <td>{roleLabel(user.role)}</td>
             <td>
               <StatusCell user={user} now={props.now} />
             </td>
@@ -343,7 +338,7 @@ function PendingTable(props: { users: UserListEntry[]; csrf: string; isOwner: bo
                 {user.email}
                 {user.name ? <div class="muted">{user.name}</div> : null}
               </td>
-              <td>{ROLE_NAMES[user.role] ?? user.role}</td>
+              <td>{roleLabel(user.role)}</td>
               <td>{formatTime(user.created_at)}</td>
               {props.isOwner ? (
                 <td>
@@ -401,7 +396,7 @@ function UserActions(props: { user: UserListEntry; csrf: string }) {
         <select name="role" aria-label={`Role for ${user.email}`}>
           {ROLE_OPTIONS.map((option) => (
             <option value={option.value} selected={option.value === user.role}>
-              {ROLE_NAMES[option.value]}
+              {roleLabel(option.value)}
             </option>
           ))}
         </select>{' '}

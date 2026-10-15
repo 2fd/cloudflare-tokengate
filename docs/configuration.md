@@ -410,6 +410,10 @@ These are constants in the code, not settings.
 | Caller token clock skew | 30 seconds | `src/identity/jwt.ts` |
 | Pre-trust request records | 10 per minute per isolate | `src/telemetry/sinks.ts` |
 
+## Supported browsers
+
+The admin console needs no JavaScript. Confirmation dialogs open as modal dialogs with invoker commands (Chrome 135, Safari 26.2, Firefox 144). Older browsers that support popovers open them as popovers, and browsers with neither show the confirmation inline below its button. Grouped sections that close each other use `<details name>` (Chrome 120, Safari 17.2, Firefox 130); older browsers let several stay open. Every destructive action is also confirmed on the server, so no fallback skips a confirmation.
+
 ## Related pages
 
 - [getting-started.md](getting-started.md): first deployment, step by step.

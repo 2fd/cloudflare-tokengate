@@ -4,7 +4,7 @@
 import type { App } from '../../app';
 import { exportConfiguration } from '../ops/export';
 import { adminActor, renderPage } from '../render';
-import { Csrf, Messages } from '../views/components';
+import { PostForm } from '../views/components';
 
 export function registerExportRoutes(app: App): void {
   app.post('/admin/export', async (c) => {
@@ -13,14 +13,18 @@ export function registerExportRoutes(app: App): void {
     if (!result.ok) {
       return renderPage(
         c,
-        { title: 'Export failed', status: 409 },
-        <>
-          <Messages errors={result.errors} />
-          <form method="post" action="/admin/export">
-            <Csrf token={c.get('viewer').csrfToken} />
+        {
+          title: 'Export failed',
+          section: 'monitoring',
+          subsection: '',
+          errors: result.errors.map((message) => ({ field: null, message })),
+          status: 409,
+        },
+        (view) => (
+          <PostForm action="/admin/export" csrf={view.csrf}>
             <button type="submit">Try the export again</button>
-          </form>
-        </>,
+          </PostForm>
+        ),
       );
     }
     const date = new Date(deps.now()).toISOString().slice(0, 10);

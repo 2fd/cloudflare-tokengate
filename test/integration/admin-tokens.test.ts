@@ -456,7 +456,7 @@ describe('review: forms, notices and per-kind fields', () => {
         await adminGet(app, admin, `/admin/tokens/${id}?notice=${encodeURIComponent(notice)}`)
       ).text();
       expect(html).not.toContain('pwned');
-      expect(html).not.toContain('class="banner info" role="status"');
+      expect(html).not.toContain('class="notice"');
     }
   });
 

@@ -43,7 +43,7 @@ describe('I-SSRF-1: upstream host allowlist at /admin/tokens/hosts', () => {
     const res = await adminGet(app, await sessionFor('owner'), '/admin/tokens/hosts');
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('<title>Allowed hosts · tokengate</title>');
+    expect(html).toContain('<title>Allowed hosts – Service tokens – tokengate</title>');
     expect(html).toContain('action="/admin/tokens/hosts"');
     expect(html).toContain('name="allowed_upstream_hosts"');
   });

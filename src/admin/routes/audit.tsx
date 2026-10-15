@@ -5,8 +5,8 @@ import { listAuditEvents } from '../../db/audit';
 import type { AuditEvent } from '../../db/types';
 import { paths } from '../paths';
 import { renderPage } from '../render';
-import { Code, EmptyState, Field, Messages, NextPage, Select } from '../views/components';
 import { formatTime, withQuery } from '../views/format';
+import { Code, EmptyState, Field, Messages, NextPage, Select } from '../views/legacy';
 
 const SECTION = paths.audit();
 const PAGE_SIZE = 50;
@@ -52,11 +52,13 @@ export function registerAuditRoutes(app: App): void {
     if (errors.length > 0) {
       return renderPage(
         c,
-        { title: 'Audit log', section: SECTION, status: 400 },
-        <>
-          <Messages errors={errors} />
-          <AuditFilters query={query} />
-        </>,
+        { title: 'Audit log', section: 'monitoring', subsection: 'audit', status: 400 },
+        () => (
+          <>
+            <Messages errors={errors} />
+            <AuditFilters query={query} />
+          </>
+        ),
       );
     }
     const rows = await listAuditEvents(c.get('deps').env.DB, {
@@ -72,9 +74,7 @@ export function registerAuditRoutes(app: App): void {
     const next =
       rows.length > PAGE_SIZE && last ? withQuery(SECTION, { ...query, before: last.id }) : null;
     const filtered = Boolean(query.target_type || query.target_id || query.actor);
-    return renderPage(
-      c,
-      { title: 'Audit log', section: SECTION },
+    return renderPage(c, { title: 'Audit log', section: 'monitoring', subsection: 'audit' }, () => (
       <>
         <p class="muted">
           Every change made in this admin UI, every sign-in, and events from the hourly maintenance
@@ -100,8 +100,8 @@ export function registerAuditRoutes(app: App): void {
           <AuditTable events={page} />
         )}
         <NextPage href={next} />
-      </>,
-    );
+      </>
+    ));
   });
 }
 

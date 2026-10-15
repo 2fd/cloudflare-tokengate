@@ -37,3 +37,17 @@ export function loginProviderNames(config: Config): string[] {
     config.login.dev ? 'the local development login' : null,
   ].filter((name): name is string => name !== null);
 }
+
+/** "3 min ago", "in 2 h", "just now": a coarse distance from `now`, for monitoring views. */
+export function relativeTime(ms: number, now: number): string {
+  const diff = now - ms;
+  const abs = Math.abs(diff);
+  if (abs < 60_000) return 'just now';
+  const [amount, unit] =
+    abs < 3_600_000
+      ? [Math.floor(abs / 60_000), 'min']
+      : abs < 86_400_000
+        ? [Math.floor(abs / 3_600_000), 'h']
+        : [Math.floor(abs / 86_400_000), abs < 2 * 86_400_000 ? 'day' : 'days'];
+  return diff >= 0 ? `${amount} ${unit} ago` : `in ${amount} ${unit}`;
+}

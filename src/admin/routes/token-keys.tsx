@@ -7,7 +7,7 @@ import { can } from '../auth/rbac';
 import { KEYRING_ERROR_TEXT, keyringStatus, rewrapCredentials } from '../ops/keyring';
 import { paths, returnPath } from '../paths';
 import { type AdminContext, adminActor, formData, redirectWithNotice, renderPage } from '../render';
-import { Badge, Csrf, Messages } from '../views/components';
+import { Badge, Csrf, Messages } from '../views/legacy';
 
 const PAGE = paths.tokenKeys();
 
@@ -52,19 +52,22 @@ async function keysPage(
     c,
     {
       title: 'Encryption keys',
-      section: PAGE,
-      notice: options.notice ? NOTICES[options.notice] : null,
+      section: 'tokens',
+      subsection: 'keys',
+      notice: options.notice ? { text: NOTICES[options.notice] } : null,
       status: options.status,
     },
-    <>
-      <Messages errors={options.errors} />
-      <KeyringSection
-        csrf={viewer.csrfToken}
-        canRewrap={can(viewer.user.role, 'keyring:rewrap')}
-        status={keyring}
-        changedKids={health.changedKids}
-      />
-    </>,
+    () => (
+      <>
+        <Messages errors={options.errors} />
+        <KeyringSection
+          csrf={viewer.csrfToken}
+          canRewrap={can(viewer.user.role, 'keyring:rewrap')}
+          status={keyring}
+          changedKids={health.changedKids}
+        />
+      </>
+    ),
   );
 }
 

@@ -66,7 +66,7 @@ describe('GET /admin/tokens/keys', () => {
     const res = await adminGet(app, await sessionFor('viewer'), '/admin/tokens/keys');
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('<title>Encryption keys · tokengate</title>');
+    expect(html).toContain('<title>Encryption keys – Service tokens – tokengate</title>');
     const keyring = await loadKeyring({ ...TEST_ACCESS_ENV, TOKENGATE_KEK: KEK });
     if (!keyring.ok) throw new Error(keyring.error);
     expect(html).toContain(keyring.keyring.kcv.k1);

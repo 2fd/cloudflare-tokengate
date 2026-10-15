@@ -15,7 +15,7 @@ import {
   redirectWithNotice,
   renderPage,
 } from '../render';
-import { Csrf, Messages } from '../views/components';
+import { Csrf, Messages } from '../views/legacy';
 
 const PAGE = paths.tokenHosts();
 
@@ -64,60 +64,63 @@ async function hostsPage(
     c,
     {
       title: 'Allowed hosts',
-      section: PAGE,
-      notice: options.notice ? NOTICES[options.notice] : null,
+      section: 'tokens',
+      subsection: 'hosts',
+      notice: options.notice ? { text: NOTICES[options.notice] } : null,
       status: options.status,
     },
-    <>
-      <Messages errors={options.errors} />
-      <p>
-        Services can send their credential to any public https host by default. To restrict that,
-        list the allowed hosts. The list applies when a service is saved and on every proxied
-        request.
-      </p>
-      {outsideAllowlist.length > 0 ? (
-        <p class="banner warning" role="status">
-          These services point outside the allowlist, so their requests are refused:{' '}
-          {outsideAllowlist.map((service, index) => (
-            <>
-              {index > 0 ? ', ' : ''}
-              <a href={paths.token(service.id)}>{service.slug}</a>
-            </>
-          ))}
-          .
+    () => (
+      <>
+        <Messages errors={options.errors} />
+        <p>
+          Services can send their credential to any public https host by default. To restrict that,
+          list the allowed hosts. The list applies when a service is saved and on every proxied
+          request.
         </p>
-      ) : null}
-      {can(viewer.user.role, 'settings:write') ? (
-        <form method="post" action={PAGE} class="stack">
-          <Csrf token={viewer.csrfToken} />
-          <label class="field">
-            <span>Allowed upstream hosts</span>
-            <textarea
-              name="allowed_upstream_hosts"
-              rows={4}
-              placeholder={'api.github.com\n*.slack.com'}
-            >
-              {options.submittedHosts ?? (upstreamHosts ?? []).join('\n')}
-            </textarea>
-            <small>
-              One per line (or separated by commas): an exact hostname such as api.github.com, or
-              *.example.com for every host below example.com. Leave it empty to allow any public
-              https host.
-            </small>
-          </label>
-          <div class="actions">
-            <button type="submit">Save allowlist</button>
-          </div>
-        </form>
-      ) : (
-        <p class="muted">
-          {upstreamHosts === null
-            ? 'Any public https host is allowed.'
-            : `Allowed: ${upstreamHosts.join(', ')}.`}{' '}
-          Only owners can change this.
-        </p>
-      )}
-    </>,
+        {outsideAllowlist.length > 0 ? (
+          <p class="banner warning" role="status">
+            These services point outside the allowlist, so their requests are refused:{' '}
+            {outsideAllowlist.map((service, index) => (
+              <>
+                {index > 0 ? ', ' : ''}
+                <a href={paths.token(service.id)}>{service.slug}</a>
+              </>
+            ))}
+            .
+          </p>
+        ) : null}
+        {can(viewer.user.role, 'settings:write') ? (
+          <form method="post" action={PAGE} class="stack">
+            <Csrf token={viewer.csrfToken} />
+            <label class="field">
+              <span>Allowed upstream hosts</span>
+              <textarea
+                name="allowed_upstream_hosts"
+                rows={4}
+                placeholder={'api.github.com\n*.slack.com'}
+              >
+                {options.submittedHosts ?? (upstreamHosts ?? []).join('\n')}
+              </textarea>
+              <small>
+                One per line (or separated by commas): an exact hostname such as api.github.com, or
+                *.example.com for every host below example.com. Leave it empty to allow any public
+                https host.
+              </small>
+            </label>
+            <div class="actions">
+              <button type="submit">Save allowlist</button>
+            </div>
+          </form>
+        ) : (
+          <p class="muted">
+            {upstreamHosts === null
+              ? 'Any public https host is allowed.'
+              : `Allowed: ${upstreamHosts.join(', ')}.`}{' '}
+            Only owners can change this.
+          </p>
+        )}
+      </>
+    ),
   );
 }
 
