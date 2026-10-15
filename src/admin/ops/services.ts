@@ -8,6 +8,7 @@ import {
   sealCredential,
   sealedKid,
 } from '../../crypto/envelope';
+import { sha256Hex } from '../../crypto/hash';
 import { type Keyring, loadKeyring } from '../../crypto/keyring';
 import { deleteGrantsByIdsStatement, exactGrantSetGuard, listGrants } from '../../db/grants';
 import {
@@ -180,17 +181,22 @@ async function planCreate(
       ? normalizeCredential(secretText, injection.injection)
       : null;
   if (credential && !credential.ok) errors.push(credential.error);
+  // The slug pre-check is a SELECT that sends nothing, so a taken slug is reported together with
+  // the format errors (one re-render), after them.
+  const slugFormatOk = !fields.errors.some((error) => error.startsWith('slug'));
+  const taken = slugFormatOk && (await getServiceBySlug(db, input.slug)) !== null;
+  const slugErrors = taken
+    ? [
+        fieldError(
+          'slug',
+          `another token already uses ${input.slug}; leave empty to use ${await freeSlug(db, input.slug)}`,
+        ),
+      ]
+    : [];
   if (errors.length > 0 || !base.ok || !injection.ok || (credential && !credential.ok)) {
-    return opFailure('invalid', serviceFieldErrors(errors), fields.warnings);
+    return opFailure('invalid', [...serviceFieldErrors(errors), ...slugErrors], fields.warnings);
   }
-  if (await getServiceBySlug(db, input.slug)) {
-    const free = await freeSlug(db, input.slug);
-    return opFailure(
-      'conflict',
-      [fieldError('slug', `another token already uses ${input.slug}; leave empty to use ${free}`)],
-      fields.warnings,
-    );
-  }
+  if (slugErrors.length > 0) return opFailure('conflict', slugErrors, fields.warnings);
   return {
     ok: true,
     plan: {
@@ -557,6 +563,11 @@ export interface ServiceCredentialInput {
    * may have been written straight into D1, waiting for a credential (I-CRED-2).
    */
   confirm_destination?: string;
+  /**
+   * destinationFingerprint of the stored destination the admin saw (the rotate form): when set,
+   * a stored row that points elsewhere now is a conflict, before anything is sent (I-CRED-2).
+   */
+  expected_destination?: string;
 }
 
 /** The validated parts of a credential change, before the check sends the secret. */
@@ -566,7 +577,8 @@ interface CredentialPlan {
   base: string;
   injection: Injection;
   injectionJson: string;
-  credential: { value: string; hint: string | null };
+  /** Null only for a check run with `withoutSecret`. */
+  credential: { value: string; hint: string | null } | null;
   host: string;
   /** Why the stored destination is not attested, or null when the stored secret opens. */
   unattested: OpenCredentialError | 'no_credential' | null;
@@ -577,17 +589,20 @@ interface CredentialPlan {
  * Every check of a credential change that sends nothing and writes nothing, in the order of A7.4:
  * field formats and the secret format, then the allowlist (skipped with `hostAllowed`, for a route
  * that allows the host itself first), then the keyring, then the destination confirmation of an
- * unattested or absent binding (I-CRED-2).
+ * unattested or absent binding (I-CRED-2). `withoutSecret` skips the secret format, for a route
+ * that already reported the secret itself and wants the other errors in the same re-render.
  */
 async function planCredential(
   deps: Pick<Deps, 'env'>,
   serviceId: string,
   input: ServiceCredentialInput,
   context: OpContext,
-  options: { hostAllowed?: boolean },
+  options: { hostAllowed?: boolean; withoutSecret?: boolean },
 ): Promise<{ ok: true; plan: CredentialPlan } | OpFailure> {
   const existing = await getService(deps.env.DB, serviceId);
   if (!existing) return opFailure('not_found', ['service not found']);
+  const moved = await destinationMoved(existing, input.expected_destination);
+  if (moved) return moved;
 
   const errors: string[] = [];
   const base = validateBaseUrl(input.base_url, {
@@ -606,13 +621,23 @@ async function planCredential(
   });
   errors.push(...fields.errors);
   errors.push(...timestampErrors('credential expiry', input.credential_expires_at));
-  const credential = injection.ok
-    ? normalizeCredential(typeof input.secret === 'string' ? input.secret : '', injection.injection)
-    : null;
+  const credential =
+    injection.ok && options.withoutSecret !== true
+      ? normalizeCredential(
+          typeof input.secret === 'string' ? input.secret : '',
+          injection.injection,
+        )
+      : null;
   if (credential && !credential.ok) errors.push(credential.error);
-  if (errors.length > 0 || !base.ok || !injection.ok || !credential?.ok) {
+  if (
+    errors.length > 0 ||
+    !base.ok ||
+    !injection.ok ||
+    (credential === null ? options.withoutSecret !== true : !credential.ok)
+  ) {
     return opFailure('invalid', serviceFieldErrors(errors), fields.warnings);
   }
+  const secret = credential?.ok ? { value: credential.value, hint: credential.hint } : null;
 
   const keyring = await loadKeyring(deps.env);
   if (!keyring.ok) return keyringUnavailable(keyring.error);
@@ -650,7 +675,7 @@ async function planCredential(
       base: base.normalized,
       injection: injection.injection,
       injectionJson: injection.json,
-      credential: { value: credential.value, hint: credential.hint },
+      credential: secret,
       host,
       unattested,
       warnings: fields.warnings,
@@ -668,7 +693,7 @@ export async function checkServiceCredential(
   serviceId: string,
   input: ServiceCredentialInput,
   context: OpContext,
-  options: { hostAllowed?: boolean } = {},
+  options: { hostAllowed?: boolean; withoutSecret?: boolean } = {},
 ): Promise<{ ok: true; warnings: string[] } | OpFailure> {
   const planned = await planCredential(deps, serviceId, input, context, options);
   return planned.ok ? { ok: true, warnings: planned.plan.warnings } : planned;
@@ -690,6 +715,8 @@ export async function setServiceCredential(
   if (!planned.ok) return planned;
   const { plan } = planned;
   const { existing, keyring, credential, unattested, host } = plan;
+  if (credential === null)
+    return opFailure('invalid', [fieldError('credential', 'credential is empty')]);
 
   const verify = existing.verify
     ? await runVerifyCheck(
@@ -780,6 +807,11 @@ export interface ServiceRotateInput {
   credential_expires_at?: number | null;
   /** Ids of tokens to replace the same secret in (rotationSiblings), each re-checked here. */
   siblings?: readonly string[];
+  /**
+   * destinationFingerprint of the destination the rotate form showed. A token repointed since
+   * then is a conflict: nothing is sent and nothing is written (I-CRED-2).
+   */
+  expected_destination?: string;
 }
 
 export type RotateResult =
@@ -804,6 +836,9 @@ export async function rotateServiceSecret(
 ): Promise<RotateResult> {
   const existing = await getService(deps.env.DB, serviceId);
   if (!existing) return opFailure('not_found', ['service not found']);
+  // The destination the admin saw, before the keyring and before anything is sent.
+  const moved = await destinationMoved(existing, input.expected_destination);
+  if (moved) return moved;
   // The secret format first, against the stored injection (A7.4), then the keyring.
   const format = normalizeCredential(
     typeof input.secret === 'string' ? input.secret : '',
@@ -833,6 +868,8 @@ export async function rotateServiceSecret(
       secret: input.secret,
       save_anyway: input.save_anyway,
       credential_expires_at: input.credential_expires_at,
+      // Re-checked on the row setServiceCredential reads, whose binding its CAS guard pins.
+      expected_destination: await destinationFingerprint(existing),
     },
     context,
   );
@@ -1055,10 +1092,21 @@ export async function deleteService(
   }
 
   // The audit row and the grant delete see the same state, so both apply or neither does. After
-  // the grants are gone the token goes only if no grant references it any more.
+  // the grants are gone the token goes only if no grant references it any more, and, in a cascade,
+  // only if this batch wrote its audit row: when the confirmed accesses were removed concurrently,
+  // the exact-set guard is false and the token must stay (I-AUDIT-1). A service.delete row for a
+  // service that still exists can only come from this batch: every earlier one that wrote it
+  // also deleted the service in the same transaction.
   const guard =
     grants.length > 0
       ? allOf(serviceExistsGuard(serviceId), exactGrantSetGuard('service_id', serviceId, ids))
+      : serviceUnreferencedGuard(serviceId);
+  const deleteGuard =
+    grants.length > 0
+      ? allOf(serviceUnreferencedGuard(serviceId), {
+          sql: "EXISTS (SELECT 1 FROM audit_log WHERE action = 'service.delete' AND target_type = 'service' AND target_id = ?)",
+          binds: [serviceId],
+        })
       : serviceUnreferencedGuard(serviceId);
   const view = serviceView(existing);
   const outcome = await commitOrConstraintFailure(
@@ -1077,7 +1125,7 @@ export async function deleteService(
     guard,
     [
       ...(grants.length > 0 ? [deleteGrantsByIdsStatement(db, ids, guard)] : []),
-      deleteServiceStatement(db, serviceId, serviceUnreferencedGuard(serviceId)),
+      deleteServiceStatement(db, serviceId, deleteGuard),
     ],
   );
   if (!outcome.ok) return outcome;
@@ -1161,6 +1209,38 @@ export async function storedBinding(
   const recorded = kid ? (await getState<Record<string, unknown>>(db, 'keyring_kcv'))?.[kid] : null;
   const keyChanged = typeof recorded === 'string' && kid ? recorded !== keyring.kcv[kid] : null;
   return { status: 'unattested', error: opened.error, keyChanged };
+}
+
+/**
+ * A short digest of the stored destination (base URL and injection), so a form can say which
+ * destination it showed without posting one: the rotate form carries it (I-CRED-2).
+ */
+export async function destinationFingerprint(
+  service: Pick<Service, 'base_url' | 'injection_json'>,
+): Promise<string> {
+  return (await sha256Hex(`${service.base_url}\n${service.injection_json}`)).slice(0, 32);
+}
+
+/** A conflict when `expected` is set and the stored destination is no longer that one. */
+async function destinationMoved(
+  existing: Service,
+  expected: string | undefined,
+): Promise<OpFailure | null> {
+  if (expected === undefined || expected === (await destinationFingerprint(existing))) return null;
+  return opFailure('conflict', [
+    fieldError(
+      null,
+      `The destination of this token changed since the page was loaded: it now sends the secret to ${hostLabel(existing.base_url)}. Nothing was sent or saved. Check the destination below, then enter the secret again`,
+    ),
+  ]);
+}
+
+function hostLabel(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host;
+  } catch {
+    return 'an invalid base URL';
+  }
 }
 
 /** The admin typed the host of the submitted base URL (case-insensitive, surrounding space ignored). */

@@ -94,6 +94,31 @@ describe('I-AUDIT-1: cascade delete', () => {
     expect((await auditRows()).slice(before).map((row) => row.action)).toEqual(['grant.create']);
   });
 
+  it('the confirmed accesses deleted between the read and the commit: the token stays, no row is lost unaudited', async () => {
+    const ids = (
+      await env.DB.prepare('SELECT id FROM grants WHERE service_id = ?')
+        .bind(world.serviceId)
+        .all<{ id: string }>()
+    ).results.map((row) => row.id);
+    const before = (await auditRows()).length;
+    // An access manager deletes them (straight in D1 here) after the op read the set.
+    const racing = racingDeps(world.app.deps, () =>
+      env.DB.prepare('DELETE FROM grants WHERE service_id = ?').bind(world.serviceId).run(),
+    );
+    const result = await deleteService(racing, ACTOR, world.serviceId, {
+      withAccesses: true,
+      accessIds: ids,
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'conflict' });
+    // Without an audit row of this batch the token is not deleted (I-AUDIT-1).
+    expect(await count('services', 'id', world.serviceId)).toBe(1);
+    expect((await auditRows()).slice(before)).toEqual([]);
+    // A fresh confirmation of the (now empty) set deletes it, audited.
+    const again = await deleteService(world.app.deps, ACTOR, world.serviceId, {});
+    expect(again).toMatchObject({ ok: true, deletedAccesses: 0 });
+    expect((await auditRows()).slice(before).map((row) => row.action)).toEqual(['service.delete']);
+  });
+
   it('a token manager sees the blocking accesses and no delete trigger', async () => {
     const manager = await loginAs(
       world.app,

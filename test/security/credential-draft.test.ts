@@ -214,6 +214,30 @@ describe('I-CRED-1 and I-CRED-2: credential drafts in the token forms', () => {
     ).toBe(`…WXYZ (${SECRET.length} chars)`);
   });
 
+  it('the draft hint of username:password shows only the password length, never its characters', async () => {
+    const session = await owner();
+    for (const [secret, length] of [
+      ['ci-service-account-name:pw12', 4],
+      // Stripe-style: the secret is the user part and the password is empty.
+      ['sk_test_short:', 13],
+    ] as const) {
+      const res = await adminPost(app, session, '/admin/tokens', {
+        template: 'custom',
+        base_url: 'https://api.basic.example',
+        injection_kind: 'basic',
+        verify_path: '/check',
+        credential: secret,
+      });
+      expect(res.status, secret).toBe(422);
+      const html = await res.text();
+      expect(html, secret).toContain(`Secret kept for 15 minutes (${length} characters).`);
+      const tail = secret.replace(/:$/, '').slice(-4);
+      expect(html, secret).not.toContain(`…${tail}`);
+      expect(html, secret).not.toContain(secret);
+      expect(draftOf(html), secret).not.toBeNull();
+    }
+  });
+
   it('a typed secret wins over a draft', async () => {
     const session = await owner();
     const first = await adminPost(app, session, '/admin/tokens', {

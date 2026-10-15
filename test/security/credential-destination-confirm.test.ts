@@ -6,7 +6,8 @@
 // secret (A13.6) never satisfies the confirmation and never follows a destination change.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { setServiceCredential } from '../../src/admin/ops/services';
+import { destinationFingerprint, setServiceCredential } from '../../src/admin/ops/services';
+import { getService } from '../../src/db/services';
 import {
   createAdminWorldApp,
   resetAdminWorld,
@@ -194,7 +195,12 @@ describe('I-CRED-2: the service page flags an unattested destination', () => {
     // The typed host is never prefilled, not even on the re-render.
     expect(refusedHtml).toMatch(/name="confirm_destination"[^>]*value=""/);
     expect(sentTo(network.calls, ATTACKER)).toEqual([]);
-    const secretAt = await adminPost(app, session, `${path}/secret`, { credential: WORLD_SECRET });
+    const current = await getService(env.DB, world.serviceId);
+    if (!current) throw new Error('service missing');
+    const secretAt = await adminPost(app, session, `${path}/secret`, {
+      expected_destination: await destinationFingerprint(current),
+      credential: WORLD_SECRET,
+    });
     expect(secretAt.status).toBe(422);
     expect(sentTo(network.calls, ATTACKER)).toEqual([]);
 

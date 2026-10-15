@@ -4,7 +4,9 @@
 // through the ops; submitted secrets are never rendered back (I-CRED-1).
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { destinationFingerprint } from '../../src/admin/ops/services';
 import { SERVICE_TEMPLATES } from '../../src/admin/service-templates';
+import { getService } from '../../src/db/services';
 import type { Role } from '../../src/db/types';
 import { toBase64 } from '../../src/lib/encoding';
 import {
@@ -59,6 +61,13 @@ async function auditActions(): Promise<string[]> {
     "SELECT action FROM audit_log WHERE target_type = 'service' ORDER BY rowid",
   ).all<{ action: string }>();
   return results.map((row) => row.action);
+}
+
+/** The rotate form's hidden digest of the destination it shows, as the token page renders it. */
+async function rotateFields(id: string): Promise<{ expected_destination: string }> {
+  const row = await getService(env.DB, id);
+  if (!row) throw new Error(`no service ${id}`);
+  return { expected_destination: await destinationFingerprint(row) };
 }
 
 async function serviceRow(slug: string) {
@@ -196,6 +205,63 @@ describe('token list', () => {
     expect(unknown).not.toContain('<b>x</b>');
   });
 
+  it('the chip a screen reader hears starts with its visible text (WCAG 2.5.3)', async () => {
+    const admin = await sessionFor('admin');
+    const id = await createOpenAi(admin);
+    await insertGrant(id, 'deploy');
+    const html = await (await adminGet(app, admin, '/admin/tokens')).text();
+    expect(html).toContain(
+      '<span class="vh">GitHub Actions · acme/api · environment production: can use OpenAI',
+    );
+    const page = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
+    expect(page).toContain(
+      '<span class="vh">acme/api · environment production · 1 operation: can use OpenAI',
+    );
+  });
+
+  it('keeps the key filter when the status filter is submitted', async () => {
+    const admin = await sessionFor('admin');
+    for (let n = 0; n < 11; n++) await createCustom(admin, { slug: `api-${n}` });
+    const html = await (await adminGet(app, admin, '/admin/tokens?key=k1')).text();
+    const form =
+      /<form method="get" action="\/admin\/tokens"[\s\S]*?<\/form>/.exec(html)?.[0] ?? '';
+    expect(form).toContain('<input type="hidden" name="key" value="k1"/>');
+    const none = await (await adminGet(app, admin, '/admin/tokens')).text();
+    const plain =
+      /<form method="get" action="\/admin\/tokens"[\s\S]*?<\/form>/.exec(none)?.[0] ?? '';
+    expect(plain).not.toContain('name="key"');
+  });
+
+  it('a stored base URL that does not parse fails closed but every page still renders', async () => {
+    const owner = await sessionFor('owner');
+    const id = await createOpenAi(owner);
+    await env.DB.prepare("UPDATE services SET base_url = 'not a url' WHERE id = ?").bind(id).run();
+    const list = await adminGet(app, owner, '/admin/tokens');
+    expect(list.status).toBe(200);
+    const listHtml = await list.text();
+    expect(listHtml).toContain('1 token has a base URL that cannot be read');
+    expect(listHtml).toContain(`href="/admin/tokens/${id}?open=destination#destination"`);
+    expect((await adminGet(app, owner, '/admin/tokens/hosts')).status).toBe(200);
+    const page = await adminGet(app, owner, `/admin/tokens/${id}`);
+    expect(page.status).toBe(200);
+    const pageHtml = await page.text();
+    expect(pageHtml).toContain('The stored base URL cannot be read');
+    expect(pageHtml).toMatch(/<details id="destination-edit" open="">/);
+    // The destination form fixes it, with the host typed again (the binding is not attested).
+    const calls = upstream.calls.length;
+    const saved = await adminPost(app, owner, `/admin/tokens/${id}/destination`, {
+      base_url: 'https://api.openai.com/v1',
+      injection_kind: 'bearer',
+      credential: SECRET,
+      confirm_destination: 'api.openai.com',
+    });
+    expect(saved.status).toBe(303);
+    expect((await serviceRow('openai'))?.base_url).toBe('https://api.openai.com/v1');
+    expect(
+      upstream.calls.slice(calls).every((call) => call.startsWith('https://api.openai.com/')),
+    ).toBe(true);
+  });
+
   it('opens the accordion with ?open=add once tokens exist', async () => {
     const admin = await sessionFor('admin');
     await createOpenAi(admin);
@@ -279,7 +345,7 @@ describe('create', () => {
     });
     expect(taken.status).toBe(409);
     const html = await taken.text();
-    expect(html).toContain('another token already uses openai; leave empty to use openai-3');
+    expect(html).toContain('Another token already uses openai; leave empty to use openai-3');
     expect(html).toContain('href="#f-openai-slug"');
     expect(upstream.calls.length).toBe(calls);
   });
@@ -326,6 +392,35 @@ describe('create', () => {
     expect(upstream.calls).toEqual([]);
   });
 
+  it('reports a bad expiry and a taken slug in the same re-render, before anything is sent', async () => {
+    const admin = await sessionFor('admin');
+    await createOpenAi(admin);
+    const calls = upstream.calls.length;
+    const res = await adminPost(app, admin, '/admin/tokens', {
+      template: 'openai',
+      credential: SECRET,
+      slug: 'openai',
+      credential_expires_at: '31/12/2027',
+    });
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    expect(html).toContain('href="#f-openai-credential_expires_at"');
+    expect(html).toContain('Another token already uses openai; leave empty to use openai-2');
+    expect(upstream.calls.length).toBe(calls);
+  });
+
+  it('the custom card says how an empty slug and name are derived', async () => {
+    const html = await (
+      await adminGet(app, await sessionFor('admin'), '/admin/tokens/new?template=custom')
+    ).text();
+    const card = /id="type-custom"[\s\S]*?<\/details>/.exec(html)?.[0] ?? '';
+    expect(card).toContain(
+      'Leave empty to use the API host&#39;s name, e.g. stripe for https://api.stripe.com/v1.',
+    );
+    expect(card).toContain('Leave empty to use the slug.');
+    expect(card).not.toContain('Leave empty to use the placeholder.');
+  });
+
   it('rejects a malformed expiry date', async () => {
     const res = await adminPost(app, await sessionFor('admin'), '/admin/tokens', {
       template: 'openai',
@@ -349,8 +444,10 @@ describe('create', () => {
     expect(html).toContain('(HTTP 401)');
     expect(html).toContain('Check again and save');
     expect(html).toContain('name="save_anyway" value="1"');
-    expect(html.indexOf('Check again and save')).toBeLessThan(
-      html.indexOf('Save without a passing check'),
+    expect(html.indexOf('Check again and save')).toBeLessThan(html.indexOf('name="save_anyway"'));
+    // The error names the secret's label and the way out (A7.3).
+    expect(html).toContain(
+      'The check of the API key failed (expected HTTP 200, got 401). Check the API key, or choose Save without a passing check',
     );
     expect(html).toContain('Secret kept for 15 minutes');
     expect(html).not.toContain(BAD_SECRET);
@@ -583,9 +680,19 @@ describe('rotate (POST /admin/tokens/:id/secret)', () => {
         html,
       )?.[0] ?? '';
     const names = [...form.matchAll(/ name="([^"]+)"/g)].map((match) => match[1]);
-    expect(names.sort()).toEqual(['_csrf', 'credential', 'credential_expires_at']);
+    expect(names.sort()).toEqual([
+      '_csrf',
+      'credential',
+      'credential_expires_at',
+      'expected_destination',
+    ]);
     expect(form).toContain('value="2032-01-01"');
-    expect(form).toContain('Replaces …WXYZ');
+    expect(form).toContain('Sent to api.openai.com. Replaces …WXYZ');
+    // A digest of the destination, never the destination itself (I-CRED-2).
+    expect(form).toContain(
+      `name="expected_destination" value="${(await rotateFields(id)).expected_destination}"`,
+    );
+    expect(form).not.toMatch(/value="https:/);
   });
 
   it('does not prefill a past or near expiry', async () => {
@@ -606,6 +713,7 @@ describe('rotate (POST /admin/tokens/:id/secret)', () => {
     const id = await createOpenAi(admin, { credential_expires_at: '2032-01-01' });
     const before = await serviceRow('openai');
     const res = await adminPost(app, admin, `/admin/tokens/${id}/secret`, {
+      ...(await rotateFields(id)),
       credential: SECRET,
       credential_expires_at: '2032-01-01',
       base_url: 'https://evil.example.com',
@@ -619,6 +727,48 @@ describe('rotate (POST /admin/tokens/:id/secret)', () => {
     expect(after?.credential_expires_at).toBe(Date.UTC(2032, 0, 1));
     expect(after?.credential_sealed).not.toBe(before?.credential_sealed);
     expect(upstream.calls.filter((call) => call.includes('evil'))).toEqual([]);
+  });
+
+  it('refuses a token repointed since the page was loaded: 409, nothing sent, nothing written, no draft', async () => {
+    const admin = await sessionFor('admin');
+    const other = await sessionFor('token_manager');
+    const id = await createOpenAi(admin);
+    const loaded = await rotateFields(id);
+    // Another token manager repoints it (with a dummy secret of their own) after A loaded the page.
+    const repoint = await adminPost(app, other, `/admin/tokens/${id}/destination`, {
+      base_url: 'https://api.attacker.example/v1',
+      injection_kind: 'bearer',
+      credential: BAD_SECRET,
+      save_anyway: '1',
+    });
+    expect(repoint.status).toBe(303);
+    const row = await serviceRow('openai');
+    const audits = (await auditActions()).length;
+    const calls = upstream.calls.length;
+    const res = await adminPost(app, admin, `/admin/tokens/${id}/secret`, {
+      ...loaded,
+      credential: SECRET,
+    });
+    expect(res.status).toBe(409);
+    const html = await res.text();
+    expect(html).toContain('it now sends the secret to api.attacker.example');
+    expect(html).not.toContain('name="credential_draft"');
+    expect(html).not.toContain(SECRET);
+    expect(upstream.calls.slice(calls)).toEqual([]);
+    expect(await serviceRow('openai')).toEqual(row);
+    expect((await auditActions()).length).toBe(audits);
+    // The re-rendered form names the new destination and carries its digest.
+    expect(html).toContain('Sent to api.attacker.example.');
+    expect(html).toContain(`value="${(await rotateFields(id)).expected_destination}"`);
+  });
+
+  it('refuses a rotate without the destination digest', async () => {
+    const admin = await sessionFor('admin');
+    const id = await createOpenAi(admin);
+    const calls = upstream.calls.length;
+    const res = await adminPost(app, admin, `/admin/tokens/${id}/secret`, { credential: SECRET });
+    expect(res.status).toBe(409);
+    expect(upstream.calls.slice(calls)).toEqual([]);
   });
 
   it('reads a GitHub expiry from the check (no expiry field)', async () => {
@@ -635,6 +785,7 @@ describe('rotate (POST /admin/tokens/:id/secret)', () => {
       .bind(id)
       .run();
     const res = await adminPost(app, admin, `/admin/tokens/${id}/secret`, {
+      ...(await rotateFields(id)),
       credential: GH_SECRET,
     });
     expect(res.status).toBe(303);
@@ -647,7 +798,10 @@ describe('rotate (POST /admin/tokens/:id/secret)', () => {
     await env.DB.prepare("UPDATE services SET base_url = 'https://api.openai.com/v2' WHERE id = ?")
       .bind(id)
       .run();
-    const res = await adminPost(app, admin, `/admin/tokens/${id}/secret`, { credential: SECRET });
+    const res = await adminPost(app, admin, `/admin/tokens/${id}/secret`, {
+      ...(await rotateFields(id)),
+      credential: SECRET,
+    });
     expect(res.status).toBe(422);
     const html = await res.text();
     expect(html).toContain('href="#f-destination-base_url"');
@@ -680,6 +834,7 @@ describe('rotate (POST /admin/tokens/:id/secret)', () => {
     const rotated = 'ghp_rotated000000000000000000000000ROTA';
     const before = (await auditActions()).length;
     const res = await adminPost(app, admin, `/admin/tokens/${api}/secret`, {
+      ...(await rotateFields(api)),
       credential: rotated,
       also_replace: uploads,
     });
@@ -704,6 +859,7 @@ describe('rotate (POST /admin/tokens/:id/secret)', () => {
       }),
     );
     const res = await adminPost(app, admin, `/admin/tokens/${api}/secret`, {
+      ...(await rotateFields(api)),
       credential: 'ghp_rotated000000000000000000000000ROTA',
       also_replace: other,
     });

@@ -9,7 +9,7 @@ import { KEYRING_ERROR_TEXT } from '../ops/keyring';
 import { freeNameAmong, freeSlugAmong, slugBaseFor } from '../ops/services';
 import { paths } from '../paths';
 import type { ViewContext } from '../render';
-import { SERVICE_TEMPLATES, type ServiceTemplate } from '../service-templates';
+import { getServiceTemplate, SERVICE_TEMPLATES, type ServiceTemplate } from '../service-templates';
 import { AskSomeone, Checkbox, Field, PostForm } from './components';
 import {
   AdvancedFields,
@@ -164,13 +164,7 @@ function TemplateCard(props: {
           ) : null}
           {failed?.state.verify ? <VerifyResult verify={failed.state.verify} /> : null}
           {template.id === 'github' ? (
-            <Checkbox
-              name="also_uploads"
-              id={ids.id('also_uploads')}
-              label="Also add release asset uploads (uploads.github.com) with the same token"
-              hint="Creates a second token for uploads.github.com with the same secret."
-              checked={values.also_uploads}
-            />
+            <AlsoUploads ctx={ctx} data={data} ids={ids} values={values} />
           ) : null}
           <OptionalFields
             ids={ids}
@@ -203,6 +197,60 @@ function TemplateCard(props: {
         </PostForm>
       )}
     </details>
+  );
+}
+
+/**
+ * The GitHub card's "also add uploads" box. When the allowlist blocks uploads.github.com, an owner
+ * gets one box that also allows it (`allow_host=uploads.github.com`, the field permission), so the
+ * pair is still one submit; anyone else gets no box, only the reason and whom to ask.
+ */
+function AlsoUploads(props: {
+  ctx: ViewContext;
+  data: CardsData;
+  ids: FormIds;
+  values: TokenFormValues;
+}) {
+  const { ctx, data, ids, values } = props;
+  const uploads = getServiceTemplate('github-uploads');
+  if (!uploads) return null;
+  const host = templateHost(uploads);
+  const label = `Also add release asset uploads (${host}) with the same token`;
+  const hint = `Creates a second token for ${host} with the same secret.`;
+  const error = ids.error('also_uploads');
+  if (upstreamHostAllowed(host, data.allowlist)) {
+    return (
+      <Checkbox
+        name="also_uploads"
+        id={ids.id('also_uploads')}
+        label={label}
+        hint={hint}
+        checked={values.also_uploads}
+        error={error}
+      />
+    );
+  }
+  if (!ctx.can('settings:write')) {
+    return (
+      <div class="hint">
+        <p>
+          {host} is not an allowed host, so the release asset uploads token cannot be added with
+          this one.
+        </p>
+        <AskSomeone permission="settings:write" ctx={ctx} verb={`allow ${host}`} />
+      </div>
+    );
+  }
+  return (
+    <Checkbox
+      name="allow_host"
+      id={ids.id('also_uploads')}
+      value={host}
+      label={`${label}, and allow ${host} in Allowed hosts (applies to every token)`}
+      hint={`${hint} ${host} is not an allowed host yet; ticking this also allows it, for every token.`}
+      checked={values.also_uploads}
+      error={error}
+    />
   );
 }
 
@@ -280,6 +328,10 @@ function CustomCard(props: {
           proxyOrigin={data.proxyOrigin}
           expiry
           today={data.today}
+          derived={{
+            slug: "Leave empty to use the API host's name, e.g. stripe for https://api.stripe.com/v1.",
+            name: 'Leave empty to use the slug.',
+          }}
         />
         <AdvancedFields ids={ids} values={values} tokens={data.tokens} />
         <SecretSubmits label="Save custom token" failedCheck={!!failed?.state.verify} />

@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { Permission } from '../../src/admin/auth/rbac';
 import type { AdminActor } from '../../src/admin/auth/types';
 import { createGrant } from '../../src/admin/ops/grants';
-import { testServiceCredential } from '../../src/admin/ops/services';
+import { destinationFingerprint, testServiceCredential } from '../../src/admin/ops/services';
 import { updateSettings } from '../../src/admin/ops/settings';
 import { inviteUser } from '../../src/admin/ops/users';
+import { getService } from '../../src/db/services';
 import {
   anchoredConditions,
   CONTEXT,
@@ -381,7 +382,10 @@ describe('I-SESS-1: token writes stop when the role changes mid-request', () => 
       });
       expect(res.status).toBe(303);
     }, 'api.github.com');
+    const row = await getService(env.DB, w.serviceId);
+    if (!row) throw new Error('service missing');
     const res = await adminPost(w.app, w.adminSession, `/admin/tokens/${w.serviceId}/secret`, {
+      expected_destination: await destinationFingerprint(row),
       credential: 'ghp_rotatedWhileDemoted0123456789',
     });
     expect(res.status).toBe(409);

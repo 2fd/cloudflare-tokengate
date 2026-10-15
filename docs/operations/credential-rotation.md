@@ -34,7 +34,9 @@ You need the token manager, admin or owner role.
 3. Note the stored hint under **Secret** (last 4 characters and length, for secrets of 20
    characters or more).
 4. Under **Replace secret**, paste the new value. The destination is not part of this form: the
-   stored base URL and injection are kept (`POST /admin/tokens/:id/secret`).
+   stored base URL and injection are kept (`POST /admin/tokens/:id/secret`). The hint names the
+   host the secret is sent to. If someone changed the destination after you opened the page, the
+   form is refused and nothing is sent: check the destination, then paste the secret again.
 5. **New secret expires on** is prefilled with the stored expiry when it is more than 14 days away.
    Change it if the new secret expires on another date; leave it empty if it does not expire.
    GitHub tokens have no expiry field: the check reads it from GitHub.

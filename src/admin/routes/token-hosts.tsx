@@ -3,7 +3,7 @@
 // picking hosts the tokens and templates use, plus any others typed one per line. An empty stored
 // list would mean "any host", so the "Only" branch never writes one.
 import type { App } from '../../app';
-import { hostListed, upstreamHostAllowed } from '../../config';
+import { hostListed } from '../../config';
 import { listServices } from '../../db/services';
 import { getAdminHosts, UPSTREAM_HOSTS_KEY } from '../../db/settings';
 import { upstreamHostsFromValue } from '../../db/settings';
@@ -13,6 +13,8 @@ import type { FieldError } from '../ops/shared';
 import { fieldError } from '../ops/shared';
 import {
   parseUpstreamHostInput,
+  storedHostOutside,
+  storedUpstreamHost,
   updateUpstreamHosts,
   upstreamHostEntry,
   upstreamHostEntryError,
@@ -101,7 +103,8 @@ function candidates(tokens: Service[]): Candidate[] {
     return found;
   };
   for (const token of [...tokens].sort((a, b) => a.name.localeCompare(b.name))) {
-    entry(new URL(token.base_url).hostname.toLowerCase()).tokens.push(token);
+    const host = storedUpstreamHost(token.base_url);
+    if (host !== null) entry(host).tokens.push(token);
   }
   for (const template of SERVICE_TEMPLATES) {
     entry(new URL(template.base_url).hostname).templates.push(template.label);
@@ -127,9 +130,7 @@ async function hostsPage(
   const allowlist = upstreamHostsFromValue(stored?.value);
   // A valid stored list is never empty: [] is what a malformed value reads as (deny all).
   const malformed = allowlist !== null && allowlist.length === 0;
-  const outside = tokens.filter(
-    (token) => !upstreamHostAllowed(new URL(token.base_url).hostname, allowlist),
-  );
+  const outside = tokens.filter((token) => storedHostOutside(token.base_url, allowlist));
   const list = candidates(tokens);
   const literal = new Set(allowlist ?? []);
   const others = (allowlist ?? []).filter((entry) => !list.some((item) => item.host === entry));

@@ -11,6 +11,7 @@ import { EXPIRY_WARNING_MS } from '../../telemetry/dashboard';
 import type { AccessEdge } from '../connections';
 import { KEYRING_ERROR_TEXT } from '../ops/keyring';
 import type { StoredBinding } from '../ops/services';
+import { storedUpstreamHost } from '../ops/upstream-hosts';
 import type { VerifyOutcome } from '../ops/verify';
 import { paths } from '../paths';
 import type { ViewContext } from '../render';
@@ -37,6 +38,7 @@ import type { StatusKey } from './status';
 import { CUSTOM_SECRET } from './token-cards';
 import {
   AdvancedFields,
+  allowlistPattern,
   baseUrlSuggestions,
   dateInput,
   EMPTY_VALUES,
@@ -59,7 +61,23 @@ const DAY_MS = 86_400_000;
 export type BindingState = StoredBinding | { status: 'unknown' };
 
 /** The `also` query of a token page notice: a second outcome of the same submit. */
-export type TokenAlso = 'host_added' | 'pair_failed' | 'sibling_failed';
+export type TokenAlso =
+  | 'host_added'
+  | 'uploads_host_added'
+  | 'hosts_added'
+  | 'pair_failed'
+  | 'pair_failed_hosts'
+  | 'pair_failed_conflict'
+  | 'pair_failed_check'
+  | 'sibling_failed';
+
+/** Why the uploads token of a GitHub create failed, per `also` code (a closed set, no free text). */
+const PAIR_FAILURE_REASONS: Partial<Record<TokenAlso, string>> = {
+  pair_failed: 'its settings were refused',
+  pair_failed_hosts: 'uploads.github.com is not an allowed host',
+  pair_failed_conflict: 'another change to the tokens happened at the same time',
+  pair_failed_check: 'its secret check failed',
+};
 
 /** One token's status in the A9 vocabulary, most severe first. */
 export function tokenStatus(
@@ -190,6 +208,8 @@ export interface TokenPageData {
   lastSet: { ts: number; actor_email: string | null } | null;
   /** Tokens of the same family holding the same secret (rotate pre-ticks them). */
   siblings: Service[];
+  /** destinationFingerprint of the stored destination: the rotate form posts it back (I-CRED-2). */
+  destinationFingerprint: string;
   /** Every token, for the destination form's suggestions. */
   tokens: readonly Service[];
   proxyOrigin: string;
@@ -283,7 +303,16 @@ function Problems(props: { ctx: ViewContext; data: TokenPageData }) {
       objects: [{ href: paths.tokenKeys(), label: 'Encryption keys' }],
     });
   }
-  if (data.outside) {
+  if (storedUpstreamHost(service.base_url) === null) {
+    alerts.push({
+      code: 'config_problem',
+      level: 'error',
+      title: 'The stored base URL cannot be read, so requests through this token are refused.',
+      detail: 'Set the destination again under Change destination.',
+      objects: [],
+      fix: destinationFix,
+    });
+  } else if (data.outside) {
     alerts.push({
       code: 'outside_hosts',
       level: 'error',
@@ -323,11 +352,12 @@ function Problems(props: { ctx: ViewContext; data: TokenPageData }) {
       });
     }
   }
-  if (data.also === 'pair_failed') {
+  const pairReason = data.also === null ? undefined : PAIR_FAILURE_REASONS[data.also];
+  if (pairReason !== undefined) {
     alerts.push({
       code: 'config_problem',
       level: 'warning',
-      title: 'The GitHub release asset uploads token was not created.',
+      title: `The GitHub release asset uploads token was not created: ${pairReason}.`,
       detail: 'This token was saved; add the uploads token on its own.',
       objects: [],
       fix: {
@@ -402,6 +432,7 @@ function unusableReason(data: TokenPageData): string | null {
   if (data.binding.status === 'unattested' || data.keyringError !== null) {
     return 'the stored secret does not open';
   }
+  if (storedUpstreamHost(service.base_url) === null) return 'its base URL cannot be read';
   if (data.outside) return `${upstreamHost(service.base_url)} is not an allowed host`;
   return null;
 }
@@ -504,7 +535,8 @@ function accessChip(
     ...(used ? { secondary: used } : {}),
     status: edge.status,
     ...(edge.statusDetail ? { statusDetail: edge.statusDetail } : {}),
-    srText: `${edge.subject} in ${edge.context} can use ${tokenName} (${operations}): ${statusText}${used ? `, ${used}` : ''}`,
+    // The accessible name starts with the visible text (WCAG 2.5.3).
+    srText: `${text}: can use ${tokenName}, ${statusText}${used ? `, ${used}` : ''}`,
   };
 }
 
@@ -601,14 +633,14 @@ function SecretSection(props: { ctx: ViewContext; data: TokenPageData; state: To
         )
       ) : null}
       {canWrite && service.verify && attested ? (
-        <p class="actions">
+        <div class="actions">
           <ActionButton
             action={`${paths.token(service.id)}/test`}
             csrf={ctx.csrf}
             label={`Test ${service.name} secret`}
           />
           <span class="hint">Sends {verifyText(service.verify)} to the upstream now.</span>
-        </p>
+        </div>
       ) : null}
       {canWrite ? (
         attested ? (
@@ -645,11 +677,13 @@ function RotateForm(props: { ctx: ViewContext; data: TokenPageData; state?: Form
   return (
     <PostForm action={`${paths.token(service.id)}/secret`} csrf={ctx.csrf} class="stack">
       <h3>Replace secret</h3>
+      {/* The destination shown here, so a token repointed since is refused (I-CRED-2). */}
+      <input type="hidden" name="expected_destination" value={data.destinationFingerprint} />
       <SecretField
         ids={ids}
         label={`New ${inSentence(secret.label)}`}
         placeholder={secret.placeholder}
-        hint={`Replaces ${service.credential_hint ?? 'the stored secret'}. Consumers keep working, with the new secret from the next request.`}
+        hint={`Sent to ${upstreamHost(service.base_url)}. Replaces ${service.credential_hint ?? 'the stored secret'}. Consumers keep working, with the new secret from the next request.`}
         pattern={template?.secret.pattern}
         draft={state?.draft ?? null}
       />
@@ -766,6 +800,9 @@ function DestinationSection(props: {
   );
 }
 
+/** A host with an optional port, as `confirm_destination` expects it (no scheme, no path). */
+const HOST_PATTERN = String.raw`[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]*[A-Za-z0-9])?)+(?::[0-9]{1,5})?`;
+
 function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?: FormState }) {
   const { ctx, data, state } = props;
   const { service, template } = data;
@@ -780,13 +817,11 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
     ? { ...stored, credential_expires_at: expiry.value }
     : { ...EMPTY_VALUES };
   const values = state ? { ...state.values, confirm_destination: '' } : defaults;
-  const host = upstreamHost(values.base_url);
   const listed = data.allowlist !== null && data.allowlist.length > 0;
-  const showAllow =
-    ctx.can('settings:write') &&
-    listed &&
-    values.base_url !== '' &&
-    !data.allowlist?.some((entry) => hostMatches(host, entry));
+  const canAllow = ctx.can('settings:write');
+  // Shown from the start, as on the custom card, so a new host needs one submit: the server
+  // applies it only when the submitted host is not covered (A13.8.3).
+  const showAllow = canAllow && listed;
   // Unattested or none: only code-sourced suggestions; D1 values could be the attacker's.
   const suggestions = attested
     ? baseUrlSuggestions(data.allowlist, data.tokens)
@@ -806,9 +841,12 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
         value={values.base_url}
         example="https://api.example.com/v1"
         suggestions={suggestions}
+        // As on the custom card: no generated pattern when the owner may tick allow_host.
+        pattern={listed && !canAllow ? allowlistPattern(data.allowlist ?? []) : undefined}
         hint={
           <>
-            Changing it requires the secret again: the secret is bound to its destination.
+            https only, no query string. Changing it requires the secret again: the secret is bound
+            to its destination.
             {listed ? <> Allowed hosts: {data.allowlist?.join(', ')}.</> : null}
           </>
         }
@@ -826,7 +864,8 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
           autocapitalize="none"
           example="api.example.com"
           value=""
-          hint="Check the base URL against the provider's docs, then type its host. Nothing is sent upstream until this matches."
+          pattern={HOST_PATTERN}
+          hint="Check the base URL against the provider's docs, then type its host only, without https:// or a path. Nothing is sent upstream until this matches."
           error={ids.error('confirm_destination')}
         />
       ) : null}
@@ -842,10 +881,10 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
         <Checkbox
           name="allow_host"
           id={ids.id('allow_host')}
-          value={host}
-          checked={state ? state.values.allow_host === host : false}
-          label={`Also allow ${host} (not in Allowed hosts yet)`}
-          hint="Applies to every token."
+          value="1"
+          checked={state ? state.values.allow_host !== '' : false}
+          label="Also add this host to Allowed hosts"
+          hint="Only when the base URL's host is not allowed yet. Applies to every token."
           error={ids.error('allow_host')}
         />
       ) : null}
@@ -864,11 +903,6 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
       />
     </PostForm>
   );
-}
-
-function hostMatches(host: string, entry: string): boolean {
-  const candidate = host.toLowerCase();
-  return entry.startsWith('*.') ? candidate.endsWith(entry.slice(1)) : candidate === entry;
 }
 
 function DetailsSection(props: { ctx: ViewContext; data: TokenPageData; state: TokenPageState }) {
@@ -945,7 +979,7 @@ function DangerSection(props: { ctx: ViewContext; data: TokenPageData }) {
     <section id="danger" aria-labelledby="danger-h">
       <h2 id="danger-h">Danger zone</h2>
       {service.enabled ? (
-        <p class="actions">
+        <div class="actions">
           <ActionButton
             action={`${paths.token(service.id)}/toggle`}
             csrf={ctx.csrf}
@@ -959,9 +993,9 @@ function DangerSection(props: { ctx: ViewContext; data: TokenPageData }) {
             {plural(consumers, 'consumer loses', 'consumers lose')} access until you enable it
             again.
           </span>
-        </p>
+        </div>
       ) : (
-        <p class="actions">
+        <div class="actions">
           <ActionButton
             action={`${paths.token(service.id)}/toggle`}
             csrf={ctx.csrf}
@@ -970,7 +1004,7 @@ function DangerSection(props: { ctx: ViewContext; data: TokenPageData }) {
             fields={{ enabled: '1' }}
             returnTo="detail"
           />
-        </p>
+        </div>
       )}
       {accesses.length === 0 ? (
         <ConfirmDialog

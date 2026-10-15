@@ -2,7 +2,7 @@
 // audit row are written in one db.batch (I-AUDIT-1). An owner allows a host either on Service
 // tokens › Allowed hosts (updateUpstreamHosts) or from a token form (addUpstreamHost, committed as
 // its own audited change before the token is saved).
-import { hostListed, isUpstreamHostEntry } from '../../config';
+import { hostListed, isUpstreamHostEntry, upstreamHostAllowed } from '../../config';
 import {
   putSettingGuardedStatement,
   settingValueGuard,
@@ -13,6 +13,25 @@ import {
 import type { Actor } from '../../db/types';
 import type { Deps } from '../../deps';
 import { commitOrConstraintFailure, type OpFailure, opFailure } from './shared';
+
+/**
+ * The lower-case hostname of a stored base URL, or null when it does not parse: a row written
+ * straight into D1 is not trusted, and pages treat such a token as outside the allowed hosts
+ * (fail closed) instead of failing to render.
+ */
+export function storedUpstreamHost(baseUrl: string): string | null {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/** The token's stored base URL is not allowed by `allowlist`, or does not parse. */
+export function storedHostOutside(baseUrl: string, allowlist: string[] | null): boolean {
+  const host = storedUpstreamHost(baseUrl);
+  return host === null || !upstreamHostAllowed(host, allowlist);
+}
 
 /**
  * One entry as typed or pasted: a URL is reduced to its host (`https://api.github.com/v3` →

@@ -4,6 +4,8 @@
 // row headers, radio groups in fieldsets, valid `pattern`s, and no script or inline style.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { destinationFingerprint } from '../../src/admin/ops/services';
+import { getService } from '../../src/db/services';
 import { adminGet, adminPost, createUser, loginAs, resetControlPlane } from '../helpers/admin-auth';
 import { createTestApp, setUpstreamHosts, type TestApp } from '../helpers/app';
 import { fakeNetwork, KEK_1 } from '../unit/admin/ops/helpers';
@@ -55,6 +57,9 @@ function checkPage(html: string, label: string): { controls: number; hidden: num
   let hiddenControls = 0;
   expect(html, label).not.toContain('<script');
   expect(html, label).not.toMatch(/ style=/);
+  // A <form> or <div> inside a <p> makes the parser close the paragraph early (no implied end
+  // tags in the tokenizer below, so this is checked on the text).
+  expect(html, label).not.toMatch(/<p[ >](?:(?!<\/p>)[\s\S])*?<(?:form|div)[ >]/);
   const nodes = parse(html);
   const ids = nodes.map((node) => node.attrs.id).filter((id): id is string => id !== undefined);
   expect(
@@ -190,6 +195,9 @@ describe('A16: service token pages', () => {
       credential: 'ghp_a11yTest0123456789abcdefghijklmn',
     });
     const id = /svc_[0-9A-Z]{26}/.exec(created.headers.get('location') ?? '')?.[0] ?? '';
+    const row = await getService(env.DB, id);
+    if (!row) throw new Error('service missing');
+    const shown = await destinationFingerprint(row);
     const cases: Array<[string, string, Record<string, string>]> = [
       [
         'custom card',
@@ -212,7 +220,7 @@ describe('A16: service token pages', () => {
         { name: 'GitHub', forward_headers: 'authorization' },
       ],
       ['details, name', `/admin/tokens/${id}`, { name: '' }],
-      ['rotate', `/admin/tokens/${id}/secret`, {}],
+      ['rotate', `/admin/tokens/${id}/secret`, { expected_destination: shown }],
       [
         'destination',
         `/admin/tokens/${id}/destination`,

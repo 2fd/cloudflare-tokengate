@@ -250,12 +250,26 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
       verify_expect_status: String(WORLD_VERIFY.expect_status),
     },
   }),
-  // Rotate: only the secret; the destination is the stored one.
-  'POST /admin/tokens/:id/secret': async (w) => ({
-    path: `/admin/tokens/${w.serviceId}/secret`,
-    action: 'service.credential.set',
-    fields: { credential: 'ghp_fixtureRotated0123456789abcdef' },
-  }),
+  // Rotate: only the secret; the destination is the stored one, named by the digest the form
+  // carries (imported here so the shared import list stays untouched).
+  'POST /admin/tokens/:id/secret': async (w) => {
+    const { destinationFingerprint } = await import('../../src/admin/ops/services');
+    const row = await env.DB.prepare('SELECT base_url, injection FROM services WHERE id = ?')
+      .bind(w.serviceId)
+      .first<{ base_url: string; injection: string }>();
+    if (!row) throw new Error('world service missing');
+    return {
+      path: `/admin/tokens/${w.serviceId}/secret`,
+      action: 'service.credential.set',
+      fields: {
+        expected_destination: await destinationFingerprint({
+          base_url: row.base_url,
+          injection_json: row.injection,
+        }),
+        credential: 'ghp_fixtureRotated0123456789abcdef',
+      },
+    };
+  },
   'POST /admin/tokens/:id/destination': async (w) => ({
     path: `/admin/tokens/${w.serviceId}/destination`,
     action: 'service.credential.set',

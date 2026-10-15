@@ -217,3 +217,175 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
     expect(network.calls.length).toBe(sent);
   });
 });
+
+describe('I-SSRF-1: the GitHub uploads token when uploads.github.com is not allowed', () => {
+  const GH = 'ghp_pairSecret0123456789abcdefghijklmn';
+
+  it('an owner gets one box that adds the uploads token and allows its host in the same submit', async () => {
+    const owner = await session('owner');
+    const html = await (await adminGet(app, owner, '/admin/tokens/new?template=github')).text();
+    expect(html).toMatch(
+      /<input type="checkbox" id="f-github-also_uploads" name="allow_host" value="uploads.github.com"/,
+    );
+    expect(html).toContain('and allow uploads.github.com in Allowed hosts');
+    const res = await adminPost(app, owner, '/admin/tokens', {
+      template: 'github',
+      credential: GH,
+      allow_host: 'uploads.github.com',
+    });
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toContain('also=uploads_host_added');
+    expect(await getAllowedUpstreamHosts(env.DB)).toEqual(['api.github.com', 'uploads.github.com']);
+    // The allowlist first, then both tokens: one submit, one paste.
+    expect(await actions()).toEqual([
+      'settings.upstream_hosts',
+      'service.create',
+      'service.create',
+    ]);
+    const page = await (await adminGet(app, owner, res.headers.get('location') ?? '')).text();
+    expect(page).toContain('uploads.github.com was added to Allowed hosts.');
+    expect(page).not.toContain('uploads token was not created');
+  });
+
+  it.each(['token_manager', 'admin'] as const)(
+    '%s gets no box, only the reason and whom to ask; a posted also_uploads is refused before anything is sent',
+    async (role) => {
+      const viewer = await session(role);
+      await createUser({ email: 'owner@example.com', role: 'owner' });
+      const html = await (await adminGet(app, viewer, '/admin/tokens/new?template=github')).text();
+      const card =
+        /<details name="token-type" class="type-card" id="type-github"[\s\S]*?<\/details>/.exec(
+          html,
+        )?.[0] ?? '';
+      expect(card).not.toContain('also_uploads');
+      expect(card).toContain('uploads.github.com is not an allowed host');
+      expect(card).toContain('mailto:owner@example.com');
+      const res = await adminPost(app, viewer, '/admin/tokens', {
+        template: 'github',
+        credential: GH,
+        also_uploads: '1',
+      });
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain('href="#f-github-also_uploads"');
+      expect(await actions()).toEqual([]);
+      expect(network.calls).toEqual([]);
+    },
+  );
+
+  it('the token page names why the uploads token was not created', async () => {
+    const owner = await session('owner');
+    const res = await adminPost(app, owner, '/admin/tokens', {
+      template: 'github',
+      credential: GH,
+    });
+    const path = (res.headers.get('location') ?? '').split('?')[0] ?? '';
+    for (const [code, reason] of [
+      ['pair_failed_hosts', 'uploads.github.com is not an allowed host'],
+      ['pair_failed_check', 'its secret check failed'],
+      ['pair_failed', 'its settings were refused'],
+    ] as const) {
+      const page = await (await adminGet(app, owner, `${path}?also=${code}`)).text();
+      expect(page, code).toContain(
+        `The GitHub release asset uploads token was not created: ${reason}.`,
+      );
+    }
+  });
+});
+
+describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
+  async function githubToken(owner: Awaited<ReturnType<typeof session>>) {
+    return /svc_[0-9A-Z]{26}/.exec(
+      (
+        await adminPost(app, owner, '/admin/tokens', {
+          template: 'github',
+          credential: 'ghp_destination0123456789abcdefghijkl',
+        })
+      ).headers.get('location') ?? '',
+    )?.[0];
+  }
+
+  it('an owner gets the box from the start, and one submit allows the host and saves', async () => {
+    const owner = await session('owner');
+    const id = await githubToken(owner);
+    const html = await (await adminGet(app, owner, `/admin/tokens/${id}`)).text();
+    const form =
+      new RegExp(`action="/admin/tokens/${id}/destination"[\\s\\S]*?</form>`).exec(html)?.[0] ?? '';
+    expect(form).toContain('id="f-destination-allow_host" name="allow_host" value="1"');
+    expect(form).not.toMatch(/id="f-destination-base_url"[^>]*pattern=/);
+    const res = await adminPost(app, owner, `/admin/tokens/${id}/destination`, {
+      base_url: 'https://api.example.com',
+      injection_kind: 'bearer',
+      credential: 'ghp_destination0123456789abcdefghijkl',
+      allow_host: '1',
+    });
+    expect(res.status).toBe(303);
+    expect(await getAllowedUpstreamHosts(env.DB)).toEqual(['api.github.com', 'api.example.com']);
+    // A box ticked for a covered host changes nothing.
+    const again = await adminPost(app, owner, `/admin/tokens/${id}/destination`, {
+      base_url: 'https://api.github.com',
+      injection_kind: 'bearer',
+      credential: 'ghp_destination0123456789abcdefghijkl',
+      allow_host: '1',
+    });
+    expect(again.status).toBe(303);
+    expect(again.headers.get('location')).not.toContain('also=');
+    expect(await getAllowedUpstreamHosts(env.DB)).toEqual(['api.github.com', 'api.example.com']);
+  });
+
+  it('a non-owner gets the generated base URL pattern and no box', async () => {
+    const owner = await session('owner');
+    const id = await githubToken(owner);
+    const html = await (await adminGet(app, await session('admin'), `/admin/tokens/${id}`)).text();
+    const pattern = /id="f-destination-base_url"[^>]*pattern="([^"]+)"/.exec(html)?.[1] ?? '';
+    const re = new RegExp(`^(?:${pattern.replaceAll('&amp;', '&')})$`, 'v');
+    expect(re.test('https://api.github.com')).toBe(true);
+    expect(re.test('https://api.example.com')).toBe(false);
+    expect(html).not.toContain('id="f-destination-allow_host"');
+  });
+
+  it('format and allowlist errors come back together, format first', async () => {
+    const owner = await session('owner');
+    const id = await githubToken(owner);
+    const res = await adminPost(app, await session('admin'), `/admin/tokens/${id}/destination`, {
+      base_url: 'https://blocked.example.com',
+      injection_kind: 'header',
+      credential: 'ghp_destination0123456789abcdefghijkl',
+    });
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    const header = html.indexOf('Enter the header name in lower case, like x-api-key');
+    const blocked = html.indexOf('blocked.example.com is not an allowed host');
+    expect(header).toBeGreaterThan(-1);
+    expect(blocked).toBeGreaterThan(header);
+    expect(network.calls.filter((call) => call.url.includes('blocked'))).toEqual([]);
+  });
+});
+
+describe('A7.4: create reports every check that sends nothing in one re-render', () => {
+  it('format, then slug, then allowlist errors come back together; nothing is sent', async () => {
+    const admin = await session('admin');
+    await seedService(app.deps, { slug: 'foo' });
+    const audited = (await actions()).length;
+    const res = await adminPost(app, admin, '/admin/tokens', {
+      template: 'custom',
+      base_url: 'http://foo.example.com',
+      injection_kind: 'header',
+      credential: 'custom-secret-0123456789abcdefghij',
+      slug: 'foo',
+      credential_expires_at: '31/12/2027',
+    });
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    const order = [
+      'Enter the expiry as a date like 2027-01-31',
+      'Enter a base URL that starts with https://',
+      'Enter the header name in lower case, like x-api-key',
+      'Another token already uses foo; leave empty to use foo-2',
+      'foo.example.com is not an allowed host. Ask an owner to allow it',
+    ].map((text) => html.indexOf(text));
+    expect(order.every((index) => index > -1)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(network.calls).toEqual([]);
+    expect((await actions()).length).toBe(audited);
+  });
+});

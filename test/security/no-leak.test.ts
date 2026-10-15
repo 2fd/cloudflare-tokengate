@@ -6,7 +6,9 @@
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ROUTE_PERMISSIONS } from '../../src/admin/auth/rbac';
+import { destinationFingerprint } from '../../src/admin/ops/services';
 import { SERVICE_TEMPLATES } from '../../src/admin/service-templates';
+import { getService } from '../../src/db/services';
 import type { Injection } from '../../src/policy/types';
 import { runCron } from '../../src/telemetry/cron';
 import { consumeRequestLogBatch } from '../../src/telemetry/queue-consumer';
@@ -550,13 +552,19 @@ async function driveAdmin(): Promise<void> {
       })
     ).status,
   ).toBe(303);
+  // The rotate form carries the digest of the destination it shows (I-CRED-2).
+  const current = await getService(env.DB, formServiceId ?? '');
+  if (!current) throw new Error('service missing');
+  const shown = { expected_destination: await destinationFingerprint(current) };
   const failedRotate = await adminForm('rotate verify fails', `${path}/secret`, {
+    ...shown,
     credential: rotated,
   });
   expect(failedRotate.status).toBe(422);
   expect(
     (
       await adminForm('rotate save anyway (draft only)', `${path}/secret`, {
+        ...shown,
         credential_draft: await draftOf(failedRotate),
         save_anyway: '1',
       })

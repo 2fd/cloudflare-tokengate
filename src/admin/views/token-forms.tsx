@@ -260,10 +260,17 @@ export function inSentence(label: string): string {
   return /^[A-Z]{2}/.test(label) ? label : `${label.charAt(0).toLowerCase()}${label.slice(1)}`;
 }
 
-/** "Secret kept for 15 minutes (…WXYZ, 34 characters). …" (A13.6). */
-export function draftHint(secret: string): string {
-  const shown = secret.length >= 20 ? `…${secret.slice(-4)}, ` : '';
-  return `Secret kept for 15 minutes (${shown}${secret.length} characters). Leave this field empty to use it, or enter another.`;
+/**
+ * "Secret kept for 15 minutes (…WXYZ, 34 characters). …" (A13.6), from the hint normalizeCredential
+ * computed ("…WXYZ (34 chars)" or "8 chars"): it follows the stored-hint rule, so it is about the
+ * secret part only (the password of username:password) and shows its last 4 characters only when
+ * that part has at least 20 (I-CRED-1). Never pass the secret itself.
+ */
+export function draftHint(hint: string | null): string {
+  const long = hint === null ? null : /^(…\S{4}) \((\d+) chars\)$/.exec(hint);
+  const short = hint === null ? null : /^(\d+) chars$/.exec(hint);
+  const shown = long ? `${long[1]}, ${long[2]} characters` : short ? `${short[1]} characters` : '';
+  return `Secret kept for 15 minutes${shown ? ` (${shown})` : ''}. Leave this field empty to use it, or enter another.`;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -343,6 +350,8 @@ export function OptionalFields(props: {
   /** False for GitHub types: the expiry is read from GitHub. */
   expiry: boolean;
   today: string;
+  /** How an empty slug and name are derived; default: the placeholders are the derived values. */
+  derived?: { slug: string; name: string };
 }) {
   const { ids, values } = props;
   return (
@@ -356,7 +365,7 @@ export function OptionalFields(props: {
         value={values.name}
         example={props.namePlaceholder}
         maxlength={100}
-        hint="Shown to people who give access. Leave empty to use the placeholder."
+        hint={`Shown to people who give access. ${props.derived?.name ?? 'Leave empty to use the placeholder.'}`}
         error={ids.error('name')}
       />
       <Field
@@ -374,7 +383,8 @@ export function OptionalFields(props: {
         hint={
           <>
             Consumers call <code>{`${props.proxyOrigin}/proxy/<slug>`}</code>. Lower-case letters,
-            digits and dashes. Cannot be changed later. Leave empty to use the placeholder.
+            digits and dashes. Cannot be changed later.{' '}
+            {props.derived?.slug ?? 'Leave empty to use the placeholder.'}
           </>
         }
         error={ids.error('slug')}
