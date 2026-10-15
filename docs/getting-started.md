@@ -164,7 +164,7 @@ The gateway keeps no session of its own. "Sign out" ends the Access session for 
 
 To give someone a role before their first sign-in, open Users and use "Invite a user". The gateway sends no email: send `<gateway>/admin` to the person yourself. They must open it with the invited email address within 7 days. The gateway links a login to an invited user only through the email address in the Access token ([I-LINK-1](threat-model.md#i-link-1)).
 
-## 12. Add a caller provider
+## 12. Add a service consumer
 
 A caller provider tells the gateway which CI tokens to trust.
 
@@ -187,7 +187,7 @@ A caller provider tells the gateway which CI tokens to trust.
 
 GitLab CI and other issuers are covered in [callers/gitlab-ci.md](callers/gitlab-ci.md) and [callers/generic-oidc.md](callers/generic-oidc.md).
 
-## 13. Add a service
+## 13. Add a service token
 
 A service is one upstream API plus the credential the gateway attaches. This example uses the GitHub REST API.
 
@@ -247,7 +247,7 @@ The credential is encrypted before it is stored. The UI shows only its length an
 
 The step fails with HTTP 403. The body contains `"code":"no_matching_grant"` and the `request_id`. This is expected: access is denied by default ([I-AUTHZ-1](threat-model.md#i-authz-1)). The response headers carry `x-tokengate-error` and `x-tokengate-request-id`. All error codes are in [errors.md](errors.md).
 
-## 15. Create the grant from the denied request
+## 15. Give access from the denied request
 
 1. In the admin UI, open Requests. You can also use "Recent denials" on the Dashboard.
 2. Open the denied request. Its reason is `no_matching_grant`.

@@ -14,6 +14,7 @@ The admin UI has four sections: Monitoring, Users, Service tokens and Service co
 
 - **New URLs.** Services are at `/admin/tokens`, caller providers at `/admin/consumers` and grants at `/admin/access`. The Settings page is removed: Data retention (`/admin/retention`), Allowed hosts (`/admin/tokens/hosts`), Encryption keys (`/admin/tokens/keys`) and Sign-in (`/admin/users/sign-in`) replace it, the system status is on the Overview, and the configuration export is in the page footer for admins and owners. An unknown admin URL shows a "Page not found" page that links to the sections.
 - **Page shell.** Every admin page has a skip link, the four sections with their sub-pages, a Help link to the section's docs, the signed-in role, and a strip that names system problems such as missing encryption keys on every page. Owners see how many people need a decision on the Users link. The forbidden page names the roles that may make the change and who has them. The stylesheet meets WCAG 2.2 AA contrast in light and dark mode.
+- **Operation presets.** Service templates offer named operations, for example "Post messages: POST /chat.postMessage", instead of one starter rule list. The grant form still prefills the default operations as rule text.
 
 <!-- WP1 -->
 <!-- WP2 -->
@@ -24,7 +25,7 @@ The admin UI has four sections: Monitoring, Users, Service tokens and Service co
 
 - **Roles.** `migrations/0002_admin_redesign.sql` rebuilds the `users` and `user_identities` tables to allow the roles `token_manager` and `access_manager`. Every row is kept, and `admin` keeps everything it could do before. Take a D1 backup before you apply it ([docs/operations/upgrades.md](docs/operations/upgrades.md#migration-policy)).
 - **URLs.** There are no redirects from the old URLs (`/admin/services*`, `/admin/caller-providers*`, `/admin/grants*`, `/admin/settings*`). They show the "Page not found" page with a hint to the new page. Update bookmarks and links in runbooks.
-<!-- WP0: export v2 -->
+- **Export schema 2.** The configuration export has `schema_version` 2. Each service has a `template_id` (the service template it was made from, or `null` for a custom service), a new `claim_labels` array holds the display labels of numeric IDs per caller provider, and `users` can have the roles `token_manager` and `access_manager`. Tools that read version 1 must accept these fields. The export never contains secrets or row IDs.
 
 ### Added
 

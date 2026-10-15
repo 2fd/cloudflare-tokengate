@@ -38,7 +38,7 @@ import {
   renderPage,
   submittedVersion,
 } from '../render';
-import { SERVICE_TEMPLATES } from '../service-templates';
+import { defaultPresets, presetRules, templateForService } from '../service-templates';
 import { formatTime, withQuery } from '../views/format';
 import {
   ActionButton,
@@ -56,6 +56,7 @@ import {
   VersionField,
   legacyNotice,
 } from '../views/legacy';
+import { accessFixable } from '../views/reasons';
 
 const SECTION = paths.access();
 const NEW = paths.accessNew();
@@ -68,12 +69,6 @@ const NOTICES: Record<string, string> = {
   disabled: 'Grant disabled. It stops matching from the next request on.',
   deleted: 'Grant deleted.',
 };
-
-/**
- * Denial reasons a grant could fix; other records cannot prefill a grant. Keep in sync with
- * GRANT_FIXABLE in requests.tsx.
- */
-const PREFILL_REASONS: readonly string[] = ['no_matching_grant', 'event_not_trusted'];
 
 const PRESET_CONTEXTS: Array<{ value: GithubPresetContext; label: string }> = [
   { value: 'branch', label: 'Branch: pushes, manual runs and schedules on a branch' },
@@ -572,8 +567,7 @@ async function prefillFromRequest(c: AdminContext, requestId: string) {
   const usable =
     record !== null &&
     record.claims_verified === 1 &&
-    record.reason !== null &&
-    PREFILL_REASONS.includes(record.reason) &&
+    accessFixable(record.reason) &&
     record.caller_provider_id !== null &&
     record.service_id !== null &&
     isRecord(claims);
@@ -1215,7 +1209,7 @@ function ConditionsField(props: { form: GrantForm; target: Target }) {
 }
 
 function RulesField(props: { form: GrantForm; service: Service }) {
-  const template = templateFor(props.service);
+  const template = templateForService(props.service);
   return (
     <TextArea
       label="Rules"
@@ -1228,7 +1222,7 @@ function RulesField(props: { form: GrantForm; service: Service }) {
           Calls the grant allows, relative to the service base URL; any line may match. One per
           line: <code>{RULE_SYNTAX}</code>, e.g. <code>GET,POST /repos/acme/app/**</code>.{' '}
           {template
-            ? `Prefilled with the ${template.label} starter rules; narrow them to what callers need.`
+            ? `Prefilled with the default ${template.label} operations; narrow them to what callers need.`
             : null}
         </>
       }
@@ -1367,14 +1361,14 @@ function singlePinValue(provider: CallerProvider): { claim: string; value: strin
   return { claim: only.claim, value: only.values[0] ?? '' };
 }
 
-/** The service template with the same base URL, whose starter rules prefill new grants. */
-function templateFor(service: Service) {
-  return SERVICE_TEMPLATES.find((template) => template.base_url === service.base_url) ?? null;
-}
-
+/**
+ * The rules of the default operation presets of the service's template, which prefill new grants.
+ * The repository placeholder reads OWNER/REPO in this text form; the admin replaces it.
+ */
 function starterRules(service: Service): string {
-  const template = templateFor(service);
-  return template ? formatRules(template.starter_rules) : '';
+  const template = templateForService(service);
+  if (!template) return '';
+  return formatRules(defaultPresets(template).flatMap((p) => presetRules(p, 'OWNER/REPO')));
 }
 
 /** Up to three conditions in short form, for the list. */

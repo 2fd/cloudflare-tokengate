@@ -122,7 +122,12 @@ describe('Cloudflare Access login', () => {
     const html = await res.text();
     expect(html).toContain(text);
     // A refused user can switch accounts from the sign-in problem page.
-    if (code === 403) expect(html).toContain('<a href="/cdn-cgi/access/logout">Sign out</a>');
+    if (code === 403) {
+      expect(html).toContain('<a href="/cdn-cgi/access/logout">Sign out</a>');
+      // The message is a shared alert, not a legacy banner.
+      expect(html).toContain('<div class="alert alert-error"><p><strong>Error:</strong> ');
+      expect(html).not.toContain('class="banner');
+    }
     const user = await env.DB.prepare(
       "SELECT role, status FROM users WHERE email = 'new@acme.com'",
     ).first();

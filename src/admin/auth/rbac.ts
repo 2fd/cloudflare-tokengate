@@ -57,8 +57,12 @@ export function rolesWith(permission: Permission): Role[] {
   return ALL_ROLES.filter((role) => can(role, permission));
 }
 
-/** Roles that hold every one of `permissions` (the intersection of their rolesWith sets). */
+/**
+ * Roles that hold every one of `permissions` (the intersection of their rolesWith sets). An empty
+ * list matches no role (fail closed), never every role.
+ */
 export function rolesWithAll(permissions: readonly Permission[]): Role[] {
+  if (permissions.length === 0) return [];
   return ALL_ROLES.filter((role) => permissions.every((permission) => can(role, permission)));
 }
 

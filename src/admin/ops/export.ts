@@ -1,15 +1,16 @@
-// Configuration export (POST /admin/export): caller providers, services, grants and users as
-// deterministic JSON keyed by name/slug. No row ids, no sealed values and no secrets (I-CRED-1):
+// Configuration export (POST /admin/export): caller providers, services, grants, claim labels and
+// users as deterministic JSON keyed by name/slug. No row ids, no sealed values and no secrets (I-CRED-1):
 // credentials appear only as hint and timestamps. Downloading an export is audited (I-AUDIT-1).
 import { callerProviderFromRow, grantFromRow, serviceFromRow } from '../../db/rows';
-import type { Actor, Role, UserStatus } from '../../db/types';
+import type { Actor, LabelledClaim, Role, UserStatus } from '../../db/types';
 import type { Deps } from '../../deps';
 import type { ProfileId } from '../../identity/types';
 import { canonicalJson } from '../../lib/json';
 import type { Condition, Injection, Rule, VerifyCheck } from '../../policy/types';
 import { commitOrConstraintFailure, type OpFailure } from './shared';
 
-export const EXPORT_SCHEMA_VERSION = 1;
+/** 2: `template_id` per service, `claim_labels`, the token_manager and access_manager roles. */
+export const EXPORT_SCHEMA_VERSION = 2;
 
 export interface ExportDocument {
   schema_version: typeof EXPORT_SCHEMA_VERSION;
@@ -34,6 +35,8 @@ export interface ExportDocument {
     forward_headers: string[];
     timeout_ms: number;
     verify: VerifyCheck | null;
+    /** Template the service was made from; display and preset data only. */
+    template_id: string | null;
     enabled: boolean;
     credential: {
       hint: string | null;
@@ -53,16 +56,26 @@ export interface ExportDocument {
     enabled: boolean;
     expires_at: number | null;
   }>;
+  /** Display labels of numeric claim IDs, per caller provider name. */
+  claim_labels: Array<{
+    caller_provider: string;
+    claim: LabelledClaim;
+    value: string;
+    label: string;
+  }>;
   users: Array<{ email: string; role: Role; status: UserStatus }>;
 }
 
 /** Builds the export. Same database content → byte-identical `exportJson` output. */
 export async function buildExport(db: D1Database): Promise<ExportDocument> {
   // One batch is one transaction: a consistent snapshot, so every grant finds its references.
-  const [providerRows, serviceRows, grantRows, userRows] = await db.batch<Record<string, unknown>>([
+  const [providerRows, serviceRows, grantRows, labelRows, userRows] = await db.batch<
+    Record<string, unknown>
+  >([
     db.prepare('SELECT * FROM caller_providers'),
     db.prepare('SELECT * FROM services'),
     db.prepare('SELECT * FROM grants'),
+    db.prepare('SELECT caller_provider_id, claim, value, label FROM claim_labels'),
     db.prepare('SELECT email, role, status FROM users'),
   ]);
   const providers = (providerRows?.results ?? []).map(callerProviderFromRow);
@@ -127,6 +140,7 @@ export async function buildExport(db: D1Database): Promise<ExportDocument> {
         forward_headers: s.forward_headers,
         timeout_ms: s.timeout_ms,
         verify: s.verify,
+        template_id: s.template_id,
         enabled: s.enabled,
         credential:
           s.credential_sealed === null
@@ -139,6 +153,19 @@ export async function buildExport(db: D1Database): Promise<ExportDocument> {
       }))
       .sort((a, b) => compare(a.slug, b.slug)),
     grants: exportedGrants,
+    claim_labels: (labelRows?.results ?? [])
+      .map((row) => ({
+        caller_provider: providerNames.get(String(row.caller_provider_id)) ?? '',
+        claim: String(row.claim) as LabelledClaim,
+        value: String(row.value),
+        label: String(row.label),
+      }))
+      .sort(
+        (a, b) =>
+          compare(a.caller_provider, b.caller_provider) ||
+          compare(a.claim, b.claim) ||
+          compare(a.value, b.value),
+      ),
     users: users
       .map((u) => ({ email: u.email.toLowerCase(), role: u.role, status: u.status }))
       .sort((a, b) => compare(a.email, b.email)),
@@ -169,6 +196,7 @@ export async function exportConfiguration(
           caller_providers: document.caller_providers.length,
           services: document.services.length,
           grants: document.grants.length,
+          claim_labels: document.claim_labels.length,
           users: document.users.length,
         },
       },

@@ -181,9 +181,17 @@ export async function getSettings(db: D1Database): Promise<Settings> {
   return settingsFromRows(results);
 }
 
+type SettingKey =
+  | keyof Settings
+  | StateKey
+  | JoinKey
+  | typeof UPSTREAM_HOSTS_KEY
+  | typeof ADMIN_HOSTS_KEY;
+type SqlGuard = { sql: string; binds: unknown[] };
+
 export function putSettingStatement(
   db: D1Database,
-  key: keyof Settings | StateKey | JoinKey | typeof UPSTREAM_HOSTS_KEY | typeof ADMIN_HOSTS_KEY,
+  key: SettingKey,
   value: unknown,
   now: number,
   updatedBy: string | null,
@@ -194,6 +202,29 @@ export function putSettingStatement(
        ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
     )
     .bind(key, JSON.stringify(value), now, updatedBy);
+}
+
+/** The stored value of `key` is still exactly `raw` (null: the key is absent). */
+export function settingValueGuard(key: SettingKey, raw: string | null): SqlGuard {
+  return { sql: '(SELECT value FROM settings WHERE key = ?) IS ?', binds: [key, raw] };
+}
+
+/** putSettingStatement that writes only while `guard` holds (read-modify-write of a list). */
+export function putSettingGuardedStatement(
+  db: D1Database,
+  key: SettingKey,
+  value: unknown,
+  now: number,
+  updatedBy: string | null,
+  guard: SqlGuard,
+): D1PreparedStatement {
+  // The WHERE is required anyway: SQLite parses an upsert after INSERT … SELECT only with one.
+  return db
+    .prepare(
+      `INSERT INTO settings (key, value, updated_at, updated_by) SELECT ?, ?, ?, ? WHERE (${guard.sql})
+       ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`,
+    )
+    .bind(key, JSON.stringify(value), now, updatedBy, ...guard.binds);
 }
 
 export async function getState<T = unknown>(db: D1Database, key: StateKey): Promise<T | null> {

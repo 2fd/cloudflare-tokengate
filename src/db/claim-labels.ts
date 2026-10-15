@@ -82,8 +82,10 @@ export interface IdWithLabel {
 }
 
 const ID_DIGITS = '([0-9]{1,20})';
-const LABELLED_PAREN = new RegExp(`^(.+?)\\s*\\(${ID_DIGITS}\\)$`);
-const LABELLED_HASH = new RegExp(`^(.+?)\\s+#${ID_DIGITS}$`);
+// Suffix-only patterns: the label is whatever precedes the match. A `^(.+?)\s*` prefix would
+// backtrack quadratically on a long run of spaces (form bodies reach 64 KiB).
+const PAREN_SUFFIX = new RegExp(`\\(${ID_DIGITS}\\)$`);
+const HASH_SUFFIX = new RegExp(`\\s#${ID_DIGITS}$`);
 const BARE = new RegExp(`^#?${ID_DIGITS}$`);
 
 /**
@@ -95,10 +97,10 @@ export function parseIdWithLabel(raw: string): IdWithLabel | null {
   const text = raw.trim();
   const bare = BARE.exec(text);
   if (bare) return { id: bare[1] as string, label: null };
-  const labelled = LABELLED_PAREN.exec(text) ?? LABELLED_HASH.exec(text);
+  const labelled = PAREN_SUFFIX.exec(text) ?? HASH_SUFFIX.exec(text);
   if (!labelled) return null;
-  const label = (labelled[1] as string).trim();
-  return label === '' ? null : { id: labelled[2] as string, label };
+  const label = text.slice(0, labelled.index).trim();
+  return label === '' ? null : { id: labelled[1] as string, label };
 }
 
 /** A comma-separated list of parseIdWithLabel entries; null when any entry is invalid. */

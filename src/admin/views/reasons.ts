@@ -33,3 +33,13 @@ export function reasonText(reason: string | null): string | null {
     ? (REASON_TEXT[reason] ?? null)
     : null;
 }
+
+/**
+ * Denial reasons that a new consumer access can fix. Only verified records with one of these
+ * reasons offer "Create grant from this request", and only they prefill the access form (I-LOG-2).
+ */
+export const ACCESS_FIXABLE_REASONS: readonly string[] = ['no_matching_grant', 'event_not_trusted'];
+
+export function accessFixable(reason: string | null): boolean {
+  return reason !== null && ACCESS_FIXABLE_REASONS.includes(reason);
+}

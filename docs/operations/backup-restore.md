@@ -102,12 +102,13 @@ pnpm wrangler d1 export tokengate-telemetry --remote --output "tokengate-telemet
 
 ## Configuration export
 
-Settings > Configuration export > "Download configuration export" (admins and owners) downloads
-`tokengate-export-<date>.json`. Each download writes a `config.export` audit event.
+The export form in the footer of every admin page (admins and owners, permission `config:export`)
+downloads `tokengate-export-<date>.json`. Each download writes a `config.export` audit event.
 
-The file is deterministic JSON with every caller provider, service, grant and user (email, role,
-status), keyed by name or slug. It holds no credentials, no row ids and no secrets
-([I-CRED-1](../threat-model.md#i-cred-1)); for each credential it has only the hint and timestamps.
+The file is deterministic JSON (`schema_version` 2) with every caller provider, service (with its
+`template_id`), grant, claim display label and user (email, role, status), keyed by name or slug.
+It holds no credentials, no row ids and no secrets ([I-CRED-1](../threat-model.md#i-cred-1)); for
+each credential it has only the hint and timestamps.
 Runtime settings are not included.
 
 Use it to review changes (diff two exports), to document the configuration, and as a manual rebuild

@@ -32,7 +32,7 @@ Non-goals and future work are listed in [docs/roadmap.md](docs/roadmap.md).
 - **Encrypted credentials.** AES-256-GCM envelope encryption under a key-encryption key that you generate and keep outside Cloudflare. The ciphertext is bound to the service and its destination.
 - **Request log.** Every proxied call can produce a request record with the outcome, the reason, the verified caller and the policy evaluation. Hourly rollups feed the dashboard. An optional archive writes every record to R2 through Basin Pipelines.
 - **Audit log.** Every admin change writes one audit event, also emitted as an `audit.event` log line for your SIEM.
-- **Admin UI behind Cloudflare Access.** Server-rendered pages without client-side JavaScript. Roles `owner`, `admin`, `token_manager`, `access_manager` and `viewer`, given by invitation; token and access duties are separate roles. Denied requests offer a "Create grant from this request" button.
+- **Admin UI behind Cloudflare Access.** Server-rendered pages without client-side JavaScript. Roles `owner`, `admin`, `token_manager`, `access_manager` and `viewer`, given by invitation; token and access duties are separate roles. Denied requests offer a "Give access from this request" link.
 - **Self-hosted.** Apache-2.0. Runs on Workers and two D1 databases in your account.
 
 ## Quick start
@@ -103,7 +103,7 @@ jobs:
             -H "x-tokengate-token: $TOKEN"
 ```
 
-The first run fails with `403 no_matching_grant`. Open the denied request in the admin UI, click "Create grant from this request", review and save. The next run succeeds. See [actions/get-token](actions/get-token/README.md) for the action's inputs and outputs.
+The first run fails with `403 no_matching_grant`. Open the denied request in the admin UI, select "Give access from this request", review and save. The next run succeeds. See [actions/get-token](actions/get-token/README.md) for the action's inputs and outputs.
 
 ## Security model
 

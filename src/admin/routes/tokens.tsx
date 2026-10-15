@@ -33,7 +33,13 @@ import {
   renderPage,
   submittedVersion,
 } from '../render';
-import { getServiceTemplate, SERVICE_TEMPLATES, type ServiceTemplate } from '../service-templates';
+import {
+  getServiceTemplate,
+  type OperationPreset,
+  presetRules,
+  SERVICE_TEMPLATES,
+  type ServiceTemplate,
+} from '../service-templates';
 import { formatTime } from '../views/format';
 import {
   ActionButton,
@@ -724,22 +730,23 @@ function TemplateGuidance(props: { template: ServiceTemplate }) {
       <p class="muted">
         {template.notes} Provider documentation: <a href={template.docs_url}>{template.docs_url}</a>
       </p>
-      <StarterRules rules={template.starter_rules} />
+      <StarterRules presets={template.operation_presets} />
     </section>
   );
 }
 
-function StarterRules(props: { rules: readonly Rule[] }) {
-  if (props.rules.length === 0) return null;
+function StarterRules(props: { presets: readonly OperationPreset[] }) {
+  if (props.presets.length === 0) return null;
+  const rules = props.presets.flatMap((p) => presetRules(p, 'OWNER/REPO'));
   return (
     <>
       <h2>Suggested grant rules</h2>
       <p class="muted">
         A grant decides which callers may use this service and which requests they may make. When
         you create one, these rules are a starting point; narrow them to what callers need (one rule
-        per line: methods, then path pattern).
+        per line: methods, then path pattern; replace OWNER/REPO with the repository).
       </p>
-      <pre>{props.rules.map(ruleText).join('\n')}</pre>
+      <pre>{rules.map(ruleText).join('\n')}</pre>
     </>
   );
 }
@@ -1127,7 +1134,7 @@ async function renderDetail(c: AdminContext, service: Service, state: DetailStat
             <a href={paths.accessNew({ token: service.id })}>Create a grant for this service</a>
           </p>
         ) : null}
-        {template ? <StarterRules rules={template.starter_rules} /> : null}
+        {template ? <StarterRules presets={template.operation_presets} /> : null}
 
         {canWrite ? (
           <>

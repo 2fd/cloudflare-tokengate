@@ -44,9 +44,17 @@ export function registerSignInRoutes(app: App): void {
     if ((add === '') === (remove === '')) {
       return signInPage(c, { errors: ['Enter one host to add.'], submittedAdd: add, status: 400 });
     }
-    const base = (await getAdminHosts(deps.env.DB)) ?? [currentHost];
+    const stored = await getAdminHosts(deps.env.DB);
+    const base = stored ?? [currentHost];
     const next = add !== '' ? [...base, add] : base.filter((host) => host !== remove.toLowerCase());
-    const result = await updateAdminHosts(deps, adminActor(c), next.join('\n'), currentHost);
+    // `stored` is what the delta was applied to: a concurrent change in between is a conflict.
+    const result = await updateAdminHosts(
+      deps,
+      adminActor(c),
+      next.join('\n'),
+      currentHost,
+      stored,
+    );
     if (!result.ok) {
       const status = result.reason === 'conflict' ? 409 : 400;
       return signInPage(c, { errors: result.errors, submittedAdd: add, status });

@@ -11,7 +11,7 @@ GitHub does not offer upstream updates for it, so you pull releases yourself.
 
 1. Read the release's "Upgrade notes" in [CHANGELOG.md](../../CHANGELOG.md). Before 1.0.0, a minor
    version can contain breaking changes; they are listed there.
-2. Check that `/readyz` returns `200` and the dashboard shows no error banner. Fix problems first, so
+2. Check that `/readyz` returns `200` and the admin Overview shows no error alert. Fix problems first, so
    you can tell them apart from upgrade problems.
 3. Note the current Worker version, for a rollback: `pnpm wrangler deployments list`.
 4. Take a backup of `DB` if the release has a migration:
@@ -60,9 +60,9 @@ GitHub does not offer upstream updates for it, so you pull releases yourself.
    If you deploy with Workers Builds, push the merge to the branch it builds from. Its deploy command
    must be `pnpm run deploy`; a plain `wrangler deploy` skips the migrations.
 2. Check `/readyz`: `checks.schema` is `true`.
-3. Check Settings > System status > Database schema: both databases are "up to date".
-4. Check the dashboard for new banners.
-5. Make one workflow call through the gateway and check it in Admin > Requests.
+3. Check Monitoring › Overview > System status > Database schema: both databases are "up to date".
+4. Check the Overview for new alerts.
+5. Make one workflow call through the gateway and check it in Monitoring › Requests.
 
 Deploys keep the variables set in the dashboard (`keep_vars: true`) and always keep secrets.
 
@@ -92,7 +92,7 @@ on the new schema during that window. Details for contributors: [CONTRIBUTING.md
 ### Schema state
 
 The running code compares each database's applied migrations (wrangler's `d1_migrations` table) with
-`SCHEMA_HEAD` (`src/db/migrations.ts`). Settings and the dashboard show the result:
+`SCHEMA_HEAD` (`src/db/migrations.ts`). The Overview and the health strip on every page show the result:
 
 | State | Shown as | Meaning | Action |
 |---|---|---|---|
@@ -117,7 +117,7 @@ You can also use the dashboard: Workers & Pages > tokengate > Deployments.
 
 What a rollback does not undo:
 
-- **Databases.** D1 migrations and data stay as they are. The dashboard shows the "newer than this
+- **Databases.** D1 migrations and data stay as they are. The admin Overview shows the "newer than this
   deployment" warning; `/readyz` stays `200`. The migration policy keeps this safe for a rollback of
   one minor release. Rolling back further can reach code that reads a column a later release dropped.
   Restoring D1 with Time Travel to undo a migration also discards every change made since; do it only

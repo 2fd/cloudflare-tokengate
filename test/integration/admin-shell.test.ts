@@ -54,6 +54,13 @@ describe('the shell on every page', () => {
     expect(html).not.toContain(' style=');
   });
 
+  it('starts every page with a doctype (no quirks mode), including the 404 page', async () => {
+    for (const path of ['/admin/tokens', '/admin/nope']) {
+      const html = await page(owner, path);
+      expect(html.startsWith('<!doctype html><html lang="en">'), path).toBe(true);
+    }
+  });
+
   it('shows the section nav, the subnav, Help, the role badge and the version', async () => {
     const html = await page(owner, '/admin/tokens/hosts');
     expect(html).toContain('<nav class="sections" aria-label="Sections">');

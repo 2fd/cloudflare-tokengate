@@ -93,6 +93,16 @@ describe('the ID input format: name (ID)', () => {
     },
   );
 
+  // Workers freeze timers during synchronous code, so the guard is the test timeout: a quadratic
+  // parse of 256 KiB of spaces takes tens of seconds, the linear one milliseconds.
+  it('parses a long field in linear time (no regex backtracking on long space runs)', () => {
+    const spaces = ' '.repeat(256 * 1024);
+    expect(parseIdWithLabel(`a${spaces}b`)).toBeNull();
+    expect(parseIdWithLabel(`a${spaces}(123)`)).toEqual({ id: '123', label: 'a' });
+    expect(parseIdWithLabel(`a${spaces}#123`)).toEqual({ id: '123', label: 'a' });
+    expect(parseIdWithLabel('('.repeat(256 * 1024))).toBeNull();
+  });
+
   it('parses lists and refuses a list with one bad entry', () => {
     expect(parseIdWithLabelList('acme (1234567), acme-labs (7654321),')).toEqual([
       { id: '1234567', label: 'acme' },

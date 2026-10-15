@@ -101,8 +101,6 @@ summary { cursor: pointer; min-block-size: 1.75rem; }
   border-bottom: 1px solid var(--bad); }
 .health-strip p { margin: 0; }
 main { max-inline-size: 75rem; margin: 0 auto; padding: 1rem 1.25rem 4rem; }
-main:focus { outline: none; }
-main:focus-visible { outline: 3px solid var(--focus); }
 .footer { max-inline-size: 75rem; margin: 0 auto; padding: 1rem 1.25rem 2rem;
   border-top: 1px solid var(--line); color: var(--muted); }
 .footer p { margin: 0 0 .5rem; }
@@ -198,6 +196,7 @@ dialog.confirm .actions { margin-bottom: 0; }
 @supports not selector(:popover-open) {
   dialog.confirm { display: block; position: static; margin: 1rem 0; }
   .confirm-trigger { display: none; }
+  dialog.confirm [command="close"] { display: none; }
 }
 form:has(option[value="owner"]:checked) .plain-submit { display: none; }
 form:not(:has(option[value="owner"]:checked)) .confirm-trigger.swap { display: none; }

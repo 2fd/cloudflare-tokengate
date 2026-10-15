@@ -200,6 +200,8 @@ describe('rolesWith and rolesWithAll', () => {
     expect(rolesWithAll(['tokens:write', 'access:write'])).toEqual(['admin', 'owner']);
     expect(rolesWithAll(['tokens:write', 'settings:write'])).toEqual(['owner']);
     expect(rolesWithAll(['tokens:write', 'tokens:write'])).toEqual(rolesWith('tokens:write'));
+    // An empty list fails closed: Array.every would otherwise match every role.
+    expect(rolesWithAll([])).toEqual([]);
     for (const a of Object.keys(MATRIX) as Permission[]) {
       for (const b of Object.keys(MATRIX) as Permission[]) {
         const both = rolesWith(a).filter((role) => rolesWith(b).includes(role));

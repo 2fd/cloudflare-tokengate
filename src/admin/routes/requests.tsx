@@ -35,7 +35,7 @@ import {
   NextPage,
   Select,
 } from '../views/legacy';
-import { docsUrl, reasonText } from '../views/reasons';
+import { accessFixable, docsUrl, reasonText } from '../views/reasons';
 
 const SECTION = '/admin/requests';
 const PAGE_SIZE = 50;
@@ -43,11 +43,6 @@ const OUTCOMES: readonly Outcome[] = ['allowed', 'denied', 'error'];
 const REQUEST_ID = /^req_[0-9A-HJKMNP-TV-Z]{26}$/;
 const SERVICE_ID = /^svc_[0-9A-HJKMNP-TV-Z]{26}$/;
 const MAX_TEXT_FILTER = 256;
-/**
- * Deny reasons a grant can fix; only these records offer "Create grant from this request". Keep in
- * sync with PREFILL_REASONS in grants.tsx.
- */
-const GRANT_FIXABLE = new Set(['no_matching_grant', 'event_not_trusted']);
 
 /** What the operator can do about a reason. */
 const NEXT_STEP: Readonly<Record<string, string>> = {
@@ -229,8 +224,7 @@ export function registerRequestsRoutes(app: App): void {
     const canCreateGrant =
       can(c.get('viewer').user.role, 'access:write') &&
       record.claims_verified === 1 &&
-      record.reason !== null &&
-      GRANT_FIXABLE.has(record.reason);
+      accessFixable(record.reason);
     return renderPage(
       c,
       { title: 'Request', section: 'monitoring', subsection: 'requests' },

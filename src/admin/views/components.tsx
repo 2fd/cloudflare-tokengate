@@ -210,8 +210,21 @@ export function Field(props: FieldProps) {
   const conditional = props.conditional === true;
   let type = props.type ?? 'text';
   let inputmode = props.inputmode;
+  let hint = props.hint;
+  // A hidden control the browser refuses (badInput, typeMismatch, step) blocks the submit and
+  // cannot be focused, so a conditional control is plain text and the server validates it.
   if (conditional && (type === 'url' || type === 'email')) {
     inputmode = inputmode ?? type;
+    type = 'text';
+  } else if (conditional && type === 'number') {
+    inputmode = inputmode ?? 'numeric';
+    type = 'text';
+  } else if (conditional && type === 'date') {
+    hint = hasContent(hint) ? (
+      <>{hint} Use a date like 2027-01-31.</>
+    ) : (
+      'Use a date like 2027-01-31.'
+    );
     type = 'text';
   }
   const listId = props.suggestions && props.suggestions.length > 0 ? `${id}-list` : undefined;
@@ -221,7 +234,7 @@ export function Field(props: FieldProps) {
       label={props.label}
       optional={props.optional}
       labelHidden={props.labelHidden}
-      hint={props.hint}
+      hint={hint}
       error={props.error}
     >
       <input
@@ -235,7 +248,7 @@ export function Field(props: FieldProps) {
         min={conditional ? undefined : props.min}
         max={conditional ? undefined : props.max}
         minlength={conditional ? undefined : props.minlength}
-        step={props.step}
+        step={conditional ? undefined : props.step}
         maxlength={props.maxlength}
         inputmode={inputmode}
         autocomplete={props.autocomplete}
@@ -246,7 +259,7 @@ export function Field(props: FieldProps) {
         enterkeyhint={props.enterkeyhint}
         autofocus={props.autofocus}
         list={listId}
-        aria-describedby={frameIds(id, props)}
+        aria-describedby={frameIds(id, { ...props, hint })}
         aria-invalid={props.error ? 'true' : undefined}
         {...(type === 'password' ? SECRET_INPUT_ATTRIBUTES : {})}
       />
@@ -436,13 +449,23 @@ export function Choice(props: SelectProps & { descriptions?: Record<string, Chil
   if (options.length === 1 && only) {
     const id = props.id ?? fieldId(props.name);
     return (
-      <div class="field">
+      <div class="field" data-invalid={props.error ? 'true' : undefined}>
         <p class="fixed" id={id}>
           <span class={props.labelHidden ? 'vh' : 'label'}>{props.label}:</span> {only.label}
         </p>
         <input type="hidden" name={props.name} value={only.value} />
         {hasContent(props.descriptions?.[only.value]) ? (
           <p class="hint">{props.descriptions?.[only.value]}</p>
+        ) : null}
+        {hasContent(props.hint) ? (
+          <p class="hint" id={`${id}-hint`}>
+            {props.hint}
+          </p>
+        ) : null}
+        {props.error ? (
+          <p class="field-error" id={`${id}-error`}>
+            <span class="vh">Error:</span> {props.error}
+          </p>
         ) : null}
       </div>
     );
@@ -598,6 +621,7 @@ export function CheckboxGroup(props: {
                 index === 0 && hintId,
                 index === 0 && errorId,
               ])}
+              aria-invalid={index === 0 && props.error ? 'true' : undefined}
             />
             <label for={id}>{option.label}</label>
             {hasContent(option.hint) ? (
@@ -656,7 +680,8 @@ export function Checkbox(props: {
 /**
  * One submit button per option (the button is the choice: "Invite as Viewer"). Options with
  * `confirm` render a dialog trigger instead; their dialogs follow every button, so the first plain
- * option stays the form's default button (Enter).
+ * option stays the form's default button (Enter). The dialogs sit inside the surrounding form, so
+ * only the `submits` variant is accepted: a standalone dialog would nest its own form.
  */
 export function SubmitButtons(props: {
   name: string;
@@ -667,7 +692,7 @@ export function SubmitButtons(props: {
     context?: string;
     description?: Child;
     current?: boolean;
-    confirm?: ConfirmDialogProps;
+    confirm?: Extract<ConfirmDialogProps, { variant: 'submits' }>;
   }>;
 }) {
   const plain = props.options.filter((option) => !option.confirm);
@@ -691,7 +716,12 @@ export function SubmitButtons(props: {
             >
               {option.label}
               {option.context ? <span class="vh"> {option.context}</span> : null}
-              {option.current ? <span class="vh"> (current)</span> : null}
+              {option.current ? (
+                <>
+                  {' '}
+                  <span class="badge">Current</span>
+                </>
+              ) : null}
             </button>
             {hasContent(option.description) ? (
               <span class="hint" id={`${fieldId(props.name)}-${option.value}-desc`}>
@@ -713,13 +743,14 @@ export function SubmitButtons(props: {
 // Messages
 
 /**
- * "There is a problem", focused on load (no role=alert: autofocus already announces it). Field
- * errors link to their control; other errors are plain items.
+ * "There is a problem", focused on load (no role=alert: autofocus already announces it). The group
+ * role lets aria-labelledby name it (a plain div may not be named). Field errors link to their
+ * control; other errors are plain items.
  */
 export function ErrorSummary(props: { errors: FieldError[] }) {
   if (props.errors.length === 0) return null;
   return (
-    <div class="error-summary" tabindex={-1} autofocus aria-labelledby="es-h">
+    <div class="error-summary" role="group" tabindex={-1} autofocus aria-labelledby="es-h">
       <h2 id="es-h">There is a problem</h2>
       <ul>
         {props.errors.map((error) => (
@@ -739,7 +770,7 @@ export function NoticeView(props: { notice: Notice; csrf: string; autofocus?: bo
     <div class="notice" role="status" tabindex={-1} autofocus={props.autofocus !== false}>
       <p>{notice.text}</p>
       {notice.next || notice.undo ? (
-        <p class="actions">
+        <div class="actions">
           {notice.next ? <a href={notice.next.href}>{notice.next.label}</a> : null}
           {notice.undo ? (
             <PostForm action={notice.undo.action} csrf={props.csrf} class="inline">
@@ -749,7 +780,7 @@ export function NoticeView(props: { notice: Notice; csrf: string; autofocus?: bo
               </button>
             </PostForm>
           ) : null}
-        </p>
+        </div>
       ) : null}
     </div>
   );

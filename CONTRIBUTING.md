@@ -176,8 +176,8 @@ A Profile is code-reviewed knowledge about one issuer type. Open an issue first.
 1. Add the ID to `ProfileId` in `src/identity/types.ts`.
 2. Create `src/identity/profiles/<id>.ts` that implements `IssuerProfile`: `id`, `label`, `defaults`, `eventClaim`, `trustedEvents`, `tenantClaims`, `sharedIssuers`, `anchorRules`, `verifyRequiredClaims`, `logClaimAllowlist`, `display`. Cite the platform's claim documentation in comments.
 3. Register it in `PROFILES` in `src/identity/profiles/index.ts`.
-4. Run `pnpm typecheck`. It lists every `Record<ProfileId, …>` table to fill, for example in `src/admin/routes/caller-providers.tsx`.
-5. Update the profile-specific code that the type checker does not flag: `CI_ISSUER_HOSTS` and `grantWarnings` in `src/policy/validate.ts`, the error text in `src/admin/ops/caller-providers.ts`, `PROFILE_ORDER` in `src/admin/routes/caller-providers.tsx`, and `PREFILL_EXTRA_CLAIMS` in `src/admin/routes/grants.tsx`.
+4. Run `pnpm typecheck`. It lists every `Record<ProfileId, …>` table to fill, for example in `src/admin/routes/consumers.tsx`.
+5. Update the profile-specific code that the type checker does not flag: `CI_ISSUER_HOSTS` and `grantWarnings` in `src/policy/validate.ts`, the error text in `src/admin/ops/caller-providers.ts`, `PROFILE_ORDER` in `src/admin/routes/consumers.tsx`, and `PREFILL_EXTRA_CLAIMS` in `src/admin/routes/access.tsx`.
 6. The `caller_providers.profile` column has a `CHECK` constraint with the allowed IDs (`migrations/0001_initial.sql`). SQLite cannot change a `CHECK` constraint in place, so this needs a migration that rebuilds the table. That is not additive (see [Migrations](#migrations)): agree on the approach in the issue and write an ADR.
 7. Add tests in `test/unit/identity/profiles.test.ts` and security tests for the tenant pin and anchor claims.
 8. Add `docs/callers/<platform>.md`, and update [docs/policies.md](docs/policies.md) and the profile entry in [docs/concepts.md](docs/concepts.md#profile).
@@ -188,13 +188,13 @@ A Profile is code-reviewed knowledge about one issuer type. Open an issue first.
 2. Validate it in `src/policy/validate.ts`. The canonical JSON it produces is stored and bound into the credential AAD ([I-CRED-2](docs/threat-model.md#i-cred-2)).
 3. Header kinds: handle it in `injectedHeaderName` and `injectCredentialHeaders` in `src/proxy/inject.ts`. URL kinds: handle it in `src/proxy/path.ts` and in the URL rewriting of `src/proxy/forward.ts`. All kinds: list the echo encodings in `secretVariants` in `src/proxy/inject.ts` ([I-CRED-1](docs/threat-model.md#i-cred-1), [I-RESP-1](docs/threat-model.md#i-resp-1)).
 4. Check the Caller token fallback in `src/proxy/caller-token.ts`: a caller copy of the injected header or parameter must never reach the upstream ([I-INJ-1](docs/threat-model.md#i-inj-1)).
-5. Add the form option, parsing and display in `src/admin/routes/services.tsx`.
+5. Add the form option, parsing and display in `src/admin/routes/tokens.tsx`.
 6. Add unit tests (`test/unit/proxy/inject.test.ts`, path vectors in `test/vectors/paths.json` for URL kinds) and extend the [I-INJ-1](docs/threat-model.md#i-inj-1) and [I-CRED-1](docs/threat-model.md#i-cred-1) security tests.
 7. Document it in the injection entry of [docs/concepts.md](docs/concepts.md#injection) and in the [I-RESP-1](docs/threat-model.md#i-resp-1) redaction list of [docs/threat-model.md](docs/threat-model.md). If an upstream uses it, update the matching `docs/upstreams/*.md` page.
 
 ### A Service template
 
-1. Add an entry to `SERVICE_TEMPLATES` in `src/admin/service-templates.ts`. Keep `starter_rules` narrow.
+1. Add an entry to `SERVICE_TEMPLATES` in `src/admin/service-templates.ts`. Keep its `operation_presets` narrow: each is a named set of rules that consumer access offers as a checkbox, and `{repo}` in a path stands for the repository.
 2. Add the template ID to the pinned list in `test/unit/admin/ops/service-templates.test.ts`. The same file checks every template against the validation the form uses.
 3. Add or update a page under `docs/upstreams/` with SDK base-URL snippets.
 
@@ -202,10 +202,10 @@ A Profile is code-reviewed knowledge about one issuer type. Open an issue first.
 
 1. Create `src/admin/routes/<page>.tsx` with a `register…Routes(app)` function. Render with `renderPage` from `src/admin/render.tsx` and the components in `src/admin/views/components.tsx`. No client-side JavaScript.
 2. Register it in `src/admin/routes/index.ts`.
-3. Add every `METHOD /path` to `ROUTE_PERMISSIONS` in `src/admin/auth/rbac.ts`. The middleware denies any `/admin` route that is not in the table ([I-RBAC-1](docs/threat-model.md#i-rbac-1)). Update the pinned table in `test/unit/admin/auth/rbac.test.ts`.
+3. Add every `METHOD /path` to `ROUTE_PERMISSIONS` in `src/admin/auth/rbac.ts`. The middleware denies any `/admin` route that is not in the table ([I-RBAC-1](docs/threat-model.md#i-rbac-1)). Put it in the block of its section (`// == monitoring ==`, `// == users ==`, `// == tokens ==`, `// == consumers ==` or `// == global ==`), and add a field permission when a form field needs more than the route permission. Update the pinned table in `test/unit/admin/auth/rbac.test.ts`.
 4. A route that changes state is a `POST` with `mutates: true`. Its form includes `<Csrf token=… />` ([I-CSRF-1](docs/threat-model.md#i-csrf-1)). It calls an op in `src/admin/ops/` that commits through `commitAudited` (`src/admin/ops/shared.ts`): the change and exactly one audit row in one `db.batch` ([I-AUDIT-1](docs/threat-model.md#i-audit-1)).
-5. Add a submission for each new mutating route to `MUTATION_FIXTURES` in `test/fixtures/admin-forms.ts`. Add an id to `readPath` in the same file for a new `GET` route with a parameter.
-6. If the page needs a navigation entry, add it to `NAV` in `src/admin/views/layout.tsx`.
+5. Add a submission for each new mutating route to `MUTATION_FIXTURES` in `test/fixtures/admin-forms.ts`. Add an id to the section map of `readPath` in the same file for a new `GET` route with a parameter.
+6. If the page needs a navigation entry, add a tab to its section in `SECTIONS` in `src/admin/views/layout.tsx`, and a path to `src/admin/paths.ts`.
 7. Never show secret material on any page: Viewers can read every page.
 
 ### A gateway error code

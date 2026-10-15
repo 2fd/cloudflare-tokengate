@@ -190,7 +190,12 @@ function errorPage(
   // The sign-out link lets a pending, suspended or mismatched user switch accounts.
   const signOut = loginProvider ? signOutUrl(loginProvider) : null;
   return c.html(
-    <Layout title="Sign-in problem" legacyBanners={[{ level: 'error', text: MESSAGES[key] }]}>
+    <Layout title="Sign-in problem">
+      <div class="alert alert-error">
+        <p>
+          <strong>Error:</strong> {MESSAGES[key]}
+        </p>
+      </div>
       <p class="actions">
         <a href={paths.overview()}>Reload</a>
         {signOut ? <a href={signOut}>Sign out</a> : null}

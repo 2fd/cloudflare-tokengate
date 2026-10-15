@@ -67,6 +67,16 @@ describe('cascade delete of grants under an exact-set guard', () => {
     expect(await listGrants(env.DB)).toHaveLength(3);
   });
 
+  it('keeps a fixed bind count for any number of ids (D1 allows 100 per statement)', async () => {
+    const many = [...ids, ...Array.from({ length: 148 }, (_, index) => `grt_missing_${index}`)];
+    const guard = exactGrantSetGuard('service_id', serviceId, many);
+    expect(guard.binds).toHaveLength(4);
+    expect(guard.sql.match(/\?/g)).toHaveLength(4);
+    // The extra ids are not grants of the owner, so the count differs and nothing is deleted.
+    expect(await cascade(many)).toBe(0);
+    expect(await listGrants(env.DB)).toHaveLength(3);
+  });
+
   it('refuses a column outside the two owners', () => {
     expect(() => exactGrantSetGuard('name' as never, 'x', [])).toThrow();
   });

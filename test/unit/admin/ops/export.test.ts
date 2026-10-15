@@ -35,8 +35,18 @@ async function seed() {
   await seedGrant(deps, provider.id, github, 'beta');
   await seedGrant(deps, provider.id, github, 'alpha');
   await env.DB.prepare(
-    "INSERT OR IGNORE INTO users (id, email, role, status, created_at, updated_at) VALUES ('usr_b', 'B@example.com', 'admin', 'active', 1, 1), ('usr_a', 'a@example.com', 'owner', 'active', 1, 1)",
+    "INSERT OR IGNORE INTO users (id, email, role, status, created_at, updated_at) VALUES ('usr_b', 'B@example.com', 'admin', 'active', 1, 1), ('usr_a', 'a@example.com', 'owner', 'active', 1, 1), ('usr_c', 'c@example.com', 'token_manager', 'active', 1, 1), ('usr_d', 'd@example.com', 'access_manager', 'pending', 1, 1)",
   ).run();
+  // template_id is persisted by the token forms later; set it directly here.
+  await env.DB.prepare("UPDATE services SET template_id = 'slack' WHERE id = ?").bind(slack).run();
+  await env.DB.prepare(
+    `INSERT INTO claim_labels (caller_provider_id, claim, value, label, updated_at, updated_by)
+     VALUES (?1, 'repository_id', '987654321', 'acme/api', 1, 'usr_a'),
+            (?1, 'repository_id', '12345', 'acme/web', 1, NULL),
+            (?1, 'repository_owner_id', ?2, 'acme', 1, 'usr_a')`,
+  )
+    .bind(provider.id, OWNER_ID)
+    .run();
   return { deps, provider };
 }
 
@@ -45,6 +55,7 @@ describe('buildExport', () => {
     const { provider } = await seed();
     const document = await buildExport(env.DB);
     expect(document.schema_version).toBe(EXPORT_SCHEMA_VERSION);
+    expect(EXPORT_SCHEMA_VERSION).toBe(2);
     expect(document.caller_providers).toEqual([
       {
         name: 'GitHub Actions',
@@ -62,6 +73,27 @@ describe('buildExport', () => {
     expect(document.services.map((s) => s.slug)).toEqual(['github', 'slack']);
     expect(document.services[0]?.credential).toMatchObject({ hint: '…cdef (30 chars)' });
     expect(document.services[1]?.credential).toBeNull();
+    expect(document.services.map((s) => s.template_id)).toEqual([null, 'slack']);
+    expect(document.claim_labels).toEqual([
+      {
+        caller_provider: 'GitHub Actions',
+        claim: 'repository_id',
+        value: '12345',
+        label: 'acme/web',
+      },
+      {
+        caller_provider: 'GitHub Actions',
+        claim: 'repository_id',
+        value: '987654321',
+        label: 'acme/api',
+      },
+      {
+        caller_provider: 'GitHub Actions',
+        claim: 'repository_owner_id',
+        value: OWNER_ID,
+        label: 'acme',
+      },
+    ]);
     expect(document.grants.map((g) => [g.service, g.name])).toEqual([
       ['github', 'alpha'],
       ['github', 'beta'],
@@ -71,12 +103,14 @@ describe('buildExport', () => {
     expect(document.users).toEqual([
       { email: 'a@example.com', role: 'owner', status: 'active' },
       { email: 'b@example.com', role: 'admin', status: 'active' },
+      { email: 'c@example.com', role: 'token_manager', status: 'active' },
+      { email: 'd@example.com', role: 'access_manager', status: 'pending' },
     ]);
 
     const json = exportJson(document);
     expect(json).not.toContain(SECRET);
     expect(json).not.toMatch(/credential_sealed|"(svc|cpr|grt|usr)_/);
-    expect(json).not.toMatch(/"(id|created_at|created_by)":/);
+    expect(json).not.toMatch(/"(id|created_at|created_by|updated_by)":/);
   });
 
   it('is deterministic', async () => {
@@ -96,7 +130,7 @@ describe('exportConfiguration', () => {
     const audit = (await auditRows()).at(-1);
     expect(audit).toMatchObject({ action: 'config.export', actor_email: ACTOR.email });
     expect(audit?.diff).toEqual({
-      counts: { caller_providers: 1, services: 2, grants: 3, users: 2 },
+      counts: { caller_providers: 1, services: 2, grants: 3, claim_labels: 3, users: 4 },
     });
   });
 });

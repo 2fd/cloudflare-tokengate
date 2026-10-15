@@ -2,6 +2,7 @@
 // account, the section's subnav, the health strip, main, and the footer with the export. Server
 // rendered with no client-side JavaScript: the CSP is `default-src 'none'` with no script-src and
 // `style-src 'self'` (src/http/security.ts), so there is no <script>, <style> or style= anywhere.
+import { raw } from 'hono/html';
 import type { Child } from 'hono/jsx';
 import { version } from '../../../package.json';
 import type { Notice } from '../notice';
@@ -104,7 +105,7 @@ export function Layout(props: {
   const title = [`${errors.length > 0 ? 'Error: ' : ''}${props.title}`, section?.label, 'tokengate']
     .filter((part) => part !== undefined)
     .join(' – ');
-  return (
+  const page = (
     <html lang="en">
       <head>
         <meta charset="utf-8" />
@@ -184,6 +185,13 @@ export function Layout(props: {
         </footer>
       </body>
     </html>
+  );
+  // c.html() adds no doctype, and without one the page renders in quirks mode.
+  return (
+    <>
+      {raw('<!doctype html>')}
+      {page}
+    </>
   );
 }
 

@@ -2,9 +2,11 @@
 // audit row are written in one db.batch (I-AUDIT-1).
 import { isUpstreamHostEntry } from '../../config';
 import {
-  getAllowedUpstreamHosts,
-  putSettingStatement,
+  putSettingGuardedStatement,
+  settingValueGuard,
   UPSTREAM_HOSTS_KEY,
+  upstreamHostsFromValue,
+  upstreamHostsStatement,
 } from '../../db/settings';
 import type { Actor } from '../../db/types';
 import type { Deps } from '../../deps';
@@ -29,7 +31,10 @@ export function parseUpstreamHostInput(
   return { ok: true, hosts: entries };
 }
 
-/** Sets the upstream host allowlist (I-SSRF-1); one audit row in the same batch (I-AUDIT-1). */
+/**
+ * Sets the upstream host allowlist (I-SSRF-1); one audit row in the same batch (I-AUDIT-1). The
+ * write is guarded on the stored value it replaces, so a concurrent change is a conflict.
+ */
 export async function updateUpstreamHosts(
   deps: Deps,
   actor: Actor,
@@ -38,10 +43,12 @@ export async function updateUpstreamHosts(
   const parsed = parseUpstreamHostInput(raw);
   if (!parsed.ok) return opFailure('invalid', [parsed.error]);
   const db = deps.env.DB;
-  const before = await getAllowedUpstreamHosts(db);
+  const stored = (await upstreamHostsStatement(db).first<{ value: string }>())?.value ?? null;
+  const before = upstreamHostsFromValue(stored);
   if (JSON.stringify(before) === JSON.stringify(parsed.hosts)) {
     return { ok: true, hosts: before, changed: false };
   }
+  const guard = settingValueGuard(UPSTREAM_HOSTS_KEY, stored);
   const outcome = await commitOrConstraintFailure(
     deps,
     actor,
@@ -55,11 +62,13 @@ export async function updateUpstreamHosts(
           : `Upstream host allowlist set (${parsed.hosts.length} entries)`,
       diff: { before, after: parsed.hosts },
     },
-    null,
-    [putSettingStatement(db, UPSTREAM_HOSTS_KEY, parsed.hosts, deps.now(), actor.id)],
+    guard,
+    [putSettingGuardedStatement(db, UPSTREAM_HOSTS_KEY, parsed.hosts, deps.now(), actor.id, guard)],
   );
   if (!outcome.ok) return outcome;
   if (!outcome.committed)
-    return opFailure('conflict', ['the allowlist was not saved; reload and retry']);
+    return opFailure('conflict', [
+      'The allowlist was changed by someone else; nothing was saved. Reload and retry.',
+    ]);
   return { ok: true, hosts: parsed.hosts, changed: true };
 }

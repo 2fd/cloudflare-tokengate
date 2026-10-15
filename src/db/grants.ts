@@ -156,23 +156,25 @@ export function grantExistsGuard(id: string): SqlGuard {
   return { sql: 'EXISTS (SELECT 1 FROM grants WHERE id = ?)', binds: [id] };
 }
 
-/** Deletes the grants with these ids while `guard` holds (cascade deletes, see exactGrantSetGuard). */
+/**
+ * Deletes the grants with these ids while `guard` holds (cascade deletes, see exactGrantSetGuard).
+ * The ids are one JSON bind: D1 allows at most 100 bound parameters per statement.
+ */
 export function deleteGrantsByIdsStatement(
   db: D1Database,
   ids: readonly string[],
   guard: SqlGuard,
 ): D1PreparedStatement {
-  const unique = [...new Set(ids)];
-  const match = unique.length === 0 ? '0' : `id IN (${unique.map(() => '?').join(', ')})`;
   return db
-    .prepare(`DELETE FROM grants WHERE ${match} AND (${guard.sql})`)
-    .bind(...unique, ...guard.binds);
+    .prepare(`DELETE FROM grants WHERE id IN (SELECT value FROM json_each(?)) AND (${guard.sql})`)
+    .bind(JSON.stringify([...new Set(ids)]), ...guard.binds);
 }
 
 /**
  * The grants that reference `ownerId` (a service or a caller provider) are exactly `ids`: none was
  * added or removed since the admin confirmed the list. A cascade delete carries it on every
- * statement, so it deletes exactly what the confirmation showed, or nothing.
+ * statement, so it deletes exactly what the confirmation showed, or nothing. Its bind count is
+ * fixed (the ids are one JSON array), whatever the number of grants.
  */
 export function exactGrantSetGuard(
   column: 'service_id' | 'caller_provider_id',
@@ -182,11 +184,11 @@ export function exactGrantSetGuard(
   if (column !== 'service_id' && column !== 'caller_provider_id') {
     throw new Error(`exactGrantSetGuard: unknown column ${String(column)}`);
   }
-  const unique = [...new Set(ids)];
-  const others = unique.length === 0 ? '' : ` AND id NOT IN (${unique.map(() => '?').join(', ')})`;
+  const unique = JSON.stringify([...new Set(ids)]);
   return {
-    sql: `(SELECT count(*) FROM grants WHERE ${column} = ?) = ?
-      AND NOT EXISTS (SELECT 1 FROM grants WHERE ${column} = ?${others})`,
-    binds: [ownerId, unique.length, ownerId, ...unique],
+    sql: `(SELECT count(*) FROM grants WHERE ${column} = ?) = json_array_length(?)
+      AND NOT EXISTS (SELECT 1 FROM grants WHERE ${column} = ?
+        AND id NOT IN (SELECT value FROM json_each(?)))`,
+    binds: [ownerId, unique, ownerId, unique],
   };
 }

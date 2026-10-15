@@ -75,8 +75,13 @@ describe('POST /admin/export', () => {
       'attachment; filename="tokengate-export-2026-10-13.json"',
     );
     expect(res.headers.get('cache-control')).toContain('no-store');
-    const body = await res.json<{ schema_version: number; users: Array<{ email: string }> }>();
-    expect(body.schema_version).toBe(1);
+    const body = await res.json<{
+      schema_version: number;
+      claim_labels: unknown[];
+      users: Array<{ email: string }>;
+    }>();
+    expect(body.schema_version).toBe(2);
+    expect(body.claim_labels).toEqual([]);
     expect(body.users.map((user) => user.email)).toEqual(['admin@example.com']);
     expect(await auditActions()).toEqual(['config.export']);
   });

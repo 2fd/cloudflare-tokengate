@@ -9,6 +9,7 @@ import {
   AlertList,
   ApproveForm,
   AskSomeone,
+  CheckboxGroup,
   Choice,
   ConfirmDialog,
   DataTable,
@@ -21,6 +22,7 @@ import {
   RadioCards,
   Select,
   StatusBadge,
+  SubmitButtons,
   Tabs,
   TextArea,
 } from '../../../../src/admin/views/components';
@@ -145,6 +147,23 @@ describe('Field', () => {
     const email = tagWithId(html(<Field {...props} type="email" conditional />), 'input', 'f-host');
     expect(email).toContain('type="text"');
     expect(email).toContain('inputmode="email"');
+    // number and date would still block a hidden submit (badInput, step), so they become text.
+    const number = tagWithId(
+      html(<Field {...props} type="number" step={1} conditional />),
+      'input',
+      'f-host',
+    );
+    expect(number).toContain('type="text"');
+    expect(number).toContain('inputmode="numeric"');
+    expect(number).not.toContain('step=');
+    expect(
+      tagWithId(html(<Field {...props} type="number" step={1} />), 'input', 'f-host'),
+    ).toContain('step="1"');
+    const dateOut = html(<Field {...props} name="expires_on" type="date" conditional />);
+    const date = tagWithId(dateOut, 'input', 'f-expires_on');
+    expect(date).toContain('type="text"');
+    expect(date).toContain('aria-describedby="f-expires_on-hint"');
+    expect(dateOut).toContain('Use a date like 2027-01-31.');
   });
 
   it('keeps password managers and autofill away from secret inputs (A7.8)', () => {
@@ -228,6 +247,23 @@ describe('Select and Choice', () => {
     expect(out).not.toContain('type="radio"');
   });
 
+  it('renders the hint and error of a one-option choice at the field', () => {
+    const out = html(
+      <Choice
+        name="type"
+        label="Type"
+        options={options(1)}
+        hint="Fixed by the template."
+        error="Choose a type"
+      />,
+    );
+    expect(out).toContain('<div class="field" data-invalid="true">');
+    expect(out).toContain('<p class="hint" id="f-type-hint">Fixed by the template.</p>');
+    expect(out).toContain(
+      '<p class="field-error" id="f-type-error"><span class="vh">Error:</span> Choose a type</p>',
+    );
+  });
+
   it('renders 2 to 6 options as radio cards and 7 or more as a select', () => {
     for (const n of [2, 6]) {
       const out = html(<Choice name="type" label="Type" options={options(n)} />);
@@ -260,6 +296,63 @@ describe('Select and Choice', () => {
   });
 });
 
+describe('CheckboxGroup and SubmitButtons', () => {
+  it('marks the first checkbox of a group with an error as invalid', () => {
+    const out = html(
+      <CheckboxGroup
+        name="events"
+        legend="Events"
+        error="Choose at least one event"
+        options={[
+          { value: 'push', label: 'push' },
+          { value: 'tag', label: 'tag' },
+        ]}
+      />,
+    );
+    const first = tagWithId(out, 'input', 'f-events');
+    expect(first).toContain('aria-invalid="true"');
+    expect(first).toContain('aria-describedby="f-events-error"');
+    expect(tagWithId(out, 'input', 'f-events-1')).not.toContain('aria-invalid');
+  });
+
+  it('marks the current option visibly, not only for screen readers', () => {
+    const out = html(
+      <SubmitButtons
+        name="join_policy"
+        legend="Who can join"
+        options={[
+          { value: 'pending', label: 'Ask an owner first', current: true },
+          { value: 'closed', label: 'Only invited people' },
+        ]}
+      />,
+    );
+    expect(out).toContain('<span class="badge">Current</span>');
+    expect(out.match(/Current/g)).toHaveLength(1);
+    expect(out).not.toContain('class="vh"> (current)');
+  });
+
+  it('accepts only submits dialogs: a standalone one would nest a form in the surrounding form', () => {
+    const options: Parameters<typeof SubmitButtons>[0]['options'] = [
+      {
+        value: 'owner',
+        label: 'Owner',
+        confirm: {
+          id: 'o',
+          trigger: 'Owner…',
+          title: 'Owner?',
+          body: 'b',
+          confirmLabel: 'Yes',
+          // @ts-expect-error the standalone variant renders its own <form>
+          variant: 'standalone',
+          action: '/a',
+          csrf: 't',
+        },
+      },
+    ];
+    expect(options).toHaveLength(1);
+  });
+});
+
 describe('ErrorSummary', () => {
   it('is focused on load and links field errors to their controls', () => {
     const out = html(
@@ -270,8 +363,9 @@ describe('ErrorSummary', () => {
         ]}
       />,
     );
+    // role=group: ARIA does not let a plain div be named by aria-labelledby.
     expect(out).toContain(
-      '<div class="error-summary" tabindex="-1" autofocus="" aria-labelledby="es-h">',
+      '<div class="error-summary" role="group" tabindex="-1" autofocus="" aria-labelledby="es-h">',
     );
     expect(out).toContain('<h2 id="es-h">There is a problem</h2>');
     expect(out).toContain('<li><a href="#f-rules-0-path">Enter a path</a></li>');
@@ -533,6 +627,9 @@ describe('status, notices, tabs and AskSomeone', () => {
     expect(out).toContain('<a href="/admin/tokens">All tokens</a>');
     expect(out).toContain('name="_csrf" value="tok"');
     expect(out).toContain('name="enabled" value="1"');
+    // A <form> start tag closes an open <p>, so the actions are a div.
+    expect(out).toContain('<div class="actions"><a href="/admin/tokens">');
+    expect(out).not.toMatch(/<p\b[^>]*>(?:(?!<\/p>).)*<form/s);
     expect(html(<NoticeView csrf="t" notice={{ text: 'x' }} autofocus={false} />)).not.toContain(
       'autofocus',
     );
