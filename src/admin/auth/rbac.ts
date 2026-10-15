@@ -139,6 +139,7 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, RoutePermission>> = Obje
   'POST /admin/consumers': accessWrite,
   'GET /admin/consumers/:id': read,
   'POST /admin/consumers/:id': accessWrite,
+  'POST /admin/consumers/:id/tenants': accessWrite,
   'POST /admin/consumers/:id/toggle': accessWrite,
   'POST /admin/consumers/:id/delete': accessWrite,
   'GET /admin/access': read,
@@ -146,6 +147,7 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, RoutePermission>> = Obje
   'POST /admin/access': accessWrite,
   'GET /admin/access/:id': read,
   'POST /admin/access/:id': accessWrite,
+  'POST /admin/access/:id/copy': accessWrite,
   'POST /admin/access/:id/toggle': accessWrite,
   'POST /admin/access/:id/delete': accessWrite,
 

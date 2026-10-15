@@ -1,23 +1,25 @@
-// Grant admin pages through the real app: RBAC, GitHub builder and text conditions, warning
-// acknowledgement bound to the warnings shown, prefill from requests (verified only), escaping.
+// Consumer access pages through the real app: RBAC, the structured form with preselected consumer
+// and token, field errors, rows editor and anchors (I-AUTHZ-2), edit, toggle and delete, list
+// filters, prefill from a verified request (I-LOG-2), statuses and escaping.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { getGrant, listGrants } from '../../src/db/grants';
-import { insertRequestRecordsStatements } from '../../src/db/requests';
-import type { CallerProvider, User } from '../../src/db/types';
-import type { RequestRecord } from '../../src/telemetry/types';
+import type { CallerProvider } from '../../src/db/types';
+import { adminGet, adminPost } from '../helpers/admin-auth';
 import {
-  type AdminSession,
-  adminGet,
-  adminPost,
-  createUser,
-  loginAs,
-  resetControlPlane,
-} from '../helpers/admin-auth';
-import { createTestApp, type TestApp } from '../helpers/app';
+  auditActions,
+  type ConsumersWorld,
+  consumersWorld,
+  idFromLocation,
+  inputValue,
+  labels,
+  lastAudit,
+  locationOf,
+  requestRecord,
+  seedLabel,
+  seedRequests,
+} from '../helpers/consumers';
 import {
-  fakeNetwork,
-  KEK_1,
   OWNER_ID,
   REPOSITORY_ID,
   seedGithubProvider,
@@ -25,138 +27,109 @@ import {
   seedService,
 } from '../unit/admin/ops/helpers';
 
-let app: TestApp;
-let admin: AdminSession;
-let viewer: AdminSession;
+let world: ConsumersWorld;
 let provider: CallerProvider;
 let serviceId: string;
 
 beforeEach(async () => {
-  await resetControlPlane();
-  await env.DB.batch([
-    env.DB.prepare('DELETE FROM grants'),
-    env.DB.prepare('DELETE FROM services'),
-    env.DB.prepare('DELETE FROM caller_providers'),
-  ]);
-  await env.TELEMETRY_DB.prepare('DELETE FROM request_log').run();
-  app = createTestApp({ fetch: fakeNetwork().fetch, env: { TOKENGATE_KEK: KEK_1 } });
-  const adminUser: User = await createUser({ email: 'admin@example.com', role: 'admin' });
-  const viewerUser: User = await createUser({ email: 'viewer@example.com', role: 'viewer' });
-  admin = await loginAs(app, adminUser);
-  viewer = await loginAs(app, viewerUser);
-  provider = await seedGithubProvider(app.deps);
-  // Same base URL as the GitHub service template, whose starter rules prefill new grants.
-  serviceId = await seedService(app.deps);
+  world = await consumersWorld();
+  provider = await seedGithubProvider(world.app.deps);
+  serviceId = await seedService(world.app.deps);
 });
 
-/** Audit actions of grant changes. */
-async function grantAuditActions(): Promise<string[]> {
-  const { results } = await env.DB.prepare(
-    "SELECT action FROM audit_log WHERE target_type = 'grant' ORDER BY rowid",
-  ).all<{ action: string }>();
-  return results.map((row) => row.action);
-}
+const admin = () => world.sessions.admin;
 
-function presetFields(overrides: Record<string, string> = {}): Record<string, string> {
+function structured(overrides: Record<string, string | string[]> = {}) {
   return {
-    caller_provider_id: provider.id,
-    service_id: serviceId,
-    mode: 'preset',
-    name: 'main deploys',
-    owner_id: OWNER_ID,
-    repository_ids: REPOSITORY_ID,
+    consumer_id: provider.id,
+    token_id: serviceId,
+    repository: `acme/api (${REPOSITORY_ID})`,
     context: 'branch',
-    pattern: 'main',
-    require_protected_ref: '1',
-    rules_text: 'GET /repos/**',
-    enabled: '1',
+    branch: 'main',
+    ref_protection: 'protected',
+    op: 'read-repo',
+    expires: 'never',
     ...overrides,
   };
 }
 
-function advancedFields(overrides: Record<string, string> = {}): Record<string, string> {
-  return {
-    caller_provider_id: provider.id,
-    service_id: serviceId,
-    mode: 'advanced',
-    name: 'text grant',
-    conditions_text: `repository_owner_id exact ${OWNER_ID}\nrepository_id exact ${REPOSITORY_ID}`,
-    rules_text: 'GET /repos/**',
-    enabled: '1',
-    ...overrides,
-  };
+async function grantAudit(): Promise<string[]> {
+  return (await auditActions()).filter((action) => action.startsWith('grant.'));
 }
 
-function grantIdFrom(response: Response): string {
-  return (response.headers.get('location') ?? '').split('/')[3]?.split('?')[0] ?? '';
-}
-
-describe('grants: viewer', () => {
-  it('can read but not create, edit, toggle or delete', async () => {
-    const grant = await seedGrant(app.deps, provider.id, serviceId);
-    const list = await adminGet(app, viewer, '/admin/access');
-    expect(list.status).toBe(200);
-    const listHtml = await list.text();
-    expect(listHtml).toContain(grant.name);
-    expect(listHtml).not.toContain('Create a grant');
-    const detail = await (await adminGet(app, viewer, `/admin/access/${grant.id}`)).text();
-    expect(detail).toContain('repository_id exact 987654321');
-    expect(detail).not.toContain('Save changes');
-
-    expect((await adminGet(app, viewer, '/admin/access/new')).status).toBe(403);
-    for (const path of [
-      '/admin/access',
-      `/admin/access/${grant.id}`,
-      `/admin/access/${grant.id}/toggle`,
-      `/admin/access/${grant.id}/delete`,
-    ]) {
-      const res = await adminPost(app, viewer, path, { ...advancedFields(), enabled: '0' });
-      expect(res.status, path).toBe(403);
+describe('consumer access: viewer and token manager', () => {
+  it('can read the matrix, the list and an access but change nothing', async () => {
+    const grant = await seedGrant(world.app.deps, provider.id, serviceId, 'deploy');
+    for (const session of [world.sessions.viewer, world.sessions.token_manager]) {
+      const matrix = await (await adminGet(world.app, session, '/admin/access')).text();
+      expect(matrix).toContain('Which consumers can use which tokens');
+      expect(matrix).not.toContain('Give a consumer access');
+      const page = await (await adminGet(world.app, session, `/admin/access/${grant.id}`)).text();
+      expect(page).toContain('deploy');
+      expect(page).not.toContain('Change this access');
+      expect(page).not.toContain('Create copy');
+      expect((await adminGet(world.app, session, '/admin/access/new')).status).toBe(403);
+      for (const path of [
+        '/admin/access',
+        `/admin/access/${grant.id}`,
+        `/admin/access/${grant.id}/copy`,
+        `/admin/access/${grant.id}/toggle`,
+        `/admin/access/${grant.id}/delete`,
+      ]) {
+        const res = await adminPost(world.app, session, path, {
+          ...structured(),
+          confirm: '1',
+          enabled: '0',
+        });
+        expect(res.status, path).toBe(403);
+      }
     }
-    expect(await grantAuditActions()).toEqual(['grant.create']);
+    expect(await grantAudit()).toEqual(['grant.create']);
     expect((await getGrant(env.DB, grant.id))?.enabled).toBe(true);
   });
 });
 
-describe('grants: new form', () => {
-  it('asks for caller provider and service first', async () => {
-    const html = await (await adminGet(app, admin, '/admin/access/new')).text();
-    expect(html).toContain('Step 1 of 2');
-    expect(html).toContain(`<option value="${provider.id}"`);
-  });
-
-  it('points to the missing prerequisite when nothing is configured', async () => {
-    await env.DB.batch([
-      env.DB.prepare('DELETE FROM services'),
-      env.DB.prepare('DELETE FROM caller_providers'),
-    ]);
-    const html = await (await adminGet(app, admin, '/admin/access/new')).text();
-    expect(html).toContain('href="/admin/consumers/new"');
-  });
-
-  it('prefills the GitHub builder from the tenant pin and rules from the service template', async () => {
-    const res = await adminGet(
-      app,
-      admin,
-      `/admin/access/new?consumer=${provider.id}&token=${serviceId}`,
-    );
+describe('consumer access: the form', () => {
+  it('fixes the only consumer and token, and shows the template operations', async () => {
+    const res = await adminGet(world.app, admin(), '/admin/access/new');
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain(`name="owner_id" value="${OWNER_ID}"`);
-    expect(html).toContain('GET /repos/OWNER/REPO/**');
-    expect(html).toMatch(/name="require_protected_ref" value="1" checked/);
-    expect(html).toContain(
-      'Trusted events (event_name): push, workflow_dispatch, schedule, release',
-    );
+    expect(inputValue(html, 'consumer_id')).toBe(provider.id);
+    expect(inputValue(html, 'token_id')).toBe(serviceId);
+    expect(html).not.toContain('type="radio" id="f-consumer_id"');
+    expect(html).not.toContain('name="owner_id"');
+    expect(html).toContain('Read repository contents: GET /repos/‹repository›/**');
+    expect(html).toMatch(/name="op" value="read-repo" checked/);
+    expect(html).toMatch(/name="context" value="environment" checked/);
+    expect(html).toMatch(/name="ref_protection" value="protected" checked/);
+    // The only consumer and token are fixed and visible: the repository carries the A7.8 pattern,
+    // but not required: a workflow pin under More constraints may stand in for it.
+    expect(html).toMatch(/name="repository"[^>]*pattern="/);
+    expect(html).not.toMatch(/name="repository"[^>]*required/);
+    expect(html).toContain('placeholder="acme/api (89012345)"');
+    expect(html).not.toContain('name="name"');
+    expect(html).not.toContain('<script');
   });
-});
 
-describe('grants: create', () => {
-  it('creates a grant with the GitHub builder and writes one audit row', async () => {
-    const res = await adminPost(app, admin, '/admin/access', presetFields());
+  it('shows the repository label in the operation once the repository is known', async () => {
+    await seedLabel(provider.id, 'repository_id', REPOSITORY_ID, 'acme/api');
+    const html = await (await adminGet(world.app, admin(), '/admin/access/new')).text();
+    // The consumer's only repository is prefilled.
+    expect(inputValue(html, 'repository')).toBe(`acme/api (${REPOSITORY_ID})`);
+    expect(html).toContain(`<option value="acme/api (${REPOSITORY_ID})">`);
+  });
+
+  it('creates an access in one submit: derived name, label, literal rule, one audit row', async () => {
+    const res = await adminPost(world.app, admin(), '/admin/access', structured());
     expect(res.status).toBe(303);
-    expect(await grantAuditActions()).toEqual(['grant.create']);
-    const grant = await getGrant(env.DB, grantIdFrom(res));
+    expect(locationOf(res)).toMatch(/^\/admin\/access\/grt_[0-9A-Z]{26}\?notice=created$/);
+    const grant = await getGrant(env.DB, idFromLocation(locationOf(res)));
+    expect(grant).toMatchObject({
+      name: 'GitHub for acme/api (branch main)',
+      enabled: true,
+      expires_at: null,
+      rules: [{ methods: ['GET'], path: '/repos/acme/api/**' }],
+    });
     expect(grant?.conditions).toEqual([
       { claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID] },
       { claim: 'repository_id', match: 'exact', values: [REPOSITORY_ID] },
@@ -165,195 +138,288 @@ describe('grants: create', () => {
       { claim: 'event_name', match: 'exact', values: ['push', 'workflow_dispatch', 'schedule'] },
       { claim: 'ref_protected', match: 'exact', values: ['true'] },
     ]);
-    expect(grant?.rules).toEqual([{ methods: ['GET'], path: '/repos/**' }]);
-
-    const detail = await (await adminGet(app, admin, res.headers.get('location') ?? '')).text();
-    expect(detail).toContain('Grant created.');
-    expect(detail).toContain('Implicitly excluded events');
-    expect(detail).toContain('release and every other event_name value');
+    expect(await labels(provider.id)).toEqual([
+      { claim: 'repository_id', value: REPOSITORY_ID, label: 'acme/api' },
+    ]);
+    expect(await grantAudit()).toEqual(['grant.create']);
+    const page = await (await adminGet(world.app, admin(), locationOf(res))).text();
+    expect(page).toContain('Access created.');
+    expect(page).toContain('Typical subject claim: <code>repo:acme/api:ref:refs/heads/main</code>');
+    expect(page).toContain('outputs.proxy-base }}/github/&lt;path&gt;');
   });
 
-  it('requires acknowledging the exact warnings shown before saving', async () => {
-    const fields = presetFields({ require_protected_ref: '' });
-    const first = await adminPost(app, admin, '/admin/access', fields);
-    expect(first.status).toBe(422);
-    const html = await first.text();
-    expect(html).toContain('protected refs are not required');
-    expect(html).toContain('name="acknowledge_warnings"');
-    const digest = /name="warnings_digest" value="([0-9a-f]{64})"/.exec(html)?.[1];
-    expect(digest).toBeDefined();
-    expect(await grantAuditActions()).toEqual([]);
-
-    // A box ticked for other warnings does not count.
-    const stale = await adminPost(app, admin, '/admin/access', {
-      ...fields,
-      acknowledge_warnings: '1',
-      warnings_digest: '0'.repeat(64),
-    });
-    expect(stale.status).toBe(422);
-    expect(await grantAuditActions()).toEqual([]);
-
-    const saved = await adminPost(app, admin, '/admin/access', {
-      ...fields,
-      acknowledge_warnings: '1',
-      warnings_digest: digest ?? '',
-    });
-    expect(saved.status).toBe(303);
-    expect(await grantAuditActions()).toEqual(['grant.create']);
-  });
-
-  it('re-renders builder errors and unparseable text with 422 and no audit row', async () => {
-    const builder = await adminPost(
-      app,
-      admin,
-      '/admin/access',
-      presetFields({ owner_id: 'acme' }),
-    );
-    expect(builder.status).toBe(422);
-    expect(await builder.text()).toContain('owner ID must be the numeric ID');
-
-    const text = await adminPost(
-      app,
-      admin,
-      '/admin/access',
-      advancedFields({ conditions_text: 'repository_id equals 1', rules_text: 'GET repos' }),
-    );
-    expect(text.status).toBe(422);
-    const html = await text.text();
-    expect(html).toContain('condition line 1');
-    expect(html).toContain('rule line 1');
-    expect(html).toContain('repository_id equals 1');
-    expect(await grantAuditActions()).toEqual([]);
-  });
-
-  it('shows validation errors from the op (anchor rules) with 422 and no audit row', async () => {
+  it('re-renders field errors with the typed values, linking the summary to each field', async () => {
     const res = await adminPost(
-      app,
-      admin,
+      world.app,
+      admin(),
       '/admin/access',
-      advancedFields({ conditions_text: 'ref exact refs/heads/main\nref_protected exact true' }),
+      structured({ repository: 'acme/api', branch: '*', op: [] }),
     );
     expect(res.status).toBe(422);
-    expect(await res.text()).toContain('I-AUTHZ-2');
-    expect(await grantAuditActions()).toEqual([]);
+    const html = await res.text();
+    expect(html).toContain('<title>Error: Give a consumer access');
+    expect(html).toContain('href="#f-repository"');
+    expect(html).toContain('Add the numeric ID after the name, like acme/api (987654321).');
+    expect(html).toContain('gh api repos/acme/api --jq');
+    expect(html).toContain('href="#f-branch"');
+    expect(html).toContain('id="f-branch-error"');
+    expect(html).toContain('value="acme/api"');
+    expect(await grantAudit()).toEqual([]);
   });
 
-  it('stores an expiry given in UTC and can save the grant disabled', async () => {
-    const res = await adminPost(
-      app,
-      admin,
-      '/admin/access',
-      advancedFields({ expires_at: '2099-01-02T03:04', enabled: '' }),
-    );
-    expect(res.status).toBe(303);
-    const grant = await getGrant(env.DB, grantIdFrom(res));
-    expect(grant?.expires_at).toBe(Date.UTC(2099, 0, 2, 3, 4));
-    expect(grant?.enabled).toBe(false);
+  it('asks to choose an operation when none is chosen', async () => {
+    const res = await adminPost(world.app, admin(), '/admin/access', structured({ op: [] }));
+    expect(res.status).toBe(422);
+    expect(await res.text()).toContain('Choose at least one operation.');
   });
 
-  it('escapes grant names', async () => {
-    const res = await adminPost(
-      app,
-      admin,
+  it('adds an unknown organization in the same submit (new_owner)', async () => {
+    await seedLabel(provider.id, 'repository_owner_id', OWNER_ID, 'acme');
+    const first = await adminPost(
+      world.app,
+      admin(),
       '/admin/access',
-      advancedFields({ name: '<script>alert(1)</script>' }),
+      structured({ repository: 'acme-x/api (5)' }),
+    );
+    expect(first.status).toBe(422);
+    const html = await first.text();
+    expect(html).toContain('acme-x is not an organization of this consumer yet.');
+    expect(html).toContain('Add organization acme-x to this consumer');
+    expect(html).toContain('href="#f-new_owner"');
+    const second = await adminPost(
+      world.app,
+      admin(),
+      '/admin/access',
+      structured({ repository: 'acme-x/api (5)', new_owner: 'acme-x (7654321)' }),
+    );
+    expect(second.status).toBe(303);
+    expect((await auditActions()).slice(-2)).toEqual(['caller_provider.update', 'grant.create']);
+    const consumer = await env.DB.prepare('SELECT tenant_pin FROM caller_providers WHERE id = ?')
+      .bind(provider.id)
+      .first<{ tenant_pin: string }>();
+    expect(JSON.parse(consumer?.tenant_pin ?? '[]')[0].values).toEqual([OWNER_ID, '7654321']);
+  });
+
+  it('expires on a chosen day at the next 00:00 UTC, and refuses a past day', async () => {
+    const day = new Date(Date.now() + 10 * 86_400_000).toISOString().slice(0, 10);
+    const res = await adminPost(
+      world.app,
+      admin(),
+      '/admin/access',
+      structured({ expires: 'date', expires_on: day }),
     );
     expect(res.status).toBe(303);
-    for (const path of ['/admin/access', res.headers.get('location') ?? '']) {
-      const html = await (await adminGet(app, admin, path)).text();
-      expect(html).not.toContain('<script>alert(1)</script>');
-      expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
-    }
+    const grant = await getGrant(env.DB, idFromLocation(locationOf(res)));
+    expect(grant?.expires_at).toBe(Date.parse(`${day}T00:00:00Z`) + 86_400_000);
+    const past = await adminPost(
+      world.app,
+      admin(),
+      '/admin/access',
+      structured({ expires: 'date', expires_on: '2001-01-01' }),
+    );
+    expect(past.status).toBe(422);
+    expect(await past.text()).toContain('Choose a day from tomorrow to 5 years ahead.');
+  });
+
+  it('converts the structured input to rows without losing it, then saves rows', async () => {
+    const rows = await adminPost(world.app, admin(), '/admin/access', {
+      ...structured({ context: 'environment', environment: 'production' }),
+      _action: 'rows',
+    });
+    expect(rows.status).toBe(200);
+    const html = await rows.text();
+    expect(html).toContain('name="editor" value="rows"');
+    expect(html).toContain('value="production"');
+    expect(html).toContain(`value="${REPOSITORY_ID}"`);
+    expect(await grantAudit()).toEqual([]);
+
+    const unanchored = await adminPost(world.app, admin(), '/admin/access', {
+      consumer_id: provider.id,
+      token_id: serviceId,
+      editor: 'rows',
+      'cond.0.claim': 'repository_id',
+      'cond.0.match': 'exact',
+      'cond.0.values': REPOSITORY_ID,
+      'rule.0.m': 'GET',
+      'rule.0.path': '/repos/acme/api',
+      expires: 'never',
+    });
+    expect(unanchored.status).toBe(422);
+    const body = await unanchored.text();
+    expect(body).toContain('I-AUTHZ-2');
+    expect(body).toContain('href="#f-cond-0-values"');
+    // Read repository contents needs a repository label; rows mode has none.
+    const saved = await adminPost(world.app, admin(), '/admin/access', {
+      consumer_id: provider.id,
+      token_id: serviceId,
+      editor: 'rows',
+      'cond.0.claim': 'repository_owner_id',
+      'cond.0.values': OWNER_ID,
+      'cond.1.claim': 'repository_id',
+      'cond.1.values': `${REPOSITORY_ID}, 5`,
+      'cond.2.claim': 'ref_protected',
+      'cond.2.values': 'true',
+      'rule.0.m': ['GET', 'HEAD'],
+      'rule.0.path': '/repos/acme/**',
+      expires: 'never',
+    });
+    expect(saved.status).toBe(303);
+    const grant = await getGrant(env.DB, idFromLocation(locationOf(saved)));
+    expect(grant?.conditions[1]).toEqual({
+      claim: 'repository_id',
+      match: 'exact',
+      values: [REPOSITORY_ID, '5'],
+    });
+    expect(grant?.rules).toEqual([{ methods: ['GET', 'HEAD'], path: '/repos/acme/**' }]);
+  });
+
+  it('saves a workflow pin without a repository: every repository of the organization', async () => {
+    const workflow = 'acme/infra/.github/workflows/deploy.yml@refs/heads/main';
+    const res = await adminPost(world.app, admin(), '/admin/access', {
+      ...structured({ repository: '', workflow_ref: workflow, op: [] }),
+      'rule.0.m': 'GET',
+      'rule.0.path': '/repos/acme/**',
+    });
+    expect(res.status).toBe(303);
+    const grant = await getGrant(env.DB, idFromLocation(locationOf(res)));
+    expect(grant?.conditions).toContainEqual({
+      claim: 'repository_owner_id',
+      match: 'exact',
+      values: [OWNER_ID],
+    });
+    expect(grant?.conditions).toContainEqual({
+      claim: 'job_workflow_ref',
+      match: 'exact',
+      values: [workflow],
+    });
+    expect(grant?.conditions.some((c) => c.claim === 'repository_id')).toBe(false);
+  });
+
+  it('adds two more rows on request without writing anything', async () => {
+    const res = await adminPost(world.app, admin(), '/admin/access', {
+      ...structured(),
+      _action: 'add:rule',
+    });
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('name="rule.3.path"');
+    expect(html).toMatch(/id="row-rule-2"[^>]*autofocus/);
+    expect(await grantAudit()).toEqual([]);
+  });
+
+  it('points to the missing token when none exists', async () => {
+    await env.DB.prepare('DELETE FROM services').run();
+    const html = await (await adminGet(world.app, admin(), '/admin/access/new')).text();
+    expect(html).toContain('A token manager must add a service token first.');
   });
 });
 
-describe('grants: detail actions', () => {
-  it('edits conditions and rules as text', async () => {
-    const grant = await seedGrant(app.deps, provider.id, serviceId);
-    const res = await adminPost(app, admin, `/admin/access/${grant.id}`, {
-      name: 'renamed',
-      conditions_text: `repository_owner_id exact ${OWNER_ID}\nrepository_id exact ${REPOSITORY_ID}, 5`,
-      rules_text: 'GET,HEAD /repos/acme/**',
-    });
-    expect(res.status).toBe(303);
-    const updated = await getGrant(env.DB, grant.id);
-    expect(updated?.name).toBe('renamed');
-    expect(updated?.conditions[1]?.values).toEqual([REPOSITORY_ID, '5']);
-    expect(updated?.rules).toEqual([{ methods: ['GET', 'HEAD'], path: '/repos/acme/**' }]);
-    expect(await grantAuditActions()).toEqual(['grant.create', 'grant.update']);
+describe('consumer access: the page', () => {
+  it('shows the summary, the event line, the exact conditions and the status', async () => {
+    await seedLabel(provider.id, 'repository_id', REPOSITORY_ID, 'acme/api');
+    const grant = await seedGrant(world.app.deps, provider.id, serviceId, 'read repo');
+    const html = await (await adminGet(world.app, admin(), `/admin/access/${grant.id}`)).text();
+    expect(html).toContain('<h1>read repo</h1>');
+    expect(html).toContain(`href="/admin/consumers/${provider.id}"`);
+    expect(html).toContain(`href="/admin/access?repository=${REPOSITORY_ID}"`);
+    expect(html).toContain('any ref');
+    expect(html).toContain('Events accepted (event_name)');
+    expect(html).toContain('repository_owner_id exact 4242');
+    expect(html).toContain('Inactive: token has no credential');
+    expect(html).toContain(`href="/admin/requests?access=${grant.id}"`);
+    expect(html).toContain(`href="/admin/audit?target=${grant.id}"`);
   });
 
-  it('asks for acknowledgement when an edit introduces warnings', async () => {
-    const grant = await seedGrant(app.deps, provider.id, serviceId);
-    const res = await adminPost(app, admin, `/admin/access/${grant.id}`, {
-      name: grant.name,
-      conditions_text: `repository_owner_id exact ${OWNER_ID}\nrepository_id exact ${REPOSITORY_ID}\nevent_name exact pull_request_target`,
-      rules_text: 'GET /repos/**',
-    });
-    expect(res.status).toBe(422);
-    const html = await res.text();
-    expect(html).toContain('pwn request');
-    expect(html).toContain('pull_request_target (opted in)');
-    expect(await grantAuditActions()).toEqual(['grant.create']);
-  });
-
-  it('reports a save without changes as unchanged and writes nothing', async () => {
-    const grant = await seedGrant(app.deps, provider.id, serviceId);
-    const res = await adminPost(app, admin, `/admin/access/${grant.id}`, {
-      name: grant.name,
-      conditions_text: `repository_owner_id exact ${OWNER_ID}\nrepository_id exact ${REPOSITORY_ID}`,
-      rules_text: 'GET /repos/**',
+  it('edits the context, re-deriving a derived name; an unchanged save writes nothing', async () => {
+    const created = await adminPost(world.app, admin(), '/admin/access', structured());
+    const id = idFromLocation(locationOf(created));
+    const grant = await getGrant(env.DB, id);
+    if (!grant) throw new Error('missing');
+    const page = await (await adminGet(world.app, admin(), `/admin/access/${id}?open=edit`)).text();
+    expect(page).toMatch(/<details id="edit" open/);
+    expect(page).toMatch(/name="context" value="branch" checked/);
+    // Never expires: no "Keep" card repeating "Never"; Never is preselected.
+    expect(page).toMatch(/name="expires" value="never" checked/);
+    expect(page).not.toContain('value="keep"');
+    const same = await adminPost(world.app, admin(), `/admin/access/${id}`, {
+      ...structured({ expires: 'keep' }),
+      intent: 'save',
       expected_updated_at: String(grant.updated_at),
     });
-    expect(res.status).toBe(303);
-    expect(res.headers.get('location')).toBe(`/admin/access/${grant.id}?notice=unchanged`);
-    expect(await grantAuditActions()).toEqual(['grant.create']);
-    expect((await getGrant(env.DB, grant.id))?.updated_at).toBe(grant.updated_at);
-    const page = await (
-      await adminGet(app, admin, `/admin/access/${grant.id}?notice=unchanged`)
-    ).text();
-    expect(page).toContain('Nothing changed');
+    expect(same.status).toBe(303);
+    expect(locationOf(same)).toBe(`/admin/access/${id}?notice=unchanged`);
+    const changed = await adminPost(world.app, admin(), `/admin/access/${id}`, {
+      ...structured({ context: 'environment', environment: 'production', expires: 'keep' }),
+      intent: 'save',
+      expected_updated_at: String(grant.updated_at),
+    });
+    expect(changed.status).toBe(303);
+    expect(locationOf(changed)).toBe(`/admin/access/${id}?notice=updated`);
+    expect((await getGrant(env.DB, id))?.name).toBe('GitHub for acme/api (environment production)');
+    expect(await grantAudit()).toEqual(['grant.create', 'grant.update']);
+    const stale = await adminPost(world.app, admin(), `/admin/access/${id}`, {
+      ...structured({ expires: 'keep' }),
+      intent: 'save',
+      expected_updated_at: String(grant.updated_at),
+    });
+    expect(stale.status).toBe(409);
   });
 
-  it('requires acknowledgement for non-POST rules on a path-injection service', async () => {
-    const webhookId = await seedService(app.deps, {
-      slug: 'discord-webhook',
-      name: 'Discord webhook',
-      base_url: 'https://discord.com/api/webhooks',
-      injection: { kind: 'path' },
-      forward_headers: [],
+  it('a renamed access keeps its name on edit; rename is its own form', async () => {
+    const created = await adminPost(world.app, admin(), '/admin/access', structured());
+    const id = idFromLocation(locationOf(created));
+    const renamed = await adminPost(world.app, admin(), `/admin/access/${id}`, {
+      intent: 'rename',
+      name: 'Deploys <b>bold</b>',
+      description: 'ticket 42',
     });
-    const fields = advancedFields({ service_id: webhookId, rules_text: 'GET,POST /' });
-    const first = await adminPost(app, admin, '/admin/access', fields);
-    expect(first.status).toBe(422);
-    const html = await first.text();
-    expect(html).toContain('allow only POST');
-    expect(html).toContain('name="acknowledge_warnings"');
-    expect(await grantAuditActions()).toEqual([]);
-
-    const postOnly = await adminPost(app, admin, '/admin/access', {
-      ...fields,
-      rules_text: 'POST /',
+    expect(locationOf(renamed)).toBe(`/admin/access/${id}?notice=renamed`);
+    await adminPost(world.app, admin(), `/admin/access/${id}`, {
+      ...structured({ branch: 'release/*', expires: 'keep' }),
+      intent: 'save',
     });
-    expect(postOnly.status).toBe(303);
-    expect(await grantAuditActions()).toEqual(['grant.create']);
+    expect((await getGrant(env.DB, id))?.name).toBe('Deploys <b>bold</b>');
+    const html = await (await adminGet(world.app, admin(), `/admin/access/${id}`)).text();
+    expect(html).toContain('Deploys &lt;b&gt;bold&lt;/b&gt;');
+    expect(html).not.toContain('Deploys <b>bold</b>');
   });
 
-  it('disables, enables and deletes', async () => {
-    const grant = await seedGrant(app.deps, provider.id, serviceId);
-    const off = await adminPost(app, admin, `/admin/access/${grant.id}/toggle`, { enabled: '0' });
-    expect(off.status).toBe(303);
-    expect((await getGrant(env.DB, grant.id))?.enabled).toBe(false);
-    const on = await adminPost(app, admin, `/admin/access/${grant.id}/toggle`, { enabled: '1' });
-    expect(on.status).toBe(303);
-    expect((await getGrant(env.DB, grant.id))?.enabled).toBe(true);
-    const deleted = await adminPost(app, admin, `/admin/access/${grant.id}/delete`, {
+  it('a label change through a save is audited and named in the notice', async () => {
+    const created = await adminPost(world.app, admin(), '/admin/access', structured());
+    const id = idFromLocation(locationOf(created));
+    const res = await adminPost(world.app, admin(), `/admin/access/${id}`, {
+      ...structured({ repository: `acme/api-renamed (${REPOSITORY_ID})`, expires: 'keep' }),
+      intent: 'save',
+    });
+    expect(locationOf(res)).toBe(`/admin/access/${id}?notice=label_changed`);
+    expect(await lastAudit('grant.update')).toMatchObject({
+      labels: {
+        before: { [`repository_id:${REPOSITORY_ID}`]: 'acme/api' },
+        after: { [`repository_id:${REPOSITORY_ID}`]: 'acme/api-renamed' },
+      },
+    });
+  });
+
+  it('disables with an Undo from the list, and deletes only through the dialog', async () => {
+    const grant = await seedGrant(world.app.deps, provider.id, serviceId);
+    const off = await adminPost(world.app, admin(), `/admin/access/${grant.id}/toggle`, {
+      enabled: '0',
+      _return: 'list',
+    });
+    expect(locationOf(off)).toBe('/admin/access?view=list&notice=disabled');
+    const back = await adminPost(world.app, admin(), `/admin/access/${grant.id}/toggle`, {
+      enabled: '1',
+      _return: 'detail',
+    });
+    expect(locationOf(back)).toBe(`/admin/access/${grant.id}?notice=enabled`);
+    const unconfirmed = await adminPost(world.app, admin(), `/admin/access/${grant.id}/delete`);
+    expect(unconfirmed.status).toBe(400);
+    const deleted = await adminPost(world.app, admin(), `/admin/access/${grant.id}/delete`, {
       confirm: '1',
     });
-    expect(deleted.status).toBe(303);
-    expect(deleted.headers.get('location')).toBe('/admin/access?notice=deleted');
+    expect(locationOf(deleted)).toBe('/admin/access?notice=deleted');
     expect(await getGrant(env.DB, grant.id)).toBeNull();
-    expect(await grantAuditActions()).toEqual([
+    expect(await grantAudit()).toEqual([
       'grant.create',
       'grant.disable',
       'grant.enable',
@@ -361,230 +427,170 @@ describe('grants: detail actions', () => {
     ]);
   });
 
-  it('duplicates through a prefilled new-grant form', async () => {
-    const grant = await seedGrant(app.deps, provider.id, serviceId, 'original');
-    const detail = await (await adminGet(app, admin, `/admin/access/${grant.id}`)).text();
-    expect(detail).toContain(`/admin/access/new?duplicate=${grant.id}`);
-    const html = await (
-      await adminGet(app, admin, `/admin/access/new?duplicate=${grant.id}`)
-    ).text();
-    expect(html).toContain('value="original (copy)"');
-    expect(html).toContain(`repository_id exact ${REPOSITORY_ID}`);
-  });
-
-  it('filters the list by service and caller provider', async () => {
-    await seedGrant(app.deps, provider.id, serviceId, 'listed grant');
-    const match = await (
-      await adminGet(app, admin, `/admin/access?token=${serviceId}&consumer=${provider.id}`)
-    ).text();
-    expect(match).toContain('listed grant');
-    const other = await (await adminGet(app, admin, '/admin/access?token=svc_other')).text();
-    expect(other).not.toContain('listed grant');
-    expect(other).toContain('No grants match these filters.');
-  });
-
-  it('answers 404 for unknown ids', async () => {
-    expect((await adminGet(app, admin, '/admin/access/grt_missing')).status).toBe(404);
-    expect((await adminGet(app, admin, '/admin/access/new?duplicate=grt_missing')).status).toBe(
-      404,
-    );
-  });
-});
-
-describe('grants: prefill from a request (I-LOG-2)', () => {
-  function record(overrides: Partial<RequestRecord> = {}): RequestRecord {
-    return {
-      id: 'req_01JTESTREQUEST000000000000',
-      ts: Date.now(),
-      outcome: 'denied',
-      reason: 'no_matching_grant',
-      status: 403,
-      upstream_status: null,
-      method: 'GET',
-      path: '/repos/acme/app/contents/README.md',
-      service_slug: 'github',
-      service_id: serviceId,
-      caller_provider_id: provider.id,
-      grant_id: null,
-      claims_verified: 1,
-      caller_subject: 'repo:acme/app:ref:refs/heads/main',
-      caller_repository: 'acme/app',
-      caller_claims: JSON.stringify({
-        sub: 'repo:acme/app:ref:refs/heads/main',
-        repository: 'acme/app',
-        repository_id: REPOSITORY_ID,
-        repository_owner_id: OWNER_ID,
-        ref: 'refs/heads/main',
-        event_name: 'push',
-      }),
-      jti: null,
-      untrusted_iss: null,
-      eval_trace: null,
-      duration_ms: 5,
-      upstream_ms: null,
-      weight: 1,
-      ip: null,
-      user_agent: null,
-      colo: null,
-      ...overrides,
-    };
-  }
-
-  async function store(row: RequestRecord): Promise<void> {
-    await env.TELEMETRY_DB.batch(insertRequestRecordsStatements(env.TELEMETRY_DB, [row]));
-  }
-
-  it('prefills exact anchor, ref and event conditions and the denied call as a rule', async () => {
-    await store(record());
-    const res = await adminGet(
-      app,
-      admin,
-      '/admin/access/new?from_request=req_01JTESTREQUEST000000000000',
-    );
-    expect(res.status).toBe(200);
-    const html = await res.text();
-    expect(html).toContain('Prefilled from request req_01JTESTREQUEST000000000000');
-    expect(html).toContain(
-      [
-        `repository_owner_id exact ${OWNER_ID}`,
-        `repository_id exact ${REPOSITORY_ID}`,
-        'ref exact refs/heads/main',
-        'event_name exact push',
-      ].join('\n'),
-    );
-    expect(html).toContain('GET /repos/acme/app/contents/README.md');
-    expect(html).toContain('the rule matches exactly that call');
-  });
-
-  // A caller can put "*" in the path of a denied call; prefilled as is it would be a wildcard rule
-  // that the banner calls exact. "%2F" paths only match through "**" (I-AUTHZ-1).
-  it.each([
-    ['/repos/acme/app/**', 'req_01JTESTWILDCARD00000000000'],
-    ['/repos/acme/app/contents/a%2Fb', 'req_01JTESTENCODEDSLASH0000000'],
-  ])('does not prefill a rule for the path %s', async (path, id) => {
-    await store(record({ id, path }));
-    const res = await adminGet(app, admin, `/admin/access/new?from_request=${id}`);
-    expect(res.status).toBe(200);
-    const html = await res.text();
-    expect(html).toContain('No rule was prefilled');
-    expect(html).not.toContain('the rule matches exactly that call');
-    expect(html).not.toContain('GET /repos/acme/app/');
-    expect(html).toContain(`repository_id exact ${REPOSITORY_ID}`);
-  });
-
-  it('refuses unverified, allowed or unknown records with 400', async () => {
-    await store(record({ id: 'req_01JTESTUNVERIFIED00000000', claims_verified: 0 }));
-    await store(record({ id: 'req_01JTESTALLOWED00000000000', outcome: 'allowed', reason: null }));
-    await store(record({ id: 'req_01JTESTTENANT000000000000', reason: 'tenant_mismatch' }));
-    for (const id of [
-      'req_01JTESTUNVERIFIED00000000',
-      'req_01JTESTALLOWED00000000000',
-      'req_01JTESTTENANT000000000000',
-      'req_01JTESTMISSING00000000000',
-    ]) {
-      const res = await adminGet(app, admin, `/admin/access/new?from_request=${id}`);
-      expect(res.status, id).toBe(400);
-      expect(await res.text()).not.toContain('repository_id exact');
-    }
-    expect(await listGrants(env.DB)).toEqual([]);
-  });
-});
-
-describe('grants: review findings', () => {
-  it('deletes only with the confirmation box ticked', async () => {
-    const grant = await seedGrant(app.deps, provider.id, serviceId);
-    const detail = await (await adminGet(app, admin, `/admin/access/${grant.id}`)).text();
-    expect(detail).toContain(`action="/admin/access/${grant.id}/delete"`);
-    expect(detail).toContain('name="confirm"');
-
-    const unconfirmed = await adminPost(app, admin, `/admin/access/${grant.id}/delete`);
-    expect(unconfirmed.status).toBe(400);
-    expect(await unconfirmed.text()).toContain('Tick the confirmation box');
-    expect(await getGrant(env.DB, grant.id)).not.toBeNull();
-    expect(await grantAuditActions()).toEqual(['grant.create']);
-  });
-
-  it('refuses mutations without the CSRF token (I-CSRF-1)', async () => {
-    const grant = await seedGrant(app.deps, provider.id, serviceId);
-    for (const [path, fields] of [
-      ['/admin/access', advancedFields()],
-      [`/admin/access/${grant.id}`, { name: 'x' }],
-      [`/admin/access/${grant.id}/toggle`, { enabled: '0' }],
-      [`/admin/access/${grant.id}/delete`, { confirm: '1' }],
-    ] as const) {
-      const res = await adminPost(app, admin, path, fields, { csrf: null });
-      expect(res.status, path).toBe(403);
-    }
-    expect(await grantAuditActions()).toEqual(['grant.create']);
-    expect((await getGrant(env.DB, grant.id))?.enabled).toBe(true);
-  });
-
-  it('never echoes an unknown notice key', async () => {
-    const grant = await seedGrant(app.deps, provider.id, serviceId);
-    const html = await (
-      await adminGet(app, admin, `/admin/access/${grant.id}?notice=%3Cb%3Eowned%3C%2Fb%3E`)
-    ).text();
-    expect(html).not.toContain('owned');
-  });
-
-  it('explains why an enabled grant matches nothing', async () => {
-    const grant = await seedGrant(app.deps, provider.id, serviceId);
+  it('shows Expired and the inactive cause as words', async () => {
+    const grant = await seedGrant(world.app.deps, provider.id, serviceId);
+    await env.DB.prepare('UPDATE grants SET expires_at = ? WHERE id = ?')
+      .bind(Date.now() - 1000, grant.id)
+      .run();
+    expect(
+      await (await adminGet(world.app, admin(), `/admin/access/${grant.id}`)).text(),
+    ).toContain('Expired');
+    await env.DB.prepare('UPDATE grants SET expires_at = NULL WHERE id = ?').bind(grant.id).run();
     await env.DB.prepare('UPDATE caller_providers SET enabled = 0 WHERE id = ?')
       .bind(provider.id)
       .run();
-    await env.DB.prepare('UPDATE grants SET expires_at = 1 WHERE id = ?').bind(grant.id).run();
-    const html = await (await adminGet(app, admin, `/admin/access/${grant.id}`)).text();
-    expect(html).toContain('This grant has expired.');
-    expect(html).toContain('is disabled, so this grant matches nothing');
+    const html = await (await adminGet(world.app, admin(), `/admin/access/${grant.id}`)).text();
+    expect(html).toContain('Inactive: consumer disabled');
+    expect(html).toContain('Inactive because the consumer is disabled');
   });
 
-  it('escapes claim values from a request record in the prefilled form', async () => {
-    const claims = {
-      repository: 'acme/app',
-      repository_id: REPOSITORY_ID,
-      repository_owner_id: OWNER_ID,
-      ref: 'refs/heads/</textarea><script>alert(1)</script>',
-      event_name: 'push',
-    };
-    await env.TELEMETRY_DB.batch(
-      insertRequestRecordsStatements(env.TELEMETRY_DB, [
-        {
-          id: 'req_01JTESTXSS000000000000000',
-          ts: Date.now(),
-          outcome: 'denied',
-          reason: 'no_matching_grant',
-          status: 403,
-          upstream_status: null,
-          method: 'GET',
-          path: '/repos/acme/app',
-          service_slug: 'github',
-          service_id: serviceId,
-          caller_provider_id: provider.id,
-          grant_id: null,
-          claims_verified: 1,
-          caller_subject: 'repo:acme/app',
-          caller_repository: 'acme/app',
-          caller_claims: JSON.stringify(claims),
-          jti: null,
-          untrusted_iss: null,
-          eval_trace: null,
-          duration_ms: 1,
-          upstream_ms: null,
-          weight: 1,
-          ip: null,
-          user_agent: null,
-          colo: null,
-        },
-      ]),
+  it('answers 404 for unknown ids', async () => {
+    expect((await adminGet(world.app, admin(), '/admin/access/grt_missing')).status).toBe(404);
+    expect(
+      (await adminPost(world.app, admin(), '/admin/access/grt_missing', { intent: 'save' })).status,
+    ).toBe(404);
+  });
+});
+
+describe('consumer access: list and filters', () => {
+  it('filters by consumer and token, ignores unknown ids with a note, and says when nothing matches', async () => {
+    const otherService = await seedService(world.app.deps, { slug: 'other', name: 'Other' });
+    await seedGrant(world.app.deps, provider.id, serviceId, 'one');
+    await seedGrant(world.app.deps, provider.id, otherService, 'two');
+    const list = await (
+      await adminGet(world.app, admin(), `/admin/access?view=list&token=${serviceId}`)
+    ).text();
+    expect(list).toContain('Disable<span class="vh"> one</span>');
+    expect(list).not.toContain('Disable<span class="vh"> two</span>');
+    const unknown = await (
+      await adminGet(world.app, admin(), '/admin/access?consumer=cpr_gone')
+    ).text();
+    expect(unknown).toContain('That consumer no longer exists.');
+    const none = await (
+      await adminGet(world.app, admin(), '/admin/access?view=list&repository=nothing-here')
+    ).text();
+    expect(none).toContain('No consumer access matches these filters.');
+    expect(none).toContain('Clear filters');
+    expect((await adminGet(world.app, admin(), '/admin/access?status=bogus&view=x')).status).toBe(
+      200,
     );
+  });
+});
+
+describe('I-LOG-2: give access from a request, verified records only', () => {
+  const claims = {
+    sub: 'repo:acme/app:ref:refs/heads/main',
+    repository: 'acme/app',
+    repository_id: REPOSITORY_ID,
+    repository_owner_id: OWNER_ID,
+    ref: 'refs/heads/main',
+    ref_type: 'branch',
+    ref_protected: 'true',
+    event_name: 'push',
+  };
+
+  async function record(id: string, overrides: Parameters<typeof requestRecord>[0] | object = {}) {
+    await seedRequests([
+      requestRecord({
+        id,
+        service_id: serviceId,
+        caller_provider_id: provider.id,
+        caller_claims: JSON.stringify(claims),
+        ...overrides,
+      }),
+    ]);
+  }
+
+  it('prefills the structured fields and the call as an operation', async () => {
+    await record('req_01JTESTREQUEST00000000000A', { path: '/repos/acme/app/**x', method: 'GET' });
+    await record('req_01JTESTREQUEST00000000000B', {
+      path: '/repos/acme/app/contents',
+      method: 'GET',
+    });
+    const html = await (
+      await adminGet(
+        world.app,
+        admin(),
+        '/admin/access/new?from_request=req_01JTESTREQUEST00000000000B',
+      )
+    ).text();
+    expect(html).toContain('Prefilled from request');
+    expect(inputValue(html, 'repository')).toBe(`acme/app (${REPOSITORY_ID})`);
+    expect(html).toMatch(/name="context" value="branch" checked/);
+    expect(inputValue(html, 'branch')).toBe('main');
+    expect(html).toMatch(/name="ref_protection" value="protected" checked/);
+    expect(inputValue(html, 'rule.0.path')).toBe('/repos/acme/app/contents');
+    // Nothing is written by the prefill; the label is stored only on save.
+    expect(await labels()).toEqual([]);
+  });
+
+  it.each(['/repos/acme/app/**', '/repos/acme/app/contents/a%2Fb'])(
+    'does not prefill a rule for the path %s',
+    async (path) => {
+      await record('req_01JTESTREQUEST00000000000C', { path });
+      const html = await (
+        await adminGet(
+          world.app,
+          admin(),
+          '/admin/access/new?from_request=req_01JTESTREQUEST00000000000C',
+        )
+      ).text();
+      expect(html).toContain('No operation was prefilled');
+      expect(html).not.toContain(`value="${path}"`);
+    },
+  );
+
+  it('opens the rows editor with the warnings and their acknowledgement for an untrusted event', async () => {
+    await record('req_01JTESTREQUEST00000000000D', {
+      reason: 'event_not_trusted',
+      caller_claims: JSON.stringify({ ...claims, event_name: 'workflow_run' }),
+    });
+    const html = await (
+      await adminGet(
+        world.app,
+        admin(),
+        '/admin/access/new?from_request=req_01JTESTREQUEST00000000000D',
+      )
+    ).text();
+    expect(html).toContain('name="editor" value="rows"');
+    expect(html).toContain('value="workflow_run"');
+    expect(html).toContain('name="warnings_digest"');
+    expect(html).toMatch(/name="acknowledge_warnings"[^>]*required/);
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['an unverified record', { claims_verified: 0 }],
+    ['another reason', { reason: 'service_disabled' }],
+    ['a deleted consumer', { caller_provider_id: 'cpr_gone' }],
+  ])('refuses %s with 400', async (_name, overrides) => {
+    await record('req_01JTESTREQUEST00000000000E', overrides);
     const res = await adminGet(
-      app,
-      admin,
-      '/admin/access/new?from_request=req_01JTESTXSS000000000000000',
+      world.app,
+      admin(),
+      '/admin/access/new?from_request=req_01JTESTREQUEST00000000000E',
     );
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(400);
     const html = await res.text();
-    expect(html).not.toContain('<script>alert(1)</script>');
-    expect(html).toContain('&lt;/textarea&gt;&lt;script&gt;');
+    expect(html).toContain('<title>Error: Cannot give access from this request');
+    expect(html).toContain('This request cannot prefill the form.');
+  });
+});
+
+describe('consumer access: escaping', () => {
+  it('escapes labels and names in the matrix, the list, the form and the page', async () => {
+    await seedLabel(provider.id, 'repository_id', REPOSITORY_ID, '<script>x</script>');
+    const grant = await seedGrant(world.app.deps, provider.id, serviceId, '<img src=x>');
+    for (const path of [
+      '/admin/access',
+      '/admin/access?view=list',
+      '/admin/access/new',
+      `/admin/access/${grant.id}`,
+      `/admin/consumers/${provider.id}`,
+    ]) {
+      const html = await (await adminGet(world.app, admin(), path)).text();
+      expect(html, path).not.toContain('<script>x</script>');
+      expect(html, path).not.toContain('<img src=x>');
+    }
+    expect(await listGrants(env.DB)).toHaveLength(1);
   });
 });

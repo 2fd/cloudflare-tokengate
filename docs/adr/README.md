@@ -26,6 +26,7 @@ Each ADR uses the format from [0001](0001-record-architecture-decisions.md): Sta
 | [0018](0018-role-split-and-field-permissions.md) | Role split (token and access duties) and field permissions | Accepted |
 | [0019](0019-admin-information-architecture.md) | Admin information architecture and URL scheme | Accepted |
 | [0020](0020-sealed-credential-drafts.md) | Sealed credential drafts | Accepted |
+| [0021](0021-structured-consumer-access-and-labels.md) | Structured consumer access, claim labels and risk acceptance | Accepted |
 
 ## Adding an ADR
 

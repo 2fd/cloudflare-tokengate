@@ -478,7 +478,7 @@ describe('validateGrant', () => {
     validateGrant({ conditions, rules: r }, githubProfile, github);
 
   it('accepts an anchored grant', () => {
-    expect(check([owner, repo])).toEqual({ errors: [], warnings: [] });
+    expect(check([owner, repo])).toEqual({ errors: [], warnings: [], warningDetails: [] });
   });
 
   describe('I-CRED-1: path-injection services', () => {
@@ -490,6 +490,7 @@ describe('validateGrant', () => {
       expect(withService([{ methods: ['POST'], path: '/' }], path)).toEqual({
         errors: [],
         warnings: [],
+        warningDetails: [],
       });
     });
 
@@ -650,6 +651,26 @@ describe('validateGrant', () => {
       expect(warnings).toHaveLength(2);
       expect(warnings[0]).toContain('"pull_request" is not a trusted event');
       expect(warnings[1]).toContain('pwn request');
+    });
+
+    it('gives every warning a stable code, in the order of the messages (A7.7)', () => {
+      const ref = (value: string): Condition => ({ claim: 'ref', match: 'glob', values: [value] });
+      const event = (values: string[], match: 'exact' | 'glob' = 'exact'): Condition => ({
+        claim: 'event_name',
+        match,
+        values,
+      });
+      const codes = (conditions: Condition[]) => {
+        const result = check(conditions);
+        expect(result.warningDetails.map((detail) => detail.message)).toEqual(result.warnings);
+        return result.warningDetails.map((detail) => detail.code);
+      };
+      expect(codes([owner, repo, ref('refs/heads/**'), protectedRef])).toEqual(['broad_glob']);
+      expect(codes([owner, repo, ref('refs/heads/main')])).toEqual(['unprotected_ref']);
+      expect(codes([owner, repo, event(['push'], 'glob')])).toEqual(['event_glob']);
+      expect(codes([owner, repo, event(['pull_request'])])).toEqual(['pull_request']);
+      expect(codes([owner, repo, event(['workflow_run'])])).toEqual(['pwn_request']);
+      expect(codes([owner, repo, event(['dynamic'])])).toEqual(['untrusted_event']);
     });
 
     it('applies the same warnings to the GitLab claim names', () => {

@@ -3,101 +3,33 @@ import {
   eventSummary,
   formatConditions,
   formatRules,
-  parseConditions,
-  parseRules,
+  formatValueList,
+  parseValueList,
 } from '../../../src/admin/grant-text';
 import { PROFILES } from '../../../src/identity/profiles';
-import type { Condition, Rule } from '../../../src/policy/types';
-import { PROXY_METHODS } from '../../../src/policy/types';
 
-function conditions(text: string): Condition[] {
-  const parsed = parseConditions(text);
-  if (!parsed.ok) throw new Error(parsed.errors.join('; '));
-  return parsed.conditions;
-}
-
-describe('parseConditions', () => {
-  it('parses exact, glob, negation and value lists', () => {
-    expect(
-      conditions(
-        [
-          'repository_owner_id exact 4242',
-          'repository_id exact 1, 2,3',
-          'ref glob refs/heads/release/*',
-          'not event_name exact pull_request_target',
-        ].join('\n'),
-      ),
-    ).toEqual([
-      { claim: 'repository_owner_id', match: 'exact', values: ['4242'] },
-      { claim: 'repository_id', match: 'exact', values: ['1', '2', '3'] },
-      { claim: 'ref', match: 'glob', values: ['refs/heads/release/*'] },
-      { claim: 'event_name', match: 'exact', values: ['pull_request_target'], negate: true },
-    ]);
-  });
-
-  it('ignores blank lines, comments and surrounding whitespace; match is case-insensitive', () => {
-    expect(
-      conditions('\n  # owner\n  sub   EXACT   repo:acme/app:ref:refs/heads/main  \r\n'),
-    ).toEqual([{ claim: 'sub', match: 'exact', values: ['repo:acme/app:ref:refs/heads/main'] }]);
-  });
-
-  it('reads JSON-quoted claims and values', () => {
-    expect(conditions('"my claim" exact "a, b", " padded ", "", plain')).toEqual([
-      { claim: 'my claim', match: 'exact', values: ['a, b', ' padded ', '', 'plain'] },
-    ]);
-  });
-
-  it('treats a bare leading "not" as negation and a quoted "not" as a claim', () => {
-    expect(parseConditions('not exact v').ok).toBe(false);
-    expect(conditions('"not" exact v')).toEqual([{ claim: 'not', match: 'exact', values: ['v'] }]);
-    expect(conditions('not not exact v')).toEqual([
-      { claim: 'not', match: 'exact', values: ['v'], negate: true },
-    ]);
-  });
-
-  it('reports every bad line with its line number', () => {
-    const parsed = parseConditions(
-      ['ref exact main', 'ref contains main', 'ref exact', 'ref exact a,,b', 'x exact "open'].join(
-        '\n',
-      ),
-    );
-    expect(parsed.ok).toBe(false);
-    if (parsed.ok) return;
-    expect(parsed.errors).toHaveLength(4);
-    expect(parsed.errors[0]).toMatch(/^condition line 2: match must be "exact" or "glob"/);
-    expect(parsed.errors[1]).toMatch(/^condition line 3: .*at least one value/);
-    expect(parsed.errors[2]).toMatch(/^condition line 4: empty value/);
-    expect(parsed.errors[3]).toMatch(/^condition line 5: /);
-  });
-
-  it('rejects a trailing comma and text after a quoted value', () => {
-    expect(parseConditions('ref exact a,').ok).toBe(false);
-    expect(parseConditions('ref exact "a" b').ok).toBe(false);
-  });
-});
-
-describe('parseRules', () => {
-  it('parses method lists, * and paths', () => {
-    const parsed = parseRules('GET /repos/**\npost, put /chat.postMessage\n* /\n# comment');
-    expect(parsed).toEqual({
+describe('parseValueList', () => {
+  it('splits bare values on commas and trims them', () => {
+    expect(parseValueList(' 89012345, 89012346 ,x')).toEqual({
       ok: true,
-      rules: [
-        { methods: ['GET'], path: '/repos/**' },
-        { methods: ['POST', 'PUT'], path: '/chat.postMessage' },
-        { methods: ['*'], path: '/' },
-      ],
+      values: ['89012345', '89012346', 'x'],
+    });
+    expect(parseValueList('   ')).toEqual({ ok: true, values: [] });
+  });
+
+  it('reads JSON-quoted values, which may hold commas, quotes or nothing', () => {
+    expect(parseValueList('"a,b", "", " padded ", plain, "q\\"uote"')).toEqual({
+      ok: true,
+      values: ['a,b', '', ' padded ', 'plain', 'q"uote'],
     });
   });
 
-  it('requires methods and a path starting with /', () => {
-    const parsed = parseRules('GET repos/x\n/only-a-path\nGET /a b');
-    expect(parsed.ok).toBe(false);
-    if (parsed.ok) return;
-    expect(parsed.errors.map((error) => error.slice(0, 12))).toEqual([
-      'rule line 1:',
-      'rule line 2:',
-      'rule line 3:',
-    ]);
+  it('explains how to fix a malformed list', () => {
+    for (const text of ['a,,b', 'a,', '"open', '"a" b']) {
+      const parsed = parseValueList(text);
+      expect(parsed.ok, text).toBe(false);
+      if (!parsed.ok) expect(parsed.error).toMatch(/^(Remove|A quoted|Put a comma)/);
+    }
   });
 });
 
@@ -143,43 +75,22 @@ function randomText(next: () => number, maxLength: number, minLength = 0): strin
   return out;
 }
 
-function pick<T>(next: () => number, items: readonly T[]): T {
-  return items[Math.floor(next() * items.length)] as T;
-}
-
 describe('round trip', () => {
-  it('parseConditions(formatConditions(x)) returns x for arbitrary claims and values', () => {
+  it('parseValueList(formatValueList(x)) returns x for arbitrary values', () => {
     for (let seed = 1; seed <= 300; seed++) {
       const next = prng(seed);
-      const input: Condition[] = [];
-      const count = 1 + Math.floor(next() * 5);
-      for (let i = 0; i < count; i++) {
-        const condition: Condition = {
-          claim: next() < 0.1 ? pick(next, ['not', 'exact', '#c']) : randomText(next, 12, 1),
-          match: pick(next, ['exact', 'glob'] as const),
-          values: Array.from({ length: 1 + Math.floor(next() * 4) }, () => randomText(next, 10)),
-        };
-        if (next() < 0.3) condition.negate = true;
-        input.push(condition);
-      }
-      const text = formatConditions(input);
-      expect(text.split('\n')).toHaveLength(input.length);
-      const parsed = parseConditions(text);
-      expect(parsed, `seed ${seed}: ${text}`).toEqual({ ok: true, conditions: input });
+      const input = Array.from({ length: 1 + Math.floor(next() * 4) }, () => randomText(next, 10));
+      const text = formatValueList(input);
+      expect(parseValueList(text), `seed ${seed}: ${text}`).toEqual({ ok: true, values: input });
     }
   });
 
-  it('parseRules(formatRules(x)) returns x for valid rules', () => {
-    const methods = [...PROXY_METHODS, '*'] as const;
-    for (let seed = 1; seed <= 300; seed++) {
-      const next = prng(seed);
-      const input: Rule[] = Array.from({ length: 1 + Math.floor(next() * 4) }, () => ({
-        methods: Array.from({ length: 1 + Math.floor(next() * 3) }, () => pick(next, methods)),
-        path: `/${Array.from({ length: Math.floor(next() * 4) }, () => pick(next, ['a', '*', '**', 'x.y', '%2F', 'v1'])).join('/')}`,
-      }));
-      const text = formatRules(input);
-      expect(parseRules(text), `seed ${seed}: ${text}`).toEqual({ ok: true, rules: input });
-    }
+  it('formats conditions with the same value lists', () => {
+    expect(
+      formatConditions([{ claim: 'x', match: 'exact', values: ['a,b', 'c'] }]).endsWith(
+        formatValueList(['a,b', 'c']),
+      ),
+    ).toBe(true);
   });
 });
 

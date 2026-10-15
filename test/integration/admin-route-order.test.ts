@@ -45,10 +45,10 @@ describe('I-RBAC-1: static admin routes are registered before their :id siblings
   it.each([
     ['/admin/tokens/keys', '<title>Encryption keys – Service tokens – tokengate</title>'],
     ['/admin/tokens/hosts', '<title>Allowed hosts – Service tokens – tokengate</title>'],
-    ['/admin/access/new', '<title>Create a grant – Service consumers – tokengate</title>'],
+    ['/admin/access/new', '<title>Give a consumer access – Service consumers – tokengate</title>'],
     [
       '/admin/consumers/new',
-      '<title>Add a caller provider – Service consumers – tokengate</title>',
+      '<title>Add a service consumer – Service consumers – tokengate</title>',
     ],
     ['/admin/users/sign-in', '<title>Sign-in – Users – tokengate</title>'],
   ])('GET %s renders its own page', async (path, title) => {

@@ -157,6 +157,15 @@ export function callerProviderEnabledGrantsUnchangedGuard(
   };
 }
 
+/**
+ * Defers foreign key checks to the end of the batch's transaction (D1 runs a batch as one
+ * transaction and resets the pragma after it). A cascade delete uses it to delete the caller
+ * provider before its grants, so every statement still sees the grant set its guard checks.
+ */
+export function deferForeignKeysStatement(db: D1Database): D1PreparedStatement {
+  return db.prepare('PRAGMA defer_foreign_keys = on');
+}
+
 /** The caller provider exists and no grant references it (grants are deleted first). */
 export function callerProviderUnreferencedGuard(id: string): SqlGuard {
   return {

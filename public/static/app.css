@@ -372,3 +372,52 @@ details.advanced[open] > .stack { margin-block-start: .75rem; }
 #danger .actions { margin: .5rem 0; }
 
 /* == section: consumers == */
+/* Add-a-consumer panel: the summary reads as the page's primary action. */
+details.primary-action > summary {
+  display: inline-flex; align-items: center; min-block-size: 2.5rem; padding: .4rem 1rem;
+  border: 1px solid var(--accent); border-radius: 4px; background: var(--accent); color: var(--on-accent); }
+details.primary-action[open] > summary { margin-block-end: 1rem; }
+.inline-details { display: inline-block; }
+.inline-details > summary { display: inline-flex; align-items: center; min-block-size: 2.5rem; color: var(--accent); }
+.inline-details[open] { display: block; inline-size: 100%; }
+.status-line, .relationship { margin: .25rem 0 .75rem; }
+.risk { padding: .5rem .75rem; border-inline-start: 4px solid var(--warn); background: var(--warn-bg); }
+.prefill { padding: .75rem 1rem; margin: 0 0 1rem; background: var(--info-bg); }
+.prefill p { margin: 0; }
+.copyable { user-select: all; white-space: pre; overflow-x: auto; }
+.quick-links { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; margin: .5rem 0 1rem; padding: 0; list-style: none; }
+.quick-links a { display: inline-flex; align-items: center; min-block-size: 1.75rem; }
+.access-block h3 { margin-block-end: .25rem; }
+.tenants { display: grid; gap: .5rem; padding-inline-start: 1.25rem; }
+.tenants .hint { margin: .2rem 0 0; }
+.confirm-trust ul { margin: .25rem 0 0; }
+/* The access form: each consumer, type or token branch reveals its own fieldsets. */
+.access-form fieldset.group { display: grid; gap: .75rem; }
+.access-form fieldset.jobs, .access-form fieldset.ops { display: grid; gap: .75rem; }
+.access-form .ack { border: 2px solid var(--warn); background: var(--warn-bg); }
+.access-form .warnings { margin: 0; padding-inline-start: 1.25rem; }
+/* Protected refs is a choice only for a context with a name or pattern (A14.4). */
+.jobs:has(input[name$="context"][value="protected"]:checked) .protection,
+.jobs:has(input[name$="context"][value="pull_request"]:checked) .protection,
+.jobs:has(input[name$="context"][value="any"]:checked) .protection { display: none; }
+.jobs details.more > summary, .ops details.other-ops > summary { min-block-size: 2.5rem; display: flex; align-items: center; }
+/* The matrix scrolls inside its region; its headers stay in view (WCAG 1.4.10, 2.4.11). */
+.matrix { max-inline-size: 100%; max-block-size: 70vh; overflow: auto; margin: 0 0 1rem;
+  scroll-padding-block-start: 4rem; scroll-padding-inline-start: 14rem; border: 1px solid var(--line); }
+.matrix table { inline-size: max-content; min-inline-size: 100%; border: 0; }
+.matrix thead th, .matrix thead td { position: sticky; inset-block-start: 0; z-index: 2; background: var(--panel);
+  min-inline-size: 10rem; vertical-align: bottom; }
+.matrix thead td.corner { inset-inline-start: 0; z-index: 3; }
+.matrix tbody th[scope="row"] { position: sticky; inset-inline-start: 0; z-index: 1; background: var(--panel);
+  max-inline-size: 14rem; overflow-wrap: anywhere; font-weight: 500; }
+.matrix th[scope="rowgroup"] { background: var(--bg); text-align: start; }
+.matrix .column-status { display: block; font-weight: 400; color: var(--muted); }
+.cell-accesses { display: grid; gap: .5rem; margin: 0; padding: 0; list-style: none; }
+.access-line { display: inline-block; min-block-size: 1.75rem; color: var(--fg); }
+.add-access { display: inline-flex; align-items: center; justify-content: center; min-inline-size: 1.75rem;
+  min-block-size: 1.75rem; border: 1px dashed var(--control-border); border-radius: 4px; text-decoration: none;
+  font-weight: 700; }
+.no-access { color: var(--muted); }
+@media (forced-colors: active) {
+  .add-access, .access-line .badge { border: 1px solid CanvasText; }
+}

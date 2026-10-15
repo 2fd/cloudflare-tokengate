@@ -335,6 +335,21 @@ export async function discoverJwksUri(
   issuer: string,
   fetchFn: typeof fetch,
 ): Promise<{ ok: true; jwksUri: string } | { ok: false; error: string }> {
+  const discovered = await discoverIssuer(issuer, fetchFn);
+  return discovered.ok ? { ok: true, jwksUri: discovered.jwksUri } : discovered;
+}
+
+/**
+ * discoverJwksUri plus the document's `id_token_signing_alg_values_supported` (null when absent
+ * or not a list of strings). The algorithms are a default for the admin to keep, never trusted
+ * without the I-JWT-1 check of validateCallerProvider.
+ */
+export async function discoverIssuer(
+  issuer: string,
+  fetchFn: typeof fetch,
+): Promise<
+  { ok: true; jwksUri: string; signingAlgs: string[] | null } | { ok: false; error: string }
+> {
   if (!isHttpsUrl(issuer)) return { ok: false, error: 'issuer must be an https URL' };
   const url = `${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`;
   let response: Response;
@@ -367,7 +382,10 @@ export async function discoverJwksUri(
   if (typeof jwksUri !== 'string' || !isJwksUri(jwksUri)) {
     return { ok: false, error: 'the discovery document has no https jwks_uri without query' };
   }
-  return { ok: true, jwksUri };
+  const algs = (document as Record<string, unknown>).id_token_signing_alg_values_supported;
+  const signingAlgs =
+    Array.isArray(algs) && algs.every((alg) => typeof alg === 'string') ? (algs as string[]) : null;
+  return { ok: true, jwksUri, signingAlgs };
 }
 
 /** https, no userinfo, no fragment. */
