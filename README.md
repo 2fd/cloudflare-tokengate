@@ -72,8 +72,7 @@ Then attach a custom domain, put `/admin` behind a Cloudflare Access application
 
 ```sh
 pnpm install
-pnpm run setup          # copies .dev.vars.example to .dev.vars; works as is
-pnpm db:migrate:local   # creates the local databases
+pnpm run setup          # copies .dev.vars.example to .dev.vars and recreates the local databases
 pnpm dev                # http://localhost:8787/admin, signed in as AUTH_ACCESS_DEVELOPMENT
 ```
 

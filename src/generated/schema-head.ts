@@ -2,7 +2,7 @@
 // whether the database schema is behind it (src/db/migrations.ts). test/unit/schema-head.test.ts
 // fails when this drifts from migrations/ or migrations-telemetry/.
 export const SCHEMA_HEAD = {
-  DB: '0002_admin_redesign.sql',
+  DB: '0001_initial.sql',
   TELEMETRY_DB: '0001_initial.sql',
 } as const;
 

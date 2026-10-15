@@ -28,7 +28,7 @@ version's variables. The upstream host allowlist and the admin hosts are stored 
 does not change them.
 
 For local development (`pnpm dev`), put all variables and secrets in `.dev.vars`. `pnpm run setup`
-creates it from `.dev.vars.example` ([CONTRIBUTING.md](../CONTRIBUTING.md#set-up)). The example lists
+creates it from `.dev.vars.example` and recreates the local databases ([CONTRIBUTING.md](../CONTRIBUTING.md#set-up)). The example lists
 every variable and secret with a comment, except `TOKENGATE_KEYRING`, which it only mentions. It
 works with `pnpm dev` as is:
 

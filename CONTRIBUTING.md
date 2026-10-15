@@ -32,18 +32,14 @@ Steps:
    pnpm run setup
    ```
 
-   It copies `.dev.vars.example` to `.dev.vars` (git-ignored). It overwrites an existing `.dev.vars`.
+   It copies `.dev.vars.example` to `.dev.vars` (git-ignored), overwriting an existing `.dev.vars`.
+   Then it deletes the local databases (`.wrangler/state/v3/d1`) and creates new ones with every
+   migration applied. Run it again whenever you want a clean local state.
    Write `pnpm run setup`: `pnpm setup` is a built-in pnpm command. The copy works as is: it sets
    the public development key in `TOKENGATE_KEK` and `AUTH_ACCESS_DEVELOPMENT=dev@example.com`. You do
    not need to edit it.
 
-3. Create the local databases:
-
-   ```sh
-   pnpm db:migrate:local
-   ```
-
-4. Start the Worker and open `http://localhost:8787/admin`:
+3. Start the Worker and open `http://localhost:8787/admin`:
 
    ```sh
    pnpm dev
@@ -80,7 +76,7 @@ You do not need a Cloudflare account or Cloudflare Access to run the tests: they
 | `pnpm test` | Vitest inside workerd (`@cloudflare/vitest-plugin`) with local D1 databases. |
 | `pnpm test:watch` | Vitest in watch mode. |
 | `pnpm test:scripts` | Shell checks: `scripts/check-config.sh`, `scripts/check-threat-ids.sh`, `test/security/check-config-test.sh`, `test/security/get-token-action.sh`, `scripts/check-links.mjs`. |
-| `pnpm run setup` | Copies `.dev.vars.example` to `.dev.vars` for local development. It overwrites an existing `.dev.vars`. |
+| `pnpm run setup` | Copies `.dev.vars.example` to `.dev.vars` (overwriting it), deletes the local D1 databases and recreates them with every migration applied. |
 | `pnpm dev` | `wrangler dev` with `.dev.vars`. |
 | `pnpm db:migrate:local` | Applies `migrations/` to `DB` and `migrations-telemetry/` to `TELEMETRY_DB`, locally. |
 | `pnpm keyring generate` / `pnpm keyring check` | Generates a key, or validates a `TOKENGATE_KEK` or `TOKENGATE_KEYRING` value read from stdin. See [docs/operations/key-rotation.md](docs/operations/key-rotation.md). |

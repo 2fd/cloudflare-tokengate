@@ -40,9 +40,10 @@ export function SetupInstructions(props: { host: string }) {
       <ul>
         <li>
           Run <code>pnpm run setup</code>: it copies a working <code>.dev.vars</code> that sets{' '}
-          <code>AUTH_ACCESS_DEVELOPMENT</code>. Then open <code>http://localhost:8787/admin</code>.
-          Every admin request to localhost, 127.0.0.1 or [::1] is then signed in as that email,
-          without any check. It is refused on any other hostname.
+          <code>AUTH_ACCESS_DEVELOPMENT</code> and recreates the local databases. Then open{' '}
+          <code>http://localhost:8787/admin</code>. Every admin request to localhost, 127.0.0.1 or
+          [::1] is then signed in as that email, without any check. It is refused on any other
+          hostname.
         </li>
       </ul>
     </>

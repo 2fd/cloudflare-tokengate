@@ -23,7 +23,7 @@ The admin UI has four sections: Monitoring, Users, Service tokens and Service co
 
 #### Upgrade notes for the redesign
 
-- **Roles.** `migrations/0002_admin_redesign.sql` rebuilds the `users` and `user_identities` tables to allow the roles `token_manager` and `access_manager`. Every row is kept, and `admin` keeps everything it could do before. Take a D1 backup before you apply it ([docs/operations/upgrades.md](docs/operations/upgrades.md#migration-policy)).
+- **Roles and schema.** The roles `token_manager` and `access_manager`, the `claim_labels` table and `services.template_id` are part of `migrations/0001_initial.sql`; there is no second migration. Local databases made before this change must be recreated: run `pnpm run setup`. `admin` keeps everything it could do before.
 - **URLs.** There are no redirects from the old URLs (`/admin/services*`, `/admin/caller-providers*`, `/admin/grants*`, `/admin/settings*`). They show the "Page not found" page with a hint to the new page. Update bookmarks and links in runbooks.
 - **Export schema 2.** The configuration export has `schema_version` 2. Each service has a `template_id` (the service template it was made from, or `null` for a custom service), a new `claim_labels` array holds the display labels of numeric IDs per caller provider, and `users` can have the roles `token_manager` and `access_manager`. Tools that read version 1 must accept these fields. The export never contains secrets or row IDs.
 
@@ -46,7 +46,7 @@ The admin UI has four sections: Monitoring, Users, Service tokens and Service co
 - **Deploy to Cloudflare** support: binding descriptions in `package.json`, `.dev.vars.example`, and `pnpm run deploy`, which applies both migrations before it deploys.
 - **Upstream host allowlist in Settings.** Owners list the hosts that services may use ("Upstream hosts", audit action `settings.upstream_hosts`). Empty, the default, allows any public https host. See [docs/configuration.md](docs/configuration.md#upstream-host-allowlist).
 - **Admin hosts in Settings.** `/admin` answers only on the hostnames that owners list in Settings > "Admin hosts" (audit action `settings.admin_hosts`). The first sign-in stores its hostname as the first entry. Entries are exact hostnames or `*.<domain>`. A save cannot empty the list or drop the hostname in use. See [docs/configuration.md](docs/configuration.md#admin-hosts) and [ADR 0016](docs/adr/0016-admin-hosts-in-settings.md).
-- **`pnpm run setup`** copies `.dev.vars.example` to `.dev.vars` for local development. The copy works with `pnpm dev` as is: it sets a public development key in `TOKENGATE_KEK` and `AUTH_ACCESS_DEVELOPMENT=dev@example.com`. The keyring refuses that key (`dev_placeholder_key`) unless `AUTH_ACCESS_DEVELOPMENT` is set and no Access variable is set. See [CONTRIBUTING.md](CONTRIBUTING.md#set-up) and [docs/configuration.md](docs/configuration.md#development-key).
+- **`pnpm run setup`** copies `.dev.vars.example` to `.dev.vars` for local development. It also deletes the local D1 databases (`.wrangler/state/v3/d1`) and applies the migrations to new ones. The copy works with `pnpm dev` as is: it sets a public development key in `TOKENGATE_KEK` and `AUTH_ACCESS_DEVELOPMENT=dev@example.com`. The keyring refuses that key (`dev_placeholder_key`) unless `AUTH_ACCESS_DEVELOPMENT` is set and no Access variable is set. See [CONTRIBUTING.md](CONTRIBUTING.md#set-up) and [docs/configuration.md](docs/configuration.md#development-key).
 
 ### Security
 
@@ -79,7 +79,7 @@ Each item links to its invariant in [docs/threat-model.md](docs/threat-model.md)
 ### Upgrade notes
 
 - This is the first release. There is no upgrade path from earlier development snapshots: deploy it into new D1 databases.
-- Schema heads: `migrations/0002_admin_redesign.sql` (`DB`) and `migrations-telemetry/0001_initial.sql` (`TELEMETRY_DB`). `pnpm run deploy` applies both.
+- Schema heads: `migrations/0001_initial.sql` (`DB`) and `migrations-telemetry/0001_initial.sql` (`TELEMETRY_DB`). `pnpm run deploy` applies both.
 - The admin UI needs a custom domain behind an Access application. On a `workers.dev` hostname only `/proxy` and the health endpoints work. Sign in first on the custom domain: that hostname becomes the first admin host.
 - `wrangler.jsonc` declares no `vars`. Set operator variables in the Cloudflare dashboard; deploys keep them. See [docs/configuration.md](docs/configuration.md).
 - Set `AUTH_ACCESS_TEAM_DOMAIN` and `AUTH_ACCESS_AUD` before you add services, and keep their exact values with the KEK. A later change requires every credential to be entered again ([docs/configuration.md](docs/configuration.md#login-binding)).

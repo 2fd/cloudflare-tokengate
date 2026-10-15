@@ -78,12 +78,6 @@ Each database has its own directory: `migrations/` for `DB`, `migrations-telemet
 - A column or table that the code stops using is dropped one minor release later at the earliest,
   not in the same release (`migrations/0001_initial.sql` header).
 - A change that cannot be additive needs an ADR and exact operator steps in the "Upgrade notes".
-- One migration is not additive: `migrations/0002_admin_redesign.sql` rebuilds `users` and
-  `user_identities` to allow the roles `token_manager` and `access_manager`
-  ([ADR 0018](../adr/0018-role-split-and-field-permissions.md)). Download the configuration export
-  and take a D1 backup ([backup-restore.md](backup-restore.md)) before you apply it. Every row is kept;
-  the earlier code keeps working on the new schema, because it never writes the new roles and refuses
-  roles it does not know.
 - The CHANGELOG lists every migration under "Upgrade notes".
 
 Migrations run before the new code is deployed. Because they are additive, the old code keeps working

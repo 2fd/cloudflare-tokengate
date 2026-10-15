@@ -37,7 +37,7 @@ The export holds every user's email and both halves of the policy. It contains n
 - **Export.** `config:export` is held by admins and owners only.
 - **Access to any service.** An access manager can create a grant for any service, in any state. The grant form shows a service's name, slug, host, injection kind and whether a credential is set, never the credential hint. Token managers cannot create, change or delete grants; to stop use of a credential, they disable the service.
 - **Join roles.** New users can join with any role except `owner` (I-LINK-1).
-- **Schema.** `users.role` accepts the five values. SQLite cannot change a CHECK constraint in place, so `migrations/0002_admin_redesign.sql` rebuilds `users` and `user_identities`, keeping every row and the last-owner triggers (I-OWNER-1). It is the one exception to the additive migration policy ([upgrades.md](../operations/upgrades.md#migration-policy)).
+- **Schema.** `users.role` accepts the five values. The CHECK constraint is in `migrations/0001_initial.sql`; the project has no release yet, so the initial migration holds it instead of a table rebuild. The last-owner triggers (I-OWNER-1) are unchanged.
 
 ## Consequences
 
