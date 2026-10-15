@@ -46,3 +46,12 @@ The upstream host allowlist moved from a variable to Settings for the same reaso
 - An owner cannot remove the hostname in use. A stored value that is not valid, or a lost domain, closes `/admin` everywhere. Recovery is a `wrangler d1 execute` on the `settings` table ([break-glass](../operations/break-glass.md#lost-admin-host)). Deleting the row opens `/admin` on every non-`workers.dev` hostname again.
 - A wildcard admin host also blocks every host below it as an upstream.
 - `wrangler.jsonc` still sets `keep_vars: true`. A blank committed `AUTH_ACCESS_AUD` would turn off admin sign-in, so `scripts/check-config.sh` still rejects blank variables.
+
+## Note (2026-10-15)
+
+The admin hosts moved from Settings to Users › Sign-in ([ADR 0019](0019-admin-information-architecture.md)). The decision is unchanged; only the editing changed:
+
+- One host per change: `POST /admin/users/sign-in/hosts` with `add=<host>` or `remove=<host>`, instead of a textarea with the whole list. A pasted URL is reduced to its hostname.
+- The lock-out guard is "the list still matches the hostname in use, wildcards included, and is not empty". So the explicit entry of the hostname in use can be removed while a `*.<domain>` entry still covers it. "Remove…" is offered only for such entries, behind a confirmation.
+- While no list is set, one button pins the console to the hostname in use.
+- The write is guarded on the stored value it was computed from. A change that races another owner's change is refused (`409`).

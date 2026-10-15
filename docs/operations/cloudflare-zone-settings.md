@@ -12,7 +12,7 @@ applies to a custom domain in your own zone.
 | Setting | Where | Recommended |
 |---|---|---|
 | Custom domain | Workers & Pages > tokengate > Settings > Domains & Routes, or `routes` in your clone's `wrangler.jsonc` | One hostname for the gateway, for example `tokengate.example.com` |
-| Admin hosts | Admin UI: Settings > "Admin hosts" | `tokengate.example.com`, stored on the first sign-in. `/admin` then answers `404` on every other hostname ([I-DEPLOY-1](../threat-model.md#i-deploy-1)) |
+| Admin hosts | Admin UI: Users › Sign-in › "Admin hosts" | `tokengate.example.com`, stored on the first sign-in. `/admin` then answers `404` on every other hostname ([I-DEPLOY-1](../threat-model.md#i-deploy-1)) |
 | `workers_dev` | `wrangler.jsonc` | `false` once the custom domain works |
 | `preview_urls` | `wrangler.jsonc` | `false` (already set; `scripts/check-config.sh` enforces it) |
 
@@ -94,7 +94,7 @@ tokens and cannot pass an Access login. `/healthz` and `/readyz` must stay reach
 5. Open `https://tokengate.example.com/admin` in a private window. Access must ask you to sign in.
 6. Open `https://tokengate.example.com/readyz`. It must answer without an Access login.
 
-Each hostname that you add later in Settings > "Admin hosts" needs the same two destinations in this
+Each hostname that you add later in Users › Sign-in › "Admin hosts" needs the same two destinations in this
 application ([configuration](../configuration.md#admin-hosts)).
 
 The gateway keeps no admin sessions. On every `/admin` request it verifies the

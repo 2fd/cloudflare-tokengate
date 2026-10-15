@@ -46,7 +46,7 @@ The restore overwrites the database in place. Every change after that time is lo
 - Grants, services and caller providers you disabled after that time come back enabled. Disable them
   again before you continue.
 - Users you suspended come back active, users you approved or rejected come back pending, demoted users get their old role back, and identities you
-  unlinked with "Reset login" are linked again. Anyone with such a user and a valid Access session
+  unlinked with "Reset sign-in" are linked again. Anyone with such a user and a valid Access session
   has access again on their next request. The first [check after a restore](#checks-after-a-restore)
   suspends them again.
 - Access sessions are not in D1, so a restore does not change them.
@@ -131,7 +131,7 @@ Use this when the Cloudflare account or both databases are lost.
    audience, then services, then grants, and enter every credential again.
 5. If the gateway URL changes, update every workflow that calls it, and the hostname of the Access
    application ([zone settings](cloudflare-zone-settings.md#cloudflare-access)). If the Access team
-   changes, every user must be linked again: use "Reset login" for each user, or
+   changes, every user must be linked again: use "Reset sign-in" for each user, or
    [break-glass](break-glass.md#regain-owner-access) when no owner can sign in.
 
 ## Checks after a restore
@@ -149,7 +149,7 @@ Use this when the Cloudflare account or both databases are lost.
 5. Settings > System status shows the database schema as "up to date".
 6. Users shows the owners you expect, and no user you had suspended is active.
 7. Grants, services and caller providers you disabled during an incident are still disabled.
-8. Settings > "Admin hosts" and "Upstream hosts" list the hosts you expect. A restore brings back
+8. Users › Sign-in › "Admin hosts" and Service tokens › Allowed hosts list the hosts you expect. A restore brings back
    the lists of the restore point.
 9. On a service with a credential check, "Test credential" passes.
 10. A workflow call succeeds ([GitHub Actions](../callers/github-actions.md)).

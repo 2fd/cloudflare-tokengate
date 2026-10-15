@@ -432,6 +432,16 @@ describe('decidePending', () => {
     });
   });
 
+  it('a plain role or status change never decides a pending user', async () => {
+    const pending = await pendingUser();
+    for (const input of [{ status: 'active' as const }, { role: 'admin' as const }]) {
+      const result = await updateUser(deps(), actorFor(owner), pending.id, input);
+      expect(result).toMatchObject({ ok: false, reason: 'invalid' });
+    }
+    expect(await getUser(env.DB, pending.id)).toMatchObject({ status: 'pending', role: 'viewer' });
+    expect(await audits()).toEqual([]);
+  });
+
   it('a decision that loses the race to another owner writes nothing', async () => {
     const pending = await pendingUser();
     const racing = racingDeps("UPDATE users SET status = 'suspended' WHERE id = ?", pending.id);

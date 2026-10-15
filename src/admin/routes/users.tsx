@@ -44,7 +44,15 @@ import {
   submittedVersion,
   type ViewContext,
 } from '../render';
-import { ActionButton, DataTable, Field, NotFound, StatusBadge, Time } from '../views/components';
+import {
+  ActionButton,
+  ApproveForm,
+  DataTable,
+  Field,
+  NotFound,
+  StatusBadge,
+  Time,
+} from '../views/components';
 import { formatTime, relativeTime } from '../views/format';
 import { ROLE_INFO, ROLE_ORDER, roleLabel } from '../views/roles';
 import {
@@ -855,6 +863,10 @@ async function personPage(c: AdminContext, id: string, options: PageOptions) {
             </p>
             {self ? (
               <p class="muted">This is you. Another owner can change your account.</p>
+            ) : owner && user.status === 'pending' ? (
+              <ApproveForm user={user} ctx={ctx} returnTo="list" />
+            ) : user.status === 'pending' ? (
+              <p>Only owners can decide.</p>
             ) : owner ? (
               <>
                 <div class="actions">

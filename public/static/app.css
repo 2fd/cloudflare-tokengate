@@ -266,6 +266,34 @@ p.empty { color: var(--muted); }
 /* == section: monitoring == */
 
 /* == section: users == */
+.callout { padding: .75rem 1rem; margin: 0 0 1rem; border-inline-start: 4px solid var(--warn);
+  background: var(--warn-bg); }
+.callout p { margin: 0; }
+.decisions { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+  gap: .75rem; margin: 0 0 1.5rem; padding: 0; list-style: none; }
+.decision { padding: .75rem 1rem; border: 1px solid var(--control-border); border-radius: 6px;
+  background: var(--panel); }
+.decision h3 { margin: 0 0 .25rem; font-size: 1rem; overflow-wrap: anywhere; }
+.decision p { margin: .25rem 0; }
+.decision .actions { margin: .5rem 0 0; }
+.role-cards, .policy-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+  gap: .5rem; align-items: stretch; }
+.role-cards .submit-option, .policy-cards .submit-option { display: grid; gap: .3rem; align-content: start;
+  padding: .5rem; border: 1px solid var(--control-border); border-radius: 6px; background: var(--panel); }
+.role-cards button, .policy-cards button { inline-size: 100%; min-block-size: 2.75rem; }
+button.current { border-width: 2px; }
+.row-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: start; }
+.person-actions > summary { display: inline-flex; align-items: center; min-block-size: 2.5rem;
+  padding: 0 .75rem; border: 1px solid var(--control-border); border-radius: 4px; color: var(--accent);
+  background: var(--panel); }
+.person-actions[open] { flex-basis: 100%; }
+.person-actions[open] > summary { margin-block-end: .5rem; }
+.person-actions .actions, .person-change .actions { gap: .5rem; margin: .5rem 0 0; }
+.person-actions fieldset, .person-change fieldset { padding: .5rem; }
+.host-chips li { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.status-line { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+#people [id^="user-"]:target, #decide:target, #invite:target, #policy:target, #hosts:target {
+  outline: 3px solid var(--focus); outline-offset: 2px; }
 
 /* == section: tokens == */
 

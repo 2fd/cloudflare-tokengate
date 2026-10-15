@@ -251,6 +251,13 @@ export async function updateUser(
   if (!existing) return opFailure('not_found', ['User not found.']);
   const stale = staleUser(existing, input.expectedUpdatedAt);
   if (stale) return stale;
+  // A pending sign-in is decided with a role in one step (user.approve / user.reject), never
+  // through a plain role or status change.
+  if (existing.status === 'pending') {
+    return opFailure('invalid', [
+      `${existing.email} is waiting for approval. Approve them with a role, or reject them, under "Needs your decision".`,
+    ]);
+  }
   return changeUser(deps, actor, existing, input, 'user.update');
 }
 

@@ -305,7 +305,7 @@ does not opt in to it ([I-AUTHZ-3](threat-model.md#i-authz-3)).
     and the Worker is not in development mode (`AUTH_ACCESS_DEVELOPMENT` set, no Access variable).
     Set a key of your own ([configuration.md](configuration.md#development-key)).
   - `base_url_invalid`: the service's base URL is no longer allowed, for example after a change to
-    the upstream host allowlist or the admin hosts (Settings) ([I-SSRF-1](threat-model.md#i-ssrf-1)).
+    the upstream host allowlist (Service tokens › Allowed hosts) or the admin hosts (Users › Sign-in) ([I-SSRF-1](threat-model.md#i-ssrf-1)).
   - `profile_unknown`: the caller provider names a profile this version does not know. This check
     runs before the token is verified, so these records are pre-trust records.
 - **Caller:** contact the admins with the request ID.
