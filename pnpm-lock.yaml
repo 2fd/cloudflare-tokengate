@@ -7,6 +7,18 @@ settings:
 importers:
 
   .:
+    devDependencies:
+      oxfmt:
+        specifier: ^0.73.0
+        version: 0.73.0
+      oxlint:
+        specifier: ^1.88.0
+        version: 1.88.0(oxlint-tsgolint@7.0.2004)
+      oxlint-tsgolint:
+        specifier: ^7.0.2004
+        version: 7.0.2004
+
+  apps/gateway:
     dependencies:
       hono:
         specifier: ^4.13.13
@@ -21,15 +33,6 @@ importers:
       '@types/node':
         specifier: ^26.6.5
         version: 26.6.5
-      oxfmt:
-        specifier: ^0.73.0
-        version: 0.73.0
-      oxlint:
-        specifier: ^1.88.0
-        version: 1.88.0(oxlint-tsgolint@7.0.2004)
-      oxlint-tsgolint:
-        specifier: ^7.0.2004
-        version: 7.0.2004
       typescript:
         specifier: ^7.0.2
         version: 7.0.2

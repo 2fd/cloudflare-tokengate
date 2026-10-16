@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # I-LOG-1: behaviour test for actions/get-token (runs the real step script with a stubbed curl).
 # Vitest runs inside workerd and cannot spawn bash, so CI runs this file directly.
-# Usage: bash test/security/get-token-action.sh
+# Usage: bash actions/get-token/test.sh
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/get-token.XXXXXX")"

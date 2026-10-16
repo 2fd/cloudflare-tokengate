@@ -11,8 +11,8 @@
   },
   "sortPackageJson": false,
   "ignorePatterns": [
-    "worker-configuration.d.ts",
-    "public/static/**",
+    "**/worker-configuration.d.ts",
+    "apps/*/public/static/**",
     "docs/diagrams/*.svg",
     "**/*.md",
     "**/*.yml",

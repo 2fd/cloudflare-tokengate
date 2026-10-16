@@ -4,7 +4,7 @@ This page shows admins how to set up an OpenAI service and shows workflow author
 
 ## Service template
 
-In the admin UI, open **Service tokens**, select **Add a token** and open the **OpenAI API** card. Paste the API key and select **Check and save OpenAI**. Everything in the table comes from the template (`src/admin/service-templates.ts`); the form does not ask for it. Name and slug are optional: when empty, the gateway uses `OpenAI` and the slug below, or the next free one (`openai-2`).
+In the admin UI, open **Service tokens**, select **Add a token** and open the **OpenAI API** card. Paste the API key and select **Check and save OpenAI**. Everything in the table comes from the template (`apps/gateway/src/admin/service-templates.ts`); the form does not ask for it. Name and slug are optional: when empty, the gateway uses `OpenAI` and the slug below, or the next free one (`openai-2`).
 
 | Field | Template value |
 |---|---|

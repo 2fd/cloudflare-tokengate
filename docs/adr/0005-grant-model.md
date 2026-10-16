@@ -36,14 +36,14 @@ Authorization has four parts. They are evaluated on the raw verified claims, nev
 
 A Grant also has rules: allowed methods and a path glob. A request is allowed when some enabled, unexpired grant of the caller provider for the service passes its anchors, conditions, event guard and at least one rule. Grants only allow. Nothing matches by default ([I-AUTHZ-1](../threat-model.md#i-authz-1)).
 
-Save-time validation (`src/policy/validate.ts`) adds warnings for risky but valid grants: broad globs on ref, environment or workflow claims, refs or environments without `ref_protected exact true`, globs on the event claim, and opt-ins to untrusted events. The admin must acknowledge warnings to save.
+Save-time validation (`apps/gateway/src/policy/validate.ts`) adds warnings for risky but valid grants: broad globs on ref, environment or workflow claims, refs or environments without `ref_protected exact true`, globs on the event claim, and opt-ins to untrusted events. The admin must acknowledge warnings to save.
 
 Details and examples are in [policies.md](../policies.md).
 
 ## Consequences
 
 - A stranger's token from a shared issuer fails the tenant pin with 401 `tenant_mismatch`. The response does not say whether the service exists. One exception is a known limitation: the injection-header token source can reveal slugs of services with `header` Injection ([threat-model.md](../threat-model.md)).
-- Grants use numeric IDs, which are harder to read. The GitHub grant builder (`src/policy/presets.ts`) and "Create grant from this request" on a denied record fill them in.
+- Grants use numeric IDs, which are harder to read. The GitHub grant builder (`apps/gateway/src/policy/presets.ts`) and "Create grant from this request" on a denied record fill them in.
 - Pull request workflows need an explicit opt-in, so a first call from them is often denied with `event_not_trusted`. This is intended.
 - Generic issuers need the admin to choose anchor claims. The gateway cannot know which claims are immutable for an unknown issuer.
 - Changing a caller provider's anchor claims or tenant pin is refused while an enabled grant would stop validating.

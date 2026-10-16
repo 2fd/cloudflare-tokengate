@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import schema from '../../../pipelines/request-log.v1.schema.json';
+import schema from '../../../../../pipelines/request-log.v1.schema.json';
 import { ARCHIVE_FIELDS, toArchiveRecord } from '../../../src/telemetry/archive';
 import {
   type ArchiveRecord,

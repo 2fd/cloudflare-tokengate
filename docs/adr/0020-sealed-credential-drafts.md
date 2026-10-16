@@ -63,5 +63,6 @@ gateway already has an envelope format with a key hierarchy and AAD binding
   cannot use it.
 - A key rotation that removes the active key within 15 minutes of a re-render makes that draft
   unusable; the admin pastes the secret again.
-- `src/admin/ops/credential-draft.ts` and `credentialDraftAad` in `src/crypto/envelope.ts` hold the
-  format; `test/security/credential-draft.test.ts` pins every rule above.
+- `apps/gateway/src/admin/ops/credential-draft.ts` and `credentialDraftAad` in
+  `apps/gateway/src/crypto/envelope.ts` hold the format;
+  `apps/gateway/test/security/credential-draft.test.ts` pins every rule above.

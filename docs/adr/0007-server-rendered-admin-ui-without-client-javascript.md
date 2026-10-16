@@ -16,16 +16,16 @@ The UI is a set of lists and forms used by a few people. It does not need client
 
 ## Decision
 
-- Pages are rendered on the server with Hono JSX (`src/admin/routes/*`, `src/admin/views/*`).
+- Pages are rendered on the server with Hono JSX (`apps/gateway/src/admin/routes/*`, `apps/gateway/src/admin/views/*`).
 - Every change is a plain HTML form `POST`. A successful change answers with a redirect (POST-redirect-GET). The configuration export (`POST /admin/export`) answers with a file download.
-- The Content-Security-Policy is `default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'` (`src/http/security.ts`). It has no `script-src`, so the browser runs no script.
+- The Content-Security-Policy is `default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'` (`apps/gateway/src/http/security.ts`). It has no `script-src`, so the browser runs no script.
 - JSX escapes all interpolated text. Biome's `noDangerouslySetInnerHtml` rule is an error (`biome.json`).
-- One stylesheet, `public/static/app.css`, is served by Workers Assets.
+- One stylesheet, `apps/gateway/public/static/app.css`, is served by Workers Assets.
 
 ## Consequences
 
 - An injected `<script>` does not run, even if escaping fails somewhere. Clickjacking is blocked by `frame-ancestors 'none'`.
 - Every form carries a `_csrf` token, and the server checks fetch metadata or `Origin` ([I-CSRF-1](../threat-model.md#i-csrf-1)).
-- The UI has no live updates, client-side validation or dynamic form rows. Complex inputs use text formats, for example conditions and rules one per line (`src/admin/grant-text.ts`).
+- The UI has no live updates, client-side validation or dynamic form rows. Complex inputs use text formats, for example conditions and rules one per line (`apps/gateway/src/admin/grant-text.ts`).
 - Pages are tested through plain HTTP requests in integration tests, without a browser.
 - There is no JSON admin API. Configuration as code is future work ([roadmap.md](../roadmap.md)).

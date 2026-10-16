@@ -6,7 +6,7 @@ Use this when a job needs a token with more access than its own `GITHUB_TOKEN`, 
 
 ## Service templates
 
-In the admin UI, open **Service tokens**, select **Add a token** and open the **GitHub REST API** card. Paste the token, tick **Also add release asset uploads (uploads.github.com) with the same token** if jobs upload release assets, and select **Check and save GitHub**. One paste creates both tokens. Everything in the table comes from the templates (`src/admin/service-templates.ts`).
+In the admin UI, open **Service tokens**, select **Add a token** and open the **GitHub REST API** card. Paste the token, tick **Also add release asset uploads (uploads.github.com) with the same token** if jobs upload release assets, and select **Check and save GitHub**. One paste creates both tokens. Everything in the table comes from the templates (`apps/gateway/src/admin/service-templates.ts`).
 
 | Field | **GitHub REST API** | **GitHub release asset uploads** |
 |---|---|---|

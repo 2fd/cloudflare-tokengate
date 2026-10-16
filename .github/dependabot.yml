@@ -1,6 +1,7 @@
 version: 2
 updates:
   - package-ecosystem: npm
+    # The root entry covers every pnpm workspace package (apps/*, packages/*) via pnpm-lock.yaml.
     directory: /
     schedule:
       interval: weekly

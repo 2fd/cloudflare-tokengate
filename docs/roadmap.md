@@ -23,7 +23,7 @@ These are outside the project's scope. Pull requests that add them are unlikely 
 
 - **GitHub App installation tokens.** Store a GitHub App private key instead of a static token. Mint a short-lived installation token per request, scoped to the repositories and permissions of the grant.
 - **Credentials that need refreshing.** Support upstreams whose credentials expire and are renewed with a refresh token, such as OAuth refresh tokens and Slack token rotation. Today a credential is a static value. `credential_expires_at` only triggers expiry notices.
-- **WebSockets.** Proxy upgraded connections. Today `upgrade` is never forwarded and is dropped from responses (`src/proxy/headers.ts`).
+- **WebSockets.** Proxy upgraded connections. Today `upgrade` is never forwarded and is dropped from responses (`apps/gateway/src/proxy/headers.ts`).
 - **KEK in Cloudflare Secrets Store** as an alternative to the `TOKENGATE_KEK` and `TOKENGATE_KEYRING` Worker secrets ([ADR 0004](adr/0004-envelope-encryption-bound-to-destination.md)).
 - **Key check value per credential.** Today key check values are recorded per kid. A per-Credential value would detect which credentials a restored old key cannot open.
 
@@ -31,7 +31,7 @@ These are outside the project's scope. Pull requests that add them are unlikely 
 
 - **Token exchange endpoint.** Exchange a workload identity token for a short-lived, scoped gateway token, for tools that cannot send a fresh caller token on every request.
 - **Per-grant rate limits configured in the UI.** Today the optional `PROXY_RATE_LIMITER` binding applies one limit, set in `wrangler.jsonc`, to each grant separately ([configuration.md](configuration.md)).
-- **Grant builder for GitLab CI.** The builder in `src/policy/presets.ts` covers GitHub Actions only. GitLab grants use the conditions editor.
+- **Grant builder for GitLab CI.** The builder in `apps/gateway/src/policy/presets.ts` covers GitHub Actions only. GitLab grants use the conditions editor.
 - **Nested claims in conditions.** Conditions read only top-level claims ([policies.md](policies.md)).
 - **Policy cache.** An opt-in cache with a bounded TTL, if D1 latency on the proxy path becomes a problem. It would delay revocation by up to the TTL, so it needs its own ADR ([ADR 0006](adr/0006-no-policy-caching.md)).
 
@@ -39,14 +39,14 @@ These are outside the project's scope. Pull requests that add them are unlikely 
 
 - **Admin JSON API.** Manage services, caller providers and grants from scripts. Today the only machine-readable output is the export (`POST /admin/export`).
 - **Import and plan/apply.** Keep configuration in git, preview the changes, then apply them.
-- **Detection of configuration regressions.** Warn on the dashboard and fail `/readyz` when Access login changes from configured to off. Today `scripts/check-config.sh` guards only the committed `wrangler.jsonc` ([ADR 0013](adr/0013-operator-variables-outside-wrangler-config.md)).
-- **Configuration check during deploy.** Run `scripts/check-config.sh` in `pnpm run deploy`. It is not run there yet. The script needs `bash` and `jq`, and their presence in the Workers Builds image is not confirmed.
+- **Detection of configuration regressions.** Warn on the dashboard and fail `/readyz` when Access login changes from configured to off. Today `apps/gateway/scripts/check-config.sh` guards only the committed `wrangler.jsonc` ([ADR 0013](adr/0013-operator-variables-outside-wrangler-config.md)).
+- **Configuration check during deploy.** Run `apps/gateway/scripts/check-config.sh` in `pnpm run deploy`. It is not run there yet. The script needs `bash` and `jq`, and their presence in the Workers Builds image is not confirmed.
 
 ### Telemetry
 
 - **Analytics Engine sink** for metrics alongside the D1 request log ([ADR 0009](adr/0009-telemetry-design.md)).
 - **Exact row counts in rollups.** Today the `request_log_max_rows` check estimates the table size from weighted rollups, which overestimates when sampling is on ([observability.md](observability.md)).
-- **Global limit on pre-trust records.** Today the limit is per isolate (`src/telemetry/sinks.ts`). A rate-limiting binding could make it global.
+- **Global limit on pre-trust records.** Today the limit is per isolate (`apps/gateway/src/telemetry/sinks.ts`). A rate-limiting binding could make it global.
 
 ## Proposing changes
 

@@ -1,9 +1,9 @@
 // Static checks on deployment files that the Worker never sees at runtime.
-// Behaviour of the get-token action itself is covered by test/security/get-token-action.sh.
+// Behaviour of the get-token action itself is covered by actions/get-token/test.sh.
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
+import actionYml from '../../../../actions/get-token/action.yml?raw';
 import devVarsExample from '../../.dev.vars.example?raw';
-import actionYml from '../../actions/get-token/action.yml?raw';
 import { DEV_PLACEHOLDER_KEK, loadKeyring } from '../../src/crypto/keyring';
 import wranglerJsonc from '../../wrangler.jsonc?raw';
 

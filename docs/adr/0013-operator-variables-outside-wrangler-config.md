@@ -15,7 +15,7 @@ Some variables are security controls:
 - `PUBLIC_URL` pins `/admin` and `/auth` to one origin ([I-DEPLOY-1](../threat-model.md#i-deploy-1)).
 - `ALLOWED_UPSTREAM_HOSTS` limits where services may send credentials ([I-SSRF-1](../threat-model.md#i-ssrf-1)).
 
-When unset, each control is off. `src/config.ts` reads an empty or whitespace-only value as unset.
+When unset, each control is off. `apps/gateway/src/config.ts` reads an empty or whitespace-only value as unset.
 
 > Note (2026-10-14): `ALLOWED_UPSTREAM_HOSTS` is no longer a variable. The upstream host allowlist is
 > now a D1 setting that owners edit in Settings ([configuration](../configuration.md#upstream-host-allowlist)).
@@ -31,7 +31,7 @@ Separately, version preview URLs would run old code against production data and 
 - `wrangler.jsonc` has no `vars` block and sets `"keep_vars": true`. Deploys, including Workers Builds, keep variables set in the dashboard.
 - Operators set variables in the dashboard (Worker > Settings > Variables and Secrets). Secrets are set with `pnpm wrangler secret put <NAME>`.
 - `"preview_urls": false`.
-- `scripts/check-config.sh` fails in these cases. `pnpm check` and CI run it.
+- `apps/gateway/scripts/check-config.sh` fails in these cases. `pnpm check` and CI run it.
   - `keep_vars` is not `true`.
   - A variable in `vars` or `env.<name>.vars` is empty or blank.
   - `preview_urls` is not `false`.

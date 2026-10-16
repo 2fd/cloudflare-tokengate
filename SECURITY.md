@@ -65,8 +65,9 @@ The maintainers keep you informed in the advisory. If a target slips, they say s
 
 In scope:
 
-- Code in this repository: `src/`, `migrations/`, `migrations-telemetry/`, `actions/get-token/`,
-  `scripts/` and the committed `wrangler.jsonc`.
+- Code in this repository: `apps/gateway/src/`, `apps/gateway/migrations/`,
+  `apps/gateway/migrations-telemetry/`, `actions/get-token/`, `scripts/`, `apps/gateway/scripts/`
+  and the committed `apps/gateway/wrangler.jsonc`.
 - Any way to break an invariant in the [threat model](docs/threat-model.md), or to go past a bound
   that a documented limitation states.
 - Documentation that leads an operator who follows it to an insecure deployment.
@@ -101,9 +102,9 @@ steps.
    ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)) ([configuration](docs/configuration.md#admin-hosts)).
 4. In Settings > "Upstream hosts", list the upstream hosts you use. Empty allows any public https
    host ([I-SSRF-1](docs/threat-model.md#i-ssrf-1)) ([configuration](docs/configuration.md#upstream-host-allowlist)).
-5. Set operator variables in the Cloudflare dashboard, not as `""` placeholders in `wrangler.jsonc`.
-   If you edit `wrangler.jsonc`, run `bash scripts/check-config.sh` before you deploy
-   ([configuration](docs/configuration.md)).
+5. Set operator variables in the Cloudflare dashboard, not as `""` placeholders in
+   `apps/gateway/wrangler.jsonc`. If you edit it, run `bash apps/gateway/scripts/check-config.sh`
+   before you deploy ([configuration](docs/configuration.md)).
 6. Until the first owner signs in, the first person through Access becomes owner: limit the Access
    policy to yourself until then. Everyone the policy lets in later
    joins with the join defaults (by default an active viewer); set them to "Pending" in Users to

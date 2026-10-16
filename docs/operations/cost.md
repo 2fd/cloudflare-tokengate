@@ -14,7 +14,7 @@ linked pricing pages before you rely on a number.
   yours in the Worker's metrics; time spent waiting for the upstream is not CPU time.
 - Each stored request record costs 8 D1 rows written: 4 on insert (the row plus 3 index entries) and
   4 when the retention job deletes it. This is an estimate from the schema
-  (`migrations-telemetry/0001_initial.sql`).
+  (`apps/gateway/migrations-telemetry/0001_initial.sql`).
 - A stored record takes about 1.5 KB including indexes. Retention is 14 days and "Maximum request log
   rows" is 5,000,000 (defaults).
 - D1 rows read stay inside the 25 billion included per month in every column: each proxied request
@@ -80,7 +80,7 @@ D1 contention at high rates, not for cost.
    [R2 archive](../observability.md#optional-r2-archive). Dashboard counts stay estimates of the real
    traffic.
 2. **Workers Logs** grows with every request. `observability.head_sampling_rate` must stay `1`,
-   because audit events are log lines (`scripts/check-config.sh`).
+   because audit events are log lines (`apps/gateway/scripts/check-config.sh`).
 3. **Worker requests and CPU** grow with traffic and are hard to reduce.
 4. **D1 storage** follows "Request log retention (days)" and "Maximum request log rows". The 10 GB
    limit per database applies to `TELEMETRY_DB` ([D1 limits](https://developers.cloudflare.com/d1/platform/limits/)).

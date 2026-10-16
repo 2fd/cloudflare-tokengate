@@ -23,14 +23,14 @@ Alternatives considered:
 
 ## Decision
 
-Credentials are sealed with envelope encryption and stored in `services.credential_sealed` (`src/crypto/envelope.ts`).
+Credentials are sealed with envelope encryption and stored in `services.credential_sealed` (`apps/gateway/src/crypto/envelope.ts`).
 
-- The key-encryption key (KEK) comes from a Worker secret: `TOKENGATE_KEK` (one key, kid `k1`) or `TOKENGATE_KEYRING` (several keys and an active kid). Keys are imported as non-extractable AES-256-GCM keys (`src/crypto/keyring.ts`).
+- The key-encryption key (KEK) comes from a Worker secret: `TOKENGATE_KEK` (one key, kid `k1`) or `TOKENGATE_KEYRING` (several keys and an active kid). Keys are imported as non-extractable AES-256-GCM keys (`apps/gateway/src/crypto/keyring.ts`).
 - Each seal uses a fresh random 256-bit data key (DEK). The credential is encrypted with AES-256-GCM under the DEK. The DEK is wrapped with AES-256-GCM under the KEK.
 - Both layers use the same additional authenticated data (AAD): `tokengate/v1/service-credential`, the service id, the stored base URL and the stored canonical injection JSON, separated by newlines.
-- The sealed format v1 is JSON with fields `v`, `kid`, `iv`, `wdek`, `dek_iv`, `ct`. `test/vectors/sealed.json` freezes it.
+- The sealed format v1 is JSON with fields `v`, `kid`, `iv`, `wdek`, `dek_iv`, `ct`. `apps/gateway/test/vectors/sealed.json` freezes it.
 - Each kid has a key check value: the first 8 bytes of HMAC-SHA256(key, `tokengate/v1/kek-check`), in hex. It identifies a key without revealing it.
-- Owners can re-encrypt all credentials under the active key (Settings, `POST /admin/settings/rewrap`, `src/admin/ops/keyring.ts`).
+- Owners can re-encrypt all credentials under the active key (Settings, `POST /admin/settings/rewrap`, `apps/gateway/src/admin/ops/keyring.ts`).
 - The KEK is generated outside Cloudflare (`openssl rand -base64 32` or `pnpm keyring generate`) and kept in the company's vault.
 
 ## Consequences

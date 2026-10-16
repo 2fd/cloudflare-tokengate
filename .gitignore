@@ -1,3 +1,4 @@
+# Unanchored patterns apply in every workspace package (apps/*, packages/*), e.g. apps/gateway/.dev.vars.
 node_modules/
 .wrangler/
 dist/

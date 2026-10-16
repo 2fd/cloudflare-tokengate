@@ -16,7 +16,7 @@ The first design kept the pending login in a D1 table, `oauth_states`. `GET /aut
 
 ## Decision
 
-The pending login lives only in the browser (`src/admin/auth/oauth-state.ts`, `src/admin/auth/routes.tsx`):
+The pending login lives only in the browser (`apps/gateway/src/admin/auth/oauth-state.ts`, `apps/gateway/src/admin/auth/routes.tsx`):
 
 - `/start` creates a random `state`, PKCE verifier and nonce. It adds `{state, code_verifier, nonce, return_to, login_provider, expires_at}` to a list of pending logins, stored as base64url JSON in the cookie `__Host-tokengate_oauth` with `Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=600`. It writes nothing to D1.
 - The list holds at most 3 entries, keyed by `state`. `/start` drops expired entries, then the oldest entries until the list has at most 3 entries and the cookie value is at most 3800 bytes. `return_to` is at most 512 characters and contains no character that JSON escapes, so 3 entries always fit and the 3-entry limit is what drops an entry. So 2 or 3 logins in different tabs of one browser do not cancel each other.

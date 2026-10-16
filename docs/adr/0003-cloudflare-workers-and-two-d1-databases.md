@@ -22,8 +22,8 @@ Request volume and control-plane data behave differently:
 
 - tokengate is one Cloudflare Worker written in TypeScript, with Hono for routing and server-rendered pages, jose for JWT verification and oauth4webapi for admin login.
 - It uses two D1 databases:
-  - `DB` (control plane): Users, sessions, caller providers, services, grants, settings, audit log. Schema in `migrations/`.
-  - `TELEMETRY_DB`: request log and hourly rollups. Schema in `migrations-telemetry/`.
+  - `DB` (control plane): Users, sessions, caller providers, services, grants, settings, audit log. Schema in `apps/gateway/migrations/`.
+  - `TELEMETRY_DB`: request log and hourly rollups. Schema in `apps/gateway/migrations-telemetry/`.
 - `pnpm run deploy` applies the migrations of both databases, then deploys the Worker.
 - Workers Paid is the recommended plan. See [getting-started.md](../getting-started.md) and [observability.md](../observability.md) for plan limits.
 

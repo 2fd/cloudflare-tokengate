@@ -42,12 +42,12 @@ GitHub does not offer upstream updates for it, so you pull releases yourself.
    If git refuses because the histories are unrelated (a copy made by the Deploy button can lack the
    upstream history), merge once with `git merge --allow-unrelated-histories v0.2.0` and take the
    upstream version of every file except your own changes.
-4. Resolve conflicts in `wrangler.jsonc`. Keep your additions (`routes`, `workers_dev`, optional
+4. Resolve conflicts in `apps/gateway/wrangler.jsonc`. Keep your additions (`routes`, `workers_dev`, optional
    bindings, `database_name`) and keep upstream's values for everything else. `keep_vars` must stay
-   `true` and no variable may be blank: `scripts/check-config.sh` fails otherwise
+   `true` and no variable may be blank: `apps/gateway/scripts/check-config.sh` fails otherwise
    ([I-DEPLOY-1](../threat-model.md#i-deploy-1)).
 5. Install dependencies: `pnpm install --frozen-lockfile`.
-6. Run the checks: `pnpm check` (lint, typecheck, tests, `scripts/check-config.sh` and the threat-model
+6. Run the checks: `pnpm check` (lint, typecheck, tests, `apps/gateway/scripts/check-config.sh` and the threat-model
    coverage check).
 
 ## Deploy
@@ -68,15 +68,15 @@ Deploys keep the variables set in the dashboard (`keep_vars: true`) and always k
 
 ## Migration policy
 
-Each database has its own directory: `migrations/` for `DB`, `migrations-telemetry/` for
+Each database has its own directory: `apps/gateway/migrations/` for `DB`, `apps/gateway/migrations-telemetry/` for
 `TELEMETRY_DB`. The newest file of each is compiled into the code as `SCHEMA_HEAD`
-(`src/generated/schema-head.ts`).
+(`apps/gateway/src/generated/schema-head.ts`).
 
 - Released migrations are never edited. Each change is a new numbered file.
 - Migrations are additive: new tables, new nullable columns or columns with a default, new indexes.
   Nothing that the previous minor release reads is dropped, renamed or retyped.
 - A column or table that the code stops using is dropped one minor release later at the earliest,
-  not in the same release (`migrations/0001_initial.sql` header).
+  not in the same release (`apps/gateway/migrations/0001_initial.sql` header).
 - A change that cannot be additive needs an ADR and exact operator steps in the "Upgrade notes".
 - The CHANGELOG lists every migration under "Upgrade notes".
 
@@ -86,7 +86,7 @@ on the new schema during that window. Details for contributors: [CONTRIBUTING.md
 ### Schema state
 
 The running code compares each database's applied migrations (wrangler's `d1_migrations` table) with
-`SCHEMA_HEAD` (`src/db/migrations.ts`). The Overview and the health strip on every page show the result:
+`SCHEMA_HEAD` (`apps/gateway/src/db/migrations.ts`). The Overview and the health strip on every page show the result:
 
 | State | Shown as | Meaning | Action |
 |---|---|---|---|

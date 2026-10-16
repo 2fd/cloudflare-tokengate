@@ -22,10 +22,10 @@ A gateway needs some way to know who is calling. The options were:
 
 Callers authenticate only with workload identity tokens from a configured caller provider.
 
-- A Caller provider has an issuer, a `jwks_uri`, an audience, allowed algorithms, a maximum token age and a profile (`github-actions`, `gitlab-ci` or `generic`). See `src/identity/jwt.ts` and `src/identity/profiles/`.
+- A Caller provider has an issuer, a `jwks_uri`, an audience, allowed algorithms, a maximum token age and a profile (`github-actions`, `gitlab-ci` or `generic`). See `apps/gateway/src/identity/jwt.ts` and `apps/gateway/src/identity/profiles/`.
 - Verification checks the signature, exact issuer, audience, expiry, maximum token age and the profile's required claims ([I-JWT-1](../threat-model.md#i-jwt-1)).
-- If the admin leaves the audience empty, a new caller provider gets a random audience: `tokengate:` followed by 26 random base32 characters (`src/admin/ops/caller-providers.ts`). Audiences shorter than 16 characters, GitHub owner URLs (the default GitHub audience) and well-known cloud audiences are refused (`src/policy/validate.ts`). A token minted for another relying party is therefore not accepted here.
-- The maximum token age is between 60 and 900 seconds for `github-actions`, and between 60 and 3600 seconds for the other profiles (`src/policy/validate.ts`).
+- If the admin leaves the audience empty, a new caller provider gets a random audience: `tokengate:` followed by 26 random base32 characters (`apps/gateway/src/admin/ops/caller-providers.ts`). Audiences shorter than 16 characters, GitHub owner URLs (the default GitHub audience) and well-known cloud audiences are refused (`apps/gateway/src/policy/validate.ts`). A token minted for another relying party is therefore not accepted here.
+- The maximum token age is between 60 and 900 seconds for `github-actions`, and between 60 and 3600 seconds for the other profiles (`apps/gateway/src/policy/validate.ts`).
 - There are no static caller keys, and `GITHUB_TOKEN` is not accepted.
 
 ## Consequences

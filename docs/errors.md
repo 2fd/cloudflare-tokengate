@@ -4,7 +4,7 @@ This page lists every error the gateway returns on `/proxy/*`, and the reason co
 request log. It is for workflow authors who call the gateway and for admins who answer their questions.
 
 Each error code has its own `##` heading. Error bodies link to it
-(`docs/errors.md#<code>`). The codes are defined in `src/lib/errors.ts`.
+(`docs/errors.md#<code>`). The codes are defined in `apps/gateway/src/lib/errors.ts`.
 
 ## Response format
 
@@ -388,5 +388,5 @@ The reason is the gateway error code, or a finer reason for some codes:
 | `upstream_timeout` | `upstream_timeout` | The upstream API did not respond in time |
 
 `not_configured` and `credential_unavailable` are never stored as reasons; the record always has the
-finer reason. The texts come from `src/admin/views/reasons.ts`; the "Next step" hints from
-`src/admin/routes/requests.tsx`.
+finer reason. The texts come from `apps/gateway/src/admin/views/reasons.ts`; the "Next step" hints from
+`apps/gateway/src/admin/routes/requests.tsx`.

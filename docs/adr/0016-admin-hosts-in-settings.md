@@ -26,13 +26,13 @@ The upstream host allowlist moved from a variable to Settings for the same reaso
 - **Admin hosts in D1.** The `settings` key `admin_hosts` holds a JSON array. An entry is an exact hostname (`tokengate.example.com`) or `*.<domain>`, which matches the hosts strictly below the domain, not the domain itself. The domain needs at least two labels. `localhost`, `127.0.0.1` and `[::1]` are also valid. Entries on `workers.dev` are refused. No scheme, port or path. This is the format of the upstream host allowlist.
 - **Initial value.** The first sign-in, which creates the first owner ([I-BOOT-1](../threat-model.md#i-boot-1)), stores the hostname of its request in the same D1 batch, only if `admin_hosts` is not set. The `user.bootstrap` audit diff records it as `host`. If the hostname is not a valid entry, nothing is stored.
 - **Editing.** Owners edit the list in Settings > "Admin hosts" (`settings:write`, `POST /admin/settings/admin-hosts`). Each change writes a `settings.admin_hosts` audit event with a `before` and `after` diff. The list cannot be empty, and it must keep the hostname that the owner uses at that moment (lock-out guard). Owners put every added hostname behind their Access application.
-- **Host pinning.** `src/http/security.ts` reads `admin_hosts` from D1 on every `/admin` request:
+- **Host pinning.** `apps/gateway/src/http/security.ts` reads `admin_hosts` from D1 on every `/admin` request:
   - `/admin` never answers on `workers.dev` or `*.workers.dev` (404).
   - When `admin_hosts` is not set, `/admin` answers on every other hostname.
   - When it is set, `/admin` answers only on a listed hostname. A hostname that is not a loopback host must use https. The port is ignored. Other requests get 404.
   - A stored value that is not a valid list denies every host (fail closed).
   - `/proxy`, `/healthz` and `/readyz` are not pinned.
-- **Logins.** Access login needs only the team domain and AUD. Because `/admin` never answers on `workers.dev`, it works only on a custom domain. The local development login applies only to a request whose hostname is `localhost`, `127.0.0.1` or `[::1]`, checked per request in `src/admin/auth/identity.ts`.
+- **Logins.** Access login needs only the team domain and AUD. Because `/admin` never answers on `workers.dev`, it works only on a custom domain. The local development login applies only to a request whose hostname is `localhost`, `127.0.0.1` or `[::1]`, checked per request in `apps/gateway/src/admin/auth/identity.ts`.
 - **No canonical origin.** The CSRF `Origin` check, invitation links, the service proxy URL, the caller provider snippets and the setup page use the origin of the current request. Host pinning makes this safe.
 - **SSRF self-exclusion.** A service base URL is refused ("must not point at this gateway") when its host matches an admin host entry, wildcards included, or the hostname of the current request ([I-SSRF-1](../threat-model.md#i-ssrf-1)). This applies when a service is saved and on every proxied request; the proxy reads the admin hosts in its per-request D1 batch.
 
@@ -45,7 +45,7 @@ The upstream host allowlist moved from a variable to Settings for the same reaso
 - The admin UI has no canonical origin. Links and snippets show the hostname that the viewer uses.
 - An owner cannot remove the hostname in use. A stored value that is not valid, or a lost domain, closes `/admin` everywhere. Recovery is a `wrangler d1 execute` on the `settings` table ([break-glass](../operations/break-glass.md#lost-admin-host)). Deleting the row opens `/admin` on every non-`workers.dev` hostname again.
 - A wildcard admin host also blocks every host below it as an upstream.
-- `wrangler.jsonc` still sets `keep_vars: true`. A blank committed `AUTH_ACCESS_AUD` would turn off admin sign-in, so `scripts/check-config.sh` still rejects blank variables.
+- `wrangler.jsonc` still sets `keep_vars: true`. A blank committed `AUTH_ACCESS_AUD` would turn off admin sign-in, so `apps/gateway/scripts/check-config.sh` still rejects blank variables.
 
 ## Note (2026-10-15)
 

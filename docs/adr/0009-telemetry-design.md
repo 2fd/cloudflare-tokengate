@@ -22,12 +22,12 @@ Logs must never contain caller tokens or credentials. Anyone on the internet can
 
 ## Decision
 
-- **Request log in D1.** One request record per proxied request in `TELEMETRY_DB.request_log` (`src/telemetry/record.ts`). Records contain only allowlisted claims of verified callers. The only request headers copied are `cf-connecting-ip` and, for verified callers, `user-agent` ([I-LOG-1](../threat-model.md#i-log-1), [I-LOG-2](../threat-model.md#i-log-2)).
+- **Request log in D1.** One request record per proxied request in `TELEMETRY_DB.request_log` (`apps/gateway/src/telemetry/record.ts`). Records contain only allowlisted claims of verified callers. The only request headers copied are `cf-connecting-ip` and, for verified callers, `user-agent` ([I-LOG-1](../threat-model.md#i-log-1), [I-LOG-2](../threat-model.md#i-log-2)).
 - **Sampling.** Allowed records are kept with probability `allowed_sample_rate`, each with `weight = 1 / rate`. Denied and error records are always kept. Records without a verified caller are capped at 10 per minute per isolate.
 - **Rollups.** The hourly cron recomputes `request_rollup_hourly` from the request log for the last 3 closed hours. It then catches up at most 24 older hours after the `rollup_watermark`, so hours missed during an outage are filled in. A recompute never lowers a stored row, so a retention purge cannot shrink the summaries ([observability](../observability.md#rollups)). Counts are sums of weights.
 - **Retention.** Owner-editable settings with floors: request log, rollups, audit log, and a soft row cap `request_log_max_rows`.
 - **Optional queue.** When `REQUEST_LOG_QUEUE` is bound, records go through a Cloudflare Queue and are written in batches. If the send fails, the record is inserted directly. Inserts are `INSERT OR IGNORE` on the request id, so redelivery is safe.
-- **Optional archive.** When `REQUEST_ARCHIVE` is bound, every record is also sent to a Pipelines stream that writes to R2 (`scripts/setup-archive.sh`, `pipelines/request-log.v1.schema.json`).
+- **Optional archive.** When `REQUEST_ARCHIVE` is bound, every record is also sent to a Pipelines stream that writes to R2 (`apps/gateway/scripts/setup-archive.sh`, `pipelines/request-log.v1.schema.json`).
 - **Audit log.** Every admin mutation writes one audit event to `DB.audit_log` in the same batch as the change ([I-AUDIT-1](../threat-model.md#i-audit-1)). Each committed event is also logged as one `audit.event` JSON line for Workers Logs. `head_sampling_rate` is 1, so these lines are not sampled.
 - **No Analytics Engine** in this version.
 

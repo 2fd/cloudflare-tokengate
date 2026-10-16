@@ -3,13 +3,13 @@
 This page explains how the gateway decides whether a caller may make a request: caller providers,
 tenant pins, grants, conditions and rules. It is for admins who write grants and for security reviewers.
 
-The code is the reference: `src/policy/` (evaluation and validation), `src/identity/profiles/` (what each
-platform is trusted for), `src/policy/presets.ts` and `src/admin/consumer-access.ts` (the structured access
-form) and `src/admin/grant-text.ts` (the text format of the "Exact conditions" view and of value lists).
+The code is the reference: `apps/gateway/src/policy/` (evaluation and validation), `apps/gateway/src/identity/profiles/` (what each
+platform is trusted for), `apps/gateway/src/policy/presets.ts` and `apps/gateway/src/admin/consumer-access.ts` (the structured access
+form) and `apps/gateway/src/admin/grant-text.ts` (the text format of the "Exact conditions" view and of value lists).
 
 ## How a request is authorized
 
-Every proxied request goes through these checks, in this order (`src/proxy/handler.ts`):
+Every proxied request goes through these checks, in this order (`apps/gateway/src/proxy/handler.ts`):
 
 1. The token's `iss` selects an enabled caller provider. The token is not trusted yet.
 2. The token is verified: signature, issuer, audience, algorithm, age and required claims
@@ -134,7 +134,7 @@ not environment exact sandbox
 
 ### Condition semantics
 
-These rules are in `src/policy/conditions.ts` ([I-AUTHZ-4](threat-model.md#i-authz-4)):
+These rules are in `apps/gateway/src/policy/conditions.ts` ([I-AUTHZ-4](threat-model.md#i-authz-4)):
 
 - **Literal claim names.** `claim` is a top-level claim name. `a.b` is the claim named `a.b`; there is no
   nested lookup.
@@ -149,7 +149,7 @@ These rules are in `src/policy/conditions.ts` ([I-AUTHZ-4](threat-model.md#i-aut
 
 ### Globs
 
-Rule paths and `glob` conditions use the same matcher (`src/policy/glob.ts`):
+Rule paths and `glob` conditions use the same matcher (`apps/gateway/src/policy/glob.ts`):
 
 | Pattern | Matches |
 |---|---|
@@ -255,7 +255,7 @@ excludes trusted events it does not list.
 ## Structured access form
 
 For GitHub Actions and GitLab CI consumers, the form "Give a consumer access" builds the conditions
-from a few choices (`src/admin/consumer-access.ts`, `src/policy/presets.ts`). The result is an ordinary
+from a few choices (`apps/gateway/src/admin/consumer-access.ts`, `apps/gateway/src/policy/presets.ts`). The result is an ordinary
 condition set, validated like any other ([I-AUTHZ-2](threat-model.md#i-authz-2)). "Write conditions by
 hand" converts the input to rows without losing it. An access is edited with the form it was made with
 when its conditions rebuild exactly; otherwise the edit form opens the rows editor.
@@ -340,7 +340,7 @@ accepts a risk by its prefilled choice: until the risks are gone, it saves only 
 
 ## Warnings
 
-Every warning has a stable code (`warningDetails` in `src/policy/validate.ts`). How each one is
+Every warning has a stable code (`warningDetails` in `apps/gateway/src/policy/validate.ts`). How each one is
 accepted is in [Risks and their acceptance](#risks-and-their-acceptance). The access page recomputes
 "Accepted risks" from the stored conditions.
 

@@ -5,7 +5,7 @@ For Slack incoming webhooks, see [webhooks.md](webhooks.md).
 
 ## Service template
 
-In the admin UI, open **Service tokens**, select **Add a token** and open the **Slack Web API** card. Paste the bot token and select **Check and save Slack**. Everything in the table comes from the template (`src/admin/service-templates.ts`); the form does not ask for it. Name and slug are optional: when empty, the gateway uses `Slack` and the slug below, or the next free one (`slack-2`).
+In the admin UI, open **Service tokens**, select **Add a token** and open the **Slack Web API** card. Paste the bot token and select **Check and save Slack**. Everything in the table comes from the template (`apps/gateway/src/admin/service-templates.ts`); the form does not ask for it. Name and slug are optional: when empty, the gateway uses `Slack` and the slug below, or the next free one (`slack-2`).
 
 | Field | Template value |
 |---|---|

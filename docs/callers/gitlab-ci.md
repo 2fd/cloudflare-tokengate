@@ -22,7 +22,7 @@ The gateway verifies the token, evaluates the grants and adds the service creden
 
 The gateway derives the name ("GitLab (acme-group)", or "GitLab (gitlab.example.com)" for a self-managed instance), the issuer, the signing keys, the algorithm and a random audience. When a GitLab consumer for the same issuer exists, **Add consumer** adds the groups to it. Groups can be added and removed later on the consumer page; the audience and the token checks are under **Advanced trust settings**.
 
-Rules the gateway enforces (`src/policy/validate.ts`, `src/identity/profiles/gitlab-ci.ts`, `src/admin/ops/caller-providers.ts`):
+Rules the gateway enforces (`apps/gateway/src/policy/validate.ts`, `apps/gateway/src/identity/profiles/gitlab-ci.ts`, `apps/gateway/src/admin/ops/caller-providers.ts`):
 
 - At least one group is required: gitlab.com signs tokens for every user ([I-TEN-1](../threat-model.md#i-ten-1)), and the access form derives each project's group from this list.
 - The tenant pin may only use `namespace_id`, as numeric IDs.

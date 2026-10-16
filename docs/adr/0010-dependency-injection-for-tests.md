@@ -23,12 +23,12 @@ Tests must run these paths exactly as in production: in the Workers runtime, wit
 
 ## Decision
 
-- Side effects go through one `Deps` object (`src/deps.ts`): `env`, `fetch`, `now()`, `random(length)`, `waitUntil(promise)`.
-- `productionDeps()` builds the real values. `src/index.ts` and `createApp()` in `src/app.ts` are the only places that call it.
+- Side effects go through one `Deps` object (`apps/gateway/src/deps.ts`): `env`, `fetch`, `now()`, `random(length)`, `waitUntil(promise)`.
+- `productionDeps()` builds the real values. `apps/gateway/src/index.ts` and `createApp()` in `apps/gateway/src/app.ts` are the only places that call it.
 - `createApp({ makeDeps })` lets tests supply their own `Deps`. jose receives `deps.fetch` through its `customFetch` option.
-- Tests run in workerd with `@cloudflare/vitest-plugin`, against local D1 databases migrated by `test/helpers/apply-migrations.ts`. No HTTP mocking library is used.
-- In `test/helpers/app.ts`, the default test `fetch` throws. Every outbound call must be expected by the test.
-- Cryptographic formats and parsers are pinned by vectors in `test/vectors/`.
+- Tests run in workerd with `@cloudflare/vitest-plugin`, against local D1 databases migrated by `apps/gateway/test/helpers/apply-migrations.ts`. No HTTP mocking library is used.
+- In `apps/gateway/test/helpers/app.ts`, the default test `fetch` throws. Every outbound call must be expected by the test.
+- Cryptographic formats and parsers are pinned by vectors in `apps/gateway/test/vectors/`.
 
 ## Consequences
 

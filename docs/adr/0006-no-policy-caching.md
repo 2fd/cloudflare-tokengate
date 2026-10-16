@@ -16,7 +16,7 @@ A cache delays revocation. During an incident, an admin disables a grant, servic
 
 ## Decision
 
-The proxy does not cache policy. `loadProxyContext` in `src/db/proxy-context.ts` reads the service, enabled caller providers, enabled and unexpired grants and settings in one D1 batch on every request.
+The proxy does not cache policy. `loadProxyContext` in `apps/gateway/src/db/proxy-context.ts` reads the service, enabled caller providers, enabled and unexpired grants and settings in one D1 batch on every request.
 
 Caches that do not decide authorization are allowed: JWKS per `jwks_uri`, OIDC discovery for admin login, the schema status and the `/readyz` answer ([architecture.md](../architecture.md#why-no-policy-caching)).
 

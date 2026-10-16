@@ -25,16 +25,16 @@ A JavaScript check followed by a write would leave a race between the two.
 ## Decision
 
 - **Triggers** `users_last_owner_update` and `users_last_owner_delete` abort any change that removes the last active owner ([I-OWNER-1](../threat-model.md#i-owner-1)).
-- **Guarded statements.** Bootstrap, invite linking and session creation use `INSERT … SELECT … WHERE` or `UPDATE … WHERE` with the full precondition in SQL (`src/db/users.ts`, `src/db/sessions.ts`). A concurrent or replayed attempt changes nothing ([I-BOOT-1](../threat-model.md#i-boot-1), [I-LINK-1](../threat-model.md#i-link-1)).
-- **Versions.** Updates to caller providers, services and grants set `updated_at = MAX(now, updated_at + 1)`, so `updated_at` works as a version. Their writes are guarded on the version the op read (`src/db/caller-providers.ts`, `src/db/services.ts`, `src/db/grants.ts`).
-- **Audit in the same batch.** Each admin op adds its audit event to the same `db.batch()` as the change. The audit statement repeats the change's guard, so it is written only if the change is ([I-AUDIT-1](../threat-model.md#i-audit-1), `src/admin/ops/shared.ts`, `src/db/audit.ts`).
+- **Guarded statements.** Bootstrap, invite linking and session creation use `INSERT … SELECT … WHERE` or `UPDATE … WHERE` with the full precondition in SQL (`apps/gateway/src/db/users.ts`, `apps/gateway/src/db/sessions.ts`). A concurrent or replayed attempt changes nothing ([I-BOOT-1](../threat-model.md#i-boot-1), [I-LINK-1](../threat-model.md#i-link-1)).
+- **Versions.** Updates to caller providers, services and grants set `updated_at = MAX(now, updated_at + 1)`, so `updated_at` works as a version. Their writes are guarded on the version the op read (`apps/gateway/src/db/caller-providers.ts`, `apps/gateway/src/db/services.ts`, `apps/gateway/src/db/grants.ts`).
+- **Audit in the same batch.** Each admin op adds its audit event to the same `db.batch()` as the change. The audit statement repeats the change's guard, so it is written only if the change is ([I-AUDIT-1](../threat-model.md#i-audit-1), `apps/gateway/src/admin/ops/shared.ts`, `apps/gateway/src/db/audit.ts`).
 - **Compare-and-swap** for re-encryption: each credential is replaced only if it still holds the value that was opened.
 
-> Note (2026-10-14): since [0015](0015-cloudflare-access-only-admin-login.md) there is no session creation and no `src/db/sessions.ts`. The admin write re-check uses `liveIdentityGuard` in `src/db/users.ts`.
+> Note (2026-10-14): since [0015](0015-cloudflare-access-only-admin-login.md) there is no session creation and no `apps/gateway/src/db/sessions.ts`. The admin write re-check uses `liveIdentityGuard` in `apps/gateway/src/db/users.ts`.
 
 ## Consequences
 
 - Concurrent admin actions cannot leave zero owners, two bootstrap owners or an unaudited change. In an admin op, a lost race is reported as a conflict.
 - The last-owner rule also holds for manual SQL run with `wrangler d1 execute`, unless the trigger itself is dropped.
-- The SQL is more complex than plain inserts and updates. Tests cover the guards, for example `test/security/bootstrap.test.ts` and `test/security/audit-coverage-ops.test.ts`.
+- The SQL is more complex than plain inserts and updates. Tests cover the guards, for example `apps/gateway/test/security/bootstrap.test.ts` and `apps/gateway/test/security/audit-coverage-ops.test.ts`.
 - Anyone with D1 write access can still change data directly. Such changes bypass the admin UI and its audit log. Credentials stay protected by their AAD binding ([ADR 0004](0004-envelope-encryption-bound-to-destination.md)).

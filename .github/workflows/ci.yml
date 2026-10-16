@@ -35,9 +35,9 @@ jobs:
       - name: Deployment guardrails, threat-model coverage and action script tests
         run: pnpm test:scripts
       - name: Deployment guardrails self-test
-        run: bash test/security/check-config-test.sh
+        run: bash apps/gateway/test/security/check-config-test.sh
       - name: get-token action behaviour (token masking, input validation)
-        run: bash test/security/get-token-action.sh
+        run: bash actions/get-token/test.sh
 
   workflows:
     runs-on: ubuntu-latest

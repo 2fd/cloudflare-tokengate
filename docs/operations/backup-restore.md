@@ -91,7 +91,7 @@ pnpm wrangler d1 export tokengate-telemetry --remote --output "tokengate-telemet
    pnpm wrangler d1 execute tokengate-restored --remote --file tokengate-20261012.sql
    ```
 
-3. In `wrangler.jsonc`, set `"database_name": "tokengate-restored"` on the `DB` binding.
+3. In `apps/gateway/wrangler.jsonc`, set `"database_name": "tokengate-restored"` on the `DB` binding.
 4. Make sure the keyring holds every key id the export's credentials use. If you rotated keys since
    the export, add the old key back as a non-active key ([key rotation](key-rotation.md)).
 5. Run `pnpm run deploy`. The export includes wrangler's `d1_migrations` table, so only migrations

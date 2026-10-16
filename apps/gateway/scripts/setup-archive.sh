@@ -8,7 +8,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/setup-archive.sh --bucket <r2-bucket> [options]
+Usage: apps/gateway/scripts/setup-archive.sh --bucket <r2-bucket> [options]
 
   --bucket NAME          R2 bucket for archive files (created if missing)   (required)
   --retention-days N     days to keep archive files (default: 90)
@@ -65,8 +65,8 @@ if ! [[ "$prefix" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]]; then
   exit 2
 fi
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-schema_file="$repo_root/pipelines/request-log.v1.schema.json"
+gateway_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+schema_file="$gateway_dir/../../pipelines/request-log.v1.schema.json"
 stream="${name}_v1"
 sink="${name}_r2"
 pipeline="${name}"
@@ -76,7 +76,7 @@ run() {
   "$@"
 }
 
-cd "$repo_root"
+cd "$gateway_dir"
 
 if ! pnpm wrangler r2 bucket info "$bucket" >/dev/null 2>&1; then
   run pnpm wrangler r2 bucket create "$bucket"

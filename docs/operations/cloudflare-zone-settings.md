@@ -11,12 +11,12 @@ applies to a custom domain in your own zone.
 
 | Setting | Where | Recommended |
 |---|---|---|
-| Custom domain | Workers & Pages > tokengate > Settings > Domains & Routes, or `routes` in your clone's `wrangler.jsonc` | One hostname for the gateway, for example `tokengate.example.com` |
+| Custom domain | Workers & Pages > tokengate > Settings > Domains & Routes, or `routes` in your clone's `apps/gateway/wrangler.jsonc` | One hostname for the gateway, for example `tokengate.example.com` |
 | Admin hosts | Admin UI: Users › Sign-in › "Admin hosts" | `tokengate.example.com`, stored on the first sign-in. `/admin` then answers `404` on every other hostname ([I-DEPLOY-1](../threat-model.md#i-deploy-1)) |
-| `workers_dev` | `wrangler.jsonc` | `false` once the custom domain works |
-| `preview_urls` | `wrangler.jsonc` | `false` (already set; `scripts/check-config.sh` enforces it) |
+| `workers_dev` | `apps/gateway/wrangler.jsonc` | `false` once the custom domain works |
+| `preview_urls` | `apps/gateway/wrangler.jsonc` | `false` (already set; `apps/gateway/scripts/check-config.sh` enforces it) |
 
-To declare the custom domain in `wrangler.jsonc` instead of the dashboard:
+To declare the custom domain in `apps/gateway/wrangler.jsonc` instead of the dashboard:
 
 ```jsonc
 "routes": [{ "pattern": "tokengate.example.com", "custom_domain": true }],
@@ -27,7 +27,7 @@ Then run `pnpm run deploy`.
 
 Why turn off `workers_dev`: with it on, `/proxy/` also answers on the workers.dev hostname, where your
 zone's rate limiting and WAF rules do not run. Host pinning always closes `/admin` there
-(`src/config.ts`, `adminHostAllowed`). So the admin UI is never available on workers.dev.
+(`apps/gateway/src/config.ts`, `adminHostAllowed`). So the admin UI is never available on workers.dev.
 
 ## Bot Fight Mode
 
@@ -98,12 +98,12 @@ Each hostname that you add later in Users › Sign-in › "Admin hosts" needs th
 application ([configuration](../configuration.md#admin-hosts)).
 
 The gateway keeps no admin sessions. On every `/admin` request it verifies the
-`Cf-Access-Jwt-Assertion` header itself (`src/admin/auth/access.ts`): signature, issuer, audience
+`Cf-Access-Jwt-Assertion` header itself (`apps/gateway/src/admin/auth/access.ts`): signature, issuer, audience
 and expiry. A request without a valid header gets `401` and "Cloudflare Access did not present a
 valid user identity for this request." This also covers a path that the Access application does not
 match: the request reaches the Worker without the header and is refused. Access service tokens carry
 no email and are refused. The gateway still applies its own users and roles after Access
-(`src/admin/auth/middleware.tsx`).
+(`apps/gateway/src/admin/auth/middleware.tsx`).
 
 Sign-in, sign-out and session length belong to Access:
 
@@ -118,7 +118,7 @@ Sign-in, sign-out and session length belong to Access:
 ## HTTPS
 
 - Turn on "Always Use HTTPS" for the gateway hostname. The gateway sends HSTS only on https
-  responses outside `/proxy/` (`src/http/security.ts`).
+  responses outside `/proxy/` (`apps/gateway/src/http/security.ts`).
 - Callers must use `https://` URLs. The get-token action rejects other URLs
   ([get-token action](../../actions/get-token/README.md)).
 

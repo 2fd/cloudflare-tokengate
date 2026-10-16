@@ -27,7 +27,7 @@ The job never sees the credential.
 
 The gateway derives the rest: the name ("GitHub Actions (acme)"), the issuer, the signing keys (OIDC discovery), the algorithm (`RS256`), the maximum token age (600 seconds) and a random audience (`tokengate:` followed by 26 characters). When a GitHub Actions consumer for the same issuer exists, **Add consumer** adds the organizations to it instead. Organizations can be added and removed later on the consumer page. The issuer, audience, algorithms, maximum token age and enterprise ID are under **Advanced trust settings**.
 
-Rules the gateway enforces (`src/policy/validate.ts`, `src/admin/ops/caller-providers.ts`):
+Rules the gateway enforces (`apps/gateway/src/policy/validate.ts`, `apps/gateway/src/admin/ops/caller-providers.ts`):
 
 - At least one organization is required: GitHub signs tokens for every GitHub user on `https://token.actions.githubusercontent.com` ([I-TEN-1](../threat-model.md#i-ten-1)), and the access form derives each repository's organization from this list.
 - The tenant pin may only use `repository_owner_id` and `enterprise_id`, as numeric IDs that a rename cannot reuse.
@@ -112,7 +112,7 @@ In JavaScript (`actions/github-script` or `@actions/core`), use `await core.getI
 
 ## 3. Send the token
 
-The gateway reads the caller token from these headers, in this order (`src/proxy/caller-token.ts`):
+The gateway reads the caller token from these headers, in this order (`apps/gateway/src/proxy/caller-token.ts`):
 
 | Header | When to use |
 |---|---|
@@ -126,7 +126,7 @@ The gateway never forwards any of these headers upstream ([I-TOK-1](../threat-mo
 
 ## Claims the gateway uses
 
-The GitHub Actions profile (`src/identity/profiles/github-actions.ts`) defines what the gateway trusts:
+The GitHub Actions profile (`apps/gateway/src/identity/profiles/github-actions.ts`) defines what the gateway trusts:
 
 | Item | Value |
 |---|---|
@@ -152,7 +152,7 @@ The command prints `acme/api (89012345)`. The ID keeps working after a rename; t
 ## Examples per context
 
 Admins create these accesses with **Give a consumer access**: paste the repository, choose **When**, and enter its branch, tag or environment.
-The conditions below come from `src/policy/presets.ts`, with **Only protected branches and tags (recommended)** chosen.
+The conditions below come from `apps/gateway/src/policy/presets.ts`, with **Only protected branches and tags (recommended)** chosen.
 The access page shows them under **Exact conditions**. Full semantics: [policies.md](../policies.md#structured-access-form).
 
 ### Branch

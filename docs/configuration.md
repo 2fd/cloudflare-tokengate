@@ -3,8 +3,8 @@
 This page lists every variable, secret, binding and runtime setting of cloudflare-tokengate. It is for
 platform engineers who deploy and operate the gateway.
 
-The code is the reference: variables are declared in `src/env.ts` and parsed in `src/config.ts`;
-settings live in `src/db/settings.ts`.
+The code is the reference: variables are declared in `apps/gateway/src/env.ts` and parsed in `apps/gateway/src/config.ts`;
+settings live in `apps/gateway/src/db/settings.ts`.
 
 ## Where each kind of value lives
 
@@ -12,25 +12,25 @@ settings live in `src/db/settings.ts`.
 |---|---|---|
 | Operator variable (`AUTH_*`) | Cloudflare dashboard: Workers & Pages > tokengate > Settings > Variables and Secrets | Yes (`keep_vars: true`) |
 | Secret (`TOKENGATE_KEK`, `TOKENGATE_KEYRING`) | `pnpm wrangler secret put <NAME>` | Yes, always |
-| Binding (D1, queue, pipeline, rate limiter) | `wrangler.jsonc` | Part of the deploy |
+| Binding (D1, queue, pipeline, rate limiter) | `apps/gateway/wrangler.jsonc` | Part of the deploy |
 | Runtime setting (retention, sampling, upstream host allowlist, admin hosts) | Admin UI: Settings | Stored in D1 |
 
 `wrangler.jsonc` sets `"keep_vars": true` and declares no `vars`. So `pnpm run deploy` and Workers Builds
 keep the values you set in the dashboard. Set each variable in one place only.
 
 If you prefer to keep configuration in git, add the variable with a non-empty value under `"vars"` in
-your clone's `wrangler.jsonc`. Every deploy then overwrites the dashboard value. Never commit `""`
-placeholders. An empty `AUTH_ACCESS_AUD` turns off admin sign-in
-([I-DEPLOY-1](threat-model.md#i-deploy-1)). Whitespace-only values count as empty. `scripts/check-config.sh` rejects them, in top-level `vars` and in `env.<name>.vars` blocks.
+your clone's `apps/gateway/wrangler.jsonc`. Every deploy then overwrites the dashboard value. Never
+commit `""` placeholders. An empty `AUTH_ACCESS_AUD` turns off admin sign-in
+([I-DEPLOY-1](threat-model.md#i-deploy-1)). Whitespace-only values count as empty. `apps/gateway/scripts/check-config.sh` rejects them, in top-level `vars` and in `env.<name>.vars` blocks.
 
 Rolling back to an earlier Worker version (`pnpm wrangler rollback` or the dashboard) restores that
 version's variables. The upstream host allowlist and the admin hosts are stored in D1, so a rollback
 does not change them.
 
-For local development (`pnpm dev`), put all variables and secrets in `.dev.vars`. `pnpm run setup`
-creates it from `.dev.vars.example` and recreates the local databases ([CONTRIBUTING.md](../CONTRIBUTING.md#set-up)). The example lists
-every variable and secret with a comment, except `TOKENGATE_KEYRING`, which it only mentions. It
-works with `pnpm dev` as is:
+For local development (`pnpm dev`), put all variables and secrets in `apps/gateway/.dev.vars`.
+`pnpm run setup` creates it from `apps/gateway/.dev.vars.example` and recreates the local databases
+([CONTRIBUTING.md](../CONTRIBUTING.md#set-up)). The example lists every variable and secret with a
+comment, except `TOKENGATE_KEYRING`, which it only mentions. It works with `pnpm dev` as is:
 
 - `TOKENGATE_KEK` is the public [development key](#development-key) (base64 of
   `DEV-ONLY-KEY-NOT-FOR-PRODUCTION!`).
@@ -255,7 +255,7 @@ The hosts that service token base URLs may use. It is a setting in the admin UI,
 - **Stored value:** key `allowed_upstream_hosts` in the `settings` table, a JSON array or `null`. A
   stored value that is not a valid list denies every host (fail closed), and the page says so.
 
-Hosts of the service templates (`src/admin/service-templates.ts`):
+Hosts of the service templates (`apps/gateway/src/admin/service-templates.ts`):
 
 | Template | Host to list |
 |---|---|
@@ -271,8 +271,8 @@ Hosts of the service templates (`src/admin/service-templates.ts`):
 
 | Binding | Type | Required | Purpose |
 |---|---|---|---|
-| `DB` | D1 (`tokengate`, `migrations/`) | Yes | Control plane: users, caller providers, services, grants, settings, audit log |
-| `TELEMETRY_DB` | D1 (`tokengate-telemetry`, `migrations-telemetry/`) | Yes | Request log and hourly rollups |
+| `DB` | D1 (`tokengate`, `apps/gateway/migrations/`) | Yes | Control plane: users, caller providers, services, grants, settings, audit log |
+| `TELEMETRY_DB` | D1 (`tokengate-telemetry`, `apps/gateway/migrations-telemetry/`) | Yes | Request log and hourly rollups |
 | `ASSETS` | Static assets (`./public`) | Yes | Serves `/static/*` (the stylesheet) |
 | `REQUEST_LOG_QUEUE` | Queue producer + consumer | Optional | Batches request-log writes |
 | `REQUEST_ARCHIVE` | Pipelines stream | Optional | Archives every recorded request to R2 |
@@ -299,7 +299,7 @@ records per day. For more traffic, use Workers Paid
    pnpm wrangler queues create tokengate-request-log-dlq
    ```
 
-2. Uncomment the `queues` block in `wrangler.jsonc`.
+2. Uncomment the `queues` block in `apps/gateway/wrangler.jsonc`.
 3. Run `pnpm run deploy`.
 
 | Consumer setting | Value | Why |
@@ -310,7 +310,7 @@ records per day. For more traffic, use Workers Paid
 | `max_concurrency` | 2 | D1 runs one query at a time; more consumers only add contention |
 | `dead_letter_queue` | `tokengate-request-log-dlq` | Keeps batches D1 could not take; nothing consumes it |
 
-Behavior (`src/telemetry/sinks.ts`, `src/telemetry/queue-consumer.ts`):
+Behavior (`apps/gateway/src/telemetry/sinks.ts`, `apps/gateway/src/telemetry/queue-consumer.ts`):
 
 - If `send` to the queue fails, the record is inserted directly instead.
 - Invalid messages are acknowledged and dropped. A D1 failure retries the whole batch after 30 seconds.
@@ -319,7 +319,7 @@ Behavior (`src/telemetry/sinks.ts`, `src/telemetry/queue-consumer.ts`):
 ### `REQUEST_ARCHIVE`
 
 Archives every recorded request to R2 as Parquet through Basin Pipelines. Run
-`scripts/setup-archive.sh --bucket <r2-bucket>`; it prints the binding to add:
+`apps/gateway/scripts/setup-archive.sh --bucket <r2-bucket>`; it prints the binding to add:
 
 ```jsonc
 "pipelines": [{ "binding": "REQUEST_ARCHIVE", "stream": "<stream-id>" }]
@@ -375,7 +375,7 @@ the same time, the last save wins for all five values.
 
 ### `request_log_max_rows`
 
-A soft cap, enforced by the hourly job (`src/telemetry/retention.ts`):
+A soft cap, enforced by the hourly job (`apps/gateway/src/telemetry/retention.ts`):
 
 - Each run estimates the stored row count from the hourly rollups. When the estimate reaches the cap,
   it finds the exact boundary, which reads up to `request_log_max_rows` rows.
@@ -402,6 +402,8 @@ A soft cap, enforced by the hourly job (`src/telemetry/retention.ts`):
 
 ## `wrangler.jsonc` reference
 
+The Worker configuration is `apps/gateway/wrangler.jsonc`.
+
 | Key | Value | Why |
 |---|---|---|
 | `compatibility_flags` | `nodejs_compat` | Node.js compatibility. On by default from compatibility date 2026-08-04 ([docs](https://developers.cloudflare.com/workers/runtime-apis/nodejs/)); listed for clarity |
@@ -411,10 +413,10 @@ A soft cap, enforced by the hourly job (`src/telemetry/retention.ts`):
 | `observability.head_sampling_rate` | `1` | Audit events are `audit.event` log lines; sampling below 1 can drop them |
 | `assets.run_worker_first` | `["/*", "!/static/*"]` | The Worker handles every path except `/static/*`, so security headers and host pinning always apply |
 | `d1_databases` | `DB`, `TELEMETRY_DB` | No database IDs are committed; see [getting-started.md](getting-started.md) to create the databases |
-| `triggers.crons` | `7 * * * *` | Hourly job: rollups, retention, credential expiry notices (`src/telemetry/cron.ts`) |
+| `triggers.crons` | `7 * * * *` | Hourly job: rollups, retention, credential expiry notices (`apps/gateway/src/telemetry/cron.ts`) |
 | `keep_vars` | `true` | Deploys keep variables set in the dashboard |
 
-`scripts/check-config.sh` (run by `pnpm test:scripts` and CI) fails if `preview_urls` is not `false`,
+`apps/gateway/scripts/check-config.sh` (run by `pnpm test:scripts` and CI) fails if `preview_urls` is not `false`,
 `global_fetch_strictly_public` is missing, either D1 binding is missing, `head_sampling_rate` is not `1`,
 `keep_vars` is not `true`, a var is blank, or the `deploy` script does not migrate `TELEMETRY_DB`.
 
@@ -424,12 +426,12 @@ These are constants in the code, not settings.
 
 | Limit | Value | Source |
 |---|---|---|
-| Admin form body | 64 KiB; larger bodies get 413 and are not read past the limit | `src/admin/render.tsx` |
-| Caller token length | 16 KiB | `src/proxy/caller-token.ts` |
-| Proxied path length | 2048 characters | `src/proxy/path.ts` |
-| Service timeout (time to response headers) | 1,000–900,000 ms; default 120,000 | `src/admin/ops/services.ts` |
-| Caller token clock skew | 30 seconds | `src/identity/jwt.ts` |
-| Pre-trust request records | 10 per minute per isolate | `src/telemetry/sinks.ts` |
+| Admin form body | 64 KiB; larger bodies get 413 and are not read past the limit | `apps/gateway/src/admin/render.tsx` |
+| Caller token length | 16 KiB | `apps/gateway/src/proxy/caller-token.ts` |
+| Proxied path length | 2048 characters | `apps/gateway/src/proxy/path.ts` |
+| Service timeout (time to response headers) | 1,000–900,000 ms; default 120,000 | `apps/gateway/src/admin/ops/services.ts` |
+| Caller token clock skew | 30 seconds | `apps/gateway/src/identity/jwt.ts` |
+| Pre-trust request records | 10 per minute per isolate | `apps/gateway/src/telemetry/sinks.ts` |
 
 ## Supported browsers
 

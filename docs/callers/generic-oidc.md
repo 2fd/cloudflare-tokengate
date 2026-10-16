@@ -7,7 +7,7 @@ Use the GitHub Actions or GitLab CI profile for those platforms: issuers on `tok
 
 ## What the issuer must provide
 
-The gateway accepts a token only if all of these hold (`src/identity/jwt.ts`, [I-JWT-1](../threat-model.md#i-jwt-1)):
+The gateway accepts a token only if all of these hold (`apps/gateway/src/identity/jwt.ts`, [I-JWT-1](../threat-model.md#i-jwt-1)):
 
 - It is a compact JWS (three base64url parts) of at most 16 KiB.
 - Its header has an `alg` that the consumer allows and a `kid` of 1-128 characters from `A-Z a-z 0-9 . _ -`.

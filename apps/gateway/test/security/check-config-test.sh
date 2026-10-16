@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # I-DEPLOY-1 / I-SSRF-1: scripts/check-config.sh rejects configs whose deploy would wipe or blank
 # operator vars set in the dashboard. Vitest runs inside workerd and cannot spawn bash, so CI runs
-# this file directly. Usage: bash test/security/check-config-test.sh
+# this file directly. Usage: bash apps/gateway/test/security/check-config-test.sh
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/check-config.XXXXXX")"

@@ -25,8 +25,8 @@ The SVG files are rendered from these specifications with
 [archify](https://github.com/tt-a1i/archify). Each SVG follows the reader's light or dark theme.
 
 The specifications describe the code. When you change behavior that a diagram shows, update the
-specification in the same change. For example, a new step in `src/proxy/handler.ts` changes
-`src/proxy-pipeline.workflow.json`.
+specification in the same change. For example, a new step in
+`apps/gateway/src/proxy/handler.ts` changes `src/proxy-pipeline.workflow.json`.
 
 ## Change a diagram
 

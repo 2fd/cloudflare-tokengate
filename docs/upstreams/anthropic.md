@@ -4,7 +4,7 @@ This page shows admins how to set up an Anthropic service and shows workflow aut
 
 ## Service template
 
-In the admin UI, open **Service tokens**, select **Add a token** and open the **Anthropic API** card. Paste the API key and select **Check and save Anthropic**. Everything in the table comes from the template (`src/admin/service-templates.ts`); the form does not ask for it. Name and slug are optional: when empty, the gateway uses `Anthropic` and the slug below, or the next free one (`anthropic-2`).
+In the admin UI, open **Service tokens**, select **Add a token** and open the **Anthropic API** card. Paste the API key and select **Check and save Anthropic**. Everything in the table comes from the template (`apps/gateway/src/admin/service-templates.ts`); the form does not ask for it. Name and slug are optional: when empty, the gateway uses `Anthropic` and the slug below, or the next free one (`anthropic-2`).
 
 | Field | Template value |
 |---|---|
@@ -78,7 +78,7 @@ Both SDKs also read `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY` from the enviro
 
 ## Caller token header
 
-The SDKs send the API key in `x-api-key`. That is this service's injection header, so the gateway accepts the caller token there when no `x-tokengate-token` or `Authorization: Bearer` header is present (`src/proxy/caller-token.ts`).
+The SDKs send the API key in `x-api-key`. That is this service's injection header, so the gateway accepts the caller token there when no `x-tokengate-token` or `Authorization: Bearer` header is present (`apps/gateway/src/proxy/caller-token.ts`).
 The gateway never forwards the caller's `x-api-key`; it sets its own with the service credential ([I-TOK-1](../threat-model.md#i-tok-1), [I-INJ-1](../threat-model.md#i-inj-1)).
 
 | Client | Header |

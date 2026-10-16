@@ -7,7 +7,7 @@ The caller posts to `/proxy/<slug>` and never sees the webhook URL.
 
 ## Service templates
 
-In the admin UI, open **Service tokens**, select **Add a token** and open the **Slack incoming webhook** or **Discord webhook** card. Paste the whole webhook URL and select **Save Slack webhook** (or **Save Discord webhook**). Everything in the table comes from the template (`src/admin/service-templates.ts`).
+In the admin UI, open **Service tokens**, select **Add a token** and open the **Slack incoming webhook** or **Discord webhook** card. Paste the whole webhook URL and select **Save Slack webhook** (or **Save Discord webhook**). Everything in the table comes from the template (`apps/gateway/src/admin/service-templates.ts`).
 
 | Field | **Slack incoming webhook** | **Discord webhook** |
 |---|---|---|
@@ -31,7 +31,7 @@ Paste the whole webhook URL. The gateway keeps only the part after the base URL 
 | `https://hooks.slack.com/services/T0000/B0000/XXXXXXXXXXXXXXXXXXXXXXXX` | `T0000/B0000/XXXXXXXXXXXXXXXXXXXXXXXX` |
 | `https://discord.com/api/webhooks/123456789012345678/REDACTED-token` | `123456789012345678/REDACTED-token` |
 
-The secret may have several `/`-separated segments. Each segment may only contain `A-Z a-z 0-9 - . _ ~ ! $ & ' ( ) * + , = : @`, and `.` or `..` segments are refused (`src/policy/validate.ts`, `src/proxy/path.ts`).
+The secret may have several `/`-separated segments. Each segment may only contain `A-Z a-z 0-9 - . _ ~ ! $ & ' ( ) * + , = : @`, and `.` or `..` segments are refused (`apps/gateway/src/policy/validate.ts`, `apps/gateway/src/proxy/path.ts`).
 
 There is no secret check for webhooks: Slack has no read-only webhook call, and Discord's `GET` returns the token in its body.
 

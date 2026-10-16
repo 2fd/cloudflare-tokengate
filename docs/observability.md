@@ -16,7 +16,7 @@ platform engineers who operate a deployment.
 
 Every request to `/proxy/<slug>/...` produces at most one request record in `request_log`
 (`TELEMETRY_DB`). The record is written in `waitUntil` and never delays or changes the response
-(`src/proxy/handler.ts`, step 16).
+(`apps/gateway/src/proxy/handler.ts`, step 16).
 
 | Outcome | Meaning | Recorded |
 |---|---|---|
@@ -26,8 +26,8 @@ Every request to `/proxy/<slug>/...` produces at most one request record in `req
 
 ### Fields
 
-The columns are defined in `migrations-telemetry/0001_initial.sql` and built only in
-`src/telemetry/record.ts`. Text columns are cut to fixed lengths (`RECORD_TEXT_LIMITS`).
+The columns are defined in `apps/gateway/migrations-telemetry/0001_initial.sql` and built only in
+`apps/gateway/src/telemetry/record.ts`. Text columns are cut to fixed lengths (`RECORD_TEXT_LIMITS`).
 
 | Field | Content |
 |---|---|
@@ -55,7 +55,7 @@ A Request record never holds a caller token, a credential or any request header 
 
 A pre-trust record is a failure before the caller is verified and the tenant pin holds: for
 example `token_missing`, `issuer_unknown`, `signature_invalid` or `tenant_mismatch`. Anyone on the
-internet can produce them, so they are limited (`src/telemetry/sinks.ts`, `src/telemetry/record.ts`):
+internet can produce them, so they are limited (`apps/gateway/src/telemetry/sinks.ts`, `apps/gateway/src/telemetry/record.ts`):
 
 - At most 10 records per minute per isolate. Records over the budget are dropped and counted. One
   `telemetry.pretrust_records_dropped` warning per minute reports the count.
@@ -121,8 +121,8 @@ There is no filter for `jti` or `run_id`. Use SQL instead
 
 ## Rollups
 
-The hourly job (`src/telemetry/cron.ts`, cron `7 * * * *`, UTC) aggregates `request_log` into
-`request_rollup_hourly` (`src/telemetry/rollup.ts`):
+The hourly job (`apps/gateway/src/telemetry/cron.ts`, cron `7 * * * *`, UTC) aggregates `request_log` into
+`request_rollup_hourly` (`apps/gateway/src/telemetry/rollup.ts`):
 
 1. It recomputes the last 3 closed hours. This counts queue deliveries that arrive up to about 2
    hours late.
@@ -143,7 +143,7 @@ cannot shrink the summaries. Re-running a recompute is idempotent.
 - Counts are sums of `weight`, so they estimate real traffic when sampling is on.
 - `upstream_auth_fail` counts allowed requests the upstream answered with 401 or 403.
 - Each row has a histogram of `duration_ms` in buckets ≤ 50, ≤ 100, ≤ 250, ≤ 500, ≤ 1000,
-  ≤ 2500, ≤ 5000 and > 5000 ms (`LATENCY_BUCKETS` in `src/db/rollups.ts`). The Overview uses only
+  ≤ 2500, ≤ 5000 and > 5000 ms (`LATENCY_BUCKETS` in `apps/gateway/src/db/rollups.ts`). The Overview uses only
   the rows of allowed requests for p50 and p95.
 - Rollups are kept for "Traffic summary retention (days)" (default 400).
 
@@ -183,12 +183,12 @@ in the request log but missing from the summaries.
 
 ## Overview
 
-Monitoring › Overview (`/admin`, `src/telemetry/dashboard.ts`) answers "is everything OK?" on one
+Monitoring › Overview (`/admin`, `apps/gateway/src/telemetry/dashboard.ts`) answers "is everything OK?" on one
 page. Nothing refreshes by itself: the page says when it was built and has a Refresh link.
 
 - **Range:** 24 hours, 7 days or 30 days (`?range=24h|7d|30d`). The page states the start. Buckets
   are UTC-aligned: 24 one-hour, 28 six-hour or 30 one-day bars, the last one partial ("so far")
-  (`src/telemetry/ranges.ts`). Requests uses the same rule, so a count and the list it links to
+  (`apps/gateway/src/telemetry/ranges.ts`). Requests uses the same rule, so a count and the list it links to
   cover the same window.
 - **Data:** stored rollups for the closed hours, plus a live aggregate of the request log for each
   hour not rolled up yet (the current hour, and the previous hour until the job has succeeded in the
@@ -264,7 +264,7 @@ none.
 ## Health endpoints
 
 Both endpoints are unauthenticated, are not pinned to the admin hosts, and send `cache-control:
-no-store` (`src/health.ts`).
+no-store` (`apps/gateway/src/health.ts`).
 
 **`GET /healthz`** returns `200 {"ok":true}`. It does no I/O. Use it for liveness only.
 
@@ -314,13 +314,13 @@ Changes made directly in D1 (`wrangler d1 execute`) are not audited.
 ### `audit.event` log lines for a SIEM
 
 After the batch commits, each audit event is also written to the Worker log as one JSON line
-(`emitAuditLine` in `src/db/audit.ts`):
+(`emitAuditLine` in `apps/gateway/src/db/audit.ts`):
 
 ```json
 {"type":"audit.event","id":"aud_...","ts":1791876649000,"actor_type":"user","actor_id":"usr_...","actor_email":"admin@example.com","action":"grant.disable","target_type":"grant","target_id":"grt_...","summary":"...","diff":{"before":{"enabled":true},"after":{"enabled":false}},"ip":"203.0.113.7","user_agent":"..."}
 ```
 
-- `wrangler.jsonc` sets `observability.head_sampling_rate` to `1`, and `scripts/check-config.sh`
+- `wrangler.jsonc` sets `observability.head_sampling_rate` to `1`, and `apps/gateway/scripts/check-config.sh`
   enforces it: a lower rate can drop audit lines.
 - The D1 table is the source of truth. A line can be missing if the isolate stops between commit
   and log; the row is not.
@@ -360,7 +360,7 @@ a sink ([I-LOG-1](threat-model.md#i-log-1)).
 Cloudflare dashboard under the Worker's Observability tab, filtered by `type`.
 
 To ship logs to a SIEM, add an OpenTelemetry destination in the Cloudflare dashboard, then list it
-in `observability.logs.destinations` in `wrangler.jsonc`
+in `observability.logs.destinations` in `apps/gateway/wrangler.jsonc`
 ([OpenTelemetry export](https://developers.cloudflare.com/workers/observability/opentelemetry-export/)).
 Keep `head_sampling_rate` at `1`. Workers Logs billing moves to Cloudflare Observability pricing on
 2026-12-01 ([Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)).
@@ -393,12 +393,12 @@ sampling and the pre-trust budget. Basin Pipelines requires Workers Paid.
    `<name>_r2` and the pipeline `<name>`:
 
    ```sh
-   bash scripts/setup-archive.sh --bucket <r2-bucket> --retention-days 90
+   bash apps/gateway/scripts/setup-archive.sh --bucket <r2-bucket> --retention-days 90
    ```
 
    Options: `--prefix` (default `requests`), `--name` (default `tokengate_requests`).
 3. Get the stream id: `pnpm wrangler basin pipelines streams get tokengate_requests_v1`.
-4. Add the binding to `wrangler.jsonc`:
+4. Add the binding to `apps/gateway/wrangler.jsonc`:
 
    ```jsonc
    "pipelines": [{ "binding": "REQUEST_ARCHIVE", "stream": "<stream-id>" }]
@@ -420,7 +420,7 @@ count days from each file's creation and delete within about a day after expiry
 ### Schema
 
 The stream schema is `pipelines/request-log.v1.schema.json`: the request-log columns except
-`eval_trace`, plus `schema_version` (`1`). `src/telemetry/archive.ts` copies only these fields. A
+`eval_trace`, plus `schema_version` (`1`). `apps/gateway/src/telemetry/archive.ts` copies only these fields. A
 stream schema and pipeline SQL cannot be changed after creation. A new schema version means a new
 stream (for example `tokengate_requests_v2`) and a new binding.
 

@@ -6,10 +6,10 @@ how to recover when a key is replaced or lost. It is for owners and platform eng
 ## How the keyring works
 
 Each credential is sealed with a fresh data key, and that data key is wrapped with a KEK from the
-Keyring (`src/crypto/envelope.ts`). The sealed value records the key id (`kid`) that wrapped it. Both
+Keyring (`apps/gateway/src/crypto/envelope.ts`). The sealed value records the key id (`kid`) that wrapped it. Both
 layers are bound to the service id, base URL and injection ([I-CRED-2](../threat-model.md#i-cred-2)).
 
-The keyring comes from exactly one of two Worker secrets (`src/crypto/keyring.ts`):
+The keyring comes from exactly one of two Worker secrets (`apps/gateway/src/crypto/keyring.ts`):
 
 | Secret | Format | Key ids |
 |---|---|---|
@@ -24,10 +24,10 @@ how to recover when a key is replaced or lost. It is for owners and platform eng
 ## How the keyring works
 
 Each credential is sealed with a fresh data key, and that data key is wrapped with a KEK from the
-Keyring (`src/crypto/envelope.ts`). The sealed value records the key id (`kid`) that wrapped it. Both
+Keyring (`apps/gateway/src/crypto/envelope.ts`). The sealed value records the key id (`kid`) that wrapped it. Both
 layers are bound to the service id, base URL and injection ([I-CRED-2](../threat-model.md#i-cred-2)).
 
-The keyring comes from exactly one of two Worker secrets (`src/crypto/keyring.ts`):
+The keyring comes from exactly one of two Worker secrets (`apps/gateway/src/crypto/keyring.ts`):
 
 | Secret | Format | Key ids |
 |---|---|---|
@@ -60,7 +60,7 @@ variables, so the same secret key has a different KCV under different `AUTH_ACCE
   sentence such as "Active key k2. 2 keys loaded. Every stored secret opens."; below it, the
   problems with their fix and the affected tokens.
 - `pnpm -s keyring check` prints the same values for a secret read from stdin
-  (`scripts/keyring.ts`). It uses the Worker's parser, so it reports the same errors. It reads
+  (`apps/gateway/scripts/keyring.ts`). It uses the Worker's parser, so it reports the same errors. It reads
   `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` and `AUTH_ACCESS_DEVELOPMENT` from the environment.
   Set them to the Worker's exact values, else the printed KCVs do not match the Encryption keys page.
   `pnpm -s keyring generate` prints the KCV for the same environment.

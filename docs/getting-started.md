@@ -71,7 +71,7 @@ If your data must stay in a jurisdiction, use `--jurisdiction eu` (or `us`, `fed
 pnpm run deploy
 ```
 
-This command applies the migrations in `migrations/` to `DB` and the migrations in `migrations-telemetry/` to `TELEMETRY_DB`, then deploys the Worker. Answer yes when Wrangler asks to apply the migrations.
+This command applies the migrations in `apps/gateway/migrations/` to `DB` and the migrations in `apps/gateway/migrations-telemetry/` to `TELEMETRY_DB`, then deploys the Worker. Answer yes when Wrangler asks to apply the migrations.
 
 Note the URL that Wrangler prints, for example `https://tokengate.<your-subdomain>.workers.dev`. Use it until step 7 gives the Worker its custom domain.
 
@@ -291,7 +291,7 @@ The steps above already put the admin UI on a custom domain. Before real use:
 
    Details are in [operations/cloudflare-zone-settings.md](operations/cloudflare-zone-settings.md).
 2. If CI jobs still use the workers.dev URL, change `TOKENGATE_URL` in your CI variables to `<gateway>`.
-3. Optional: turn off the workers.dev hostname. Set `"workers_dev": false` in your clone's `wrangler.jsonc` and run `pnpm run deploy`.
+3. Optional: turn off the workers.dev hostname. Set `"workers_dev": false` in your clone's `apps/gateway/wrangler.jsonc` and run `pnpm run deploy`.
 4. Optional: in Settings > "Upstream hosts", list the exact hosts your services use. Empty allows any public https host ([configuration](configuration.md#upstream-host-allowlist)).
 5. Pin `actions/get-token` to a commit SHA in every workflow.
 6. Monitor `<gateway>/readyz` and read [observability.md](observability.md). Optional bindings (request log queue, R2 archive, rate limiter) are in [configuration.md](configuration.md).
@@ -299,14 +299,14 @@ The steps above already put the admin UI on a custom domain. Before real use:
 
 ## Deploy button
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/2fd/cloudflare-tokengate)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/2fd/cloudflare-tokengate/tree/main/apps/gateway)
 
 1. Generate the KEK and store it in your vault first (step 6, items 1 and 2).
 2. Click the button. Cloudflare copies this repository into a new repository in your GitHub or GitLab account, creates the two D1 databases and sets up Workers Builds.
 3. The form asks for the two secrets that `.dev.vars.example` sets:
    - `TOKENGATE_KEK`: paste your KEK. Do not use the development key from `.dev.vars.example`: it is public.
    - `AUTH_ACCESS_DEVELOPMENT`: the local development login. It signs in no request to your Worker. Enter any email address; you delete this secret in [step 9](#9-set-the-operator-variables).
-4. Check that the Workers Builds deploy command runs the `deploy` script: `pnpm run deploy`. Cloudflare pre-fills it from `package.json`. If the field shows a plain `wrangler deploy`, change it: that command does not apply the database migrations.
+4. Check that the Workers Builds deploy command runs the `deploy` script: `pnpm run deploy`. Cloudflare pre-fills it from `apps/gateway/package.json`. If the field shows a plain `wrangler deploy`, change it: that command does not apply the database migrations.
 5. After the first deploy, continue at [step 7](#7-attach-a-custom-domain). The Access variables are not part of the button form: `wrangler.jsonc` declares none.
 
 A deploy that keeps the `.dev.vars.example` values fails closed ([I-DEPLOY-1](threat-model.md#i-deploy-1)). The development login signs in only requests to `localhost`, so `/admin` shows the setup page and nobody can sign in. When you set the Access variables, the Worker refuses the development key (`dev_placeholder_key`), and the setup page stays until you delete `AUTH_ACCESS_DEVELOPMENT`.

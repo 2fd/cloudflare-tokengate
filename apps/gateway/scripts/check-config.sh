@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deployment guardrails that tests cannot see because they live in wrangler.jsonc (I-DEPLOY-1, I-SSRF-1).
-# Usage: scripts/check-config.sh [path/to/wrangler.jsonc]   (defaults to the repo's wrangler.jsonc)
+# Usage: apps/gateway/scripts/check-config.sh [path/to/wrangler.jsonc]   (default: its wrangler.jsonc)
 set -euo pipefail
 config_file="$(realpath "${1:-$(dirname "$0")/../wrangler.jsonc}")"
 cd "$(dirname "$0")/.."

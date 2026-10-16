@@ -2,7 +2,7 @@
   "schema_version": 2,
   "diagram_type": "workflow",
   "meta": {
-    "title": "How a grant is evaluated (src/policy/evaluate.ts)",
+    "title": "How a grant is evaluated (apps/gateway/src/policy/evaluate.ts)",
     "quality_profile": "showcase",
     "legend": {
       "entries": {

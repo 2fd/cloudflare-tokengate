@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Every threat-model invariant ID (I-XXX-N) must be named by at least one describe() block under
-# the test directory (default: test/). IDs come from docs/threat-model.md when it exists, else
-# from the list below. Prints the missing IDs and exits 1 if there are any.
+# the test directory (default: apps/gateway/test/). IDs come from docs/threat-model.md when it
+# exists, else from the list below. Prints the missing IDs and exits 1 if there are any.
 #
-#   scripts/check-threat-ids.sh                 # describe() anywhere under test/
-#   scripts/check-threat-ids.sh test/security   # describe() under test/security/ only
+#   scripts/check-threat-ids.sh                              # describe() anywhere under apps/gateway/test/
+#   scripts/check-threat-ids.sh apps/gateway/test/security   # describe() under apps/gateway/test/security/ only
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-test_dir="${1:-test}"
+test_dir="${1:-apps/gateway/test}"
 case "$test_dir" in /*) ;; *) test_dir="$root/$test_dir" ;; esac
 threat_model="$root/docs/threat-model.md"
 

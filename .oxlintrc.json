@@ -8,7 +8,7 @@
     "typeAware": true,
     "reportUnusedDisableDirectives": "error"
   },
-  "ignorePatterns": ["worker-configuration.d.ts", "public/static/**"],
+  "ignorePatterns": ["**/worker-configuration.d.ts", "apps/*/public/static/**"],
   "rules": {
     "typescript/no-floating-promises": "error",
     "react/no-danger": "error",
@@ -17,11 +17,11 @@
   },
   "overrides": [
     {
-      "files": ["scripts/**"],
+      "files": ["scripts/**", "apps/*/scripts/**"],
       "rules": { "eslint/no-console": "off" }
     },
     {
-      "files": ["test/**"],
+      "files": ["apps/*/test/**"],
       "rules": {
         "typescript/unbound-method": "off",
         "typescript/no-base-to-string": "off",

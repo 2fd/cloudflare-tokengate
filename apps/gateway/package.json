@@ -1,0 +1,47 @@
+{
+  "name": "@tokengate/gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted credential broker for Cloudflare Workers: callers present a workload identity token (e.g. GitHub Actions OIDC), the gateway injects the upstream API credential.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "setup": "cp .dev.vars.example .dev.vars && rm -rf .wrangler/state/v3/d1 && pnpm db:migrate:local",
+    "dev": "wrangler dev",
+    "deploy": "wrangler d1 migrations apply DB --remote && wrangler d1 migrations apply TELEMETRY_DB --remote && wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local && wrangler d1 migrations apply TELEMETRY_DB --local",
+    "types": "wrangler types --env-file .dev.vars.example",
+    "typecheck": "wrangler types --env-file .dev.vars.example --check && tsc --noEmit && tsc --noEmit -p scripts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "keyring": "node scripts/keyring.ts",
+    "test:scripts": "bash scripts/check-config.sh && bash test/security/check-config-test.sh"
+  },
+  "dependencies": {
+    "hono": "^4.13.13",
+    "jose": "^6.2.12"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.0",
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3",
+    "wrangler": "^4.149.0"
+  },
+  "cloudflare": {
+    "bindings": {
+      "DB": {
+        "description": "Control-plane database (users, caller providers, services, grants, settings, audit log). Created for you; `pnpm run deploy` applies its migrations."
+      },
+      "TELEMETRY_DB": {
+        "description": "Request log and hourly rollups, kept separate so telemetry volume cannot fill the control plane. Created for you; `pnpm run deploy` applies its migrations."
+      },
+      "TOKENGATE_KEK": {
+        "description": "**Required. Replace the default.** Key that encrypts stored upstream credentials: 32 random bytes, base64. The default from .dev.vars.example is public and the Worker refuses it outside local development. Generate your own outside Cloudflare with `openssl rand -base64 32` and keep a copy in your vault: losing it loses every stored credential. For rotation, see docs/operations/key-rotation.md in the repository."
+      },
+      "AUTH_ACCESS_DEVELOPMENT": {
+        "description": "**Local development only.** Signs every admin request to localhost in as this email, with no check. In production it signs nobody in, and together with AUTH_ACCESS_TEAM_DOMAIN and AUTH_ACCESS_AUD no login works: delete this secret and set the Access variables before you add services (stored credentials are bound to these variables)."
+      }
+    }
+  }
+}

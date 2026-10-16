@@ -73,7 +73,7 @@ Steps:
    ```
 
 4. Generate a user id and an audit event id in the gateway's format (`<prefix>_<ULID>`,
-   `src/lib/ids.ts`):
+   `apps/gateway/src/lib/ids.ts`):
 
    ```sh
    read -r USER_ID AUDIT_ID < <(node -e 'const A="0123456789ABCDEFGHJKMNPQRSTVWXYZ";const id=(p)=>{let t=Date.now(),s="";for(let i=0;i<10;i++){s=A[t%32]+s;t=Math.floor(t/32)}for(const b of crypto.getRandomValues(new Uint8Array(16)))s+=A[b%32];return `${p}_${s}`};console.log(id("usr"),id("aud"))')
@@ -94,7 +94,7 @@ Steps:
    gateway links the identity, makes the user active and writes a `user.link` audit event.
 
    A login identity that is already linked to a user always signs in as that user
-   (`src/admin/auth/resolve-login.ts`). If the page says "This account is suspended." or "Your account is waiting for an owner to
+   (`apps/gateway/src/admin/auth/resolve-login.ts`). If the page says "This account is suspended." or "Your account is waiting for an owner to
    approve it.", your identity is still linked to a user that is not active. Access
    identities have `login_provider = 'access'` and the subject
    `https://<team>.cloudflareaccess.com|<sub>`. List the identities of users that are not active,

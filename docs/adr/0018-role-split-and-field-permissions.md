@@ -37,7 +37,7 @@ The export holds every user's email and both halves of the policy. It contains n
 - **Export.** `config:export` is held by admins and owners only.
 - **Access to any service.** An access manager can create a grant for any service, in any state. The grant form shows a service's name, slug, host, injection kind and whether a credential is set, never the credential hint. Token managers cannot create, change or delete grants; to stop use of a credential, they disable the service.
 - **Join roles.** New users can join with any role except `owner` (I-LINK-1).
-- **Schema.** `users.role` accepts the five values. The CHECK constraint is in `migrations/0001_initial.sql`; the project has no release yet, so the initial migration holds it instead of a table rebuild. The last-owner triggers (I-OWNER-1) are unchanged.
+- **Schema.** `users.role` accepts the five values. The CHECK constraint is in `apps/gateway/migrations/0001_initial.sql`; the project has no release yet, so the initial migration holds it instead of a table rebuild. The last-owner triggers (I-OWNER-1) are unchanged.
 
 ## Consequences
 
@@ -46,4 +46,4 @@ The export holds every user's email and both halves of the policy. It contains n
 - Code that checks a write must name the half it needs. Pages show write controls by the permission of each action, not by one "can configure" flag.
 - Old code runs on the new schema during a deploy: it never writes the new roles, and `can()` refuses roles it does not know. Rolling back after someone has the new roles leaves them with no permission until the new code is back.
 - The migration rebuilds two tables. Operators take a backup first, and the CHANGELOG upgrade notes say so.
-- Adding a field permission is a change to the RBAC table, pinned by `test/unit/admin/auth/rbac.test.ts`, and the role split is tested on the real app by `test/security/role-split.test.ts`.
+- Adding a field permission is a change to the RBAC table, pinned by `apps/gateway/test/unit/admin/auth/rbac.test.ts`, and the role split is tested on the real app by `apps/gateway/test/security/role-split.test.ts`.
