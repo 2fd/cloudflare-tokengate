@@ -177,6 +177,12 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
 .menu-item{display:flex;align-items:center;width:100%;min-height:2.25rem;padding:0 var(--sp-3);border:0;border-radius:var(--r-2);background:none;color:var(--text);text-decoration:none;text-align:left;cursor:pointer}
 .menu-item:hover{background:var(--surface-2)}
 .menu hr{border:0;border-top:1px solid var(--line);margin:var(--sp-1) 0}
+/* placement: anchored to the button that opened it (implicit popovertarget anchor), below it and
+   flipped when there is no room; the account menu opens upward. Without anchor positioning the
+   menu is centered in the viewport instead of sitting in the top-left corner. */
+[popover].menu{position-area:block-end span-inline-end;position-try-fallbacks:flip-block,flip-inline;margin-block:var(--sp-1)}
+.acct>[popover].menu{position-area:block-start span-inline-end}
+@supports not (position-area:block-end){ [popover].menu{inset:0;margin:auto;width:fit-content;height:fit-content} }
 /* health strip (error level only), top of main */
 .hstrip{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-1) var(--sp-3);padding:var(--sp-2) max(var(--gutter),calc((100% - var(--w-content-max)) / 2));background:var(--bad-bg);color:var(--text);box-shadow:inset 0 -1px 0 color-mix(in srgb,var(--bad-dot) 40%,transparent);font-size:var(--fs-sm)}
 .hstrip b{color:var(--bad);font-weight:var(--fw-medium)}
@@ -206,6 +212,8 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
   .detail{grid-template-columns:minmax(0,1fr) var(--w-rail)}
   .form-layout{grid-template-columns:minmax(0,var(--w-form)) minmax(var(--w-rail),var(--w-rail-form))}
 }
+/* top bar below 40rem: the bar keeps its height when the shell is taller than its content */
+@media (max-width:39.99rem){ .app{grid-template-rows:auto minmax(0,1fr)} }
 
 /* ===== 3. Page header ===================================================== */
 .ph{display:flex;flex-direction:column;gap:var(--sp-4)}
@@ -348,6 +356,7 @@ details.disc>.disc-b{margin-top:var(--sp-2)}
 .tbl{width:100%;border-collapse:separate;border-spacing:0}
 .tbl th,.tbl td{height:var(--h-row);padding:var(--sp-2) var(--sp-3);text-align:left;vertical-align:middle;font-weight:var(--fw-regular);border-top:1px solid var(--line)}
 .tbl thead th{height:2.25rem;padding-top:0;padding-bottom:0;border-top:0;border-bottom:1px solid var(--line);background:var(--panel-sub);font-size:var(--fs-xs);line-height:var(--lh-xs);font-weight:var(--fw-medium);color:var(--text-2);white-space:nowrap}
+.tbl thead th:not(:last-child){box-shadow:1px 0 0 var(--panel-sub)}   /* covers the hairline seam between header cells at fractional widths */
 .tbl thead+tbody tr:first-child>*{border-top:0}
 .tbl thead th:first-child{border-top-left-radius:var(--r-3)}
 .tbl thead th:last-child{border-top-right-radius:var(--r-3)}
@@ -397,7 +406,7 @@ a.ent-n:hover{color:var(--accent-text);text-decoration:underline}
 /* empty state: inside the panel where the table would be */
 .empty{display:flex;flex-direction:column;align-items:center;gap:var(--sp-2);padding:var(--sp-9) var(--sp-5);text-align:center}
 .empty .glyph{display:grid;place-items:center;width:var(--logo-lg);height:var(--logo-lg);margin-bottom:var(--sp-2);border-radius:var(--r-3);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--text-2)}
-.empty h3{font-size:var(--fs-lg);line-height:var(--lh-lg);font-weight:var(--fw-medium)}
+.empty :is(h2,h3,h4){font-size:var(--fs-lg);line-height:var(--lh-lg);font-weight:var(--fw-medium)}
 .empty p{max-width:52ch;color:var(--text-2)}
 .empty .btn-row{margin-top:var(--sp-3);justify-content:center}
 /* zero state inside a panel, positive */
@@ -444,6 +453,7 @@ input[type=radio],input[type=checkbox]{flex:none;width:16px;height:16px;margin:0
 .fixedbar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2) var(--sp-3);min-height:3rem;padding:var(--sp-2) var(--sp-4);border-radius:var(--r-3);background:var(--panel-bg);box-shadow:var(--panel-ring)}
 .fixedbar .lbl{min-width:4.5rem;font-size:var(--fs-sm);color:var(--text-2)}
 .fixedbar .grow{flex:1;min-width:0;flex-basis:10rem}  /* a badge wraps instead of overlapping a long mono path */
+.fixedbar .grow .meta{overflow-wrap:anywhere}  /* a long host or path breaks instead of leaving the bar */
 .inherit{display:block;padding:var(--sp-2) var(--sp-3);border-radius:var(--r-2);background:var(--surface-2);font-size:var(--fs-sm);color:var(--text-2)}
 .inherit b{color:var(--text);font-weight:var(--fw-medium)}
 /* radio cards (2-6 options) */
@@ -492,11 +502,16 @@ input[type=radio],input[type=checkbox]{flex:none;width:16px;height:16px;margin:0
 /* checkbox row (single) */
 .check{display:grid;grid-template-columns:auto minmax(0,1fr);gap:var(--sp-2) var(--sp-3);align-items:start;cursor:pointer}
 .check>input{margin-top:2px}
+.check>span>.hint{display:block;margin-top:2px}  /* second line under a checkbox label */
 /* shared focus ring for clickable labels */
 :is(.rc,.row-pick,.pick,.op,.check):has(input:focus-visible){outline:var(--focus-ring);outline-offset:2px}
 :is(.rc,.row-pick,.pick,.op,.check) input:focus-visible{outline:none}
 /* hidden branch box (reveal) and More disclosure */
 .subbox{display:grid;gap:var(--sp-5);padding:var(--sp-4);border-radius:var(--r-3);background:var(--surface-2)}
+/* a SubBox as a side note (“When you save”): heading + numbered list (promoted from the tokens page) */
+.subbox h3{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2);font-size:var(--fs-md);font-weight:var(--fw-medium)}
+.subbox ol{display:grid;gap:var(--sp-2);margin:0;padding-left:1.1rem;font-size:var(--fs-sm);color:var(--text-2)}
+.subbox ol b{color:var(--text);font-weight:var(--fw-medium)}
 details.more>summary{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px var(--sp-2);min-height:2rem;color:var(--accent-text);font-weight:var(--fw-medium)}
 details.more>summary::before{content:"";flex:none;width:6px;height:6px;margin-right:2px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .12s} /* same chevron as details.disc */
 details.more[open]>summary::before{transform:rotate(45deg)}
@@ -509,6 +524,11 @@ details.more>.more-b{margin-top:var(--sp-2);display:grid;gap:var(--sp-4)}
 .riskacc .check{margin-top:var(--sp-1);font-weight:var(--fw-medium)}
 .submit-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-3)}
 .submit-row .hint{flex-basis:100%}
+/* error summary (GOV.UK pattern): a bad callout, focused on load, one link per field error */
+.errsum:focus{outline:var(--focus-ring);outline-offset:2px}
+.errsum h2,.errsum h3{font-size:var(--fs-md);line-height:var(--lh-md);font-weight:600}
+.errsum ul{margin:var(--sp-1) 0 0;padding-left:1.1rem;display:grid;gap:2px}
+.errsum a{color:var(--bad);font-weight:var(--fw-medium)}
 /* stepper form sections (one page, numbered steps) */
 .stepper{display:flex;flex-direction:column;margin:0;padding:0;list-style:none}
 .fstep{position:relative;display:grid;grid-template-columns:1.5rem minmax(0,1fr);column-gap:var(--sp-4);padding-bottom:var(--sp-8)}
@@ -548,6 +568,11 @@ details.type-card[open] .sel{display:inline}
 .tcard .t{font-weight:var(--fw-medium)}
 .tcard .d{grid-column:2;font-size:var(--fs-sm);color:var(--text-2)}
 .tcard .go{grid-row:1/3;grid-column:3;color:var(--text-3)}
+.tcards>li{display:grid}  /* a card in a list item fills its cell */
+.tcard{align-content:center}  /* a taller card (its row neighbour wraps more) keeps title and line together, not spread apart */
+.tcard:not(:has(>.logo)){grid-template-columns:minmax(0,1fr) auto}  /* no logo: text + chevron */
+.tcard:not(:has(>.logo)) .d{grid-column:1}
+.tcard:not(:has(>.logo)) .go{grid-column:2}
 /* code / snippet */
 pre.code{margin:0;padding:var(--sp-4);overflow:auto;border-radius:var(--r-3);background:var(--panel-sub);box-shadow:inset 0 0 0 1px var(--line);color:var(--text);font:var(--fs-sm)/1.6 var(--font-mono);white-space:pre;tab-size:2;user-select:all;-webkit-user-select:all}
 pre.code .c{color:var(--text-3)}
@@ -668,11 +693,12 @@ pre.code .k{color:var(--accent-text)}
 .fadd>summary{display:inline-flex;align-items:center;gap:4px;height:var(--h-control);padding:0 var(--sp-3);border:1px dashed var(--control-border);border-radius:var(--r-2);background:var(--btn-bg);color:var(--text-2);font-weight:var(--fw-medium);white-space:nowrap}
 .fadd>summary:hover{border-style:solid;color:var(--text)}
 .fadd[open]>summary{border-style:solid;background:var(--surface-2);color:var(--text)}
-.fpop{position:absolute;top:calc(100% + 4px);left:0;z-index:10;display:grid;min-width:16rem;max-width:calc(100vw - 2rem);padding:var(--sp-1);border:1px solid var(--line-strong);border-radius:var(--r-3);background:var(--surface);box-shadow:var(--shadow-dialog)}
+.fpop{position:absolute;top:calc(100% + 4px);left:0;z-index:10;display:grid;width:max-content;min-width:16rem;max-width:min(28rem,calc(100vw - 2rem));padding:var(--sp-1);border:1px solid var(--line-strong);border-radius:var(--r-3);background:var(--surface);box-shadow:var(--shadow-dialog)}
 .fpop a{display:flex;align-items:center;gap:var(--sp-2);min-height:2.25rem;padding:0 var(--sp-2);border-radius:var(--r-2);color:var(--text);text-decoration:none}
 .fpop a:hover{background:var(--surface-2)}
 .fpop a .n{margin-left:auto;font-size:var(--fs-sm);color:var(--text-3)}
 .fpop hr{border:0;border-top:1px solid var(--line);margin:var(--sp-1) 0}
+.tray-h .end .fpop,.filters.end .fpop{left:auto;right:0}   /* menus at the right edge of the tray header open towards the content */
 /* active filter chips: links that remove the filter */
 .achips{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center}
 .achip{display:inline-flex;align-items:center;gap:6px;height:var(--h-control-sm);padding:0 6px 0 var(--sp-3);border-radius:var(--r-2);background:var(--accent-soft);color:var(--accent-soft-text);font-size:var(--fs-sm);font-weight:var(--fw-medium);text-decoration:none}
@@ -694,6 +720,10 @@ dialog.dlg.wide{width:min(40rem,calc(100vw - 2rem))}
 dialog.dlg::backdrop{background:var(--backdrop)}
 dialog.dlg[open]{display:flex;flex-direction:column}
 dialog.dlg>form{display:flex;flex-direction:column;min-height:0;max-height:inherit}
+/* fallback: where command="show-modal" is missing, the trigger's popovertarget opens the dialog as a popover */
+dialog.dlg:popover-open{display:flex;flex-direction:column;inset:0;margin:auto}
+/* server-rendered open (re-shown after a failed submit, or a GET confirm page): in the page flow, not an overlay */
+dialog.dlg[open]:not(:modal){position:relative;inset:auto;margin:0;max-width:100%;max-height:none}
 .dlg-h{display:flex;flex-direction:column;gap:var(--sp-1);padding:var(--sp-5) var(--sp-6) 0}
 .dlg-h h2{font-size:var(--fs-xl);line-height:var(--lh-xl);font-weight:var(--fw-medium)}
 .dlg-h p{color:var(--text-2)}
@@ -727,9 +757,9 @@ dialog.dlg>form{display:flex;flex-direction:column;min-height:0;max-height:inher
 .sw.bad{background:var(--bad-dot)}
 .sw.denied{background:repeating-linear-gradient(-45deg,var(--chart-denied) 0 2px,var(--panel-bg) 2px 3.5px);box-shadow:inset 0 0 0 1px var(--chart-denied)}
 .sw.error{background:radial-gradient(circle,var(--panel-bg) 1px,transparent 1.4px) 0 0/3px 3px,var(--chart-error)}
-.chart{display:block;width:100%;height:auto}
+.chart{display:block;width:100%;height:auto;overflow:visible}  /* y labels may reach into the panel padding on phones */
 .chart .gridl{stroke:var(--line);stroke-width:1}
-.chart .axis{fill:var(--text-3);font:11px var(--font-sans)}
+.chart .axis{fill:var(--text-3);font:14px var(--font-sans)}  /* viewBox units: about 12px at 1440 */
 .chart .b-allowed{fill:var(--chart-allowed)}
 .chart .b-denied{fill:url(#hatch)} .chart .b-error{fill:url(#dots)}
 .chart .hatch-bg{fill:var(--chart-denied)} .chart .hatch-ln{stroke:var(--panel-bg);stroke-width:1.4}
@@ -821,6 +851,41 @@ mark.ok{background:var(--ok-bg);color:var(--ok)}
 .todo{display:grid;gap:var(--sp-3);padding:var(--sp-4);border-radius:var(--r-3);background:var(--accent-soft);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 35%,transparent)}
 .prefill{display:flex;flex-wrap:wrap;gap:var(--sp-1) var(--sp-2);align-items:center;font-size:var(--fs-sm);color:var(--text-2)}
 
+
+/* --- Split view: request list + detail pane. Each item links to its own URL (?req=), so the
+   server renders the pane and marks the item aria-current="page"; no JS. */
+.split{display:grid;grid-template-columns:minmax(16rem,22rem) minmax(0,1fr);gap:4px;align-items:start}
+.split-list{position:sticky;top:var(--sp-4);display:flex;flex-direction:column;min-width:0;max-height:calc(100dvh - 2 * var(--sp-4));overflow:auto;border-radius:var(--r-3);background:var(--panel-bg);box-shadow:var(--panel-ring)}
+.split-items{margin:0;padding:0;list-style:none}
+.split-items>li+li{border-top:1px solid var(--line)}
+.split-item{display:grid;gap:2px;padding:var(--sp-3) var(--sp-4);color:var(--text);text-decoration:none}
+.split-item:hover{background:var(--row-hover)}
+.split-item[aria-current]{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
+.split-item:focus-visible{outline-offset:-3px}
+.split-top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--sp-1) var(--sp-3);font-size:var(--fs-sm);line-height:var(--lh-sm)}
+.split-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-sm);font-weight:var(--fw-medium)}
+.split-item:hover .split-t{color:var(--accent-text);text-decoration:underline}
+.split-item .meta{overflow-wrap:anywhere}
+.split-f{margin-top:auto;padding:var(--sp-2) var(--sp-4);border-top:1px solid var(--line);font-size:var(--fs-sm);color:var(--text-2)}
+.split-pane{display:flex;flex-direction:column;gap:var(--sp-5);min-width:0;padding:var(--sp-5);border-radius:var(--r-3);background:var(--panel-bg);box-shadow:var(--panel-ring)}
+.split-h{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:var(--sp-3) var(--sp-4);padding-bottom:var(--sp-4);border-bottom:1px solid var(--line)}
+.split-h .t{display:flex;flex-direction:column;gap:2px;min-width:0}
+.split-h :is(h2,h3){font-size:var(--fs-lg);line-height:var(--lh-lg);font-weight:var(--fw-medium);overflow-wrap:anywhere}
+.split-h .end{display:flex;flex-wrap:wrap;gap:var(--sp-2);margin-left:auto}
+.split-b{display:flex;flex-direction:column;gap:var(--sp-5);min-width:0}
+/* the pane is narrower than a page: its trace shows 2 per row */
+.split-b .trace{grid-template-columns:repeat(2,minmax(0,1fr))}
+.split-b .tstep:nth-child(odd)::before{display:none}
+@media (max-width:64rem){
+  .split{grid-template-columns:minmax(0,1fr)}
+  .split-list{position:static;max-height:20rem}
+}
+@media (max-width:39.99rem){
+  .chart .axis{font-size:24px}  /* viewBox units: stays readable when the chart is a third of its width */
+  .split-pane{padding:var(--sp-4)}
+  .split-b .trace{grid-template-columns:minmax(0,1fr)}
+}
+
 /* ===== 15. Connections ===================================================== */
 /* --- Arrow (delegation) row: consumer · repo  ->  token · operation */
 .arrow{display:flex;flex-wrap:wrap;align-items:center;gap:4px var(--sp-2);min-width:0}
@@ -834,8 +899,8 @@ a.arrow:hover .ent-n{color:var(--accent-text);text-decoration:underline}
 /* --- Connections map: consumers | wires (server SVG) | tokens.
    Geometry is fixed so the server can draw the wires: node pitch = --h-node + --map-gap
    (56 + 8 = 64 CSS px). SVG viewBox height = rows * 64 - 8; node i center y = i*64 + 28.
-   Above 12 nodes per side the server shows the top 8 by traffic plus one .group node
-   ("+ 9 more consumers") and the .cmap-note pointing to the matrix (see block .matrix). */
+   Above 7 nodes per side the server shows the 6 busiest plus one .group node
+   ("+ 8 more consumers") and the .cmap-note pointing to the matrix (see block .matrix). */
 .cmap{--map-gap:.5rem;display:grid;grid-template-columns:minmax(14rem,17rem) minmax(4rem,.55fr) minmax(0,2.6fr);padding:0 var(--sp-4) var(--sp-4)}
 .cmap-h{display:flex;align-items:center;gap:var(--sp-2);height:2.25rem;margin-bottom:var(--sp-3);border-bottom:1px solid var(--line);font-size:var(--fs-xs);font-weight:var(--fw-medium);color:var(--text-2);white-space:nowrap}
 .cmap-h .n{color:var(--text-3);font-weight:var(--fw-regular)}

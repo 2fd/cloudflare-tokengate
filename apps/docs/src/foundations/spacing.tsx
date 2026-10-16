@@ -33,7 +33,7 @@ export const spacing: Foundation = {
   slug: 'spacing',
   title: 'Spacing and sizes',
   summary:
-    'A 4px base, ten spacing steps, five radii and fixed control heights. Only these values appear in the CSS.',
+    'A 4px base, ten spacing steps and fixed control heights and widths. Only these values appear in the CSS.',
   render: () => (
     <>
       <Tray id="dx-s-space" title="Spacing" description="--sp-1 to --sp-10, in px.">
@@ -87,32 +87,6 @@ export const spacing: Foundation = {
               input (<code>.field</code>).
             </li>
             <li>4px between panels stacked in one tray.</li>
-          </ul>
-        </Panel>
-      </Tray>
-      <Tray id="dx-s-radius" title="Radius">
-        <Panel variant="pad">
-          <ul class="dx-radii">
-            <li>
-              <span class="dx-radius" data-r="1" aria-hidden="true" />
-              --r-1 4 · badges, chips
-            </li>
-            <li>
-              <span class="dx-radius" data-r="2" aria-hidden="true" />
-              --r-2 6 · controls, logos
-            </li>
-            <li>
-              <span class="dx-radius" data-r="3" aria-hidden="true" />
-              --r-3 8 · panels, cards
-            </li>
-            <li>
-              <span class="dx-radius" data-r="4" aria-hidden="true" />
-              --r-4 12 · trays, dialogs
-            </li>
-            <li>
-              <span class="dx-radius" data-r="pill" aria-hidden="true" />
-              --r-pill
-            </li>
           </ul>
         </Panel>
       </Tray>

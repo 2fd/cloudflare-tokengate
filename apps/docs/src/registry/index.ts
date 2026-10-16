@@ -20,30 +20,32 @@ export const GROUPS: readonly GroupInfo[] = [
   {
     key: 'base',
     label: 'Base',
-    description: 'Buttons, badges, status dots, chips, logos, IDs, callouts and code snippets.',
+    description:
+      'Buttons, badges, status words, chips, logos, icons, IDs, masked secrets, avatars, callouts and code snippets.',
   },
   {
     key: 'forms',
     label: 'Forms',
     description:
-      'Fields, radio cards, pick lists, the live give-access form, filters and confirm dialogs.',
+      'Fields, inputs, radio cards, pick lists, steppers, the live give-access form, risk acceptance, error summaries and type catalogs.',
   },
   {
     key: 'layout',
     label: 'Layout',
-    description: 'App shell, sidebar, centered page column, page header, tabs, trays and panels.',
+    description:
+      'App shell, sidebar, account menu, page column, page header, tabs, trays, detail layout, danger zone, dialogs, menus and disclosures.',
   },
   {
     key: 'data',
     label: 'Data',
     description:
-      'Tables, empty states, key-value lists, the right rail, activity feed and secrets.',
+      'Tables, filters, quick links, pagers, empty states, key-value lists, secrets, activity feeds, diffs and times.',
   },
   {
     key: 'viz',
     label: 'Visualization',
     description:
-      'KPIs, charts, pipeline, needs attention, request trace, connections map and matrix.',
+      'Needs attention, pipeline, KPIs, charts, reasons bar, connections map, matrix, checklist, request trace and split view.',
   },
 ];
 

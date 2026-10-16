@@ -10,6 +10,16 @@ export interface TrayProps {
   count?: number | string;
   /** One line under the title. */
   description?: Child;
+  /**
+   * A bar that sits directly in the header row (`.tray-h`), after the title: a filter bar
+   * (`Filters`) or quick links (`QuickLinks`), which size themselves against the title.
+   */
+  bar?: Child;
+  /**
+   * Keep the title for screen readers only (`.vh`): the header row then holds just the `bar` and
+   * the actions, as on the request log ("Requests, newest first" over the filter bar).
+   */
+  hideTitle?: boolean;
   /** Header actions on the right (`.tray-h .end`): secondary buttons, filters, a segmented link. */
   actions?: Child;
   /** Footer facts (`.tray-f`). */
@@ -30,6 +40,12 @@ export interface TrayProps {
 export function Tray(props: TrayProps) {
   const headingId = `${props.id}-h`;
   const Heading = props.level === 3 ? 'h3' : 'h2';
+  const heading = (
+    <Heading class={cx(props.level === 3 && 'h2', props.hideTitle && 'vh')} id={headingId}>
+      {props.title}
+      {props.count !== undefined ? <span class="count">{props.count}</span> : null}
+    </Heading>
+  );
   return (
     <section
       class={cx('tray', props.tone === 'warn' && 'tone-warn', props.class)}
@@ -37,13 +53,15 @@ export function Tray(props: TrayProps) {
       aria-labelledby={headingId}
     >
       <div class="tray-h">
-        <div class="t">
-          <Heading class={props.level === 3 ? 'h2' : undefined} id={headingId}>
-            {props.title}
-            {props.count !== undefined ? <span class="count">{props.count}</span> : null}
-          </Heading>
-          {props.description ? <p>{props.description}</p> : null}
-        </div>
+        {props.hideTitle ? (
+          heading
+        ) : (
+          <div class="t">
+            {heading}
+            {props.description ? <p>{props.description}</p> : null}
+          </div>
+        )}
+        {props.bar ?? null}
         {props.actions ? <div class="end">{props.actions}</div> : null}
       </div>
       {props.children}

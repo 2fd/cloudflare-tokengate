@@ -1,5 +1,6 @@
-import { Panel, Tray } from '@tokengate/ui';
-import { resolveToken } from '../tokens';
+import { Badge, Panel, Tray } from '@tokengate/ui';
+import { COLOR_TOKENS, resolveToken } from '../tokens';
+import { CONTRAST_PAIRS, measure } from './contrast';
 import type { Foundation } from './types';
 
 interface Row {
@@ -7,7 +8,12 @@ interface Row {
   use: string;
 }
 
-const GROUPS: ReadonlyArray<{ id: string; title: string; description: string; rows: Row[] }> = [
+export const GROUPS: ReadonlyArray<{
+  id: string;
+  title: string;
+  description: string;
+  rows: Row[];
+}> = [
   {
     id: 'surfaces',
     title: 'Surfaces',
@@ -77,6 +83,19 @@ const GROUPS: ReadonlyArray<{ id: string; title: string; description: string; ro
     ],
   },
   {
+    id: 'nav',
+    title: 'Navigation',
+    description: 'The sidebar is light in both schemes; its tokens are aliases of the ones above.',
+    rows: [
+      { token: 'nav-text', use: 'Sidebar items' },
+      { token: 'nav-muted', use: 'Counts in the sidebar' },
+      { token: 'nav-hover-bg', use: 'Sidebar item hover' },
+      { token: 'nav-active-bg', use: 'Current sidebar item' },
+      { token: 'nav-active-text', use: 'Current sidebar item text' },
+      { token: 'nav-active-bar', use: 'Bar of the current sub-item' },
+    ],
+  },
+  {
     id: 'charts',
     title: 'Charts and wires',
     description:
@@ -91,6 +110,78 @@ const GROUPS: ReadonlyArray<{ id: string; title: string; description: string; ro
     ],
   },
 ];
+
+/** The token an alias ends at (`--nav-text` → `text-2`): the one with a swatch rule. */
+function finalToken(name: string): string {
+  let current = name;
+  for (let hops = 0; hops < 4; hops++) {
+    const alias = COLOR_TOKENS.get(current)?.alias;
+    if (!alias) break;
+    current = alias;
+  }
+  return current;
+}
+
+function Ratio(props: { value?: number; min: number }) {
+  if (props.value === undefined) return <span class="faint">—</span>;
+  const pass = props.value >= props.min;
+  return (
+    <span class={pass ? 'dx-hex' : 't-bad'}>
+      {props.value.toFixed(2)}:1{pass ? null : ' (fails)'}
+    </span>
+  );
+}
+
+function ContrastTable() {
+  const results = CONTRAST_PAIRS.map(measure);
+  return (
+    <div class="scroll" role="region" tabindex={0} aria-labelledby="dx-c-contrast-h">
+      <table class="tbl stackable">
+        <thead>
+          <tr>
+            <th scope="col">Foreground on background</th>
+            <th scope="col" class="num">
+              Light
+            </th>
+            <th scope="col" class="num">
+              Dark
+            </th>
+            <th scope="col">Needs</th>
+            <th scope="col">Result</th>
+            <th scope="col">Where</th>
+          </tr>
+        </thead>
+        <tbody>
+          {results.map((pair) => (
+            <tr>
+              <th scope="row" class="dx-name">
+                <span class="dx-sw" data-token={finalToken(pair.fg)} aria-hidden="true" />{' '}
+                <code>--{pair.fg}</code> on <code>--{pair.bg}</code>
+              </th>
+              <td class="num" data-label="Light">
+                <Ratio value={pair.light} min={pair.min} />
+              </td>
+              <td class="num" data-label="Dark">
+                <Ratio value={pair.dark} min={pair.min} />
+              </td>
+              <td data-label="Needs">{pair.min === 3 ? '3:1 non-text' : '4.5:1 text'}</td>
+              <td data-label="Result">
+                {pair.pass ? (
+                  <Badge status="active">Passes AA</Badge>
+                ) : (
+                  <Badge status="expired">Fails</Badge>
+                )}
+              </td>
+              <td class="dx-cell" data-label="Where">
+                {pair.use}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 function Hex(props: { value?: string }) {
   return props.value ? <span class="dx-hex">{props.value}</span> : <span class="faint">—</span>;
@@ -112,13 +203,14 @@ function TokenTable(props: { id: string; rows: Row[] }) {
         <tbody>
           {props.rows.map((row) => {
             const value = resolveToken(row.token);
+            const alias = COLOR_TOKENS.get(row.token)?.alias;
             return (
               <tr>
                 <th scope="row" class="dx-name">
                   <code>--{row.token}</code>
                 </th>
                 <td data-label="Swatch">
-                  <span class="dx-sw" data-token={row.token} aria-hidden="true" />
+                  <span class="dx-sw" data-token={finalToken(row.token)} aria-hidden="true" />
                 </td>
                 <td data-label="Light">
                   <Hex value={value.light} />
@@ -128,6 +220,14 @@ function TokenTable(props: { id: string; rows: Row[] }) {
                 </td>
                 <td class="dx-cell" data-label="Use">
                   {row.use}
+                  {alias ? (
+                    <>
+                      {' '}
+                      <span class="faint">
+                        (alias of <code>--{alias}</code>)
+                      </span>
+                    </>
+                  ) : null}
                 </td>
               </tr>
             );
@@ -169,6 +269,16 @@ export const color: Foundation = {
           </Panel>
         </Tray>
       ))}
+      <Tray
+        id="dx-c-contrast"
+        title="Contrast"
+        count={CONTRAST_PAIRS.length}
+        description="WCAG 2.2 AA ratios of the pairs the components use, computed from the values above in both schemes."
+      >
+        <Panel variant="flush">
+          <ContrastTable />
+        </Panel>
+      </Tray>
     </>
   ),
 };

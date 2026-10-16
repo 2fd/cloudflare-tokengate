@@ -35,15 +35,15 @@ Each group owns its folder, its barrel, its tests, its docs registry file and it
 
 | Group | Components | `ui.css` sections |
 |---|---|---|
-| `base` | Button, ButtonRow, Badge, StatusDot (`.st`), RiskTag, Chip, Logo, LogoStack, IdChip, Slug, Mask, Avatar, Callout, Notice, AskSomeone, CodeBlock, Kbd, LinkAction (`.linkish`) | 4, 5, 8 (except `.empty`, `.oneline`), the `pre.code` / `.code-cap` lines of 9 |
-| `forms` | Field, Input, Select, Textarea, FieldInline, RadioCards, RowPicker, Picks, CheckPresets, Check, FixedBar, Inherit, SubBox, More, RiskAcceptance, SubmitRow, Stepper, TypeCatalog, LinkCards (`.tcards`), live form (`.lform`, summary rail), Filters, Search, AddFilter, ActiveFilters, QuickLinks, Dialog | 9, 10, 12, 13 |
-| `layout` | AppShell, SideNav, HealthLine, AccountMenu, HealthStrip, Page, PageHeader, Breadcrumbs, Identity (`.ident`), Tabs, Segmented, RelationLine, Tray, Panel, DangerZone, Disclosure, DetailLayout, FormLayout, Rail, Grid, Checklist (Get started) | 2, 3, 6, 16 |
-| `data` | Table (+ cell helpers: Entity, Num, Actions, Pager), EmptyState, ZeroState, KeyValue, RailKeyValue, Feed, Secret, DiffTable | 7, 11, `.empty` / `.oneline` in 8 |
-| `viz` | Kpis, Chart, Reasons bar, Legend, Pipeline, NeedsAttention, Trace, NextStep, ArrowRow, ConnectionsMap, Matrix | 14, 15 |
+| `base` | Button, ButtonRow, LinkAction (`.linkish`), Badge, Status (`.st`), Dot, RiskTag, Chip, Chips, Logo, LogoStack, Icon, IdChip, Slug, Mono, Kbd, Mask, Avatar, Callout, Notice, AskSomeone, CodeBlock | 4, 5, 8 (except `.empty`, `.oneline`), the `pre.code` / `.code-cap` lines of 9 |
+| `forms` | Field, FieldSet, FieldError, Input, Textarea, Select, Checkbox, FieldInline, RadioCards, RowPicker, Or, Picks, CheckPresets, SelectedCount, Reveal, SubBox, More, Stepper, FormStep, the live form (LiveForm, LiveSummary, SummaryRow, SummaryWire, SummaryFoot, LivePhrase, RiskSwitch), RiskAcceptance, FixedBar, Inherit, SubmitRow, ErrorSummary, TypeCatalog, TypeCard, CatalogGroup, LinkCards (`.tcards`) | 9, 10 |
+| `layout` | AppShell, SideNav, NavIcon, HealthLine, HealthStrip, AccountMenu, Menu, MenuItem, MenuSeparator, Page, PageHeader, Breadcrumbs, Identity (`.ident`), RelationLine, TabRow, Tabs, Segmented, Tray, Panel, DetailLayout, DangerZone, DangerRow, Disclosure, Dialog, ConfirmDialog, DialogTrigger, DialogClose | 2, 3, 6, 13 |
+| `data` | Table, Row, RowHeader, Cell, Entity, CountLink, Result, Filters, FilterSearch, AddFilter, ActiveFilters, QuickLinks, Pager, EmptyState, ZeroState, KeyValue, RailKeyValue, Secret, Feed, FeedItem, FeedDay, DiffTable, Time | 7, 11, 12, `.empty` / `.oneline` in 8 |
+| `viz` | NeedsAttention, Pipeline, Kpis, Delta, Chart, ChartPatterns, Legend, ReasonBar, ConnectionsMap, Matrix, Checklist, ChecklistProgress, Trace, NextStep, SplitView, ArrowRow | 14, 15, 16 |
 
-The component names are a starting list from the design reference; a group may merge or split them. Sections 0 (tokens), 1 (base), 17 (responsive) and 18 (forced colors) have no owner: put a component's responsive rules in a `@media` block at the end of the component's own section instead of in 17, and change tokens only with a contrast check (the token contrast test must stay green).
+Export names are unique across groups: the root barrel re-exports every group with `export *`, so a name two groups export fails the typecheck. Sections 0 (tokens), 1 (base), 17 (responsive) and 18 (forced colors) have no owner: put a component's responsive rules in a `@media` block at the end of the component's own section instead of in 17, and change tokens only with a contrast check (the token contrast test must stay green). Some base components draw with classes that live in other groups' sections (`.avatar` in 2, `.idchip` and `.slug` in 3, `.mask` in 11): change those rules together with the base owner.
 
-Minimal versions already exist, made for the docs chrome: `base/Badge`, `base/CodeBlock`, `layout/AppShell`, `layout/SideNav`, `layout/Page`, `layout/PageHeader`, `layout/Breadcrumbs`, `layout/Tray`, `layout/Panel`. Their owners complete them (for example AppShell's health line and account menu, PageHeader's identity row) and keep their current props working: the docs chrome uses them.
+Two overlaps are deliberate: `Disclosure variant="more"` (layout) and `More` (forms) render the same `details.more`; use `More` inside forms and `Disclosure` elsewhere. Pages that show a `Chart` or a `ReasonBar` render `ChartPatterns` once, from their layout (the docs layout does).
 
 ## Component conventions
 

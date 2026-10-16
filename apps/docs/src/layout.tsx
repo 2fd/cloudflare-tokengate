@@ -1,7 +1,7 @@
 // The docs chrome, built from @tokengate/ui: AppShell with a SideNav generated from the
 // foundations list and the registry, and the centered Page column. Every docs page renders
 // through DocsLayout, so the sidebar markup is the same everywhere and only the current item moves.
-import { AppShell, Page, SideNav, type SideNavSection } from '@tokengate/ui';
+import { AppShell, ChartPatterns, Page, SideNav, type SideNavSection } from '@tokengate/ui';
 import { uiCss } from '@tokengate/ui/css';
 import { raw } from 'hono/html';
 import type { Child } from 'hono/jsx';
@@ -75,6 +75,8 @@ export function DocsLayout(props: DocsLayoutProps) {
           <link rel="stylesheet" href={docsCss.href} />
         </head>
         <body>
+          {/* the chart fills (#hatch, #dots), once per page for every Chart and ReasonBar example */}
+          <ChartPatterns />
           <AppShell
             brand={{ name: 'tokengate', href: '/docs', host: 'design system' }}
             nav={<SideNav label="Documentation" sections={docsSections(props.at)} />}

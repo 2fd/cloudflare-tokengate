@@ -40,6 +40,42 @@ describe('docs pages', () => {
     // One main landmark and one h1 outside the examples.
     expect(html.match(/<main\b/g)).toHaveLength(1);
     expect(html).toContain('aria-current="page"');
+    // Ids are unique, so every label, describedby and fragment link points at one element (the
+    // chart patterns render once, from the layout).
+    const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]);
+    expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]);
+  });
+
+  it('the sidebar links every foundation and group page', async () => {
+    const html = await (await get('/docs')).text();
+    expect(html).toContain('href="/docs/foundations/');
+    for (const group of GROUPS) expect(html).toContain(`href="/docs/components/${group.key}"`);
+  });
+
+  it.each(GROUPS)('the open $label section lists every component of the group', async (group) => {
+    const html = await (await get(`/docs/components/${group.key}`)).text();
+    const nav = html.slice(html.indexOf('<nav'), html.indexOf('<main'));
+    for (const doc of REGISTRY[group.key]) {
+      expect(nav, doc.name).toContain(`href="${componentHref(group.key, doc.slug)}"`);
+      expect(nav, doc.name).toContain(`>${doc.name}<`);
+    }
+  });
+
+  it.each(FOUNDATIONS)('the open Foundations section lists $title', async (topic) => {
+    const html = await (await get(`/docs/foundations/${topic.slug}`)).text();
+    const nav = html.slice(html.indexOf('<nav'), html.indexOf('<main'));
+    for (const other of FOUNDATIONS)
+      expect(nav).toContain(`href="/docs/foundations/${other.slug}"`);
+  });
+
+  it.each(
+    GROUPS.flatMap((group) =>
+      REGISTRY[group.key].map((doc) => [componentHref(group.key, doc.slug), doc] as const),
+    ),
+  )('%s is the current nav item and documents every export it covers', async (path, doc) => {
+    const html = await (await get(path)).text();
+    expect(html).toMatch(new RegExp(`href="${path}"[^>]*aria-current="page"`));
+    for (const name of [doc.name, ...(doc.related ?? [])]) expect(html, name).toContain(name);
   });
 
   it('answers 404 with the docs chrome for unknown pages', async () => {

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { AppShell, SideNav } from '../../src';
+import {
+  AccountMenu,
+  AppShell,
+  HealthLine,
+  HealthStrip,
+  MenuItem,
+  NavIcon,
+  SideNav,
+} from '../../src';
 import { render } from '../render';
 
 const sections = [
@@ -55,5 +63,150 @@ describe('AppShell', () => {
     );
     expect(html).not.toContain('<main');
     expect(html).not.toContain('skip-link');
+  });
+});
+
+describe('AppShell slots', () => {
+  const html = render(
+    <AppShell
+      brand={{ name: 'tokengate', href: '/admin', host: 'gate.acme.dev' }}
+      nav="nav"
+      class="x"
+      health={
+        <HealthLine
+          href="/admin#ov-attention"
+          tone="warn"
+          srLabel=". Open Overview, Needs attention"
+        >
+          3 warnings to review
+        </HealthLine>
+      }
+      account={
+        <AccountMenu id="acct" name="Maya Chen" role="Owner" initials="MC">
+          <MenuItem href="/docs">Docs</MenuItem>
+        </AccountMenu>
+      }
+      banner={<HealthStrip title="Keyring unavailable.">Every call fails.</HealthStrip>}
+    >
+      body
+    </AppShell>,
+  );
+
+  it('places brand, health, nav and account in the sidebar, banner first in main', () => {
+    expect(html).toMatch(/^<div class="app x">/);
+    expect(html).toContain('<span class="inst-host">gate.acme.dev</span>');
+    expect(html.indexOf('class="health"')).toBeLessThan(html.indexOf('class="navd"'));
+    expect(html.indexOf('nav</')).toBeLessThan(html.indexOf('class="acct"'));
+    expect(html).toContain('<main class="main" id="main"><p class="hstrip" role="alert">');
+    expect(html).toContain('</p>body</main>');
+  });
+
+  it('does not double-wrap the account block', () => {
+    expect(html.match(/class="acct"/g)).toHaveLength(1);
+  });
+
+  it('omits the host line when there is none', () => {
+    expect(render(<AppShell brand={{ name: 't', href: '/' }} nav="n" />)).not.toContain(
+      'inst-host',
+    );
+  });
+});
+
+describe('HealthLine', () => {
+  it('renders a hidden dot, the summary and the screen reader rest of the name', () => {
+    expect(
+      render(
+        <HealthLine href="/admin#ov-attention" tone="warn" srLabel=". Open Overview">
+          3 warnings to review
+        </HealthLine>,
+      ),
+    ).toBe(
+      '<a class="health" href="/admin#ov-attention"><span class="dot warn" aria-hidden="true"></span>3 warnings to review<span class="vh">. Open Overview</span></a>',
+    );
+  });
+
+  it('uses the plain green dot for ok and passes classes through', () => {
+    const html = render(
+      <HealthLine href="/admin#ov-health" class="y">
+        Healthy · 1 note
+      </HealthLine>,
+    );
+    expect(html).toContain(
+      '<a class="health y" href="/admin#ov-health"><span class="dot" aria-hidden="true">',
+    );
+    expect(html).not.toContain('class="vh"');
+  });
+
+  it.each(['bad', 'info'] as const)('tone %s colors the dot', (tone) => {
+    expect(
+      render(
+        <HealthLine href="#" tone={tone}>
+          x
+        </HealthLine>,
+      ),
+    ).toContain(`class="dot ${tone}"`);
+  });
+});
+
+describe('HealthStrip', () => {
+  it('is an alert with the glyph hidden and the action last', () => {
+    expect(
+      render(
+        <HealthStrip title="Keyring unavailable." action={<a href="/k">Fix encryption keys</a>}>
+          Every call fails.
+        </HealthStrip>,
+      ),
+    ).toBe(
+      '<p class="hstrip" role="alert"><b><span aria-hidden="true">✕</span> Keyring unavailable.</b> Every call fails. <a href="/k">Fix encryption keys</a></p>',
+    );
+  });
+
+  it('takes another glyph and extra classes', () => {
+    const html = render(<HealthStrip title="T" glyph="⚠" class="z" />);
+    expect(html).toBe(
+      '<p class="hstrip z" role="alert"><b><span aria-hidden="true">⚠</span> T</b></p>',
+    );
+  });
+});
+
+describe('AccountMenu', () => {
+  const html = render(
+    <AccountMenu id="acct-1" name="Maya <Chen>" role="Owner" initials="MC" class="k">
+      <MenuItem href="/admin/export">Export configuration</MenuItem>
+    </AccountMenu>,
+  );
+
+  it('opens its popover menu from the button', () => {
+    expect(html).toMatch(
+      /^<div class="acct k"><button class="acct-btn" type="button" popovertarget="acct-1">/,
+    );
+    expect(html).toContain('<div class="menu" id="acct-1" popover="auto">');
+  });
+
+  it('hides the avatar and chevron, names the button with the person and "account menu"', () => {
+    expect(html).toContain('<span class="avatar md" aria-hidden="true">MC</span>');
+    expect(html).toContain('<span class="chev" aria-hidden="true">▾</span>');
+    expect(html).toContain('<span class="vh">, account menu</span>');
+    expect(html).toContain('<small>Owner</small>');
+  });
+
+  it('escapes the name', () => {
+    expect(html).toContain('<b>Maya &lt;Chen&gt;</b>');
+  });
+});
+
+describe('NavIcon', () => {
+  it.each(['monitoring', 'tokens', 'consumers', 'users'] as const)(
+    '%s is a hidden svg.ic',
+    (name) => {
+      const html = render(<NavIcon name={name} />);
+      expect(html).toMatch(
+        /^<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><(path|circle|rect) /,
+      );
+    },
+  );
+
+  it('passes classes through', () => {
+    expect(render(<NavIcon name="users" class="big" />)).toContain('class="ic big"');
   });
 });

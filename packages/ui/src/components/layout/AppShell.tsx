@@ -14,11 +14,11 @@ export interface AppShellProps {
   brand: AppShellBrand;
   /** Sidebar navigation, usually a `SideNav`. */
   nav: Child;
-  /** Health line under the brand (`a.health`), hidden below 40rem. */
+  /** Health line under the brand, a `HealthLine` (`a.health`); hidden below 40rem. */
   health?: Child;
-  /** Account block at the bottom of the sidebar (`.acct`). */
+  /** Account block at the bottom of the sidebar, an `AccountMenu` (it renders `.acct`). */
   account?: Child;
-  /** Error-level health strip at the top of main (`p.hstrip[role=alert]`). */
+  /** Error-level health strip at the top of main, a `HealthStrip` (`p.hstrip[role=alert]`). */
   banner?: Child;
   /** Id of `<main>`, the skip link target. One main per page. */
   mainId?: string;
@@ -47,8 +47,8 @@ function Mark() {
 /**
  * App shell (`.app`): skip link, light sidebar (brand, health, navigation, account) and the main
  * column. Below 40rem the sidebar becomes a top bar and the navigation opens from a "Menu" button
- * (`details.navd`, no JS); from 40rem it is always open. Minimal version from the docs scaffold:
- * the layout group completes the health line, account menu and banner components.
+ * (`details.navd`, no JS); from 40rem it is always open. The main column holds the error-level
+ * banner, then the content, usually one centered `Page`.
  */
 export function AppShell(props: AppShellProps) {
   const mainId = props.mainId ?? 'main';
@@ -75,7 +75,7 @@ export function AppShell(props: AppShellProps) {
             <summary>Menu</summary>
             <div class="navd-in">
               {props.nav}
-              {props.account ? <div class="acct">{props.account}</div> : null}
+              {props.account}
             </div>
           </details>
         </div>

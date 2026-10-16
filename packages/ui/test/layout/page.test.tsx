@@ -51,3 +51,68 @@ describe('Tray', () => {
     expect(render(<Tray id="a" title="T" level={3} />)).toContain('<h3 class="h2" id="a-h">T</h3>');
   });
 });
+
+describe('Tray header bar', () => {
+  it('puts the bar straight in the header row, after a screen-reader-only title', () => {
+    const html = render(
+      <Tray id="rq" title="Requests, newest first" hideTitle bar={<form class="filters">f</form>}>
+        <Panel variant="flush">x</Panel>
+      </Tray>,
+    );
+    expect(html).toContain(
+      '<div class="tray-h"><h2 class="vh" id="rq-h">Requests, newest first</h2><form class="filters">f</form></div>',
+    );
+  });
+
+  it('keeps the visible title block when the title is shown', () => {
+    expect(render(<Tray id="q" title="Tokens" bar={<nav>q</nav>} />)).toContain(
+      '<div class="t"><h2 id="q-h">Tokens</h2></div><nav>q</nav>',
+    );
+  });
+});
+
+describe('Tray slots', () => {
+  const html = render(
+    <Tray
+      id="tok"
+      title="All tokens"
+      description="One line."
+      actions={<a href="#">Export</a>}
+      footer="Updated 14:05"
+      class="x"
+    >
+      <Panel variant="pad">a</Panel>
+      <Panel>b</Panel>
+    </Tray>,
+  );
+
+  it('renders description, actions and footer around the panels', () => {
+    expect(html).toMatch(/^<section class="tray x" id="tok" aria-labelledby="tok-h">/);
+    expect(html).toContain(
+      '<div class="t"><h2 id="tok-h">All tokens</h2><p>One line.</p></div><div class="end"><a href="#">Export</a></div>',
+    );
+    expect(html).toContain(
+      '<div class="panel pad">a</div><div class="panel">b</div><div class="tray-f">Updated 14:05</div></section>',
+    );
+  });
+});
+
+describe('Panel', () => {
+  it.each(['pad', 'flush'] as const)('variant %s', (variant) => {
+    expect(
+      render(
+        <Panel variant={variant} class="y">
+          c
+        </Panel>,
+      ),
+    ).toBe(`<div class="panel ${variant} y">c</div>`);
+  });
+});
+
+describe('Breadcrumbs', () => {
+  it('renders a crumb without href as text', () => {
+    expect(render(<Breadcrumbs items={[{ label: 'A' }, { label: 'B' }]} class="z" />)).toBe(
+      '<nav class="crumbs z" aria-label="Breadcrumb"><ol><li>A</li><li aria-current="page">B</li></ol></nav>',
+    );
+  });
+});

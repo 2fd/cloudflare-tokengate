@@ -18,6 +18,9 @@ ol.dx-list>li::marker{font-variant-numeric:tabular-nums}
 
 /* ===== Component page: examples =========================================== */
 /* one panel per example: heading row, canvas (the real component), JSX snippet */
+/* clip, not hidden: hidden makes the panel a scroll container and breaks sticky parts inside an
+   example (the live summary rail) */
+.panel.flush.dx-example{overflow:clip}
 .dx-example-h{display:flex;flex-direction:column;gap:2px;padding:var(--sp-3) var(--sp-5);box-shadow:inset 0 -1px 0 var(--line)}
 .dx-example-h h3{font-size:var(--fs-md);line-height:var(--lh-md);font-weight:var(--fw-medium)}
 .dx-example-h p{font-size:var(--fs-sm);line-height:var(--lh-sm);color:var(--text-2);max-width:72ch}
@@ -36,7 +39,7 @@ ol.dx-list>li::marker{font-variant-numeric:tabular-nums}
 
 /* ===== Component page: props, classes, do / don't ========================= */
 .dx-cell{overflow-wrap:anywhere}
-.dx-props td,.dx-props th{vertical-align:top;padding-top:var(--sp-3);padding-bottom:var(--sp-3);height:auto}
+.dx-props td,.dx-props tbody th{vertical-align:top;padding-top:var(--sp-3);padding-bottom:var(--sp-3);height:auto}
 .dx-props .dx-name{font-family:var(--font-mono);font-size:var(--fs-sm);white-space:nowrap}
 .dx-props .dx-type{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--text-2);overflow-wrap:anywhere}
 .dx-props .dx-def{white-space:nowrap}
@@ -150,9 +153,5 @@ ol.dx-list>li::marker{font-variant-numeric:tabular-nums}
   .dx-props .dx-name{white-space:normal;overflow-wrap:anywhere}
 }
 
-/* ===== Link cards without a logo (docs indexes) ============================ */
-.dx-cards>li{display:grid}
-.dx-cards .tcard{grid-template-columns:minmax(0,1fr) auto}
-.dx-cards .tcard .d{grid-column:1}
-.dx-cards .tcard .go{grid-column:2}
+/* ===== Inline rows ======================================================== */
 .dx-row{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center}
