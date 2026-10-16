@@ -21,7 +21,7 @@
       "rules": { "eslint/no-console": "off" }
     },
     {
-      "files": ["apps/*/test/**"],
+      "files": ["apps/*/test/**", "packages/*/test/**"],
       "rules": {
         "typescript/unbound-method": "off",
         "typescript/no-base-to-string": "off",

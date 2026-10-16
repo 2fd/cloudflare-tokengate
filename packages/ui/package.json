@@ -1,0 +1,33 @@
+{
+  "name": "@tokengate/ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "tokengate design system D: one stylesheet and server-rendered Hono JSX components, with no client JavaScript.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./base": "./src/components/base/index.ts",
+    "./forms": "./src/components/forms/index.ts",
+    "./layout": "./src/components/layout/index.ts",
+    "./data": "./src/components/data/index.ts",
+    "./viz": "./src/components/viz/index.ts",
+    "./css": "./src/css.ts",
+    "./ui.css": "./src/styles/ui.css",
+    "./vite-css-text": "./vite-css-text.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "peerDependencies": {
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "hono": "^4.13.13",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}

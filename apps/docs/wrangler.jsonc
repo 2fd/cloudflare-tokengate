@@ -1,0 +1,14 @@
+// tokengate-docs — the design system documentation Worker (apps/docs). No bindings, no secrets:
+// every page is rendered from @tokengate/ui and the registry in src/registry.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "tokengate-docs",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  // Stylesheets are bundled as strings (Workers cannot read files at runtime) and served from
+  // /static/<name>.<hash>.css by src/app.tsx. See packages/ui/src/css.ts.
+  "rules": [{ "type": "Text", "globs": ["**/*.css"], "fallthrough": true }]
+}

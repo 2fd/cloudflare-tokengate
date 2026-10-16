@@ -44,7 +44,11 @@
   // deploy and overwrites the dashboard value, so set each var in one place only and never commit ""
   // placeholders: an emptied AUTH_ACCESS_AUD silently turns off admin sign-in (I-DEPLOY-1).
   // scripts/check-config.sh enforces this.
-  "keep_vars": true
+  "keep_vars": true,
+
+  // Stylesheets of @tokengate/ui are bundled as strings (Workers cannot read files at runtime); see
+  // packages/ui/README.md, "Serving the stylesheet".
+  "rules": [{ "type": "Text", "globs": ["**/*.css"], "fallthrough": true }]
 
   // --- Optional: batch request-log writes through a queue (Workers Paid). See docs/observability.md.
   // "queues": {

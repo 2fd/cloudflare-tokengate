@@ -82,7 +82,11 @@ apps/
     scripts/               Worker scripts: keyring, config guardrails, archive setup.
     wrangler.jsonc         Worker configuration.
     .dev.vars.example      Local variables; `pnpm run setup` copies it to .dev.vars.
-packages/                  Shared libraries (none yet).
+  docs/                    @tokengate/docs: Worker "tokengate-docs" serving the design system docs
+                           under /docs (`pnpm docs:dev`, port 8790). Pages come from src/registry.
+packages/
+  ui/                      @tokengate/ui: design system D. src/styles/ui.css and Hono JSX
+                           components (no client JS). Conventions: packages/ui/README.md.
 actions/get-token/         Composite GitHub Action for callers, and its shell test.
 pipelines/                 Request archive stream schema.
 docs/                      Operator and contributor documentation, ADRs, diagrams.
@@ -104,9 +108,9 @@ scripts/                   Repository checks: links, threat-model IDs.
 | `pnpm check` | Everything CI runs on the code: `lint`, `typecheck`, `test`, `test:scripts`. Run it before you push. |
 | `pnpm lint` | `oxlint` (type-aware), then `oxfmt --check .` (format and import order). |
 | `pnpm format` | `oxfmt .` |
-| `pnpm typecheck` | In `apps/gateway`: `wrangler types --check`, then `tsc --noEmit` for `src/` and `test/`, then for `scripts/`. |
-| `pnpm types` | Regenerates `apps/gateway/worker-configuration.d.ts`. Run it after you change bindings in `apps/gateway/wrangler.jsonc`. |
-| `pnpm test` | In `apps/gateway`: Vitest inside workerd (`@cloudflare/vitest-plugin`) with local D1 databases. |
+| `pnpm typecheck` | In `apps/gateway`: `wrangler types --check`, then `tsc --noEmit` for `src/` and `test/`, then for `scripts/`. In `apps/docs`: `wrangler types --check`, then `tsc --noEmit`. In `packages/ui`: `tsc --noEmit`. |
+| `pnpm types` | Regenerates `apps/gateway/worker-configuration.d.ts` and `apps/docs/worker-configuration.d.ts`. Run it after you change bindings or module rules in a `wrangler.jsonc`. |
+| `pnpm test` | In `apps/gateway`: Vitest inside workerd (`@cloudflare/vitest-plugin`) with local D1 databases. In `packages/ui` and `apps/docs`: Vitest in Node (components render to strings; docs routes through `app.request()`). |
 | `pnpm test:watch` | Vitest in watch mode. |
 | `pnpm test:scripts` | Shell checks: `scripts/check-threat-ids.sh`, `actions/get-token/test.sh`, `scripts/check-links.mjs`, then `apps/gateway/scripts/check-config.sh` and `apps/gateway/test/security/check-config-test.sh`. |
 | `pnpm run setup` | Copies `apps/gateway/.dev.vars.example` to `apps/gateway/.dev.vars` (overwriting it), deletes the local D1 databases and recreates them with every migration applied. |
@@ -115,6 +119,8 @@ scripts/                   Repository checks: links, threat-model IDs.
 | `pnpm keyring generate` / `pnpm keyring check` | Generates a key, or validates a `TOKENGATE_KEK` or `TOKENGATE_KEYRING` value read from stdin. See [docs/operations/key-rotation.md](docs/operations/key-rotation.md). |
 | `pnpm run deploy` | Applies both remote migrations, then `wrangler deploy`. Operators use it; contributors rarely need it. |
 | `pnpm wrangler <args>` | Wrangler in `apps/gateway`, for example `pnpm wrangler secret put TOKENGATE_KEK`. |
+| `pnpm docs:dev` | The design system docs Worker (`apps/docs`) on http://localhost:8790/docs. |
+| `pnpm docs:deploy` | Deploys the docs Worker `tokengate-docs`. |
 
 To run one file or one `describe`:
 

@@ -53,6 +53,7 @@ The repository is a pnpm workspace. The Worker moved, unchanged, to `apps/gatewa
 
 - **Upgrade note: Workers Builds.** If Workers Builds deploys your copy, set the build's root directory to `apps/gateway`. The Deploy button now points at `apps/gateway`.
 - **Upgrade note: local state.** Local development files now live in the package: move `.dev.vars` to `apps/gateway/.dev.vars` and `.wrangler/` to `apps/gateway/.wrangler/`, or run `pnpm run setup` again. If your clone changes `wrangler.jsonc`, check that the merge carried your changes to `apps/gateway/wrangler.jsonc`.
+- **Design system.** `packages/ui` (`@tokengate/ui`) holds design system D: one stylesheet (`src/styles/ui.css`, served at `/static/ui.<hash>.css`) and server-rendered Hono JSX components with no client JavaScript. `apps/docs` is a separate Worker, `tokengate-docs`, that documents it under `/docs` (`pnpm docs:dev` on port 8790, `pnpm docs:deploy`). Both Workers bundle `**/*.css` as text modules (a `rules` entry in `wrangler.jsonc`). The admin UI does not use it yet.
 
 ### Added
 
