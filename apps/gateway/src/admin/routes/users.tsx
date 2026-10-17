@@ -10,7 +10,6 @@ import {
   Callout,
   Chip,
   Chips,
-  Column,
   DangerRow,
   DangerZone,
   DetailLayout,
@@ -21,7 +20,7 @@ import {
   FieldError,
   Filters,
   FilterSearch,
-  Grid,
+  Disclosure,
   Icon,
   IdChip,
   Identity,
@@ -668,7 +667,7 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
       const singleOwner = owner && activeOwners === 1;
       const hasStack = cards.length > 0 || singleOwner;
       return (
-        <Grid>
+        <>
           {owner ? (
             <InviteTray
               ctx={ctx}
@@ -681,25 +680,22 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
             />
           ) : null}
           {hasStack ? (
-            <Column span={7}>
-              <Stack>
-                <DecisionTray cards={cards} ctx={ctx} dismissError={atCard ? rowError : null} />
-                {singleOwner ? (
-                  <Callout
-                    title="You are the only owner."
-                    actions={
-                      <Button size="sm" href={paths.users({ hash: 'invite' })}>
-                        Invite a second owner
-                      </Button>
-                    }
-                  >
-                    If you lose access, only a break-glass database edit gets you back.
-                  </Callout>
-                ) : null}
-              </Stack>
-            </Column>
+            <Stack>
+              <DecisionTray cards={cards} ctx={ctx} dismissError={atCard ? rowError : null} />
+              {singleOwner ? (
+                <Callout
+                  title="You are the only owner."
+                  actions={
+                    <Button size="sm" href={paths.users({ hash: 'invite' })}>
+                      Invite a second owner
+                    </Button>
+                  }
+                >
+                  If you lose access, only a break-glass database edit gets you back.
+                </Callout>
+              ) : null}
+            </Stack>
           ) : null}
-          {hasStack ? <RoleMap listed={listed} selfId={ctx.userId} /> : null}
           <AccountsTray
             all={all}
             listed={listed}
@@ -717,7 +713,14 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
             highlight={highlight}
             rowError={atRow ? rowError : undefined}
           />
-        </Grid>
+          <Disclosure
+            summary="Who can change what"
+            hint="Roles and permissions"
+            class="u-role-guide"
+          >
+            <RoleMap listed={listed} selfId={ctx.userId} />
+          </Disclosure>
+        </>
       );
     },
   );
@@ -841,7 +844,6 @@ function AccountsTray(props: {
   return (
     <Tray
       id="people"
-      class="span-12"
       title="Accounts"
       count={listed.length}
       description={

@@ -25,6 +25,7 @@ function id(value: string): string {
 }
 
 export const paths = {
+  appearance: () => '/admin/users/appearance' as const,
   overview: (o?: { range?: Range; hash?: 'health' | 'attention' | 'get-started' }) =>
     build('/admin', { range: o?.range }, o?.hash),
   requests: (f?: {

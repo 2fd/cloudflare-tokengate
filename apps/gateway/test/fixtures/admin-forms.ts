@@ -177,6 +177,11 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
   }),
 
   // == users ==
+  'POST /admin/users/appearance': async () => ({
+    path: '/admin/users/appearance',
+    action: 'settings.update',
+    fields: { title: 'Acme Gateway' },
+  }),
   'POST /admin/users/sign-in/policy': async () => ({
     path: '/admin/users/sign-in/policy',
     action: 'user.join_defaults',

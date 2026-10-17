@@ -521,6 +521,23 @@ describe('issuer access rules: list and filters', () => {
     ).text();
     expect(list).toContain('Disable<span class="vh"> one</span>');
     expect(list).not.toContain('Disable<span class="vh"> two</span>');
+    // Selecting a credential keeps both menus and the quick links available in place.
+    expect(list).toContain('Filter by </span>Credential</summary>');
+    expect(list).toContain('Filter by </span>Credential access rule</summary>');
+    const quickLinks =
+      /<nav class="qlinks" aria-label="Accesses that need attention">([\s\S]*?)<\/nav>/.exec(
+        list,
+      )?.[1] ?? '';
+    const quickHrefs = [...quickLinks.matchAll(/href="([^"]+)"/g)];
+    expect(quickHrefs).toHaveLength(5);
+    for (const [, href] of quickHrefs) {
+      const params = new URL(href!.replaceAll('&amp;', '&'), 'https://example.test').searchParams;
+      expect(params.get('token')).toBe(serviceId);
+      expect(params.get('status')).toBeTruthy();
+    }
+    expect(list.indexOf('aria-label="Active filters"')).toBeGreaterThan(
+      list.indexOf('aria-label="Accesses that need attention"'),
+    );
     const unknown = await (
       await adminGet(world.app, admin(), '/admin/issuer-access-rules?consumer=cpr_gone')
     ).text();

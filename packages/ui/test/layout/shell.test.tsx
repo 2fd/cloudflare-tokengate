@@ -67,6 +67,21 @@ describe('SideNav', () => {
 });
 
 describe('AppShell', () => {
+  it('replaces the built-in mark with an image', () => {
+    const html = render(<AppShell brand={{ name: 'Acme', href: '/', image: '/logo.png' }} />);
+    expect(html).toContain('<img src="/logo.png" alt="" width="32" height="32"/>');
+    expect(html).not.toContain('M12 3l7 3');
+  });
+
+  it('supports a custom title and icon', () => {
+    const html = render(
+      <AppShell brand={{ name: 'Acme <Gateway>', href: '/admin', icon: 'home' }} />,
+    );
+    expect(html).toContain('Acme &lt;Gateway&gt;');
+    expect(html).toContain('M4 11l8-7 8 7');
+    expect(html).not.toContain('M12 3l7 3');
+  });
+
   it('links the skip link to main', () => {
     const html = render(
       <AppShell brand={{ name: 'tokengate', href: '/admin' }} nav="nav" mainId="m">

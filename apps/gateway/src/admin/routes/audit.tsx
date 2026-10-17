@@ -372,12 +372,6 @@ export function registerAuditRoutes(app: App): void {
                 ]}
               />
             </TabRow>
-            <ActiveFilters
-              lead="Active filters"
-              filters={chips}
-              clearHref={paths.audit()}
-              clearLabel="Clear filters"
-            />
           </PageHeader>
         ),
       },
@@ -390,33 +384,41 @@ export function registerAuditRoutes(app: App): void {
           }
           bar={
             showFilters ? (
-              <Filters as="group" label="Filter audit log" end>
-                <AddFilter
-                  id="f-actor"
-                  label="Who"
-                  open={error('actor') !== undefined}
-                  options={peopleOptions}
-                  extra={[
-                    {
-                      href: link({ ...params, actor: 'system' }, {}),
-                      label: 'System (hourly job)',
-                    },
-                  ]}
+              <>
+                <Filters as="group" label="Filter audit log">
+                  <AddFilter
+                    id="f-actor"
+                    label="Who"
+                    open={error('actor') !== undefined}
+                    options={peopleOptions}
+                    extra={[
+                      {
+                        href: link({ ...params, actor: 'system' }, {}),
+                        label: 'System (hourly job)',
+                      },
+                    ]}
+                  />
+                  <AddFilter
+                    id="f-target"
+                    label="Target"
+                    open={error('target') !== undefined}
+                    options={targetGroups}
+                    extra={targetExtra}
+                  />
+                  {error('actor') ? (
+                    <FieldError id="f-actor-error">{error('actor')}</FieldError>
+                  ) : null}
+                  {error('target') ? (
+                    <FieldError id="f-target-error">{error('target')}</FieldError>
+                  ) : null}
+                </Filters>
+                <ActiveFilters
+                  lead="Active filters"
+                  filters={chips}
+                  clearHref={paths.audit()}
+                  clearLabel="Clear filters"
                 />
-                <AddFilter
-                  id="f-target"
-                  label="Target"
-                  open={error('target') !== undefined}
-                  options={targetGroups}
-                  extra={targetExtra}
-                />
-                {error('actor') ? (
-                  <FieldError id="f-actor-error">{error('actor')}</FieldError>
-                ) : null}
-                {error('target') ? (
-                  <FieldError id="f-target-error">{error('target')}</FieldError>
-                ) : null}
-              </Filters>
+              </>
             ) : undefined
           }
         >

@@ -518,7 +518,13 @@ const sections = [
           type: 'readonly SideNavSection[]',
           required: true,
           description:
-            "label, href, icon, count, pill { label, srSuffix }, open, current, items[] { label, href, current }. current is boolean | 'page' | 'true': true or 'page' is the current page, 'true' an ancestor of a deeper page.",
+            "label, href, icon, count, pill { label, srSuffix }, open, current, items[] { label, href, icon, current }. current is boolean | 'page' | 'true': true or 'page' is the current page, 'true' an ancestor of a deeper page.",
+        },
+        {
+          name: 'grouped',
+          type: 'boolean',
+          description:
+            'Show each section as a labeled group with all its pages visible. An item without its own icon uses the section icon.',
         },
         { name: 'class', type: 'string', description: 'Extra classes on the nav.' },
       ],

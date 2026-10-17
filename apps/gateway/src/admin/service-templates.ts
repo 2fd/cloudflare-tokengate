@@ -38,6 +38,10 @@ export interface TemplateSecret {
 export interface ServiceTemplate {
   id: string;
   label: string;
+  /** Application heading in the credential catalog. */
+  app: string;
+  /** Access type shown within the application group. */
+  access_label: string;
   /** The card summary after the label: host and secret shape, e.g. "slack.com/api · bot token xoxb-…". */
   card_summary: string;
   secret: TemplateSecret;
@@ -74,6 +78,8 @@ const GITHUB_SECRET: TemplateSecret = {
 export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
   {
     id: 'slack',
+    app: 'Slack',
+    access_label: 'Bot token',
     label: 'Slack Web API',
     card_summary: 'slack.com/api · bot token xoxb-…',
     secret: {
@@ -109,6 +115,8 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
   },
   {
     id: 'slack-webhook',
+    app: 'Slack',
+    access_label: 'Incoming webhook',
     label: 'Slack incoming webhook',
     card_summary: 'hooks.slack.com · webhook URL',
     secret: {
@@ -134,6 +142,8 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
   },
   {
     id: 'discord-webhook',
+    app: 'Discord',
+    access_label: 'Webhook',
     label: 'Discord webhook',
     card_summary: 'discord.com · webhook URL',
     secret: {
@@ -162,6 +172,8 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
   },
   {
     id: 'openai',
+    app: 'OpenAI',
+    access_label: 'API key',
     label: 'OpenAI API',
     card_summary: 'api.openai.com · project API key sk-proj-…',
     secret: {
@@ -187,6 +199,8 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
   },
   {
     id: 'anthropic',
+    app: 'Anthropic',
+    access_label: 'API key',
     label: 'Anthropic API',
     card_summary: 'api.anthropic.com · API key sk-ant-…',
     secret: {
@@ -219,6 +233,8 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
   },
   {
     id: 'github',
+    app: 'GitHub',
+    access_label: 'Personal access token',
     label: 'GitHub REST API',
     card_summary: 'api.github.com · personal access token github_pat_… or ghp_…',
     secret: GITHUB_SECRET,
@@ -242,6 +258,8 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
   },
   {
     id: 'github-uploads',
+    app: 'GitHub',
+    access_label: 'Release asset uploads',
     label: 'GitHub release asset uploads',
     card_summary: 'uploads.github.com · the same token as GitHub REST API',
     secret: GITHUB_SECRET,

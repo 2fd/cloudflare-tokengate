@@ -84,6 +84,10 @@ describe('Requests filters', () => {
     );
     // Six filters plus the outcome: each chip drops exactly one key.
     expect(hrefs).toHaveLength(7);
+    expect(html.indexOf('aria-label="Active filters"')).toBeGreaterThan(
+      html.indexOf('aria-label="Filter requests"'),
+    );
+    expect(html).toContain('<h2 id="requests-h">Requests, newest first</h2>');
     const full = new URLSearchParams(query);
     for (const href of hrefs) {
       const params = new URL(href, 'https://x').searchParams;

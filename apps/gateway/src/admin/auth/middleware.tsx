@@ -27,9 +27,10 @@ import { parseConfig } from '../../config';
 import type { User } from '../../db/types';
 import { recordRefusedStatements, recordSeenStatements } from '../../db/users';
 import type { Deps } from '../../deps';
+import { adminBrand } from '../branding';
 import { paths } from '../paths';
 import {
-  ADMIN_FORM_MAX_BYTES,
+  adminFormLimit,
   type AdminContext,
   type FormFields,
   parsedForm,
@@ -135,7 +136,7 @@ export const adminMiddleware: MiddlewareHandler<AppContext> = async (c, next) =>
     // Bounded read: any role's oversized body is refused before it is buffered in full.
     const form = await parsedForm(c);
     if (!form.ok) {
-      return c.text(`Request body too large (limit ${ADMIN_FORM_MAX_BYTES} bytes).`, 413);
+      return c.text(`Request body too large (limit ${adminFormLimit(c)} bytes).`, 413);
     }
     fields = form.fields;
     const passed = await csrfCheck({
@@ -231,7 +232,7 @@ function endpointRoute(c: AdminContext): { method: string; path: string } | null
 }
 
 /** "Sign-in problem": no user yet, so the bare shell (brand only). One primary: Reload. */
-function errorPage(
+async function errorPage(
   c: AdminContext,
   key: MessageKey,
   status: ContentfulStatusCode,
@@ -242,6 +243,7 @@ function errorPage(
   return c.html(
     <BareLayout
       title={documentTitle('Sign-in problem', null, false)}
+      brand={await adminBrand(c.get('deps').env.DB, new URL(c.req.url).hostname)}
       host={new URL(c.req.url).hostname}
     >
       <PageHeader
@@ -265,7 +267,7 @@ function errorPage(
 const LOGIN_VARIABLES = ['AUTH_ACCESS_TEAM_DOMAIN', 'AUTH_ACCESS_AUD'] as const;
 
 /** Shown when no login is configured. Lists the variables to set, never their values (I-CFG-1). */
-function setupPage(c: AdminContext) {
+async function setupPage(c: AdminContext) {
   const env = c.get('deps').env;
   const config = parseConfig(env);
   const host = new URL(c.req.url).hostname;
@@ -290,7 +292,11 @@ function setupPage(c: AdminContext) {
     });
   }
   return c.html(
-    <BareLayout title={documentTitle('Set up sign-in', null, false)} host={host}>
+    <BareLayout
+      title={documentTitle('Set up sign-in', null, false)}
+      host={host}
+      brand={await adminBrand(c.get('deps').env.DB, host)}
+    >
       <PageHeader
         title="Set up sign-in"
         description="Sign-in to the admin console goes through Cloudflare Access, and no Access login is configured."

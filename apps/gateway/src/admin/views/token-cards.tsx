@@ -6,6 +6,7 @@ import {
   Badge,
   Button,
   Callout,
+  CatalogGroup,
   CodeBlock,
   Entity,
   Field,
@@ -121,17 +122,22 @@ export function TokenTypeCards(props: {
     <>
       <TypeCatalog
         id="types"
-        title="Which API does this token unlock?"
-        description="Ready-made types set the URL, how the secret is sent and the check for you."
+        title="Choose an application and access type"
+        description="Start with an API credential, then limit each consumer’s access in tokengate. Webhooks already have a narrow scope."
       >
-        {SERVICE_TEMPLATES.map((template) => (
-          <TemplateCard
-            ctx={ctx}
-            data={data}
-            template={template}
-            open={openId === template.id}
-            failed={props.failed?.template === template.id ? props.failed : null}
-          />
+        {['Slack', 'GitHub', 'OpenAI', 'Anthropic', 'Discord'].map((app) => (
+          <>
+            <CatalogGroup>{app}</CatalogGroup>
+            {SERVICE_TEMPLATES.filter((template) => template.app === app).map((template) => (
+              <TemplateCard
+                ctx={ctx}
+                data={data}
+                template={template}
+                open={openId === template.id}
+                failed={props.failed?.template === template.id ? props.failed : null}
+              />
+            ))}
+          </>
         ))}
         <Or />
         <CustomCard
@@ -178,7 +184,7 @@ function TemplateCard(props: {
     name: 'token-type',
     id: `type-${template.id}`,
     logo: templateLogo(template),
-    title: template.label,
+    title: template.access_label,
     description: `${template.card_summary}${blocked ? ` · ${host} is not an allowed host` : ''}`,
     open: props.open,
   };

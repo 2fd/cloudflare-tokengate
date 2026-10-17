@@ -6,6 +6,8 @@ import { ariaCurrent } from './current';
 export interface SideNavItem {
   label: string;
   href: string;
+  /** Decorative icon for a grouped navigation row. */
+  icon?: Child;
   /**
    * `true` or `'page'`: this item is the current page (`aria-current="page"`). `'true'`: it holds
    * the current page, a deeper page not in the nav (`aria-current="true"`): a token detail under
@@ -38,6 +40,8 @@ export interface SideNavProps {
   /** Accessible name of the navigation landmark ("Sections"). */
   label: string;
   sections: readonly SideNavSection[];
+  /** Show labeled groups with every page visible. */
+  grouped?: boolean;
   class?: string;
 }
 
@@ -46,7 +50,37 @@ export interface SideNavProps {
  * it. No group labels. Data driven, so every page renders the same markup and only the current
  * item changes.
  */
-export function SideNav({ label, sections, class: className }: SideNavProps) {
+export function SideNav({ label, sections, grouped, class: className }: SideNavProps) {
+  if (grouped) {
+    return (
+      <nav class={cx('nav', className)} aria-label={label}>
+        {sections.map((section) => (
+          <section class="nav-group" aria-label={section.label}>
+            <div class="nav-label">{section.label}</div>
+            <ul class="nav-pages">
+              {(section.items?.length ? section.items : [section]).map((item, index) => (
+                <li>
+                  <a class="nav-item" href={item.href} aria-current={ariaCurrent(item.current)}>
+                    {item.icon ?? section.icon}
+                    <span class="nav-text">{item.label}</span>
+                    {index === 0 && section.pill ? (
+                      <span class="nav-pill">
+                        {section.pill.label}
+                        <SrSuffix text={section.pill.srSuffix} />
+                      </span>
+                    ) : null}
+                    {index === 0 && section.count !== undefined ? (
+                      <span class="nav-count">{section.count}</span>
+                    ) : null}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))}
+      </nav>
+    );
+  }
   return (
     <nav class={cx('nav', className)} aria-label={label}>
       {sections.map((section) => (

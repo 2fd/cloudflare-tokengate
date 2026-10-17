@@ -25,6 +25,8 @@ const DOCUMENTED_ADMIN_ROUTES = [
   'POST /admin/retention',
 
   // == users ==
+  'GET /admin/users/appearance',
+  'POST /admin/users/appearance',
   'GET /admin/users/sign-in',
   'POST /admin/users/sign-in/policy',
   'POST /admin/users/sign-in/hosts',

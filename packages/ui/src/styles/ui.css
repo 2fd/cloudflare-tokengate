@@ -42,7 +42,7 @@
   /* sizes */
   --h-control: 2.5rem; --h-control-sm: 2rem; --h-chip: 1.75rem; --h-badge: 1.375rem;
   --h-row: 2.75rem; --h-row-dense: 2.25rem; --h-node: 3.5rem;
-  --w-sidebar: 15rem; --w-form: 40rem; --w-rail: 20rem; --w-rail-form: 24rem; --w-content-max: 76rem; --w-col-min: 60rem;
+  --w-sidebar: 17rem; --w-form: 40rem; --w-rail: 20rem; --w-rail-form: 24rem; --w-content-max: 76rem; --w-col-min: 60rem;
   --gutter: 2rem;
   --logo-xs: 1.125rem; --logo-sm: 1.5rem; --logo-md: 2rem; --logo-lg: 2.5rem;
 
@@ -132,16 +132,17 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
 .skip-link{position:absolute;left:-9999px;top:var(--sp-2);z-index:30;padding:var(--sp-2) var(--sp-3);border-radius:var(--r-2);background:var(--accent);color:var(--on-accent)}
 .skip-link:focus{left:var(--sp-2)}
 .side{min-width:0;background:var(--nav-bg);border-right:1px solid var(--line)}
-.side-in{display:flex;flex-direction:column;gap:var(--sp-3);min-height:100%;padding:var(--sp-3)}
+.side-in{display:flex;flex-direction:column;gap:var(--sp-4);min-height:100%;padding:var(--sp-4) var(--sp-3)}
 /* from 40rem the sidebar stays in view, so the health line and the account block (export, docs,
    sign out) never scroll away on a long page; a sidebar taller than the window scrolls on its own */
 @media (min-width:40rem){ .side-in{position:sticky;top:0;height:100vh;height:100dvh;min-height:0;overflow-y:auto} }
 /* instance block */
 .inst{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:var(--sp-3);align-items:center;padding:var(--sp-2)}
-.mark{grid-row:span 2;display:grid;place-items:center;width:2rem;height:2rem;border-radius:var(--r-2);background:var(--accent);color:var(--on-accent);box-shadow:var(--primary-shadow);flex:none}
+.mark{grid-row:span 2;display:grid;place-items:center;width:2rem;height:2rem;border-radius:var(--r-2);background:transparent;color:var(--text);box-shadow:none;flex:none}
+.mark img{display:block;width:100%;height:100%;object-fit:contain;border-radius:inherit}
 .mark svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.inst-name{font-weight:var(--fw-medium);line-height:var(--lh-sm);color:var(--text);text-decoration:none}
-.inst-host{font:var(--fs-xs)/var(--lh-xs) var(--font-mono);color:var(--text-2)}
+.inst-name{overflow-wrap:anywhere;font-weight:var(--fw-medium);line-height:var(--lh-sm);color:var(--text);text-decoration:none}
+.inst-host{overflow-wrap:anywhere;font:var(--fs-xs)/var(--lh-xs) var(--font-mono);color:var(--text-2)}
 .health{display:flex;align-items:center;gap:var(--sp-2);min-height:1.75rem;padding:0 var(--sp-2);border:1px solid var(--line);border-radius:var(--r-2);background:var(--page-bg);color:var(--text-2);font-size:var(--fs-sm);text-decoration:none}
 .health:hover{color:var(--text);border-color:var(--line-strong)}
 /* nav: <details class="navd"> is always open from 40rem (no JS); below it is the Menu button */
@@ -164,6 +165,16 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
 .nav-sub a{display:flex;align-items:center;gap:var(--sp-2);min-height:1.875rem;padding:0 var(--sp-2);border-radius:var(--r-2);color:var(--nav-text);text-decoration:none}
 .nav-sub a:hover{background:var(--nav-hover-bg);color:var(--text)}
 .nav-sub a[aria-current]{background:var(--nav-active-bg);color:var(--nav-active-text);font-weight:var(--fw-medium);box-shadow:inset 3px 0 0 var(--nav-active-bar)}
+/* Flat, labeled sidebar groups. */
+.nav-group + .nav-group{margin-top:var(--sp-5)}
+.nav-label{padding:var(--sp-2) var(--sp-3);color:var(--nav-muted);font:var(--fs-xs)/var(--lh-xs) var(--font-mono);letter-spacing:.1em;text-transform:uppercase}
+.nav-pages{display:flex;flex-direction:column;gap:2px;list-style:none;margin:0;padding:0}
+.nav-pages .nav-item{min-height:2.5rem;padding:var(--sp-2) var(--sp-3);gap:var(--sp-3);font-weight:var(--fw-regular);border-radius:var(--r-3)}
+.nav-pages .nav-item svg{width:18px;height:18px}
+.nav-pages .nav-item[aria-current]{box-shadow:none;font-weight:var(--fw-medium)}
+.nav-text{flex:1;min-width:0;overflow-wrap:anywhere}
+.nav-pages .nav-count,.nav-pages .nav-pill{margin-left:0;flex:none}
+.nav-pages .nav-pill{border-radius:var(--r-pill)}
 /* account */
 .acct{margin-top:auto;padding-top:var(--sp-3);border-top:1px solid var(--line)}
 .acct-btn{display:flex;align-items:center;gap:var(--sp-2);width:100%;min-height:2.75rem;padding:var(--sp-1) var(--sp-2);border:1px solid transparent;border-radius:var(--r-2);background:none;text-align:left;cursor:pointer}
@@ -757,7 +768,12 @@ pre.code .k{color:var(--accent-text)}
 
 /* ===== 12. Filters ======================================================== */
 .filters{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2)}
+/* Filter controls keep their start edge when conditional actions/chips appear.
+   Contract: packages/ui/README.md#stable-filter-layout */
+.tray-h:has(>.filters,>.qlinks){justify-content:flex-start}
+.tray-h:has(>.filters:not(.end))>.t{flex:1 1 100%}
 .tray-h>.filters{flex:1 1 30rem}
+.tray-h>.achips{flex:1 1 100%;order:1}
 .filters .search{position:relative;flex:1 1 16rem;max-width:22rem}
 .filters .search svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-3)}
 .filters .search .input{padding-left:2rem}
@@ -785,7 +801,7 @@ pre.code .k{color:var(--accent-text)}
 .achip:hover .x{background:color-mix(in srgb,var(--accent-soft-text) 15%,transparent)}
 /* quick links with counts (status filters, focus switch) */
 .qlinks{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center}
-.ql{display:inline-flex;align-items:center;gap:6px;height:var(--h-control-sm);padding:0 var(--sp-3);border:1px solid var(--line-strong);border-radius:var(--r-2);background:var(--btn-bg);color:var(--text-2);font-size:var(--fs-sm);text-decoration:none;white-space:nowrap}
+.ql{display:inline-flex;align-items:center;gap:6px;height:var(--h-control-sm);padding:0 var(--sp-3);border:1px solid var(--line-strong);border-radius:var(--r-2);background:var(--btn-bg);color:var(--text-2);font-size:var(--fs-sm);font-weight:var(--fw-medium);text-decoration:none;white-space:nowrap}
 .ql:hover{border-color:var(--control-border);color:var(--text)}
 .ql .n{display:inline-grid;place-items:center;min-width:1.25rem;height:1.125rem;padding:0 5px;border-radius:var(--r-1);background:var(--surface-2);font-size:var(--fs-xs);font-variant-numeric:tabular-nums}
 .ql .g{font-size:var(--fs-xs)}
@@ -984,7 +1000,8 @@ a.arrow:hover .ent-n{color:var(--accent-text);text-decoration:underline}
 .cmap-mid .cmap-h{justify-content:center}
 .hub{display:inline-flex;align-items:center;gap:6px;height:1.5rem;padding:0 var(--sp-2) 0 3px;border-radius:var(--r-1);background:var(--accent-soft);color:var(--accent-soft-text);font-size:var(--fs-xs);font-weight:var(--fw-medium)}
 .hub .mark{grid-row:auto;width:1.125rem;height:1.125rem;border-radius:3px;box-shadow:none}
-.hub .mark svg{width:11px;height:11px}
+.hub .mark img{display:block;width:100%;height:100%;object-fit:contain;border-radius:inherit}
+.mark svg{width:11px;height:11px}
 .nodes{display:grid;grid-auto-rows:var(--h-node);row-gap:var(--map-gap);margin:0;padding:0;list-style:none}
 .wires{display:block;width:100%;overflow:visible}
 .wire{fill:none;stroke:var(--wire);stroke-width:1.5;vector-effect:non-scaling-stroke}

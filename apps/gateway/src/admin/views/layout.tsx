@@ -8,6 +8,7 @@
 import {
   AccountMenu,
   AppShell,
+  type AppShellBrand,
   ChartPatterns,
   HealthLine,
   HealthStrip,
@@ -68,6 +69,7 @@ export const SECTIONS: Readonly<Record<SectionKey, SectionInfo>> = {
     tabs: [
       { key: 'people', href: paths.users(), label: 'People' },
       { key: 'sign-in', href: paths.signIn(), label: 'Sign-in' },
+      { key: 'appearance', href: paths.appearance(), label: 'Appearance' },
     ],
   },
   tokens: {
@@ -93,10 +95,26 @@ export const SECTIONS: Readonly<Record<SectionKey, SectionInfo>> = {
   },
 };
 
+const TAB_ICONS: Readonly<Record<string, IconName>> = {
+  overview: 'monitoring',
+  requests: 'chart',
+  audit: 'table',
+  retention: 'system',
+  tokens: 'token',
+  hosts: 'home',
+  keys: 'gate',
+  consumers: 'consumer',
+  access: 'gate',
+  appearance: 'palette',
+  people: 'users',
+  'sign-in': 'user',
+};
+
 /** Sidebar order (ADR 0022): the product's core in the middle. */
 export const SECTION_ORDER: readonly SectionKey[] = ['monitoring', 'tokens', 'consumers', 'users'];
 
 export interface ShellProps {
+  brand?: AppShellBrand;
   /** The open section; null opens none (an unknown or moved URL). */
   section: SectionKey | null;
   /** The section page this page belongs to (a `tabs` key); '' for none (403, 404). */
@@ -163,7 +181,7 @@ export function Layout(props: { title: string; shell: ShellProps; children?: Chi
   return (
     <Document title={props.title}>
       <AppShell
-        brand={{ name: 'tokengate', href: paths.overview(), host: shell.view.host }}
+        brand={shell.brand ?? { name: 'tokengate', href: paths.overview(), host: shell.view.host }}
         health={
           <HealthLine
             href={shell.health.href}
@@ -173,7 +191,7 @@ export function Layout(props: { title: string; shell: ShellProps; children?: Chi
             {shell.health.text}
           </HealthLine>
         }
-        nav={<SideNav label="Sections" sections={sideNavSections(shell)} />}
+        nav={<SideNav label="Sections" sections={sideNavSections(shell)} grouped />}
         account={<AdminAccountMenu shell={shell} />}
         banner={
           shell.problems.length > 0 ? <AdminHealthStrip problems={shell.problems} /> : undefined
@@ -191,11 +209,16 @@ export function Layout(props: { title: string; shell: ShellProps; children?: Chi
  * The pages shown before a user is resolved (sign-in problem, set up sign-in): the brand only,
  * no navigation and no account.
  */
-export function BareLayout(props: { title: string; host: string; children?: Child }) {
+export function BareLayout(props: {
+  title: string;
+  host: string;
+  brand?: AppShellBrand;
+  children?: Child;
+}) {
   return (
     <Document title={props.title}>
       <AppShell
-        brand={{ name: 'tokengate', href: paths.overview(), host: props.host }}
+        brand={props.brand ?? { name: 'tokengate', href: paths.overview(), host: props.host }}
         mainId="main"
       >
         <Page>{props.children}</Page>
@@ -205,7 +228,7 @@ export function BareLayout(props: { title: string; host: string; children?: Chil
 }
 
 /**
- * One row per section in SECTION_ORDER; the open section shows its pages. A page item is the
+ * Labeled groups in SECTION_ORDER, with all pages visible. A page item is the
  * current page (`aria-current="page"`) on its own URL, and "true" on a deeper page under it (a
  * token under Tokens, a request under Requests).
  */
@@ -231,6 +254,7 @@ export function sideNavSections(shell: ShellProps): SideNavSection[] {
       items: info.tabs.map((tab) => ({
         label: tab.label,
         href: tab.href,
+        icon: <Icon name={TAB_ICONS[tab.key] ?? info.icon} />,
         current:
           key === shell.section && tab.key === shell.subsection
             ? tab.href === shell.path

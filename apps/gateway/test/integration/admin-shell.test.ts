@@ -8,6 +8,7 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { version } from '../../package.json';
 import { loadDone, resolveNotice } from '../../src/admin/notice';
+import { ADMIN_BRANDING_KEY, getAdminBranding, putSettingStatement } from '../../src/db/settings';
 import type { User } from '../../src/db/types';
 import { newId } from '../../src/lib/ids';
 import {
@@ -20,6 +21,8 @@ import { type AdminSession, adminGet, adminPost, createUser, loginAs } from '../
 import { createTestApp } from '../helpers/app';
 import { KEK_1 } from '../unit/admin/ops/helpers';
 
+const PNG_DATA =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
 let world: AdminWorld;
 let ownerUser: User;
 let owner: AdminSession;
@@ -50,6 +53,48 @@ function navLink(html: string, href: string): string {
 }
 
 describe('the shell on every page', () => {
+  it('loads title and uploaded image from D1 on signed-in and sign-in screens', async () => {
+    await env.DB.batch([
+      putSettingStatement(
+        env.DB,
+        ADMIN_BRANDING_KEY,
+        {
+          title: 'Acme <Gateway>',
+          image: PNG_DATA,
+        },
+        Date.now(),
+        ownerUser.id,
+      ),
+    ]);
+    const app = createTestApp();
+    const session = await loginAs(app, ownerUser);
+    const html = await (await adminGet(app, session, '/admin')).text();
+    expect(html).toContain('Acme &lt;Gateway&gt;');
+    expect(html).toContain(`src="${PNG_DATA}"`);
+    const anonymous = await (await app.request('/admin')).text();
+    expect(anonymous).toContain('Acme &lt;Gateway&gt;');
+    expect(anonymous).toContain(`src="${PNG_DATA}"`);
+  });
+
+  it('falls back safely for blank titles and invalid stored images', async () => {
+    await env.DB.batch([
+      putSettingStatement(
+        env.DB,
+        ADMIN_BRANDING_KEY,
+        {
+          title: '  ',
+          image: 'data:image/svg+xml,<svg onload="alert(1)"/>',
+        },
+        Date.now(),
+        ownerUser.id,
+      ),
+    ]);
+    const html = await page(owner, '/admin');
+    expect(html).toContain('class="inst-name" href="/admin">tokengate</a>');
+    expect(html).toContain('M12 3l7 3');
+    expect(html).not.toContain('onload');
+  });
+
   it('starts with the skip link and has one h1 inside main#main', async () => {
     const html = await page(owner, '/admin/credentials');
     expect(html.indexOf('<a ')).toBe(html.indexOf('<a class="skip-link" href="#main">'));
@@ -70,21 +115,28 @@ describe('the shell on every page', () => {
     }
   });
 
-  it('lists the sections in sidebar order and the pages of the open section only', async () => {
+  it('lists all pages in labeled groups regardless of the open section', async () => {
     const nav = sideNav(await page(owner, '/admin/credentials/hosts'));
-    const rows = [...nav.matchAll(/<a class="nav-item[^"]*" href="([^"]+)"/g)].map((m) => m[1]);
+    const rows = [...nav.matchAll(/<a class="nav-item" href="([^"]+)"/g)].map((m) => m[1]);
     expect(rows).toEqual([
       '/admin',
-      '/admin/credentials',
-      '/admin/credential-access-rules',
-      '/admin/users',
-    ]);
-    expect(nav).toContain('<a class="nav-item is-open" href="/admin/credentials">');
-    const items = [...nav.matchAll(/<li><a href="([^"]+)"/g)].map((m) => m[1]);
-    expect(items).toEqual([
+      '/admin/requests',
+      '/admin/audit',
+      '/admin/retention',
       '/admin/credentials',
       '/admin/credentials/hosts',
       '/admin/credentials/keys',
+      '/admin/credential-access-rules',
+      '/admin/issuer-access-rules',
+      '/admin/users',
+      '/admin/users/sign-in',
+      '/admin/users/appearance',
+    ]);
+    expect([...nav.matchAll(/class="nav-label">([^<]+)/g)].map((m) => m[1])).toEqual([
+      'Monitoring',
+      'Credentials',
+      'Access Rules',
+      'Users',
     ]);
   });
 
@@ -106,35 +158,41 @@ describe('the shell on every page', () => {
 
   it('marks the current page item as the page or as an ancestor (aria-current)', async () => {
     const list = await page(owner, '/admin/credentials');
-    // The section row is open but is not the current page; its Tokens item is.
+    // The flat row marks the current page.
     expect(navLink(list, '/admin/credentials')).toBe(
-      '<a class="nav-item is-open" href="/admin/credentials">',
+      '<a class="nav-item" href="/admin/credentials" aria-current="page">',
     );
-    expect(sideNav(list)).toContain('<li><a href="/admin/credentials" aria-current="page">');
+    expect(sideNav(list)).toContain(
+      '<li><a class="nav-item" href="/admin/credentials" aria-current="page">',
+    );
     expect(navLink(list, '/admin')).not.toContain('aria-current');
 
     const hosts = sideNav(await page(owner, '/admin/credentials/hosts'));
-    expect(hosts).toContain('<li><a href="/admin/credentials/hosts" aria-current="page">');
-    expect(hosts).toContain('<li><a href="/admin/credentials">Credentials</a></li>');
+    expect(hosts).toContain(
+      '<li><a class="nav-item" href="/admin/credentials/hosts" aria-current="page">',
+    );
+    expect(hosts).toContain('<li><a class="nav-item" href="/admin/credentials">');
 
     const detail = sideNav(await page(owner, `/admin/credentials/${world.serviceId}`));
-    expect(detail).toContain('<li><a href="/admin/credentials" aria-current="true">');
+    expect(detail).toContain(
+      '<li><a class="nav-item" href="/admin/credentials" aria-current="true">',
+    );
 
     const audit = sideNav(await page(owner, '/admin/audit'));
-    expect(audit).toContain('<a class="nav-item is-open" href="/admin">');
-    expect(audit).toContain('<li><a href="/admin/audit" aria-current="page">');
+    expect(audit).toContain('<a class="nav-item" href="/admin">');
+    expect(audit).toContain('<li><a class="nav-item" href="/admin/audit" aria-current="page">');
 
     // Forbidden and not-found pages open the section and mark no item.
     const missing = sideNav(await page(owner, '/admin/credentials/nope/deeper'));
-    expect(missing).toContain('<a class="nav-item is-open" href="/admin/credentials">');
+    expect(missing).toContain('<a class="nav-item" href="/admin/credentials">');
     expect(missing).not.toContain('aria-current');
   });
 
   it('counts tokens and consumers, and shows none for an empty list', async () => {
     const nav = sideNav(await page(owner, '/admin/requests'));
-    expect(nav).toContain('Credentials<span class="nav-count">1</span>');
-    expect(nav).toContain('Access Rules<span class="nav-count">1</span>');
-    expect(nav).not.toMatch(/(Monitoring|Users)<span class="nav-count">/);
+    expect(nav).toContain('Credentials</span><span class="nav-count">1</span>');
+    expect(nav).toContain('Access Rules</span><span class="nav-count">1</span>');
+    expect(nav).not.toMatch(/(Overview|People)<\/span><span class="nav-count">/);
   });
 
   it('shows owners how many people need a decision, with a text alternative', async () => {
@@ -145,7 +203,7 @@ describe('the shell on every page', () => {
       identity: { loginProvider: 'access', subject: 'pending-subject' },
     });
     const pill =
-      'Users<span class="nav-pill">1 pending<span class="vh">: a person needs your decision</span></span>';
+      'People</span><span class="nav-pill">1 pending<span class="vh">: a person needs your decision</span></span>';
     expect(await page(owner, '/admin/requests')).toContain(pill);
     const admin = await loginAs(
       world.app,
@@ -492,5 +550,75 @@ describe('_return: row actions go back to a fixed page', () => {
       ?.replace(/&done=aud_[0-9A-Z]{26}/, '')
       .replace(/#.*$/, '');
     expect(bare).toBe(location);
+  });
+});
+
+describe('appearance settings', () => {
+  async function upload(session: AdminSession, image: File, csrf = session.csrfToken) {
+    const body = new FormData();
+    body.set('_csrf', csrf);
+    body.set('title', 'My workspace');
+    body.set('image', image);
+    return world.app.request('/admin/users/appearance', {
+      method: 'POST',
+      body,
+      headers: { ...session.headers, 'sec-fetch-site': 'same-origin' },
+    });
+  }
+  function png() {
+    return new File(
+      [Uint8Array.from(atob(PNG_DATA.split(',')[1]!), (c) => c.charCodeAt(0))],
+      'logo.png',
+      { type: 'image/png' },
+    );
+  }
+
+  it('uploads, persists, preserves and resets the image and title with an audit entry', async () => {
+    expect(await page(owner, '/admin/users/appearance')).toContain('enctype="multipart/form-data"');
+    expect((await upload(owner, png())).status).toBe(303);
+    expect(await getAdminBranding(env.DB)).toEqual({ title: 'My workspace', image: PNG_DATA });
+    expect(await page(owner, '/admin')).toContain(`src="${PNG_DATA}"`);
+    expect(
+      (await adminPost(world.app, owner, '/admin/users/appearance', { title: 'Renamed' })).status,
+    ).toBe(303);
+    expect(await getAdminBranding(env.DB)).toEqual({ title: 'Renamed', image: PNG_DATA });
+    expect(
+      (
+        await adminPost(world.app, owner, '/admin/users/appearance', {
+          title: '',
+          remove_image: 'yes',
+        })
+      ).status,
+    ).toBe(303);
+    expect(await getAdminBranding(env.DB)).toEqual({ title: 'tokengate', image: null });
+    const audit = await env.DB.prepare(
+      "SELECT * FROM audit_log WHERE target_id = 'admin_branding'",
+    ).all();
+    expect(audit.results).toHaveLength(3);
+    expect(JSON.stringify(audit.results)).not.toContain('base64');
+  });
+
+  it('rejects unsupported and oversized files without changing settings', async () => {
+    expect(
+      (await upload(owner, new File(['<svg/>'], 'logo.png', { type: 'image/png' }))).status,
+    ).toBe(400);
+    expect(
+      (await upload(owner, new File([new Uint8Array(256 * 1024 + 1)], 'big.png'))).status,
+    ).toBe(400);
+    expect(
+      (await adminPost(world.app, owner, '/admin/users/appearance', { title: 'x'.repeat(81) }))
+        .status,
+    ).toBe(400);
+    expect(await getAdminBranding(env.DB)).toEqual({ title: 'tokengate', image: null });
+  });
+
+  it('requires owner permission and CSRF for image uploads', async () => {
+    const viewer = await loginAs(
+      world.app,
+      await createUser({ email: 'viewer@example.com', role: 'viewer' }),
+    );
+    expect((await upload(viewer, png())).status).toBe(403);
+    expect((await upload(owner, png(), 'invalid')).status).toBe(403);
+    expect(await getAdminBranding(env.DB)).toEqual({ title: 'tokengate', image: null });
   });
 });

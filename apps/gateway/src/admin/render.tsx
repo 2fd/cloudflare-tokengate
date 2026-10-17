@@ -20,6 +20,7 @@ import { CSRF_FIELD } from './auth/csrf';
 import { signOutUrl } from './auth/identity';
 import { can, type Permission, rolesWith } from './auth/rbac';
 import type { AdminActor, AdminViewer } from './auth/types';
+import { adminBrand } from './branding';
 import type { Notice, PendingNotice } from './notice';
 import type { FieldError } from './ops/shared';
 import {
@@ -123,6 +124,7 @@ export async function renderPageFor(
     <Layout
       title={documentTitle(props.title, props.section, errors.length > 0)}
       shell={{
+        brand: await adminBrand(deps.env.DB, url.hostname),
         section: props.section,
         subsection: props.subsection,
         path: url.pathname,
@@ -275,14 +277,16 @@ export type FormFields = Record<string, string | string[]>;
  */
 export const ADMIN_FORM_MAX_BYTES = 64 * 1024;
 
-export type ParsedForm = { ok: true; fields: FormFields } | { ok: false; error: 'too_large' };
+export type ParsedForm =
+  | { ok: true; fields: FormFields; files?: Record<string, File> }
+  | { ok: false; error: 'too_large' };
 
 const parsedForms = new WeakMap<Request, Promise<ParsedForm>>();
 
 /**
  * The request body as form fields, read and parsed once per request (the admin middleware reads
- * `_csrf` from the same result). Repeated fields become arrays; file uploads are ignored. A body
- * that is not a form yields no fields; one over ADMIN_FORM_MAX_BYTES yields `too_large`.
+ * `_csrf` from the same result). Repeated text fields become arrays; files are kept separately.
+ * A non-form body yields no fields; a body over the route limit yields `too_large`.
  */
 export function parsedForm(c: AdminContext): Promise<ParsedForm> {
   const raw = c.req.raw;
@@ -300,7 +304,13 @@ export async function formData(c: AdminContext): Promise<FormFields> {
   return parsed.ok ? parsed.fields : Object.create(null);
 }
 
+/** A branding image has a separate bounded upload allowance. */
+export function adminFormLimit(c: AdminContext): number {
+  return c.req.path === '/admin/users/appearance' ? 384 * 1024 : ADMIN_FORM_MAX_BYTES;
+}
+
 async function parseForm(c: AdminContext): Promise<ParsedForm> {
+  const maxBytes = adminFormLimit(c);
   const type = c.req.header('content-type') ?? '';
   if (
     !type.startsWith('application/x-www-form-urlencoded') &&
@@ -311,8 +321,8 @@ async function parseForm(c: AdminContext): Promise<ParsedForm> {
   // Content-Length is checked first so an honest oversized upload is refused unread (a malformed one
   // is NaN and fails too); the counting read also covers chunked bodies and understated lengths.
   const declared = Number(c.req.header('content-length') ?? '0');
-  if (!(declared <= ADMIN_FORM_MAX_BYTES)) return { ok: false, error: 'too_large' };
-  const bytes = await readAtMost(c.req.raw.body, ADMIN_FORM_MAX_BYTES);
+  if (!(declared <= maxBytes)) return { ok: false, error: 'too_large' };
+  const bytes = await readAtMost(c.req.raw.body, maxBytes);
   if (bytes === null) return { ok: false, error: 'too_large' };
   let body: Record<string, unknown>;
   try {
@@ -326,14 +336,16 @@ async function parseForm(c: AdminContext): Promise<ParsedForm> {
   // Null prototype: a field named `__proto__` stays an ordinary key, and unsubmitted names such as
   // `constructor` read as undefined.
   const out: FormFields = Object.create(null);
+  const files: Record<string, File> = Object.create(null);
   for (const [name, value] of Object.entries(body)) {
-    if (typeof value === 'string') out[name] = value;
+    if (value instanceof File) files[name] = value;
+    else if (typeof value === 'string') out[name] = value;
     else if (Array.isArray(value)) {
       const strings = value.filter((item): item is string => typeof item === 'string');
       if (strings.length > 0) out[name] = strings;
     }
   }
-  return { ok: true, fields: out };
+  return { ok: true, fields: out, files };
 }
 
 /** The whole stream, or null (stream cancelled) as soon as it exceeds `max` bytes. */

@@ -1,10 +1,14 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
-import { Icon } from '../base/Icon';
+import { Icon, type IconName } from '../base/Icon';
 
 export interface AppShellBrand {
   /** Product or instance name ("tokengate"). */
   name: string;
+  /** Built-in brand icon. Defaults to the gateway shield. */
+  icon?: IconName;
+  /** Custom image, replacing the built-in mark. */
+  image?: string;
   /** Home link of the app. */
   href: string;
   /** Mono line under the name: the host ("gate.acme.dev") or a subtitle. */
@@ -45,10 +49,10 @@ function present(node: Child | undefined): boolean {
 }
 
 /** The shield mark of the instance block: the `gate` icon of the set on the accent tile. */
-function Mark() {
+function Mark({ icon = 'gate', image }: Pick<AppShellBrand, 'icon' | 'image'>) {
   return (
     <span class="mark" aria-hidden="true">
-      <Icon name="gate" />
+      {image ? <img src={image} alt="" width="32" height="32" /> : <Icon name={icon} />}
     </span>
   );
 }
@@ -74,7 +78,7 @@ export function AppShell(props: AppShellProps) {
       <div class="side">
         <div class="side-in">
           <div class="inst">
-            <Mark />
+            <Mark icon={props.brand.icon} image={props.brand.image} />
             <a class="inst-name" href={props.brand.href}>
               {props.brand.name}
             </a>

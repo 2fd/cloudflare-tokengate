@@ -186,7 +186,8 @@ type SettingKey =
   | StateKey
   | JoinKey
   | typeof UPSTREAM_HOSTS_KEY
-  | typeof ADMIN_HOSTS_KEY;
+  | typeof ADMIN_HOSTS_KEY
+  | typeof ADMIN_BRANDING_KEY;
 type SqlGuard = { sql: string; binds: unknown[] };
 
 export function putSettingStatement(
@@ -287,4 +288,54 @@ export function confirmKeyCheckValueStatement(
        WHERE (CASE WHEN json_valid(settings.value) THEN json_extract(settings.value, '$."' || ?1 || '"') END) IS ?4`,
     )
     .bind(kid, kcv, now, previous);
+}
+
+/** Branding is stored as one value so title and image change together. */
+export const ADMIN_BRANDING_KEY = 'admin_branding';
+export const BRAND_IMAGE_MAX_BYTES = 256 * 1024;
+export interface AdminBranding {
+  title: string;
+  /** Uploaded raster image as a data URL, or null for the built-in shield. */
+  image: string | null;
+}
+export const DEFAULT_ADMIN_BRANDING: AdminBranding = { title: 'tokengate', image: null };
+
+export function brandImageType(bytes: Uint8Array): string | null {
+  const starts = (prefix: number[]) => prefix.every((byte, i) => bytes[i] === byte);
+  if (bytes.length < 12) return null;
+  if (starts([137, 80, 78, 71, 13, 10, 26, 10])) return 'image/png';
+  if (starts([255, 216, 255])) return 'image/jpeg';
+  if (starts([82, 73, 70, 70]) && String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP')
+    return 'image/webp';
+  return null;
+}
+
+function validBrandImage(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > Math.ceil(BRAND_IMAGE_MAX_BYTES / 3) * 4 + 32)
+    return false;
+  const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(value);
+  if (!match) return false;
+  try {
+    const bytes = Uint8Array.from(atob(match[2]!), (char) => char.charCodeAt(0));
+    return bytes.length <= BRAND_IMAGE_MAX_BYTES && brandImageType(bytes) === match[1];
+  } catch {
+    return false;
+  }
+}
+
+export async function getAdminBranding(db: D1Database): Promise<AdminBranding> {
+  const row = await db
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .bind(ADMIN_BRANDING_KEY)
+    .first<{ value: string }>();
+  const value = row ? parseJsonOrNull(row.value) : null;
+  if (!value || typeof value !== 'object') return { ...DEFAULT_ADMIN_BRANDING };
+  const stored = value as Partial<AdminBranding>;
+  return {
+    title:
+      typeof stored.title === 'string' && stored.title.trim().length <= 80
+        ? stored.title.trim() || DEFAULT_ADMIN_BRANDING.title
+        : DEFAULT_ADMIN_BRANDING.title,
+    image: validBrandImage(stored.image) ? stored.image : null,
+  };
 }

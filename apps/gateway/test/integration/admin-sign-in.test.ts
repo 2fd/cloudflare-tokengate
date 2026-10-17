@@ -61,13 +61,9 @@ describe('GET /admin/users/sign-in', () => {
       await storeHosts(['gw.test']);
       const html = await page(await sessionFor(role));
       expect(html).toContain('<title>Sign-in – Users – tokengate</title>');
-      expect(html).toContain('aria-label="Console address">https://gw.test/admin</pre>');
-      expect(html).toContain(
-        '<p class="u-now"><span class="muted">Now</span><span class="big">Let them in as Viewer</span>',
-      );
-      expect(html).toContain(
-        '<span class="mono">gw.test</span> <span class="badge accent">you are here</span>',
-      );
+      expect(html).toContain('href="https://gw.test/admin"><code>https://gw.test/admin</code></a>');
+      expect(html).toContain('<p class="u-now"><span class="big">Let them in as Viewer</span>');
+      expect(html).toContain('<span class="mono">gw.test</span> <span class="hint">current</span>');
       // Nothing to open: the policy dialogs are for owners only.
       expect(html).not.toContain('dlg-policy');
       // The account menu export form (admins) is in the sidebar, not part of this page.
@@ -129,16 +125,14 @@ describe('GET /admin/users/sign-in', () => {
     await adminPost(app, owner, '/admin/users/sign-in/policy', { join_policy: 'pending' });
     const html = await page(owner);
     expect(html).toContain('<span class="big">Ask an owner first</span>');
-    expect(html).toContain('<ol class="trace u-c3" aria-label="What happens now">');
-    expect(html).toContain(
-      '<li class="tstep is-on"><span class="s">2 · Waits</span><span class="v">In “Needs your decision”</span><span class="d"><a href="/admin/users#decide">1 person waiting: wait@example.com</a></span></li>',
-    );
+    expect(html).not.toContain('class="trace u-c3"');
+    expect(html).toContain('<a href="/admin/users#decide">1 person waiting for approval</a>');
   });
 
   it('names the login provider and its variables, never their values (I-CFG-1)', async () => {
     const html = await page(await sessionFor('owner'));
     expect(html).toContain(
-      '<dt>Cloudflare Access</dt><dd><div class="line"><span class="badge ok"><span aria-hidden="true">✓</span>In use</span><span class="muted">You signed in with it.</span></div></dd>',
+      '<dt>Cloudflare Access</dt><dd><div class="line"><span class="badge ok"><span aria-hidden="true">✓</span>In use</span></div></dd>',
     );
     expect(html).toContain(
       '<dt>Local development login</dt><dd><div class="line"><span class="badge off"><span aria-hidden="true">⏸</span>Off</span></div></dd>',
@@ -163,15 +157,30 @@ describe('GET /admin/users/sign-in', () => {
     const one = await page(owner);
     expect(one).not.toContain('name="remove"');
     // The note sits on the row of the host it is about.
-    expect(one).toContain(
-      '<span class="badge accent">you are here</span></span><span class="hint">Covers this host, so it cannot be removed.</span>',
-    );
-    expect(one).toContain('<p class="hint">Only this hostname is listed.</p>');
+    expect(one).toContain('href="#faq-remove-host">Why can’t I remove it?</a>');
+    expect(one).not.toContain('Only this hostname is listed.');
     expect(one).not.toContain('dlg-host-');
 
     await storeHosts(['gw.test', 'old.example.com']);
     const two = await page(owner);
     expect(two).toContain('name="remove" value="old.example.com"');
+    expect(two).toContain('href="https://old.example.com/admin"');
+    expect(two).toContain('href="https://gw.test/admin"');
+    const content = two.slice(
+      two.indexOf('class="signin-settings'),
+      two.indexOf('id="dlg-policy"'),
+    );
+    expect(content).not.toContain('<details');
+    for (const anchor of [
+      'faq-add-host',
+      'faq-wildcards',
+      'faq-remove-host',
+      'faq-authentication',
+      'faq-revoke-session',
+    ]) {
+      expect(content).toContain(`href="#${anchor}"`);
+      expect(content).toContain(`id="${anchor}"`);
+    }
     expect(two).not.toContain('name="remove" value="gw.test"');
     expect(two).toContain('People who use old.example.com lose the console at once.');
 
@@ -189,7 +198,7 @@ describe('GET /admin/users/sign-in', () => {
     expect(wild).toContain('name="remove" value="admin.acme.com"');
     expect(wild).toContain('name="remove" value="*.acme.com"');
     expect(wild).toContain(
-      '<span class="mono">*.acme.com</span> <span class="badge accent">you are here</span>',
+      '<span class="mono">*.acme.com</span> <span class="hint">current</span>',
     );
     await storeHosts(['*.acme.com']);
     expect(await at()).not.toContain('name="remove"');

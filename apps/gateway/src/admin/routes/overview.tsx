@@ -24,6 +24,7 @@ import {
   FeedDay,
   FeedItem,
   Grid,
+  Stack,
   Legend,
   LinkAction,
   LiveSummary,
@@ -364,21 +365,23 @@ function OverviewPage(props: PageData) {
       <TokensInUse {...props} />
       <Grid>
         <Column span={8}>
-          {data.telemetryAvailable ? (
-            <TrafficTray data={data} />
-          ) : (
-            <Tray id="traffic" title={`Requests per ${CHART[range].unit}`}>
-              <Panel variant="pad">
-                <ZeroState>The request log could not be read, so traffic is not shown.</ZeroState>
-              </Panel>
-            </Tray>
-          )}
+          <Stack>
+            {data.telemetryAvailable ? (
+              <TrafficTray data={data} />
+            ) : (
+              <Tray id="traffic" title={`Requests per ${CHART[range].unit}`}>
+                <Panel variant="pad">
+                  <ZeroState>The request log could not be read, so traffic is not shown.</ZeroState>
+                </Panel>
+              </Tray>
+            )}
+            <HealthTray checks={checks} alerts={alerts} />
+          </Stack>
         </Column>
         <Column span={4}>
           <RecentChanges data={data} names={props.names} suspended={props.suspended} />
         </Column>
       </Grid>
-      <HealthTray checks={checks} alerts={alerts} />
     </>
   );
 }
@@ -583,12 +586,46 @@ function FreshOverview(props: PageData) {
       <RangeNote show={props.rangeNote} />
       <Grid>
         <Column span={8}>
-          <GetStarted
-            ctx={ctx}
-            connections={props.connections}
-            steps={props.steps}
-            doneCount={props.doneCount}
-          />
+          <Stack>
+            <GetStarted
+              ctx={ctx}
+              connections={props.connections}
+              steps={props.steps}
+              doneCount={props.doneCount}
+            />
+            {urgent.length > 0 ? (
+              <Tray id="attention" title="Needs attention" count={urgent.length}>
+                <Panel>
+                  <AttentionCards items={toAttentionItems(urgent, ctx)} layout="list" />
+                  <ApproveOwnerDialogs alerts={urgent} ctx={ctx} />
+                </Panel>
+              </Tray>
+            ) : null}
+            {notes.length > 0 ? (
+              <div class="notes" id="notes">
+                {notes.map((alert) => (
+                  <p class="hint">
+                    <Dot tone="info" /> <span class="vh">Note: </span>
+                    {alert.title}
+                    {alert.detail ? ` ${alert.detail}` : null}
+                    {alert.objects.map((object) => (
+                      <>
+                        {' '}
+                        <a href={object.href}>{object.label}</a>
+                      </>
+                    ))}
+                    {alert.fix && ctx.can(alert.fix.permission) ? (
+                      <>
+                        {' '}
+                        <a href={alert.fix.href}>{alert.fix.label}</a>
+                      </>
+                    ) : null}
+                  </p>
+                ))}
+              </div>
+            ) : null}
+            <HealthTray checks={checks} alerts={alerts} />
+          </Stack>
         </Column>
         <Column span={4} rail>
           <LiveSummary
@@ -649,38 +686,6 @@ function FreshOverview(props: PageData) {
           </Tray>
         </Column>
       </Grid>
-      {urgent.length > 0 ? (
-        <Tray id="attention" title="Needs attention" count={urgent.length}>
-          <Panel>
-            <AttentionCards items={toAttentionItems(urgent, ctx)} layout="list" />
-            <ApproveOwnerDialogs alerts={urgent} ctx={ctx} />
-          </Panel>
-        </Tray>
-      ) : null}
-      {notes.length > 0 ? (
-        <div class="notes" id="notes">
-          {notes.map((alert) => (
-            <p class="hint">
-              <Dot tone="info" /> <span class="vh">Note: </span>
-              {alert.title}
-              {alert.detail ? ` ${alert.detail}` : null}
-              {alert.objects.map((object) => (
-                <>
-                  {' '}
-                  <a href={object.href}>{object.label}</a>
-                </>
-              ))}
-              {alert.fix && ctx.can(alert.fix.permission) ? (
-                <>
-                  {' '}
-                  <a href={alert.fix.href}>{alert.fix.label}</a>
-                </>
-              ) : null}
-            </p>
-          ))}
-        </div>
-      ) : null}
-      <HealthTray checks={checks} alerts={alerts} />
     </>
   );
 }

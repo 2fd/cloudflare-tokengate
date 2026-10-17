@@ -5,6 +5,9 @@
 // reports where it belongs). Every value is prefilled and the numbers have suggestion lists; the
 // sample rate is a pick from presets. A failed save re-renders the dialog open in the page flow.
 import {
+  Grid,
+  Column,
+  Stack,
   Badge,
   Button,
   Callout,
@@ -185,36 +188,44 @@ async function retentionPage(
           {kept.stored === null ? (
             <Callout tone="warn" title="The request log could not be read." />
           ) : null}
-          <Tray
-            id="records"
-            title="Request records"
-            description={kept.stored === null ? undefined : <UsageLine usage={kept} />}
-            actions={edit('request records')}
-          >
-            <Panel variant="pad">
-              <KeyValue items={valueItems(GROUPS[0]?.keys ?? [], settings)} />
-            </Panel>
-          </Tray>
-          <Tray
-            id="summaries"
-            title="Hourly summaries"
-            description="Summaries feed the Overview and 'last used'."
-            actions={edit('hourly summaries')}
-          >
-            <Panel variant="pad">
-              <KeyValue items={valueItems(GROUPS[1]?.keys ?? [], settings)} />
-            </Panel>
-          </Tray>
-          <Tray
-            id="audit"
-            title="Audit log"
-            description="The 90-day floor protects the audit trail."
-            actions={edit('audit log')}
-          >
-            <Panel variant="pad">
-              <KeyValue items={valueItems(GROUPS[2]?.keys ?? [], settings)} />
-            </Panel>
-          </Tray>
+          <Grid>
+            <Column span={6}>
+              <Tray
+                id="records"
+                title="Request records"
+                description={kept.stored === null ? undefined : <UsageLine usage={kept} />}
+                actions={edit('request records')}
+              >
+                <Panel variant="pad">
+                  <KeyValue items={valueItems(GROUPS[0]?.keys ?? [], settings)} />
+                </Panel>
+              </Tray>
+            </Column>
+            <Column span={6}>
+              <Stack>
+                <Tray
+                  id="summaries"
+                  title="Hourly summaries"
+                  description="Summaries feed the Overview and 'last used'."
+                  actions={edit('hourly summaries')}
+                >
+                  <Panel variant="pad">
+                    <KeyValue items={valueItems(GROUPS[1]?.keys ?? [], settings)} />
+                  </Panel>
+                </Tray>
+                <Tray
+                  id="audit"
+                  title="Audit log"
+                  description="The 90-day floor protects the audit trail."
+                  actions={edit('audit log')}
+                >
+                  <Panel variant="pad">
+                    <KeyValue items={valueItems(GROUPS[2]?.keys ?? [], settings)} />
+                  </Panel>
+                </Tray>
+              </Stack>
+            </Column>
+          </Grid>
           {canEdit ? (
             <SettingsDialog
               ctx={ctx}

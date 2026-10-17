@@ -8,6 +8,8 @@ Read [docs/architecture.md](docs/architecture.md) for the module map and [docs/t
 - Everyone who takes part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 - For a new feature or a design change, open an issue before you write code. Check [docs/roadmap.md](docs/roadmap.md) first: it lists non-goals.
 
+For admin UI changes, follow the [design system spacing and form composition rules](packages/ui/README.md#spacing-and-form-composition), including the visual checks.
+
 ## Set up
 
 Prerequisites:

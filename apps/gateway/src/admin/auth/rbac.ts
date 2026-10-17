@@ -91,6 +91,8 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, RoutePermission>> = Obje
   'POST /admin/retention': settingsWrite,
 
   // == users ==
+  'GET /admin/users/appearance': read,
+  'POST /admin/users/appearance': settingsWrite,
   'GET /admin/users/sign-in': read,
   'POST /admin/users/sign-in/policy': usersWrite,
   // Admin hosts are a deployment setting (I-DEPLOY-1), shown here because they decide where people

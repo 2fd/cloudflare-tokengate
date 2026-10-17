@@ -80,9 +80,135 @@ Most of design D is in `ui.css` with a component. A few patterns are used by one
 | Monitoring | `.flink` (filter link in a cell), `.find` (Find a request in a page header, a tray header or a panel), `.tray-h > details.disc` (a disclosure as the whole tray header), `#denials .tbl th .arrow` (Top denied callers), `.tbl.log` (one-line request rows), `.notes` (empty install) |
 | Tokens | `.rot-row` (secret · expiry · submit in one row), `#tokens > .tray-h > .filters` |
 | Consumers | `.con-stack` / `.con-fields` (fields 24px apart), `.con-types`, `.con-preset`, `.con-confirm`, `.con-list`, `.con-tenant`, `ul.operations`, `.tbl th .arrow` (arrow rows on a two-line grid), the give-access gating and review (`.ga-*`), `.nw`, `.d-block` |
-| Users | `.cmap.u-rmap` (the role map: the connections map vocabulary at a 48px pitch), `.trace.u-c3`, `.u-now`, `.u-can` (the yes / no list), `.gain` / `.lose`, `.u-compare`, `.u-person`, `.u-hosts`, `.u-pad`, the `#invite` tray opened by its fragment |
+| Users | `.u-role-guide` (optional role reference), `.cmap.u-rmap` (the role map: the connections map vocabulary at a 48px pitch), `.trace.u-c3`, `.u-now`, `.u-can` (the yes / no list), `.gain` / `.lose`, `.u-compare`, `.u-person`, `.u-hosts`, `.u-pad`, the `#invite` tray opened by its fragment |
 
 The mechanism: the app keeps them in its own stylesheet (for example `apps/gateway/src/admin/pages.css`), served like `ui.css` with `cssAsset('pages', text)` and linked after it. That stylesheet uses the tokens only (no hard-coded colors, the same `light-dark()` pairs), never restyles a `ui.css` class outside its own page's markup, and keeps the WCAG rules of the system (contrast, forced colors). Promoted already: the grid columns (`Grid`, `Column`), the row menu (`RowMenu`), decision items (`NeedsAttention` `who`), action cards (`ActionCards`), logo radio cards (`RadioCard.logo`), group rows (`GroupRow`), the 7th and 8th live-form fields (`LiveSlot` 1–8), the who-can-use map (`WhoCanUse`), the sparkline (`Sparkline`), compact KPIs (`Kpis columns={2}`), the plan summary (`LiveSummary variant="plan"`), `FieldGrid`, `RailFoot`, `Stack` and the one-button POST form (`ActionForm`).
+
+## Spacing and form composition
+
+Read this section before creating or changing an admin page, form, or layout component.
+Use the existing spacing tokens and containers; each container owns spacing at its level.
+
+| Boundary | Required composition | Spacing |
+|---|---|---|
+| Page blocks | Direct children of `Page`, or `Stack` | `--sp-7` (32px) |
+| Related compact blocks | `Stack gap="sm"` | `--sp-4` (16px) |
+| Panel edge to form/prose | `Panel variant="pad"` | `--sp-5` (20px) padding |
+| Fields in a simple form | `class="fields"` on the form or a field wrapper | `--sp-6` (24px) gap |
+| Label, hint, control, error | `Field` / `.field` | `--sp-2` (8px) gap |
+| Checkbox and its label | `Checkbox` | `--sp-3` (12px) column gap |
+| Adjacent action buttons | `ButtonRow` | `--sp-2` (8px) gap, wraps on small screens |
+
+`Panel` without a variant is a surface with **no padding**. Choose `variant="pad"` for forms
+and prose; choose `variant="flush"` for edge-to-edge content such as tables.
+
+`form-layout` is the **page-level form plus summary rail grid**. At 80rem it creates two
+columns. Its direct children are the form column and the rail, not individual fields.
+A simple settings form uses `.fields` and a width capped at `var(--w-form)` (40rem), keeping
+one column at every viewport size. Put the width rule in the page's stylesheet if needed.
+
+Compose a settings panel like this:
+
+```tsx
+<Panel variant="pad">
+  <form class="fields" method="post">
+    {/* Hidden inputs, then Field/Checkbox components. */}
+    <Field>{/* control */}</Field>
+    <Checkbox name="enabled">Enabled</Checkbox>
+    <ButtonRow>
+      <Button type="submit" variant="primary">Save</Button>
+    </ButtonRow>
+  </form>
+</Panel>
+```
+
+The field stack supplies separation before the action row; `ButtonRow` keeps the button at
+its natural width. Scope page-specific CSS to that page, use `--sp-*` tokens, and let one
+container own each gap to avoid accumulating child margins and parent gaps.
+
+Before marking a layout change complete, inspect desktop and 390px widths in light and dark:
+content clears every panel edge, fields stay in the intended columns, controls and hints fit
+without horizontal overflow, and actions have their own space. Check error and disabled states.
+If browser verification is unavailable, state that limitation; passing markup tests does not
+verify visual spacing.
+
+### Content density
+
+Keep the working content near the page header. When adjacent blocks have different heights,
+put each column's continuation in its own `Stack` or use `DetailLayout`. A short notice next to
+a tall diagram must not create a shared grid row that pushes a full-width list below the diagram.
+Use `Grid` rows for genuinely parallel content, such as related settings cards.
+
+Keep optional explanations in a labelled `Disclosure` after the working content. Keep warnings,
+required inputs, errors and primary actions visible. Give compact forms a panel width matching
+the form plus its padding; retain the existing field spacing and readable line lengths.
+Empty installs may leave unused space after their content; do not stretch panels or add filler
+to occupy the viewport. Inspect both sparse and populated states before changing shared spacing.
+
+Layout review (October 2026):
+
+| Pages | Composition and decision |
+|---|---|
+| People | Notices followed immediately by full-width Accounts; the role map is an optional disclosure below the list, available with or without pending decisions. |
+| Request detail | One continuous main stack and one summary/related rail, replacing two synchronized grid rows. |
+| Overview, fresh and populated | Main-column content continues independently of the explanatory or activity rail; health checks no longer wait for the taller neighboring panel. |
+| Retention | Request settings beside a stack of summary/audit settings on desktop; one column below the grid breakpoint. |
+| Appearance | The branding panel fits the form width plus padding. |
+| Requests and Audit lists | Sequential controls and result panels; empty results retain their explanation and action without a fixed-height placeholder. |
+| Credentials, credential access rules, issuer access rules lists | Full-width lists/maps; keep usable table width and compact empty-state actions. |
+| Allowed hosts and Encryption keys | Policy/list first; the key tools already use a parallel grid with no subsequent content forced below a tall rail. |
+| Person, credential and access-rule details | Existing `DetailLayout` columns already flow independently. |
+| New credential, new credential access rule, new issuer access rule | Keep the catalog/form and bounded summary rail; required fields remain visible. |
+| Sign-in | Bounded settings stack; FAQ anchors remain visible and reachable. |
+| Not-found, missing-record and export-error pages | Compact messages/actions; export success is a download, not a layout. |
+
+The October review exercised 16 locally available views at 1440px and 390px in light and dark
+(64 combinations), with no document-level horizontal overflow. Also checked the open role guide,
+owner/zero-result filters, invitation, invalid request/audit filters and retention dialog in all
+four viewport/theme combinations. The local install had no
+credentials, access rules or request records: their populated detail layouts were reviewed in
+source and integration tests, not visually. The existing person detail was checked in the browser.
+
+Verify desktop and 390px, light and dark, plus open disclosures, sparse/empty results and
+error/disabled states where available. Check actual `innerWidth` after browser navigation:
+some embedded browsers reset viewport emulation. Record which populated detail states could
+only be inspected in source/tests because the local database has no corresponding records.
+
+## Stable filter layout
+
+Read this section before changing list filters, quick links, active chips, or tray headers.
+Filter selection changes values and results while retaining the controls' alignment and order.
+Quick links keep the same font weight in selected and unselected states to preserve their widths.
+
+- Put list controls in `Tray.bar` (`Filters` / `QuickLinks`); align them to the start edge.
+  The shared stylesheet owns this alignment. `Tray.actions` stays at the end with its auto margin;
+  showing a clear action must not redistribute the controls across the header.
+- Render `ActiveFilters` after the controls. In a tray header it occupies a full row below
+  controls and actions. Outside a tray, place it after all filter controls, including quick links.
+  The result area may move down as chips wrap; the controls above must keep their position.
+- Keep menus available after selection so users can replace a value in place. Preserve other
+  query parameters when switching a quick filter. Base option counts and visibility on the
+  unfiltered collection, not the current result set.
+- Keep a tray title's visibility consistent while its filter bar is present. Put dynamic query
+  summaries in the page description; a selection must not insert a heading above the controls.
+- `Filters.end` is an explicit compact trailing layout, not a selected-state toggle. Prefer the
+  start-aligned default for list filters. Use spacing tokens and natural wrapping, not offsets.
+
+### Filter audit (October 2026)
+
+| Surface | Finding and normalized behavior |
+|---|---|
+| Accounts | Conditional Clear filters changed flex space distribution; quick links now stay at the start. Search visibility uses the full account collection. |
+| Tokens | Active chips shared the controls' flex row; they now take a separate trailing row. Status counts use the scoped collection. |
+| Access | Selected credential menus and attention links disappeared; controls now remain available, attention links retain other query parameters, and chips follow them. |
+| Requests | Active chips preceded the toolbar and selection revealed its title; chips now follow controls and a stable title remains visible in both states. |
+| Audit | Active chips preceded the toolbar; they now follow its controls, which use the start-aligned default. |
+
+Before reporting visual completion, compare unfiltered, selected, multiple-chip, cleared,
+zero-result and invalid-input states at desktop and 390px, in light and dark themes. Check
+open menus and keyboard focus, and disabled controls where supported. Compare control positions
+at the same viewport: clearing or adding a chip must not shift preceding controls. Only viewport
+width and the controls' own content should determine wrapping. Record any unavailable checks.
 
 ## Serving the stylesheet
 

@@ -41,6 +41,16 @@ These defaults fail closed in production ([I-DEPLOY-1](threat-model.md#i-deploy-
 login signs in no request through Cloudflare's edge, and the Worker refuses the development key as soon
 as an Access variable is set.
 
+## Admin branding
+
+Owners can change the sidebar title and upload a logo in **Users > Appearance**. The title and
+image are stored together in the D1 `settings` table under `admin_branding`, as a JSON object
+with `title` and `image` (a data URL). No environment variables or new bindings are needed.
+The image supports PNG, JPEG and WebP up to 256 KiB. Saving with no new file keeps the current
+image; “Use the default icon” removes it. A blank title uses `tokengate`, and an absent image
+uses the built-in shield. These defaults also apply when no branding has been saved.
+Branding applies to the sidebar and sign-in screens, and persists across deployments.
+
 ## How invalid configuration fails
 
 Configuration is parsed per feature: `login.access` and `login.dev` ([I-CFG-1](threat-model.md#i-cfg-1)). A malformed feature is turned off; it never runs half

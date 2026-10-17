@@ -129,7 +129,7 @@ describe('GET /admin/users', () => {
     expect(html).not.toContain('<script');
   });
 
-  it('shows the role map next to the decisions, with role filter links and a text equivalent', async () => {
+  it('keeps the role map in a closed disclosure after Accounts, with links and a text equivalent', async () => {
     await linked('admin@example.com', { name: 'Diego Ruiz' });
     const html = await page(await sessionFor('owner'));
     const map = slice(html, 'id="roles-map"', '</section>');
@@ -137,9 +137,11 @@ describe('GET /admin/users', () => {
     expect(map).toContain('<span class="nl">Diego Ruiz</span>');
     expect(map).toContain('<svg class="wires"');
     expect(map).toContain('<b>Admin:</b> credentials, issuer access rules, export.');
-    // Without decisions or the single-owner note there is no column to sit beside.
+    expect(html).toContain('<details class="disc u-role-guide"><summary>');
+    expect(html.indexOf('id="roles-map"')).toBeGreaterThan(html.indexOf('id="people"'));
+    // The guide stays available even without decisions or the single-owner note.
     await createUser({ email: 'o2@example.com', role: 'owner' }, T0);
-    expect(await page(await sessionFor('owner'))).not.toContain('id="roles-map"');
+    expect(await page(await sessionFor('owner'))).toContain('id="roles-map"');
   });
 
   it('tells non-owners whom to ask about a pending person, without any control', async () => {
@@ -835,10 +837,7 @@ describe('Needs your decision', () => {
     for (const role of ['viewer', 'token_manager', 'access_manager', 'admin']) {
       expect(decide).toContain(`name="role" value="${role}"`);
     }
-    const rows = slice(
-      slice(html, '<section class="tray span-12" id="people"', '</table>'),
-      '<tbody',
-    );
+    const rows = slice(slice(html, '<section class="tray" id="people"', '</table>'), '<tbody');
     expect(rows).not.toContain('wait@example.com');
     expect(html).not.toContain(`id="user-${pending.id}"`);
     // The Accounts tray says where the pending person is instead.

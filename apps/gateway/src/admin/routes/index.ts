@@ -8,6 +8,7 @@
 // test/integration/admin-route-order.test.ts pins this.
 import type { App } from '../../app';
 import { registerAccessRoutes } from './access';
+import { registerAppearanceRoutes } from './appearance';
 import { registerAuditRoutes } from './audit';
 import { registerConsumersRoutes } from './consumers';
 import { registerExportRoutes } from './export';
@@ -27,6 +28,7 @@ export function registerAdminRoutes(app: App): void {
   registerAuditRoutes(app);
   registerRetentionRoutes(app);
   // Users
+  registerAppearanceRoutes(app);
   registerSignInRoutes(app);
   registerUsersRoutes(app);
   // Credentials

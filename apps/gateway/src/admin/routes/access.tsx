@@ -486,31 +486,27 @@ function ListFilters(props: {
           maxlength={200}
           suggestions={repositories}
         />
-        {props.consumer ? null : (
-          <AddFilter
-            label="Credential access rule"
-            options={connections.consumers.map((consumer) => ({
-              href: listHref(q, { consumer: consumer.id }),
-              label: consumer.name,
-              logo: consumerLogo(consumer),
-              count: count((edge) => edge.grant.credential_access_rule_id === consumer.id),
-            }))}
-            srSuffix="accesses"
-          />
-        )}
-        {props.token ? null : (
-          <AddFilter
-            label="Credential"
-            options={connections.tokens.map((token) => ({
-              href: listHref(q, { token: token.id }),
-              label: token.name,
-              logo: tokenLogo(token),
-              slug: token.slug,
-              count: count((edge) => edge.grant.service_id === token.id),
-            }))}
-            srSuffix="accesses"
-          />
-        )}
+        <AddFilter
+          label="Credential access rule"
+          options={connections.consumers.map((consumer) => ({
+            href: listHref(q, { consumer: consumer.id }),
+            label: consumer.name,
+            logo: consumerLogo(consumer),
+            count: count((edge) => edge.grant.credential_access_rule_id === consumer.id),
+          }))}
+          srSuffix="accesses"
+        />
+        <AddFilter
+          label="Credential"
+          options={connections.tokens.map((token) => ({
+            href: listHref(q, { token: token.id }),
+            label: token.name,
+            logo: tokenLogo(token),
+            slug: token.slug,
+            count: count((edge) => edge.grant.service_id === token.id),
+          }))}
+          srSuffix="accesses"
+        />
         <AddFilter
           label="Status"
           options={[statusOption('active')]}
@@ -518,6 +514,19 @@ function ListFilters(props: {
           srSuffix="accesses"
         />
       </Filters>
+
+      <QuickLinks
+        label="Accesses that need attention"
+        lead="Needs attention"
+        links={quick.map((link) => ({
+          label: STATUS_WORDS[link.status],
+          glyph: link.glyph || undefined,
+          tone: link.tone,
+          count: statusCount[link.status],
+          href: listHref(q, { status: link.status }),
+          current: q.status === link.status,
+        }))}
+      />
       <ActiveFilters
         filters={[
           ...(props.consumer
@@ -551,23 +560,6 @@ function ListFilters(props: {
         clearHref={paths.access({ view: q.view === 'matrix' ? 'matrix' : undefined })}
         clearLabel="Clear filters"
       />
-      {props.consumer || props.token || q.repository ? null : (
-        <QuickLinks
-          label="Accesses that need attention"
-          lead="Needs attention"
-          links={quick.map((link) => ({
-            label: STATUS_WORDS[link.status],
-            glyph: link.glyph || undefined,
-            tone: link.tone,
-            count: statusCount[link.status],
-            href: paths.access({
-              view: q.view === 'matrix' ? 'matrix' : undefined,
-              status: link.status,
-            }),
-            current: q.status === link.status,
-          }))}
-        />
-      )}
     </>
   );
 }

@@ -11,23 +11,18 @@ import {
   Button,
   ButtonRow,
   Chip,
-  CodeBlock,
   ConfirmDialog,
   Dialog,
   DialogClose,
   DialogTrigger,
   Field,
   FieldSet,
-  Grid,
-  Inherit,
   Input,
   KeyValue,
   type KeyValueItem,
   Mono,
   PageHeader,
   Panel,
-  Trace,
-  type TraceStep,
   Tray,
 } from '@tokengate/ui';
 import type { App } from '../../app';
@@ -232,6 +227,7 @@ async function signInPage(
   ]);
   const notice = options.status ? null : resolveNotice(NOTICES, c.req.query('notice'), done);
   const policy = joinPolicyOf(defaults);
+  const config = parseConfig(deps.env);
   return renderPage(
     c,
     {
@@ -246,7 +242,7 @@ async function signInPage(
           title="Sign-in"
           description={
             <>
-              Who gets in the first time, and where the console answers.
+              Choose how new people get access to this workspace.
               <LearnMore path="concepts.md#user" about="sign-in" />
             </>
           }
@@ -257,107 +253,30 @@ async function signInPage(
       const canPolicy = ctx.can('users:write');
       return (
         <>
-          <Grid>
+          <div class="signin-settings stack">
             <PolicyTray
               ctx={ctx}
               policy={policy}
               waiting={waiting}
               error={options.policyError ?? null}
             />
-            <Tray
-              id="address"
-              class="span-5"
-              title="Console address"
-              description="Send people this address. tokengate emails nothing."
-            >
-              <Panel variant="pad">
-                <CodeBlock label="Console address" caption="Select to copy">
-                  {`https://${url.hostname}/admin`}
-                </CodeBlock>
-              </Panel>
-            </Tray>
             <HostsTray
               ctx={ctx}
               hosts={adminHosts}
               currentHost={url.hostname}
+              currentOrigin={url.origin}
               add={options.add}
               addError={options.addError}
             />
-            <LoginTray config={parseConfig(deps.env)} />
-          </Grid>
+            <LoginTray config={config} />
+            <SignInFaq />
+          </div>
           {canPolicy && !options.policyError ? <PolicyDialog ctx={ctx} policy={policy} /> : null}
           {canPolicy ? <ElevatedDialogs ctx={ctx} policy={policy} /> : null}
         </>
       );
     },
   );
-}
-
-/** The 3-step explainer of a policy: what happens to someone new, the current stage marked. */
-function explainer(policy: JoinPolicy, waiting: readonly User[]): TraceStep[] {
-  const signs: TraceStep = {
-    state: 'notrun',
-    glyph: '',
-    status: '1 · Signs in',
-    title: 'Through Cloudflare Access',
-    detail: 'tokengate records the email',
-  };
-  if (policy === 'pending') {
-    const [first] = waiting;
-    const n = waiting.length;
-    return [
-      signs,
-      {
-        state: 'on',
-        status: '2 · Waits',
-        title: 'In “Needs your decision”',
-        detail:
-          n > 0 ? (
-            <a href={paths.users({ hash: 'decide' })}>
-              {n >= WAITING_MAX ? `${n}+` : n} {n === 1 ? 'person' : 'people'} waiting
-              {first ? `: ${first.email}` : ''}
-            </a>
-          ) : (
-            'Nobody is waiting'
-          ),
-      },
-      {
-        state: 'notrun',
-        glyph: '',
-        status: '3 · An owner decides',
-        title: 'Approve with a role, or reject',
-        detail: 'One click on People or Overview',
-      },
-    ];
-  }
-  if (policy === 'closed') {
-    return [
-      signs,
-      { state: 'on', status: '2 · Is refused', title: 'Recorded as suspended' },
-      {
-        state: 'notrun',
-        glyph: '',
-        status: '3 · An owner can reactivate',
-        title: 'Their row appears under People',
-      },
-    ];
-  }
-  const role = policy.slice('active:'.length) as keyof typeof ROLE_INFO;
-  return [
-    signs,
-    {
-      state: 'on',
-      status: '2 · Gets in',
-      title: `As ${ROLE_INFO[role].label}, at once`,
-      detail: ROLE_INFO[role].short,
-    },
-    {
-      state: 'notrun',
-      glyph: '',
-      status: '3 · Owners can change it',
-      title: 'Change the role on People',
-    },
-  ];
 }
 
 function PolicyTray(props: {
@@ -371,24 +290,32 @@ function PolicyTray(props: {
   return (
     <Tray
       id="policy"
-      class="span-12"
-      title="When someone new signs in"
-      description="Applies to people Cloudflare Access lets through who have no invitation. Invited people always get the role of their invitation."
+      title="New people"
+      description="Default access for people who sign in without an invitation."
       actions={
         canPolicy ? (
           <DialogTrigger size="sm" dialog="dlg-policy" srSuffix="who can join">
-            Change…
+            Change access…
           </DialogTrigger>
         ) : undefined
       }
     >
       <Panel variant="pad">
         <p class="u-now">
-          <span class="muted">Now</span>
           <span class="big">{JOIN_POLICY_LABELS[policy]}</span>
-          {policy === 'pending' ? <Badge tone="accent">Recommended</Badge> : null}
         </p>
-        <Trace class="u-c3" label="What happens now" steps={explainer(policy, props.waiting)} />
+        <p class="muted">{POLICY_HINTS[policy]}</p>
+        <p class="hint">Invited people receive the role assigned in their invitation.</p>
+        {policy === 'pending' && props.waiting.length > 0 ? (
+          <p>
+            <a href={paths.users({ hash: 'decide' })}>
+              {props.waiting.length >= WAITING_MAX
+                ? `${props.waiting.length}+`
+                : props.waiting.length}{' '}
+              {props.waiting.length === 1 ? 'person waiting' : 'people waiting'} for approval
+            </a>
+          </p>
+        ) : null}
         {canPolicy ? null : <AskSomeone permission="users:write" ctx={ctx} verb="change this" />}
         {/* After a refused submit the options sit open here, next to the error. */}
         {canPolicy && props.error ? (
@@ -477,6 +404,7 @@ function HostsTray(props: {
   ctx: ViewContext;
   hosts: string[] | null;
   currentHost: string;
+  currentOrigin: string;
   add?: string;
   addError?: string | null;
 }) {
@@ -490,6 +418,11 @@ function HostsTray(props: {
           const removable = rest.length > 0 && hostListed(currentHost, rest);
           const here = hostListed(currentHost, [host]);
           const dialog = `dlg-host-${index}`;
+          const shareUrl = here
+            ? `${props.currentOrigin}/admin`
+            : host.startsWith('*.')
+              ? null
+              : `${['localhost', '127.0.0.1', '[::1]'].includes(host) ? 'http' : 'https'}://${host}/admin`;
           return (
             <li>
               <Chip>
@@ -497,12 +430,26 @@ function HostsTray(props: {
                 {here ? (
                   <>
                     {' '}
-                    <Badge tone="accent">you are here</Badge>
+                    <span class="hint">current</span>
                   </>
                 ) : null}
               </Chip>
+              {shareUrl ? (
+                <span class="signin-host-link">
+                  <span class="hint">Share link</span>{' '}
+                  <a href={shareUrl}>
+                    <code>{shareUrl}</code>
+                  </a>
+                </span>
+              ) : (
+                <a class="hint" href="#faq-wildcards">
+                  Choose a subdomain to share
+                </a>
+              )}
               {canWrite && here && !removable ? (
-                <span class="hint">Covers this host, so it cannot be removed.</span>
+                <a class="hint" href="#faq-remove-host">
+                  Why can’t I remove it?
+                </a>
               ) : null}
               {canWrite && removable ? (
                 <>
@@ -522,21 +469,18 @@ function HostsTray(props: {
             </li>
           );
         });
-  const hint = hosts !== null && hosts.length === 1 ? 'Only this hostname is listed.' : null;
   return (
     <Tray
       id="hosts"
-      class="span-7"
       title="Admin hosts"
       count={hosts?.length}
-      description="The console answers only on these hostnames. Any other hostname gets 404. Put each one behind your Cloudflare Access application first. Never workers.dev."
+      description={<a href="#faq-add-host">How to configure a host</a>}
     >
       <Panel variant="pad">
         {list === null ? (
           <>
             <p>
-              Not pinned: the console answers on every hostname routed to this Worker, except
-              workers.dev.
+              No hosts configured. <a href="#faq-unrestricted">What does this mean?</a>
             </p>
             {canWrite && isAdminHostEntry(currentHost) ? (
               <div>
@@ -551,7 +495,6 @@ function HostsTray(props: {
             <ul class="u-hosts" aria-label="Admin hosts">
               {list}
             </ul>
-            {hint ? <p class="hint">{hint}</p> : null}
           </div>
         )}
         {canWrite ? (
@@ -562,7 +505,7 @@ function HostsTray(props: {
             <Field
               id="f-add"
               label="Add a hostname"
-              hint="A hostname, or *.domain for every host below it. A pasted URL is reduced to its hostname. Not workers.dev."
+              hint={<a href="#faq-wildcards">Accepted hostname formats</a>}
               error={props.addError || undefined}
             >
               <ButtonRow>
@@ -576,9 +519,7 @@ function HostsTray(props: {
                   pattern={ADMIN_HOST_PATTERN}
                   placeholder={hostExample(currentHost)}
                 />
-                <Button variant="primary" type="submit">
-                  Add host
-                </Button>
+                <Button type="submit">Add host</Button>
               </ButtonRow>
             </Field>
           </form>
@@ -598,10 +539,7 @@ function LoginTray(props: { config: Config }) {
       label: 'Cloudflare Access',
       line: true,
       value: config.login.access ? (
-        <>
-          <Badge status="active">In use</Badge>
-          <span class="muted">You signed in with it.</span>
-        </>
+        <Badge status="active">In use</Badge>
       ) : loginErrors.some((error) => error.feature === 'login.access') ? (
         <Badge tone="bad" glyph="✕">
           Misconfigured
@@ -616,14 +554,7 @@ function LoginTray(props: { config: Config }) {
       label: 'Local development login',
       line: true,
       value: config.login.dev ? (
-        <>
-          <Badge tone="warn" glyph="⚠">
-            On
-          </Badge>
-          <span class="muted">
-            <code>AUTH_ACCESS_DEVELOPMENT</code> is set. It signs in only requests to localhost.
-          </span>
-        </>
+        <Badge tone="off">On</Badge>
       ) : (
         <Badge tone="off" glyph="⏸">
           Off
@@ -638,24 +569,78 @@ function LoginTray(props: { config: Config }) {
   return (
     <Tray
       id="login"
-      class="span-12"
       title="Login provider"
-      description="Set in the Worker's configuration, not here."
+      description={<a href="#faq-authentication">How to configure authentication</a>}
     >
       <Panel variant="pad">
         <KeyValue items={items} />
-        <Inherit>
-          <span aria-hidden="true">⚠ </span>If you change <code>AUTH_ACCESS_TEAM_DOMAIN</code>,{' '}
-          <code>AUTH_ACCESS_AUD</code> or <code>AUTH_ACCESS_DEVELOPMENT</code>, tokengate cannot
-          decrypt any stored secret, and every person needs Reset sign-in before they can sign in
-          again.
-        </Inherit>
-        <p>
-          <a href="https://one.dash.cloudflare.com/">
-            Revoke a person's Access session in Cloudflare Zero Trust
-          </a>{' '}
-          <span class="hint">(one.dash.cloudflare.com, opens outside tokengate)</span>
-        </p>
+        <a class="hint" href="#faq-revoke-session">
+          Session management
+        </a>
+      </Panel>
+    </Tray>
+  );
+}
+
+/** Explanations stay in one visible reference section, linked from the relevant controls. */
+function SignInFaq() {
+  return (
+    <Tray id="signin-faq" title="FAQ">
+      <Panel variant="pad">
+        <div class="stack signin-faq">
+          <section id="faq-add-host">
+            <h3>How do I configure a host?</h3>
+            <p>
+              Route the hostname to this Worker and protect it with your Cloudflare Access
+              application before adding it here. Only listed hostnames can serve the console; other
+              hostnames return 404. Hosts under workers.dev are not supported.
+            </p>
+          </section>
+          <section id="faq-wildcards">
+            <h3>Which hostname formats can I use?</h3>
+            <p>
+              Enter a hostname such as admin.example.com, or *.example.com for its subdomains. A
+              pasted URL is reduced to its hostname. A wildcard is not a shareable address: use a
+              concrete subdomain routed to the Worker. Share links use HTTPS; the current host keeps
+              its actual protocol and port.
+            </p>
+          </section>
+          <section id="faq-remove-host">
+            <h3>Why can’t I remove a host?</h3>
+            <p>
+              At least one host must remain, and the remaining entries must still cover the address
+              you are using. Add another host and open the console there before removing this one.
+            </p>
+          </section>
+          <section id="faq-unrestricted">
+            <h3>What happens when no hosts are configured?</h3>
+            <p>
+              Not pinned: the console answers on every hostname routed to this Worker, except
+              workers.dev. Add your console hostname to restrict it.
+            </p>
+          </section>
+          <section id="faq-authentication">
+            <h3>Where do I configure authentication?</h3>
+            <p>
+              Configure Cloudflare Access in the Worker’s settings with{' '}
+              <code>AUTH_ACCESS_TEAM_DOMAIN</code> and <code>AUTH_ACCESS_AUD</code>. Local
+              development login uses <code>AUTH_ACCESS_DEVELOPMENT</code> and signs in only requests
+              to localhost.
+            </p>
+            <p>
+              If you change these values, tokengate cannot decrypt any stored secret, and every
+              person needs Reset sign-in before they can sign in again. Plan this change before
+              editing the configuration.
+            </p>
+          </section>
+          <section id="faq-revoke-session">
+            <h3>How do I revoke a sign-in session?</h3>
+            <p>
+              Revoke the person’s Access session in{' '}
+              <a href="https://one.dash.cloudflare.com/">Cloudflare Zero Trust</a>.
+            </p>
+          </section>
+        </div>
       </Panel>
     </Tray>
   );

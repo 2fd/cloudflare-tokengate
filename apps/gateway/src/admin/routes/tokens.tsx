@@ -1237,7 +1237,7 @@ async function renderNew(
         <PageHeader
           crumbs={[{ href: paths.tokens(), label: 'Credentials' }, { label: 'Add credential' }]}
           title="Add a credential"
-          description="Pick the API and paste its secret. tokengate checks the secret with the API before it stores it, so a typo never reaches your consumers."
+          description="Store an application credential, then give each consumer access with its own limits. Consumers use the credential through tokengate without receiving its secret."
         />
       ),
       errors: o.errors,

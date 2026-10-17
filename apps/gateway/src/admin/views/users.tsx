@@ -1301,7 +1301,6 @@ export function RoleMap(props: { listed: readonly UserListEntry[]; selfId?: stri
   return (
     <Tray
       id="roles-map"
-      class="span-5"
       title="Who can change what"
       description="Everyone reads every page. Select a role to filter the list."
       footer={

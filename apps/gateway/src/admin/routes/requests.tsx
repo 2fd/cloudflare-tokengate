@@ -590,12 +590,6 @@ async function requestsPage(
               ]}
             />
           </TabRow>
-          <ActiveFilters
-            lead="Active filters"
-            filters={filterChips(params, names)}
-            clearHref={paths.requests()}
-            clearLabel="Clear filters"
-          />
         </PageHeader>
       ),
     },
@@ -634,8 +628,7 @@ async function requestsPage(
         <OneCaller params={params} rows={rows} ctx={ctx} />
         <Tray
           id="requests"
-          title={sentence ? sentence.title : 'Requests, newest first'}
-          hideTitle={!sentence && showFilters}
+          title="Requests, newest first"
           description={
             params.range ? (
               <>
@@ -648,14 +641,22 @@ async function requestsPage(
           }
           bar={
             showFilters ? (
-              <RequestFilters
-                params={params}
-                errors={o.errors}
-                credentials={credentials}
-                providers={providers}
-                repos={[...new Set(repos.map((r) => r.label))]}
-                rawRepo={o.rawRepo}
-              />
+              <>
+                <RequestFilters
+                  params={params}
+                  errors={o.errors}
+                  credentials={credentials}
+                  providers={providers}
+                  repos={[...new Set(repos.map((r) => r.label))]}
+                  rawRepo={o.rawRepo}
+                />
+                <ActiveFilters
+                  lead="Active filters"
+                  filters={filterChips(params, names)}
+                  clearHref={paths.requests()}
+                  clearLabel="Clear filters"
+                />
+              </>
             ) : undefined
           }
         >
@@ -1818,17 +1819,6 @@ function RequestDetail(props: {
             giveAccess={props.giveAccess}
             step={step + 1}
           />
-        </Stack>
-      </Column>
-      <Column span={4} rail as="aside" label="Request summary">
-        <Tray id="summary" title="Summary">
-          <Panel>
-            <RailKeyValue items={summary} />
-          </Panel>
-        </Tray>
-      </Column>
-      <Column span={8}>
-        <Stack>
           {trace.length > 0 ? (
             <Tray
               id="trace"
@@ -1907,7 +1897,12 @@ function RequestDetail(props: {
           />
         </Stack>
       </Column>
-      <Column span={4} rail as="aside" label="Related requests">
+      <Column span={4} rail as="aside" label="Request summary and related requests">
+        <Tray id="summary" title="Summary">
+          <Panel>
+            <RailKeyValue items={summary} />
+          </Panel>
+        </Tray>
         <Tray id="related" title="Related">
           <Panel>
             <ul class="cmap-list">
