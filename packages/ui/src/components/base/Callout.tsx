@@ -24,6 +24,11 @@ export interface CalloutProps {
   actions?: Child;
   /** `status` for a message that appears after an action (see `Notice`). Never `alert`. */
   role?: 'status';
+  /**
+   * Moves focus to the callout on load (`tabindex="-1" autofocus`): a `Notice` after a redirect.
+   * Default false. Only one autofocus per page; an `ErrorSummary` takes it when there are errors.
+   */
+  autofocus?: boolean;
   class?: string;
   /** The rest of the first paragraph, after the bold sentence. */
   children?: Child;
@@ -36,7 +41,12 @@ export interface CalloutProps {
 export function Callout(props: CalloutProps) {
   const tone = props.tone ?? 'info';
   return (
-    <div class={cx('callout', tone !== 'info' && tone, props.class)} role={props.role}>
+    <div
+      class={cx('callout', tone !== 'info' && tone, props.class)}
+      role={props.role}
+      tabindex={props.autofocus ? -1 : undefined}
+      autofocus={props.autofocus || undefined}
+    >
       <span class="gl" aria-hidden="true">
         {props.glyph ?? CALLOUT_GLYPHS[tone]}
       </span>

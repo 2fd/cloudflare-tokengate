@@ -1,41 +1,85 @@
-// Shared admin components (the design system). Every section builds its pages from these; a
-// section-specific primitive goes in that section's own views file, not here. Hono JSX escapes all
-// interpolated text, dangerouslySetInnerHTML is a lint error (oxlint react/no-danger), and nothing
-// here uses style= or script (CSP). Conventions behind the markup:
+// Shared admin adapters over the design system (@tokengate/ui, ADR 0022). An adapter stays here
+// only where the admin adds behavior: the field id convention, conditional validation, the status
+// vocabulary, who to ask, the not-found texts. Everything else, a page takes from @tokengate/ui
+// directly. Hono JSX escapes all interpolated text, dangerouslySetInnerHTML is a lint error (oxlint
+// react/no-danger), and nothing here uses style= or script (CSP). Conventions behind the markup:
 // - ids: a field named `a.b` has the id `f-a-b` (fieldId), its hint `…-hint`, its error `…-error`;
-//   aria-describedby lists only ids that are rendered.
+//   a group of choices (FieldSet) has the field id, and its inputs `…-1`, `…-2` …; an ErrorSummary
+//   link to the group lands on its first enabled input (FocusTargets, filled while the body renders).
 // - native validation (required, pattern, min, …) only on controls that are visible whenever their
 //   form can be submitted; `conditional` drops it for controls inside a .reveal or closed details.
-// - dialogs open with invoker commands, fall back to popover, and render inline without either;
-//   the server always requires the confirm value, so the dialog is never the only guard.
-import type { Child } from 'hono/jsx';
-import type { User } from '../../db/types';
+// - dialogs open with invoker commands and fall back to popover; the server always requires the
+//   confirm value, so the dialog is never the only guard.
+import {
+  ActionForm,
+  AskSomeone as UiAskSomeone,
+  Badge,
+  Checkbox as UiCheckbox,
+  Chip as UiChip,
+  ConfirmDialog as UiConfirmDialog,
+  DialogTrigger,
+  EmptyState as UiEmptyState,
+  ErrorSummary as UiErrorSummary,
+  Field as UiField,
+  FieldSet,
+  FixedBar,
+  firstChoiceId,
+  Input,
+  KeyValue,
+  type LinkCard,
+  LinkCards,
+  Notice,
+  Pager as UiPager,
+  RadioCards as UiRadioCards,
+  Select as UiSelect,
+  type SelectOption,
+  type Suggestion,
+  Tabs as UiTabs,
+  Textarea,
+  Time as UiTime,
+  Button,
+  Callout,
+  Panel,
+  Tray,
+} from '@tokengate/ui';
+import { type Child, createContext, useContext } from 'hono/jsx';
 import { CSRF_FIELD } from '../auth/csrf';
 import type { Permission } from '../auth/rbac';
-import type { Notice } from '../notice';
+import type { Notice as NoticeData } from '../notice';
 import type { FieldError } from '../ops/shared';
 import { paths } from '../paths';
 import type { ViewContext } from '../render';
-import { ApproveForm } from './approve-form';
-import { formatTime, relativeTime } from './format';
-import { rolesFor, ROLE_INFO } from './roles';
-import { STATUS, type StatusKey, statusLabel } from './status';
+import { relativeTime } from './format';
+import { ROLE_INFO, rolesFor } from './roles';
+import { STATUS, type StatusKey, statusLabel, uiTone } from './status';
 
+export type { Suggestion } from '@tokengate/ui';
 export type { Tone } from './status';
-// ApproveForm has its own file (it encodes the Users approve flow); pages import it from here.
-export { ApproveForm };
-
-export interface Suggestion {
-  value: string;
-  label?: string;
-}
 
 /** The id of the control for form field `name` (`.` becomes `-`, as in `f-rules-0-path`). */
 export function fieldId(name: string): string {
   return `f-${name.replace(/[.]/g, '-')}`;
 }
 
-function describedBy(ids: Array<string | null | undefined | false>): string | undefined {
+/**
+ * Field ids that are on an element that cannot take focus (a group's fieldset), mapped to the
+ * control an ErrorSummary link must land on (the group's first enabled input). The group adapters
+ * fill it while the page body renders; renderPage renders the body first, then the summary.
+ */
+export const FocusTargets = createContext<Map<string, string> | null>(null);
+
+/** The ErrorSummary target of field `name`: its control, also when the field is a group. */
+export function focusTarget(targets: ReadonlyMap<string, string>, name: string): string {
+  const id = fieldId(name);
+  return targets.get(id) ?? id;
+}
+
+function hasContent(child: Child | undefined): boolean {
+  return child !== undefined && child !== null && child !== false && child !== '';
+}
+
+/** The ids of `ids` that are set, as one attribute value (undefined when none is). */
+function idList(ids: Array<string | null | undefined | false>): string | undefined {
   const present = ids.filter((id): id is string => typeof id === 'string' && id !== '');
   return present.length > 0 ? present.join(' ') : undefined;
 }
@@ -44,7 +88,7 @@ function describedBy(ids: Array<string | null | undefined | false>): string | un
 // Forms
 
 /** Hidden synchronizer token required on every POST form (I-CSRF-1). */
-export function Csrf(props: { token: string }) {
+function Csrf(props: { token: string }) {
   return <input type="hidden" name={CSRF_FIELD} value={props.token} />;
 }
 
@@ -56,17 +100,19 @@ export function VersionField(props: { value: string }) {
   return <input type="hidden" name="expected_updated_at" value={props.value} />;
 }
 
-function HiddenFields(props: { fields?: Record<string, string> }) {
-  return (
-    <>
-      {Object.entries(props.fields ?? {}).map(([name, value]) => (
-        <input type="hidden" name={name} value={value} />
-      ))}
-    </>
-  );
+/** The hidden fields of a one-button form: `_csrf` first, then `_return`, then the rest. */
+function hiddenFields(
+  csrf: string,
+  fields?: Record<string, string>,
+  returnTo?: string,
+): Record<string, string> {
+  return { [CSRF_FIELD]: csrf, ...(returnTo ? { _return: returnTo } : {}), ...fields };
 }
 
-/** A POST form that always carries the CSRF token, so no page can forget it (I-CSRF-1). */
+/**
+ * A POST form that always carries the CSRF token, so no page can forget it (I-CSRF-1). For a form
+ * with several controls; a one-button form is an ActionButton (ui ActionForm).
+ */
 export function PostForm(props: {
   action: string;
   csrf: string;
@@ -86,8 +132,9 @@ export function PostForm(props: {
 }
 
 /**
- * A POST form rendered as one button. `context` is appended visually hidden, so repeated buttons
- * have distinct accessible names that start with the visible label ("Disable" + " Slack bot").
+ * A POST form rendered as one button (ui ActionForm). `context` is appended visually hidden, so
+ * repeated buttons have distinct accessible names that start with the visible label ("Disable" +
+ * " Slack bot").
  */
 export function ActionButton(props: {
   action: string;
@@ -95,17 +142,21 @@ export function ActionButton(props: {
   label: string;
   context?: string;
   tone?: 'primary' | 'secondary' | 'danger';
+  /** `sm` in table rows, callouts and notices. */
+  size?: 'sm';
   fields?: Record<string, string>;
   returnTo?: string;
 }) {
   return (
-    <PostForm action={props.action} csrf={props.csrf} class="inline" returnTo={props.returnTo}>
-      <HiddenFields fields={props.fields} />
-      <button type="submit" class={props.tone ?? 'secondary'}>
-        {props.label}
-        {props.context ? <span class="vh"> {props.context}</span> : null}
-      </button>
-    </PostForm>
+    <ActionForm
+      action={props.action}
+      hidden={hiddenFields(props.csrf, props.fields, props.returnTo)}
+      variant={props.tone ?? 'secondary'}
+      size={props.size}
+      srSuffix={props.context}
+    >
+      {props.label}
+    </ActionForm>
   );
 }
 
@@ -126,6 +177,8 @@ export interface FieldProps {
   optional?: boolean;
   /** The control can be hidden while its form is submittable: no native validation (A7.6). */
   conditional?: boolean;
+  /** Mono type for IDs, paths, URLs: also no autocomplete, spellcheck or autocapitalize. */
+  mono?: boolean;
   pattern?: string;
   inputmode?: InputMode;
   /** No default: pass a token, or `off`. */
@@ -140,7 +193,6 @@ export interface FieldProps {
   readonly?: boolean;
   disabled?: boolean;
   suggestions?: readonly Suggestion[];
-  labelHidden?: boolean;
   /** Extra ids for aria-describedby, after the hint and error. */
   describedBy?: string[];
   enterkeyhint?: 'send' | 'done' | 'go';
@@ -148,71 +200,18 @@ export interface FieldProps {
   autofocus?: boolean;
 }
 
-/** Label, hint and error around a control; the shared frame of Field, TextArea and Select. */
-function FieldFrame(props: {
-  id: string;
-  label: string;
-  optional?: boolean;
-  labelHidden?: boolean;
-  hint?: Child;
-  error?: string | null;
-  children: Child;
-}) {
-  return (
-    <div class="field" data-invalid={props.error ? 'true' : undefined}>
-      <label for={props.id} class={props.labelHidden ? 'vh' : undefined}>
-        {props.label}
-        {props.optional ? <span class="optional"> (optional)</span> : null}
-      </label>
-      {hasContent(props.hint) ? (
-        <p class="hint" id={`${props.id}-hint`}>
-          {props.hint}
-        </p>
-      ) : null}
-      {props.error ? (
-        <p class="field-error" id={`${props.id}-error`}>
-          <span class="vh">Error:</span> {props.error}
-        </p>
-      ) : null}
-      {props.children}
-    </div>
-  );
-}
-
-function hasContent(child: Child | undefined): boolean {
-  return child !== undefined && child !== null && child !== false && child !== '';
-}
-
-function frameIds(id: string, p: { hint?: Child; error?: string | null; describedBy?: string[] }) {
-  return describedBy([
-    hasContent(p.hint) && `${id}-hint`,
-    p.error && `${id}-error`,
-    ...(p.describedBy ?? []),
-  ]);
-}
-
 /**
- * What A7.8 puts on every secret input (type="password"): no autofill, spellcheck or autocorrect,
- * and password managers told to leave it alone. Paste is never blocked.
+ * A labelled input (ui Field + Input). `type="password"` is a ui secret input: it never renders a
+ * value and password managers leave it alone (A7.8). A conditional control is plain text without
+ * native validation: a hidden control the browser refuses (badInput, typeMismatch, step) blocks the
+ * submit and cannot be focused, so the server validates it.
  */
-export const SECRET_INPUT_ATTRIBUTES = {
-  autocomplete: 'off',
-  spellcheck: false,
-  autocapitalize: 'none',
-  autocorrect: 'off',
-  'data-1p-ignore': 'true',
-  'data-lpignore': 'true',
-  'data-bwignore': 'true',
-} as const;
-
 export function Field(props: FieldProps) {
   const id = props.id ?? fieldId(props.name);
   const conditional = props.conditional === true;
   let type = props.type ?? 'text';
   let inputmode = props.inputmode;
   let hint = props.hint;
-  // A hidden control the browser refuses (badInput, typeMismatch, step) blocks the submit and
-  // cannot be focused, so a conditional control is plain text and the server validates it.
   if (conditional && (type === 'url' || type === 'email')) {
     inputmode = inputmode ?? type;
     type = 'text';
@@ -227,57 +226,55 @@ export function Field(props: FieldProps) {
     );
     type = 'text';
   }
-  const listId = props.suggestions && props.suggestions.length > 0 ? `${id}-list` : undefined;
+  const common = {
+    name: props.name,
+    placeholder: props.example,
+    required: !conditional && props.required ? true : undefined,
+    pattern: conditional ? undefined : props.pattern,
+    minlength: conditional ? undefined : props.minlength,
+    maxlength: props.maxlength,
+    inputmode,
+    autocomplete: props.autocomplete,
+    spellcheck: props.spellcheck,
+    autocapitalize: props.autocapitalize,
+    readonly: props.readonly,
+    disabled: props.disabled,
+    enterkeyhint: props.enterkeyhint,
+    autofocus: props.autofocus,
+    describedBy: idList(props.describedBy ?? []),
+  };
   return (
-    <FieldFrame
-      id={id}
-      label={props.label}
-      optional={props.optional}
-      labelHidden={props.labelHidden}
-      hint={hint}
-      error={props.error}
-    >
-      <input
-        id={id}
-        name={props.name}
-        type={type}
-        value={props.value == null ? '' : String(props.value)}
-        placeholder={props.example}
-        required={!conditional && props.required ? true : undefined}
-        pattern={conditional ? undefined : props.pattern}
-        min={conditional ? undefined : props.min}
-        max={conditional ? undefined : props.max}
-        minlength={conditional ? undefined : props.minlength}
-        step={conditional ? undefined : props.step}
-        maxlength={props.maxlength}
-        inputmode={inputmode}
-        autocomplete={props.autocomplete}
-        spellcheck={props.spellcheck}
-        autocapitalize={props.autocapitalize}
-        readonly={props.readonly}
-        disabled={props.disabled}
-        enterkeyhint={props.enterkeyhint}
-        autofocus={props.autofocus}
-        list={listId}
-        aria-describedby={frameIds(id, { ...props, hint })}
-        aria-invalid={props.error ? 'true' : undefined}
-        {...(type === 'password' ? SECRET_INPUT_ATTRIBUTES : {})}
-      />
-      {listId ? (
-        <datalist id={listId}>
-          {(props.suggestions ?? []).map((suggestion) => (
-            <option value={suggestion.value}>{suggestion.label ?? suggestion.value}</option>
-          ))}
-        </datalist>
-      ) : null}
-    </FieldFrame>
+    <UiField id={id} label={props.label} optional={props.optional} hint={hint} error={props.error}>
+      {type === 'password' ? (
+        // A secret is never autofilled or corrected, whatever the caller passes (A7.8).
+        <Input
+          {...common}
+          secret
+          autocomplete="off"
+          spellcheck={undefined}
+          autocapitalize={undefined}
+        />
+      ) : (
+        <Input
+          {...common}
+          type={type}
+          mono={props.mono}
+          value={props.value == null ? '' : props.value}
+          min={conditional ? undefined : props.min}
+          max={conditional ? undefined : props.max}
+          step={conditional ? undefined : props.step}
+          suggestions={props.suggestions}
+        />
+      )}
+    </UiField>
   );
 }
 
+/** Multi-line text (ui Field + Textarea). `spellcheck={false}` means exact values: mono. */
 export function TextArea(
   props: Omit<
     FieldProps,
-    'type' | 'pattern' | 'inputmode' | 'min' | 'max' | 'step' | 'suggestions'
+    'type' | 'pattern' | 'inputmode' | 'min' | 'max' | 'step' | 'suggestions' | 'mono'
   > & {
     rows?: number;
   },
@@ -285,34 +282,26 @@ export function TextArea(
   const id = props.id ?? fieldId(props.name);
   const conditional = props.conditional === true;
   return (
-    <FieldFrame
+    <UiField
       id={id}
       label={props.label}
       optional={props.optional}
-      labelHidden={props.labelHidden}
       hint={props.hint}
       error={props.error}
     >
-      <textarea
-        id={id}
+      <Textarea
         name={props.name}
         rows={props.rows ?? 4}
         placeholder={props.example}
         required={!conditional && props.required ? true : undefined}
-        minlength={conditional ? undefined : props.minlength}
         maxlength={props.maxlength}
-        autocomplete={props.autocomplete}
-        spellcheck={props.spellcheck}
-        autocapitalize={props.autocapitalize}
+        mono={props.spellcheck === false}
         readonly={props.readonly}
         disabled={props.disabled}
-        autofocus={props.autofocus}
-        aria-describedby={frameIds(id, props)}
-        aria-invalid={props.error ? 'true' : undefined}
-      >
-        {props.value == null ? '' : String(props.value)}
-      </textarea>
-    </FieldFrame>
+        describedBy={idList(props.describedBy ?? [])}
+        value={props.value == null ? '' : String(props.value)}
+      />
+    </UiField>
   );
 }
 
@@ -361,6 +350,7 @@ export function IdWithLabelField(
       {...field}
       type="text"
       inputmode="text"
+      mono
       pattern={ID_PATTERNS[kind]}
       spellcheck={false}
       autocapitalize="none"
@@ -390,57 +380,38 @@ export interface SelectProps {
   id?: string;
   value?: string | null;
   options: OptionList;
-  /** Rendered as a first `<option value="">`, selected while there is no value. */
+  /** Rendered as a first `<option value="">`, selected while there is no value. It stays selectable. */
   placeholder?: string;
   required?: boolean;
   hint?: Child;
   error?: string | null;
-  labelHidden?: boolean;
   conditional?: boolean;
 }
 
+/**
+ * A labelled select (ui Field + Select). The placeholder is an ordinary first option, so a filter
+ * can go back to "any" (ui disables its own placeholder once a value is set).
+ */
 export function Select(props: SelectProps) {
   const id = props.id ?? fieldId(props.name);
-  const value = props.value ?? '';
-  const option = (entry: Option) => (
-    <option value={entry.value} selected={entry.value === value}>
-      {entry.label}
-    </option>
-  );
+  const options: Array<SelectOption | { group: string; options: readonly SelectOption[] }> = [
+    ...(props.placeholder !== undefined ? [{ value: '', label: props.placeholder }] : []),
+    ...props.options,
+  ];
   return (
-    <FieldFrame
-      id={id}
-      label={props.label}
-      labelHidden={props.labelHidden}
-      hint={props.hint}
-      error={props.error}
-    >
-      <select
-        id={id}
+    <UiField id={id} label={props.label} hint={props.hint} error={props.error}>
+      <UiSelect
         name={props.name}
+        options={options}
+        value={props.value ?? ''}
         required={!props.conditional && props.required ? true : undefined}
-        aria-describedby={frameIds(id, props)}
-        aria-invalid={props.error ? 'true' : undefined}
-      >
-        {props.placeholder !== undefined ? (
-          <option value="" selected={value === ''}>
-            {props.placeholder}
-          </option>
-        ) : null}
-        {props.options.map((entry) =>
-          'group' in entry ? (
-            <optgroup label={entry.group}>{entry.options.map(option)}</optgroup>
-          ) : (
-            option(entry)
-          ),
-        )}
-      </select>
-    </FieldFrame>
+      />
+    </UiField>
   );
 }
 
 /**
- * A choice whose control follows the option count: 1 option is fixed text plus a hidden input
+ * A choice whose control follows the option count: 1 option is a fixed fact plus a hidden input
  * (nothing to decide), 2–6 are RadioCards, 7 or more a Select.
  */
 export function Choice(props: SelectProps & { descriptions?: Record<string, Child> }) {
@@ -449,21 +420,20 @@ export function Choice(props: SelectProps & { descriptions?: Record<string, Chil
   if (options.length === 1 && only) {
     const id = props.id ?? fieldId(props.name);
     return (
-      <div class="field" data-invalid={props.error ? 'true' : undefined}>
-        <p class="fixed" id={id}>
-          <span class={props.labelHidden ? 'vh' : 'label'}>{props.label}:</span> {only.label}
-        </p>
+      <div class="field" id={id}>
+        <FixedBar label={props.label} name={only.label} />
         <input type="hidden" name={props.name} value={only.value} />
         {hasContent(props.descriptions?.[only.value]) ? (
-          <p class="hint">{props.descriptions?.[only.value]}</p>
+          <span class="hint">{props.descriptions?.[only.value]}</span>
         ) : null}
         {hasContent(props.hint) ? (
-          <p class="hint" id={`${id}-hint`}>
+          <span class="hint" id={`${id}-hint`}>
             {props.hint}
-          </p>
+          </span>
         ) : null}
         {props.error ? (
           <p class="field-error" id={`${id}-error`}>
+            <span aria-hidden="true">✕</span>
             <span class="vh">Error:</span> {props.error}
           </p>
         ) : null}
@@ -475,7 +445,6 @@ export function Choice(props: SelectProps & { descriptions?: Record<string, Chil
       <RadioCards
         name={props.name}
         legend={props.label}
-        legendHidden={props.labelHidden}
         value={props.value}
         idPrefix={props.id}
         hint={props.hint}
@@ -496,20 +465,24 @@ export interface RadioOption {
   title: string;
   description?: Child;
   disabled?: boolean;
-  /** Rendered as "Risk: …" in the option's hint. */
+  /** A risky option: a "⚠ Risk" tag, and "Risk: …" after the description. */
   risk?: string;
-  /** Shown only while this option is checked (CSS :has); never holds native validation. */
+  /**
+   * Fields this option needs. Transitional: rendered after the cards and always shown (the
+   * section stages move them into a ui LiveForm Reveal). Never holds native validation.
+   */
   reveal?: Child;
 }
 
 /**
- * Radio options as cards. The first radio has the group's field id, so an ErrorSummary link to
- * the group lands on it; the group error is on the fieldset and described from the first radio.
+ * Radio options as cards (ui FieldSet + RadioCards). The fieldset has the field id and the radios
+ * are `${id}-1`, `${id}-2` … An ErrorSummary link to the field lands on the first enabled radio
+ * (FocusTargets), which is aria-invalid on an error. The group's hint and error describe the
+ * fieldset.
  */
 export function RadioCards(props: {
   name: string;
   legend: string;
-  legendHidden?: boolean;
   value?: string | null;
   idPrefix?: string;
   options: RadioOption[];
@@ -517,63 +490,49 @@ export function RadioCards(props: {
   error?: string | null;
 }) {
   const prefix = props.idPrefix ?? fieldId(props.name);
-  const hintId = hasContent(props.hint) ? `${prefix}-hint` : null;
-  const errorId = props.error ? `${prefix}-error` : null;
+  const reveals = props.options.filter((option) => hasContent(option.reveal));
+  useContext(FocusTargets)?.set(
+    prefix,
+    firstChoiceId(
+      prefix,
+      props.options.map((option) => ({ value: option.value, disabled: option.disabled })),
+    ),
+  );
   return (
-    <fieldset class="cards" data-invalid={props.error ? 'true' : undefined}>
-      <legend class={props.legendHidden ? 'vh' : undefined}>{props.legend}</legend>
-      {hintId ? (
-        <p class="hint" id={hintId}>
-          {props.hint}
-        </p>
-      ) : null}
-      {errorId ? (
-        <p class="field-error" id={errorId}>
-          <span class="vh">Error:</span> {props.error}
-        </p>
-      ) : null}
-      {props.options.map((option, index) => {
-        const id = index === 0 ? prefix : `${prefix}-${index}`;
-        const hasHint = hasContent(option.description) || option.risk !== undefined;
-        return (
-          <>
-            <div class="choice">
-              <input
-                type="radio"
-                id={id}
-                name={props.name}
-                value={option.value}
-                checked={option.value === props.value}
-                disabled={option.disabled}
-                aria-describedby={describedBy([
-                  hasHint && `${id}-desc`,
-                  index === 0 && hintId,
-                  index === 0 && errorId,
-                ])}
-                aria-invalid={index === 0 && props.error ? 'true' : undefined}
-              />
-              <label for={id}>{option.title}</label>
-              {hasHint ? (
-                <p class="hint" id={`${id}-desc`}>
-                  {option.description}
-                  {option.risk !== undefined ? (
-                    <>
-                      {hasContent(option.description) ? ' ' : null}
-                      <strong>Risk:</strong> {option.risk}
-                    </>
-                  ) : null}
-                </p>
-              ) : null}
-            </div>
-            {hasContent(option.reveal) ? <div class="reveal">{option.reveal}</div> : null}
-          </>
-        );
-      })}
-    </fieldset>
+    <FieldSet id={prefix} legend={props.legend} hint={props.hint} error={props.error}>
+      <UiRadioCards
+        name={props.name}
+        invalid={props.error ? true : undefined}
+        value={props.value ?? undefined}
+        options={props.options.map((option) => ({
+          value: option.value,
+          title: option.title,
+          disabled: option.disabled,
+          risk: option.risk !== undefined,
+          description:
+            option.risk !== undefined ? (
+              <>
+                {option.description}
+                {hasContent(option.description) ? ' ' : null}
+                <strong>Risk:</strong> {option.risk}
+              </>
+            ) : (
+              option.description
+            ),
+        }))}
+      />
+      {reveals.map((option) => (
+        <div class="reveal">{option.reveal}</div>
+      ))}
+    </FieldSet>
   );
 }
 
-/** Checkboxes sharing one name; the server reads the submitted values as an array. */
+/**
+ * Checkboxes sharing one name (ui FieldSet + Checkbox rows); the server reads the submitted values
+ * as an array. The fieldset has the field id; the boxes are `${id}-1`, `${id}-2` … An ErrorSummary
+ * link lands on the first enabled box, which is aria-invalid on an error.
+ */
 export function CheckboxGroup(props: {
   name: string;
   legend: string;
@@ -590,52 +549,28 @@ export function CheckboxGroup(props: {
   conditional?: boolean;
 }) {
   const prefix = fieldId(props.name);
-  const hintId = hasContent(props.hint) ? `${prefix}-hint` : null;
-  const errorId = props.error ? `${prefix}-error` : null;
+  const first = firstChoiceId(prefix, props.options);
+  useContext(FocusTargets)?.set(prefix, first);
   return (
-    <fieldset class="checks" data-invalid={props.error ? 'true' : undefined}>
-      <legend>{props.legend}</legend>
-      {hintId ? (
-        <p class="hint" id={hintId}>
-          {props.hint}
-        </p>
-      ) : null}
-      {errorId ? (
-        <p class="field-error" id={errorId}>
-          <span class="vh">Error:</span> {props.error}
-        </p>
-      ) : null}
-      {props.options.map((option, index) => {
-        const id = index === 0 ? prefix : `${prefix}-${index}`;
-        return (
-          <div class="choice">
-            <input
-              type="checkbox"
-              id={id}
-              name={props.name}
-              value={option.value}
-              checked={option.checked}
-              disabled={option.disabled}
-              aria-describedby={describedBy([
-                hasContent(option.hint) && `${id}-desc`,
-                index === 0 && hintId,
-                index === 0 && errorId,
-              ])}
-              aria-invalid={index === 0 && props.error ? 'true' : undefined}
-            />
-            <label for={id}>{option.label}</label>
-            {hasContent(option.hint) ? (
-              <p class="hint" id={`${id}-desc`}>
-                {option.hint}
-              </p>
-            ) : null}
-          </div>
-        );
-      })}
-    </fieldset>
+    <FieldSet id={prefix} legend={props.legend} hint={props.hint} error={props.error}>
+      {props.options.map((option, index) => (
+        <UiCheckbox
+          id={`${prefix}-${index + 1}`}
+          name={props.name}
+          value={option.value}
+          checked={option.checked}
+          disabled={option.disabled}
+          hint={hasContent(option.hint) ? option.hint : undefined}
+          invalid={props.error && `${prefix}-${index + 1}` === first ? true : undefined}
+        >
+          {option.label}
+        </UiCheckbox>
+      ))}
+    </FieldSet>
   );
 }
 
+/** One checkbox (ui Checkbox). It always sends `1` unless a value is given (servers read `1`). */
 export function Checkbox(props: {
   name: string;
   label: Child;
@@ -648,94 +583,17 @@ export function Checkbox(props: {
 }) {
   const id = props.id ?? fieldId(props.name);
   return (
-    <div class="field checkbox" data-invalid={props.error ? 'true' : undefined}>
-      <input
-        type="checkbox"
-        id={id}
-        name={props.name}
-        value={props.value ?? '1'}
-        checked={props.checked}
-        required={props.required}
-        aria-describedby={describedBy([
-          hasContent(props.hint) && `${id}-hint`,
-          props.error && `${id}-error`,
-        ])}
-        aria-invalid={props.error ? 'true' : undefined}
-      />
-      <label for={id}>{props.label}</label>
-      {hasContent(props.hint) ? (
-        <p class="hint" id={`${id}-hint`}>
-          {props.hint}
-        </p>
-      ) : null}
-      {props.error ? (
-        <p class="field-error" id={`${id}-error`}>
-          <span class="vh">Error:</span> {props.error}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-/**
- * One submit button per option (the button is the choice: "Invite as Viewer"). Options with
- * `confirm` render a dialog trigger instead; their dialogs follow every button, so the first plain
- * option stays the form's default button (Enter). The dialogs sit inside the surrounding form, so
- * only the `submits` variant is accepted: a standalone dialog would nest its own form.
- */
-export function SubmitButtons(props: {
-  name: string;
-  legend: string;
-  options: Array<{
-    value: string;
-    label: string;
-    context?: string;
-    description?: Child;
-    current?: boolean;
-    confirm?: Extract<ConfirmDialogProps, { variant: 'submits' }>;
-  }>;
-}) {
-  const plain = props.options.filter((option) => !option.confirm);
-  const confirmed = props.options.filter((option) => option.confirm);
-  return (
-    <fieldset class="submits">
-      <legend>{props.legend}</legend>
-      <div class="actions">
-        {plain.map((option) => (
-          <span class="submit-option">
-            <button
-              type="submit"
-              name={props.name}
-              value={option.value}
-              class={option.current ? 'secondary current' : 'secondary'}
-              aria-describedby={
-                hasContent(option.description)
-                  ? `${fieldId(props.name)}-${option.value}-desc`
-                  : undefined
-              }
-            >
-              {option.label}
-              {option.context ? <span class="vh"> {option.context}</span> : null}
-              {option.current ? (
-                <>
-                  {' '}
-                  <span class="badge">Current</span>
-                </>
-              ) : null}
-            </button>
-            {hasContent(option.description) ? (
-              <span class="hint" id={`${fieldId(props.name)}-${option.value}-desc`}>
-                {option.description}
-              </span>
-            ) : null}
-          </span>
-        ))}
-        {confirmed.map((option) =>
-          option.confirm ? <ConfirmTrigger {...option.confirm} /> : null,
-        )}
-      </div>
-      {confirmed.map((option) => (option.confirm ? <ConfirmBox {...option.confirm} /> : null))}
-    </fieldset>
+    <UiCheckbox
+      id={id}
+      name={props.name}
+      value={props.value ?? '1'}
+      checked={props.checked}
+      required={props.required}
+      hint={hasContent(props.hint) ? props.hint : undefined}
+      error={props.error || undefined}
+    >
+      {props.label}
+    </UiCheckbox>
   );
 }
 
@@ -743,46 +601,60 @@ export function SubmitButtons(props: {
 // Messages
 
 /**
- * "There is a problem", focused on load (no role=alert: autofocus already announces it). The group
- * role lets aria-labelledby name it (a plain div may not be named). Field errors link to their
- * control; other errors are plain items.
+ * "There is a problem" (ui ErrorSummary): focused on load, `role="group"` (no role=alert:
+ * autofocus already announces it). Field errors link to their control (`target`, default fieldId;
+ * renderPage passes focusTarget, so a group links to its first input); other errors are plain items.
  */
-export function ErrorSummary(props: { errors: FieldError[] }) {
-  if (props.errors.length === 0) return null;
+export function ErrorSummary(props: {
+  errors: FieldError[];
+  target?: (field: string) => string;
+  title?: Child;
+  description?: Child;
+}) {
+  const target = props.target ?? fieldId;
   return (
-    <div class="error-summary" role="group" tabindex={-1} autofocus aria-labelledby="es-h">
-      <h2 id="es-h">There is a problem</h2>
-      <ul>
-        {props.errors.map((error) => (
-          <li>
-            {error.field ? <a href={`#${fieldId(error.field)}`}>{error.message}</a> : error.message}
-          </li>
-        ))}
-      </ul>
-    </div>
+    <UiErrorSummary
+      role="group"
+      title={props.title}
+      description={props.description}
+      errors={props.errors.map((error) => ({
+        target: error.field ? target(error.field) : undefined,
+        message: error.message,
+      }))}
+    />
   );
 }
 
 /** A success notice after a POST-redirect-GET (notice.ts), focused on load unless errors are. */
-export function NoticeView(props: { notice: Notice; csrf: string; autofocus?: boolean }) {
+export function NoticeView(props: { notice: NoticeData; csrf: string; autofocus?: boolean }) {
   const { notice } = props;
+  const actions =
+    notice.next || notice.undo ? (
+      <>
+        {notice.next ? (
+          <Button href={notice.next.href} size="sm">
+            {notice.next.label}
+          </Button>
+        ) : null}
+        {notice.undo ? (
+          <ActionForm
+            action={notice.undo.action}
+            size="sm"
+            srSuffix={notice.undo.srSuffix}
+            hidden={{ [CSRF_FIELD]: props.csrf, ...notice.undo.fields }}
+          >
+            {notice.undo.label}
+          </ActionForm>
+        ) : null}
+      </>
+    ) : undefined;
   return (
-    <div class="notice" role="status" tabindex={-1} autofocus={props.autofocus !== false}>
-      <p>{notice.text}</p>
-      {notice.next || notice.undo ? (
-        <div class="actions">
-          {notice.next ? <a href={notice.next.href}>{notice.next.label}</a> : null}
-          {notice.undo ? (
-            <PostForm action={notice.undo.action} csrf={props.csrf} class="inline">
-              <HiddenFields fields={notice.undo.fields} />
-              <button type="submit" class="secondary">
-                {notice.undo.label}
-              </button>
-            </PostForm>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
+    <Notice
+      title={notice.text}
+      more={notice.more}
+      actions={actions}
+      autofocus={props.autofocus !== false}
+    />
   );
 }
 
@@ -797,6 +669,7 @@ export type ConfirmDialogProps = {
   triggerContext?: string;
   title: string;
   body: Child;
+  /** What happens, one fact per item. */
   affected?: Child[];
   confirmLabel: string;
   danger?: boolean;
@@ -812,9 +685,9 @@ export type ConfirmDialogProps = {
 );
 
 /**
- * A trigger button and its modal dialog. `standalone` holds its own form with `confirm=1`;
- * `submits` submits another form (`formId`) and must be placed after that form in tree order, so
- * the form's default button does not change.
+ * A trigger button and its modal dialog (ui DialogTrigger + ConfirmDialog). `standalone` posts its
+ * own form with `confirm=1`; `submits` submits another form (`formId`) and must be placed after
+ * that form's default button in tree order.
  */
 export function ConfirmDialog(props: ConfirmDialogProps) {
   return (
@@ -825,81 +698,43 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   );
 }
 
-/**
- * The trigger alone. `type="button"`: per the HTML spec a submit button inside a form runs no
- * command. `commandfor` opens a real modal; `popovertarget` is the fallback without invoker
- * commands; without either the dialog is shown inline by CSS and the trigger hidden.
- */
+/** The trigger alone: `type="button"`, so it never submits a surrounding form. */
 export function ConfirmTrigger(props: ConfirmDialogProps) {
-  const dialogId = `dlg-${props.id}`;
   return (
-    <button
-      type="button"
-      class={props.danger ? 'confirm-trigger danger' : 'confirm-trigger secondary'}
-      commandfor={dialogId}
-      command="show-modal"
-      popovertarget={dialogId}
+    <DialogTrigger
+      dialog={`dlg-${props.id}`}
+      variant={props.danger ? 'danger' : 'secondary'}
+      srSuffix={props.triggerContext}
     >
       {props.trigger}
-      {props.triggerContext ? <span class="vh"> {props.triggerContext}</span> : null}
-    </button>
+    </DialogTrigger>
   );
 }
 
-/** The dialog alone (see ConfirmTrigger). */
+/** The dialog alone (see ConfirmTrigger). The server requires `confirm` in both variants. */
 export function ConfirmBox(props: ConfirmDialogProps) {
-  const dialogId = `dlg-${props.id}`;
-  const confirmClass = props.danger ? 'danger' : 'primary';
-  return (
-    <dialog id={dialogId} class="confirm" popover="auto" aria-labelledby={`${dialogId}-h`}>
-      <h2 id={`${dialogId}-h`}>{props.title}</h2>
-      <p>{props.body}</p>
-      {props.affected && props.affected.length > 0 ? (
-        <ul class="affected">
-          {props.affected.map((item) => (
-            <li>{item}</li>
-          ))}
-        </ul>
-      ) : null}
-      <div class="actions">
-        {props.variant === 'standalone' ? (
-          <PostForm
-            action={props.action}
-            csrf={props.csrf}
-            class="inline"
-            returnTo={props.returnTo}
-          >
-            <HiddenFields fields={props.fields} />
-            <input type="hidden" name="confirm" value="1" />
-            <button type="submit" class={confirmClass}>
-              {props.confirmLabel}
-            </button>
-          </PostForm>
-        ) : (
-          <button
-            type="submit"
-            form={props.formId}
-            name={props.name ?? 'confirm'}
-            value={props.value ?? '1'}
-            formnovalidate={props.formnovalidate}
-            class={confirmClass}
-          >
-            {props.confirmLabel}
-          </button>
-        )}
-        <button
-          type="button"
-          class="secondary"
-          commandfor={dialogId}
-          command="close"
-          popovertarget={dialogId}
-          popovertargetaction="hide"
-          autofocus
-        >
-          Cancel
-        </button>
-      </div>
-    </dialog>
+  const common = {
+    id: `dlg-${props.id}`,
+    title: props.title,
+    description: props.body,
+    consequences: props.affected,
+    confirmLabel: props.confirmLabel,
+    confirmVariant: props.danger ? ('danger-solid' as const) : ('primary' as const),
+  };
+  return props.variant === 'standalone' ? (
+    <UiConfirmDialog
+      {...common}
+      action={props.action}
+      hidden={{ ...hiddenFields(props.csrf, props.fields, props.returnTo), confirm: '1' }}
+    />
+  ) : (
+    <UiConfirmDialog
+      {...common}
+      form={props.formId}
+      name={props.name}
+      value={props.value}
+      formnovalidate={props.formnovalidate}
+    />
   );
 }
 
@@ -907,8 +742,9 @@ export function ConfirmBox(props: ConfirmDialogProps) {
 // Navigation
 
 /**
- * Links as tabs (no ARIA tab roles: those need script). The current item gets
- * aria-current="page", or "true" when the page is below it (a token page under Tokens).
+ * Views of one object or one list as tabs (ui Tabs; links, no ARIA tab roles). The current item
+ * gets aria-current="page", or "true" when the page is below it. Never the section subnav: that
+ * is the sidebar.
  */
 export function Tabs(props: {
   label: string;
@@ -918,110 +754,56 @@ export function Tabs(props: {
   currentState?: 'page' | 'true';
 }) {
   return (
-    <nav aria-label={props.label} class={props.class ?? 'tabs'}>
-      <ul>
-        {props.items.map((item) => (
-          <li>
-            <a
-              href={item.href}
-              aria-current={item.key === props.current ? (props.currentState ?? 'page') : undefined}
-            >
-              {item.label}
-              {item.count !== undefined ? (
-                <>
-                  {' '}
-                  <span class="count">{item.count}</span>
-                </>
-              ) : null}
-            </a>
-          </li>
-        ))}
-      </ul>
-    </nav>
+    <UiTabs
+      label={props.label}
+      class={props.class}
+      items={props.items.map((item) => ({
+        label: item.label,
+        href: item.href,
+        count: item.count,
+        current: item.key === props.current ? (props.currentState ?? 'page') : undefined,
+      }))}
+    />
   );
 }
 
-/** `Service tokens › Slack bot › Change secret`; the last item is the current page. */
-export function Breadcrumbs(props: { items: Array<{ href: string; label: string }> }) {
-  const last = props.items.length - 1;
-  return (
-    <nav aria-label="Breadcrumb" class="breadcrumb">
-      <ol>
-        {props.items.map((item, index) => (
-          <li>
-            <a href={item.href} aria-current={index === last ? 'page' : undefined}>
-              {item.label}
-            </a>
-          </li>
-        ))}
-      </ol>
-    </nav>
-  );
-}
-
-/** Newest, newer and older links of a keyset-paginated list. */
+/** Newest, newer and older links of a keyset-paginated list (ui Pager with buttons). */
 export function Pager(props: {
   newest?: string | null;
   newer?: string | null;
   older?: string | null;
+  /** What is shown. Default "Times in UTC." */
+  summary?: Child;
 }) {
   if (!props.newest && !props.newer && !props.older) return null;
   return (
-    <nav aria-label="Pages" class="pager">
-      {props.newest ? <a href={props.newest}>Newest entries</a> : null}
-      {props.newer ? (
-        <a href={props.newer}>
-          <span aria-hidden="true">← </span>Newer entries
-        </a>
-      ) : null}
-      {props.older ? (
-        <a href={props.older}>
-          Older entries<span aria-hidden="true"> →</span>
-        </a>
-      ) : null}
-    </nav>
-  );
-}
-
-/** The active filters of a list, each removable, plus "Clear filters". */
-export function FilterChips(props: {
-  items: Array<{ label: string; removeHref: string }>;
-  clearHref: string;
-}) {
-  if (props.items.length === 0) return null;
-  return (
-    <ul class="chips filters" aria-label="Active filters">
-      {props.items.map((item) => (
-        <li>
-          <a class="chip" href={item.removeHref}>
-            {item.label}
-            <span class="vh"> (remove this filter)</span>
-            <span aria-hidden="true"> ×</span>
-          </a>
-        </li>
-      ))}
-      <li>
-        <a href={props.clearHref}>Clear filters</a>
-      </li>
-    </ul>
+    <UiPager
+      summary={props.summary ?? 'Times in UTC.'}
+      newest={props.newest ?? undefined}
+      newestLabel="Newest entries"
+      newer={props.newer ?? undefined}
+      newerLabel="Newer entries"
+      older={props.older ?? undefined}
+      olderLabel="Older entries"
+      buttons
+    />
   );
 }
 
 // ---------------------------------------------------------------------------------------------
 // Data display
 
-/** `<span class="badge <tone>">` with an aria-hidden glyph; the label carries the meaning. */
+/** A status in the admin vocabulary (status.ts) as a ui Badge; the word carries the meaning. */
 export function StatusBadge(props: { status: StatusKey; detail?: string }) {
   const info = STATUS[props.status];
   return (
-    <span class={`badge ${info.tone}`}>
-      {info.glyph ? <span aria-hidden="true">{info.glyph} </span> : null}
+    <Badge tone={uiTone(info.tone)} glyph={info.glyph || undefined}>
       {statusLabel(props.status, props.detail)}
-    </span>
+    </Badge>
   );
 }
 
-export interface ChipProps {
+interface ChipProps {
   href?: string;
   text: string;
   secondary?: string;
@@ -1031,155 +813,62 @@ export interface ChipProps {
   srText: string;
 }
 
+/**
+ * A relationship chip (ui Chip). The visible name and the status glyph are hidden from assistive
+ * technology; `srText` is what a screen reader hears.
+ */
 export function Chip(props: ChipProps) {
-  const visible = (
-    <span aria-hidden="true">
-      {props.text}
-      {props.secondary ? <span class="secondary-text"> {props.secondary}</span> : null}
-      {props.status ? (
-        <>
-          {' '}
-          <StatusBadge status={props.status} detail={props.statusDetail} />
-        </>
-      ) : null}
-    </span>
-  );
-  const spoken = <span class="vh">{props.srText}</span>;
-  return props.href ? (
-    <a class="chip" href={props.href}>
-      {visible}
-      {spoken}
-    </a>
-  ) : (
-    <span class="chip">
-      {visible}
-      {spoken}
-    </span>
-  );
-}
-
-export function ChipList(props: {
-  label: string;
-  items: ChipProps[];
-  max?: number;
-  moreHref?: string;
-  moreText?: string;
-}) {
-  const max = props.max ?? 6;
-  const shown = props.items.slice(0, max);
-  const rest = props.items.length - shown.length;
+  const info = props.status ? STATUS[props.status] : null;
+  const tone = info ? uiTone(info.tone) : undefined;
   return (
-    <ul class="chips" aria-label={props.label}>
-      {shown.map((item) => (
-        <li>
-          <Chip {...item} />
-        </li>
-      ))}
-      {rest > 0 ? (
-        <li>
-          {props.moreHref ? (
-            <a href={props.moreHref}>{props.moreText ?? `and ${rest} more`}</a>
-          ) : (
-            (props.moreText ?? `and ${rest} more`)
-          )}
-        </li>
-      ) : null}
-    </ul>
+    <UiChip
+      href={props.href}
+      glyph={info?.glyph || undefined}
+      glyphTone={tone === 'off' ? undefined : tone}
+    >
+      <span aria-hidden="true">
+        {props.text}
+        {props.secondary ? <span class="meta"> {props.secondary}</span> : null}
+      </span>
+      <span class="vh">{props.srText}</span>
+    </UiChip>
   );
-}
-
-export function EmptyState(props: { title?: string; children: Child; action?: Child }) {
-  return (
-    <div class="empty">
-      {props.title ? <h2>{props.title}</h2> : null}
-      <p>{props.children}</p>
-      {hasContent(props.action) ? <div class="actions">{props.action}</div> : null}
-    </div>
-  );
-}
-
-export interface Column<R> {
-  key: string;
-  header: string;
-  numeric?: boolean;
-  render: (row: R) => Child;
 }
 
 /**
- * Every table: inside a labelled, focusable region that scrolls on its own (never the page,
- * WCAG 1.4.10), with a caption, column headers and a row header cell.
+ * Nothing to list (ui EmptyState): `title` names what is missing; without one, the text is the
+ * title. Heading level 2 by default, for a page with no tray heading above it.
  */
-export function DataTable<R>(props: {
-  id: string;
-  caption: string;
-  captionHidden?: boolean;
-  columns: Array<Column<R>>;
-  /** Key of the column whose cells are row headers. */
-  rowHeader: string;
-  rows: readonly R[];
-  /** Shown instead of the table when there are no rows. */
-  empty?: Child;
+export function EmptyState(props: {
+  title?: string;
+  children: Child;
+  action?: Child;
+  headingLevel?: 2 | 3;
 }) {
-  if (props.rows.length === 0 && hasContent(props.empty)) return <>{props.empty}</>;
-  const captionId = `${props.id}-cap`;
   return (
-    <div class="table-region" role="region" aria-labelledby={captionId} tabindex={0}>
-      <table id={props.id}>
-        <caption id={captionId} class={props.captionHidden ? 'vh' : undefined}>
-          {props.caption}
-        </caption>
-        <thead>
-          <tr>
-            {props.columns.map((column) => (
-              <th scope="col" class={column.numeric ? 'num' : undefined}>
-                {column.header}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {props.rows.map((row) => (
-            <tr>
-              {props.columns.map((column) =>
-                column.key === props.rowHeader ? (
-                  <th scope="row" class={column.numeric ? 'num' : undefined}>
-                    {column.render(row)}
-                  </th>
-                ) : (
-                  <td class={column.numeric ? 'num' : undefined}>{column.render(row)}</td>
-                ),
-              )}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <UiEmptyState
+      title={props.title ?? props.children}
+      description={props.title ? props.children : undefined}
+      actions={hasContent(props.action) ? props.action : undefined}
+      headingLevel={props.headingLevel ?? 2}
+    />
   );
 }
 
-/** Key/value list for detail pages; each fact once. */
+/** Facts of a detail page (ui KeyValue); each fact once. */
 export function Details(props: { rows: Array<[string, Child]> }) {
-  return (
-    <dl class="details">
-      {props.rows.map(([key, value]) => (
-        <>
-          <dt>{key}</dt>
-          <dd>{value}</dd>
-        </>
-      ))}
-    </dl>
-  );
+  return <KeyValue items={props.rows.map(([label, value]) => ({ label, value }))} />;
 }
 
-/** `<time datetime>` in UTC, plus "3 min ago" when `relative`. */
+/**
+ * A moment (ui Time) in UTC: "13 Oct 2026, 15:00", or "3 min ago" when `relative`. The
+ * `datetime` attribute keeps the exact ISO value with milliseconds.
+ */
 export function Time(props: { ms: number; relative?: boolean; now?: number }) {
   return (
-    <>
-      <time datetime={new Date(props.ms).toISOString()}>{formatTime(props.ms)}</time>
-      {props.relative && props.now !== undefined ? (
-        <span class="muted"> ({relativeTime(props.ms, props.now)})</span>
-      ) : null}
-    </>
+    <UiTime datetime={new Date(props.ms).toISOString()}>
+      {props.relative && props.now !== undefined ? relativeTime(props.ms, props.now) : undefined}
+    </UiTime>
   );
 }
 
@@ -1187,34 +876,52 @@ export function Time(props: { ms: number; relative?: boolean; now?: number }) {
 // Role-aware help
 
 /**
- * Who can make a change the viewer cannot: active users whose role holds `permission`, owners
- * last, at most 3 named. The same wording everywhere (WCAG 3.2.4). Every role can already see
- * these emails on Users, so this discloses nothing new.
+ * Who can make a change the viewer cannot (ui AskSomeone), with the same wording on every page
+ * (WCAG 3.2.4): "Only token managers can add service tokens. Ask A, B or C and 2 more." and one
+ * mailto link to all of them. The people are active users whose role holds `permission`, owners
+ * last, at most 3 named (ViewContext.askers). Every role can already see these emails on Users,
+ * so this discloses nothing new. `lead={false}` leaves out the first sentence, where the page
+ * already names the roles (the forbidden page).
  */
-export function AskSomeone(props: { permission: Permission; ctx: ViewContext; verb?: string }) {
+export function AskSomeone(props: {
+  permission: Permission;
+  ctx: ViewContext;
+  /** What the permission lets them do, after "can": "add a service token". */
+  verb?: string;
+  lead?: boolean;
+  /** Subject line of the email. */
+  subject?: string;
+}) {
   const [least] = rolesFor(props.permission).filter((role) => role !== 'viewer');
-  const noun = least ? ROLE_INFO[least].noun : 'an owner';
-  const people = props.ctx.askers(props.permission);
-  const more = props.ctx.askersMore(props.permission);
-  const lead = `Ask ${noun}${props.verb ? ` to ${props.verb}` : ''}`;
-  if (people.length === 0) return <p class="ask">{lead}.</p>;
+  const plural = least ? ROLE_INFO[least].plural : 'owners';
+  const emails = props.ctx.askers(props.permission).map((person) => person.email);
+  const lead =
+    props.lead === false ? null : `Only ${plural} can ${props.verb ?? 'make this change'}.`;
+  if (emails.length === 0) {
+    return (
+      <UiAskSomeone people={[]}>
+        {lead === null ? 'Ask an owner.' : `${lead} Ask an owner.`}
+      </UiAskSomeone>
+    );
+  }
+  const subject = props.subject ? `?subject=${encodeURIComponent(props.subject)}` : '';
   return (
-    <p class="ask">
-      {lead}:{' '}
-      {people.map((person, index) => (
-        <>
-          {index > 0 ? (index === people.length - 1 && more === 0 ? ' or ' : ', ') : null}
-          <a href={`mailto:${person.email}`}>{person.email}</a>
-        </>
-      ))}
-      {more > 0 ? ` and ${more} more` : ''}.
-    </p>
+    <UiAskSomeone
+      people={emails}
+      more={props.ctx.askersMore(props.permission)}
+      link={{ href: `mailto:${emails.join(',')}${subject}`, label: 'Email them' }}
+    >
+      {lead}
+    </UiAskSomeone>
   );
 }
 
-const NOT_FOUND_TEXT: Readonly<
-  Record<'page' | 'token' | 'consumer' | 'access' | 'user' | 'request', string>
-> = {
+// ---------------------------------------------------------------------------------------------
+// Not found
+
+export type NotFoundWhat = 'page' | 'token' | 'consumer' | 'access' | 'user' | 'request';
+
+const NOT_FOUND_TEXT: Readonly<Record<NotFoundWhat, string>> = {
   page: 'There is no page at this address.',
   token: 'There is no service token with this ID. It may have been deleted.',
   consumer: 'There is no service consumer with this ID. It may have been deleted.',
@@ -1223,163 +930,66 @@ const NOT_FOUND_TEXT: Readonly<
   request: 'There is no request record with this ID. It may have been purged by data retention.',
 };
 
-const SECTION_LINKS: ReadonlyArray<{ href: string; label: string }> = [
-  { href: paths.overview(), label: 'Monitoring' },
-  { href: paths.users(), label: 'Users' },
-  { href: paths.tokens(), label: 'Service tokens' },
-  { href: paths.consumers(), label: 'Service consumers' },
+/** The description of a not-found page header. Static text only. */
+export function notFoundText(what: NotFoundWhat): string {
+  return NOT_FOUND_TEXT[what];
+}
+
+/** The sections in the order of the sidebar (ADR 0022), with the pages each one holds. */
+const SECTION_LINKS: readonly LinkCard[] = [
+  {
+    href: paths.overview(),
+    title: 'Monitoring',
+    description: 'Overview, requests, audit log and data retention',
+  },
+  {
+    href: paths.tokens(),
+    title: 'Service tokens',
+    description: 'Tokens, allowed hosts and encryption keys',
+  },
+  {
+    href: paths.consumers(),
+    title: 'Service consumers',
+    description: 'Consumers and consumer access',
+  },
+  { href: paths.users(), title: 'Users', description: 'People and sign-in' },
 ];
 
-/** The body of every not-found page. Static text only: the requested path is never echoed. */
-export function NotFound(props: {
-  what: 'page' | 'token' | 'consumer' | 'access' | 'user' | 'request';
-  hint?: Child;
-}) {
-  return (
-    <>
-      {hasContent(props.hint) ? <div class="moved">{props.hint}</div> : null}
-      <p>{NOT_FOUND_TEXT[props.what]} Go to one of the sections:</p>
-      <ul>
-        {SECTION_LINKS.map((section) => (
-          <li>
-            <a href={section.href}>{section.label}</a>
-          </li>
-        ))}
-      </ul>
-    </>
-  );
-}
-
-// ---------------------------------------------------------------------------------------------
-// Alerts (the Overview problems and each object page's own)
-
-export type AlertCode =
-  | 'keyring_unavailable'
-  | 'key_missing'
-  | 'key_changed'
-  | 'credential_malformed'
-  | 'key_not_active'
-  | 'credential_expired'
-  | 'credential_expiring'
-  | 'credential_missing_used'
-  | 'upstream_auth'
-  | 'outside_hosts'
-  | 'schema_behind'
-  | 'schema_ahead'
-  | 'schema_unknown'
-  | 'config_problem'
-  | 'cron_failing'
-  | 'cron_stale'
-  | 'cron_never'
-  | 'access_expiring'
-  | 'users_need_decision'
-  | 'single_owner';
-
-export type PendingUser = Pick<User, 'id' | 'email' | 'updated_at'>;
-
-export interface Alert {
-  code: AlertCode;
-  level: 'error' | 'warning' | 'info';
+/** A fact about the missing object: a bold first sentence and inline text. Phrasing only. */
+export interface NotFoundHint {
   title: string;
-  detail: string;
-  /** Always shown. */
-  objects: Array<{ href: string; label: string }>;
-  /** Shown only to holders of `permission`; others see AskSomeone(permission). */
-  fix?: { href: string; label: string; permission: Permission } | null;
-  form?:
-    | { kind: 'approve-pending'; users: PendingUser[] }
-    | { kind: 'rewrap'; count: number }
-    | null;
+  /** Inline content after the title (no blocks: it goes in the callout's paragraph). */
+  text?: Child;
 }
 
-const ALERT_PREFIX: Readonly<Record<Alert['level'], string>> = {
-  error: 'Error:',
-  warning: 'Warning:',
-  info: 'Note:',
-};
+/** Where the parts of a moved page went: a titled tray of link cards. */
+export interface NotFoundLinks {
+  title: string;
+  items: ReadonlyArray<{ href: string; title: string; description: string }>;
+}
 
-/** Static list (no role=alert); past `max` the rest sit in a closed details. */
-export function AlertList(props: { alerts: Alert[]; ctx: ViewContext; max?: number }) {
-  if (props.alerts.length === 0) return null;
-  const max = props.max ?? 10;
-  const shown = props.alerts.slice(0, max);
-  const rest = props.alerts.slice(max);
+/**
+ * The body of every not-found page, under a header that says what is missing (notFoundText) or
+ * where the page went. An optional hint callout, the moved page's links, then the sections. Static
+ * text only: the requested path is never echoed.
+ */
+export function NotFound(props: { hint?: NotFoundHint; links?: NotFoundLinks }) {
+  const { hint, links } = props;
   return (
     <>
-      <ul class="alerts">
-        {shown.map((alert) => (
-          <AlertItem alert={alert} ctx={props.ctx} />
-        ))}
-      </ul>
-      {rest.length > 0 ? (
-        <details>
-          <summary>
-            {rest.length} more {rest.length === 1 ? 'problem' : 'problems'}
-          </summary>
-          <ul class="alerts">
-            {rest.map((alert) => (
-              <AlertItem alert={alert} ctx={props.ctx} />
-            ))}
-          </ul>
-        </details>
+      {hint ? <Callout title={hint.title}>{hint.text}</Callout> : null}
+      {links ? (
+        <Tray id="nf-moved" title={links.title}>
+          <Panel variant="pad">
+            <LinkCards cards={links.items} />
+          </Panel>
+        </Tray>
       ) : null}
+      <Tray id="nf-sections" title="Go to a section">
+        <Panel variant="pad">
+          <LinkCards cards={SECTION_LINKS} />
+        </Panel>
+      </Tray>
     </>
-  );
-}
-
-function AlertItem(props: { alert: Alert; ctx: ViewContext }) {
-  const { alert, ctx } = props;
-  const form = alert.form ?? null;
-  return (
-    <li class={`alert alert-${alert.level}`}>
-      <p>
-        <strong>{ALERT_PREFIX[alert.level]}</strong> {alert.title}
-        {alert.detail ? <> {alert.detail}</> : null}
-      </p>
-      {alert.objects.length > 0 ? (
-        <p class="objects">
-          {alert.objects.map((object, index) => (
-            <>
-              {index > 0 ? ' · ' : null}
-              <a href={object.href}>{object.label}</a>
-            </>
-          ))}
-        </p>
-      ) : null}
-      {alert.fix ? (
-        ctx.can(alert.fix.permission) ? (
-          <p>
-            <a href={alert.fix.href}>{alert.fix.label}</a>
-          </p>
-        ) : (
-          <AskSomeone permission={alert.fix.permission} ctx={ctx} />
-        )
-      ) : null}
-      {form?.kind === 'rewrap' && ctx.can('keyring:rewrap') ? (
-        <PostForm
-          action="/admin/tokens/keys/rewrap"
-          csrf={ctx.csrf}
-          class="inline"
-          returnTo="overview"
-        >
-          <button type="submit" class="secondary">
-            Re-encrypt {form.count} {form.count === 1 ? 'secret' : 'secrets'} with the active key
-          </button>
-        </PostForm>
-      ) : null}
-      {form?.kind === 'approve-pending' ? (
-        ctx.can('users:write') ? (
-          <ul class="pending">
-            {form.users.map((user) => (
-              <li>
-                <ApproveForm user={user} ctx={ctx} returnTo="overview" compact />
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <AskSomeone permission="users:write" ctx={ctx} />
-        )
-      ) : null}
-    </li>
   );
 }

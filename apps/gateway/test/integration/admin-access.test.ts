@@ -62,7 +62,7 @@ describe('consumer access: viewer and token manager', () => {
     const grant = await seedGrant(world.app.deps, provider.id, serviceId, 'deploy');
     for (const session of [world.sessions.viewer, world.sessions.token_manager]) {
       const matrix = await (await adminGet(world.app, session, '/admin/access')).text();
-      expect(matrix).toContain('Which consumers can use which tokens');
+      expect(matrix).toContain('Which consumer jobs can use which service token');
       expect(matrix).not.toContain('Give a consumer access');
       const page = await (await adminGet(world.app, session, `/admin/access/${grant.id}`)).text();
       expect(page).toContain('deploy');
@@ -98,7 +98,8 @@ describe('consumer access: the form', () => {
     expect(inputValue(html, 'token_id')).toBe(serviceId);
     expect(html).not.toContain('type="radio" id="f-consumer_id"');
     expect(html).not.toContain('name="owner_id"');
-    expect(html).toContain('Read repository contents: GET /repos/‹repository›/**');
+    expect(html).toContain('Read repository contents');
+    expect(html).toContain('<code>GET /repos/‹repository›/**</code>');
     expect(html).toMatch(/name="op" value="read-repo" checked/);
     expect(html).toMatch(/name="context" value="environment" checked/);
     expect(html).toMatch(/name="ref_protection" value="protected" checked/);
@@ -144,7 +145,9 @@ describe('consumer access: the form', () => {
     expect(await grantAudit()).toEqual(['grant.create']);
     const page = await (await adminGet(world.app, admin(), locationOf(res))).text();
     expect(page).toContain('Access created.');
-    expect(page).toContain('Typical subject claim: <code>repo:acme/api:ref:refs/heads/main</code>');
+    expect(page).toContain(
+      'Typical subject</dt><dd class="mono copyable">repo:acme/api:ref:refs/heads/main',
+    );
     expect(page).toContain('outputs.proxy-base }}/github/&lt;path&gt;');
   });
 
@@ -319,7 +322,7 @@ describe('consumer access: the page', () => {
     await seedLabel(provider.id, 'repository_id', REPOSITORY_ID, 'acme/api');
     const grant = await seedGrant(world.app.deps, provider.id, serviceId, 'read repo');
     const html = await (await adminGet(world.app, admin(), `/admin/access/${grant.id}`)).text();
-    expect(html).toContain('<h1>read repo</h1>');
+    expect(html).toContain('<h1>read repo <span class="badge');
     expect(html).toContain(`href="/admin/consumers/${provider.id}"`);
     expect(html).toContain(`href="/admin/access?repository=${REPOSITORY_ID}"`);
     expect(html).toContain('any ref');
@@ -336,7 +339,7 @@ describe('consumer access: the page', () => {
     const grant = await getGrant(env.DB, id);
     if (!grant) throw new Error('missing');
     const page = await (await adminGet(world.app, admin(), `/admin/access/${id}?open=edit`)).text();
-    expect(page).toMatch(/<details id="edit" open/);
+    expect(page).toMatch(/<details class="disc" id="edit" open/);
     expect(page).toMatch(/name="context" value="branch" checked/);
     // Never expires: no "Keep" card repeating "Never"; Never is preselected.
     expect(page).toMatch(/name="expires" value="never" checked/);
@@ -573,6 +576,141 @@ describe('I-LOG-2: give access from a request, verified records only', () => {
     const html = await res.text();
     expect(html).toContain('<title>Error: Cannot give access from this request');
     expect(html).toContain('This request cannot prefill the form.');
+  });
+});
+
+describe('consumer access: design D pages', () => {
+  it('draws the connections map and the access list, with the view switch and quick links', async () => {
+    const grant = await seedGrant(world.app.deps, provider.id, serviceId, 'one');
+    const html = await (await adminGet(world.app, admin(), '/admin/access')).text();
+    expect(html).toContain('<h1>Consumer access<span class="count">1</span></h1>');
+    expect(html).toContain('<div class="cmap" id="cmap" role="group"');
+    expect(html).toContain('<section class="tray" id="al" aria-labelledby="al-h">');
+    expect(html).toMatch(/<a href="\/admin\/access" aria-current="page">Map<\/a>/);
+    expect(html).toContain('<nav class="qlinks" aria-label="Accesses that need attention">');
+    expect(html).toContain(`href="/admin/access/${grant.id}"`);
+    // The header has the one primary; the access list rows have the one-click Disable.
+    expect(html.match(/class="btn primary/g)).toHaveLength(1);
+    expect(html).toContain('Disable<span class="vh"> one</span>');
+  });
+
+  it('names the token in the header when filtered by it, and follows a focused consumer', async () => {
+    await seedGrant(world.app.deps, provider.id, serviceId, 'one');
+    const byToken = await (
+      await adminGet(world.app, admin(), `/admin/access?token=${serviceId}`)
+    ).text();
+    expect(byToken).toContain('<b>1 consumer</b> can use');
+    expect(byToken).toContain(`href="/admin/access/new?token=${serviceId}"`);
+    expect(byToken).toContain('Give a consumer access to GitHub');
+    expect(byToken).toContain('id="al-h">Accesses to GitHub');
+    const focused = await (
+      await adminGet(world.app, admin(), `/admin/access?focus=${provider.id}`)
+    ).text();
+    expect(focused).toContain(`id="al-h">Accesses of ${provider.name}`);
+    expect(focused).toContain('Everything else is dimmed.');
+    const gone = await (await adminGet(world.app, admin(), '/admin/access?focus=cpr_gone')).text();
+    expect(gone).toContain('That consumer no longer exists.');
+  });
+
+  it('filters expired accesses (a status of its own)', async () => {
+    const grant = await seedGrant(world.app.deps, provider.id, serviceId, 'old');
+    const html = await (await adminGet(world.app, admin(), '/admin/access?status=expired')).text();
+    expect(html).toContain('No consumer access matches these filters.');
+    await env.DB.prepare('UPDATE grants SET expires_at = ? WHERE id = ?')
+      .bind(Date.now() - 1000, grant.id)
+      .run();
+    const expired = await (
+      await adminGet(world.app, admin(), '/admin/access?status=expired')
+    ).text();
+    expect(expired).toContain(`href="/admin/access/${grant.id}"`);
+    expect(expired).toMatch(
+      /aria-current="true"><span class="g" aria-hidden="true">✕<\/span>Expired/,
+    );
+  });
+
+  it('opens from a token page with the token fixed in the header and the bar', async () => {
+    await seedService(world.app.deps, { slug: 'other', name: 'Other' });
+    const html = await (
+      await adminGet(world.app, admin(), `/admin/access/new?token=${serviceId}`)
+    ).text();
+    expect(html).toContain('<h1>Give a consumer access to GitHub</h1>');
+    expect(html).toContain(`<li><a href="/admin/tokens/${serviceId}">GitHub</a></li>`);
+    expect(html).toContain('<div class="fixedbar"><span class="lbl">Token</span>');
+    expect(html).toContain(`<a class="btn secondary" href="/admin/tokens/${serviceId}">Cancel</a>`);
+    expect(html).toContain('<aside class="rail" id="ga-sum" aria-labelledby="ga-sum-h">');
+  });
+
+  it('picks a known repository, or saves the one typed under "Another repository"', async () => {
+    await seedLabel(provider.id, 'repository_id', REPOSITORY_ID, 'acme/api');
+    await seedLabel(provider.id, 'repository_id', '5', 'acme/web');
+    const form = await (await adminGet(world.app, admin(), '/admin/access/new')).text();
+    // Two known repositories: rows to pick, none checked, plus "Another repository".
+    expect(form).toContain('<fieldset class="field sf3" id="f-repository-pick"');
+    expect(form).toContain('name="repository" value=""');
+    expect(form).toContain('name="repository_other"');
+    expect(form).not.toMatch(/name="repository" value="[^"]+" checked/);
+    const res = await adminPost(
+      world.app,
+      admin(),
+      '/admin/access',
+      structured({ repository: '', repository_other: 'acme/infra (6)' }),
+    );
+    expect(res.status).toBe(303);
+    const grant = await getGrant(env.DB, idFromLocation(locationOf(res)));
+    expect(grant?.conditions).toContainEqual({
+      claim: 'repository_id',
+      match: 'exact',
+      values: ['6'],
+    });
+  });
+
+  it('shows the denied request in the rail of a form prefilled from it', async () => {
+    await seedRequests([
+      requestRecord({
+        id: 'req_01JTESTREQUEST00000000000F',
+        service_id: serviceId,
+        caller_provider_id: provider.id,
+        path: '/repos/acme/app/contents',
+        caller_claims: JSON.stringify({
+          repository: 'acme/app',
+          repository_id: REPOSITORY_ID,
+          repository_owner_id: OWNER_ID,
+          ref: 'refs/heads/main',
+          ref_type: 'branch',
+          ref_protected: 'true',
+          event_name: 'push',
+        }),
+      }),
+    ]);
+    const html = await (
+      await adminGet(
+        world.app,
+        admin(),
+        '/admin/access/new?from_request=req_01JTESTREQUEST00000000000F',
+      )
+    ).text();
+    expect(html).toContain('<h1>Allow this call from acme/app</h1>');
+    expect(html).toContain('id="ga-sum-h">The denied request</h2>');
+    expect(html).toContain('GET /repos/acme/app/contents');
+    expect(html).toContain(
+      '<a class="btn secondary" href="/admin/requests/req_01JTESTREQUEST00000000000F">Back to the request</a>',
+    );
+  });
+
+  it('copies to a repository typed under "Another…"', async () => {
+    await seedLabel(provider.id, 'repository_id', REPOSITORY_ID, 'acme/api');
+    const created = await adminPost(world.app, admin(), '/admin/access', structured());
+    const id = idFromLocation(locationOf(created));
+    const page = await (await adminGet(world.app, admin(), `/admin/access/${id}`)).text();
+    expect(page).toMatch(/name="repository" value="acme\/api \(987654321\)" checked/);
+    expect(page).toContain('<div class="ga-copy-other subbox">');
+    const res = await adminPost(world.app, admin(), `/admin/access/${id}/copy`, {
+      repository: '',
+      repository_other: 'acme/web (987654322)',
+      token_id: serviceId,
+    });
+    expect(res.status).toBe(303);
+    expect(locationOf(res)).toMatch(/\?notice=copied$/);
   });
 });
 

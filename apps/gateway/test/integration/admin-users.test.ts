@@ -103,7 +103,7 @@ describe('GET /admin/users', () => {
     const html = await page(await sessionFor('viewer'));
     expect(html).toContain('<title>People – Users – tokengate</title>');
     expect(html).toContain('owner@example.com');
-    expect(html).not.toContain('<form method="post"');
+    expect(html).not.toMatch(/<form\b[^>]*\bmethod="post"/);
     expect(html).toContain('Only owners can decide.');
     expect(html).toContain('wait@example.com');
     expect(html).not.toContain('id="invite"');
@@ -119,21 +119,76 @@ describe('GET /admin/users', () => {
     expect(html).toContain('The email of their Cloudflare Access account');
     expect(html).toContain('placeholder="alex@example.com"');
     // Reset sign-in is a dialog whose own form posts the reset.
-    const reset = slice(html, `<dialog id="dlg-reset-${admin.id}"`, '</dialog>');
+    const reset = slice(html, `<dialog class="dlg" id="dlg-reset-${admin.id}"`, '</dialog>');
     expect(reset).toContain(`<form method="post" action="/admin/users/${admin.id}/reset-login"`);
     expect(reset).toContain('name="confirm" value="1"');
     expect(html).toContain(
-      `type="button" class="confirm-trigger danger" commandfor="dlg-reset-${admin.id}" command="show-modal"`,
+      `<button class="menu-item two bad" type="button" command="show-modal" commandfor="dlg-reset-${admin.id}"`,
     );
     expect(html).not.toContain(`action="/admin/users/${owner.id}/reset-login"`);
     expect(html).not.toContain('<script');
   });
 
+  it('shows the role map next to the decisions, with role filter links and a text equivalent', async () => {
+    await linked('admin@example.com', { name: 'Diego Ruiz' });
+    const html = await page(await sessionFor('owner'));
+    const map = slice(html, 'id="roles-map"', '</section>');
+    expect(map).toContain('<a class="node cnode" href="/admin/users?role=admin">');
+    expect(map).toContain('<span class="nl">Diego Ruiz</span>');
+    expect(map).toContain('<svg class="wires"');
+    expect(map).toContain('<b>Admin:</b> service tokens, consumer access, export.');
+    // Without decisions or the single-owner note there is no column to sit beside.
+    await createUser({ email: 'o2@example.com', role: 'owner' }, T0);
+    expect(await page(await sessionFor('owner'))).not.toContain('id="roles-map"');
+  });
+
+  it('tells non-owners whom to ask about a pending person, without any control', async () => {
+    await createUser(
+      {
+        email: 'wait@example.com',
+        status: 'pending',
+        identity: { loginProvider: 'access', subject: 't|w' },
+      },
+      T0,
+    );
+    const html = await page(await sessionFor('admin'));
+    const decide = slice(html, '<section class="tray tone-warn" id="decide"', '</section>');
+    expect(decide).toContain('<p>Only owners can decide.</p>');
+    expect(decide).toMatch(
+      /<p class="ask">\s*Ask <b>owner@example\.com<\/b>\. <a href="mailto:owner@example\.com">Email them<\/a><\/p>/,
+    );
+    expect(decide).not.toContain('/approve"');
+    expect(html).not.toContain('Invite someone</a>');
+  });
+
   it('the self row has no controls', async () => {
     const html = await page(await sessionFor('owner'));
     const self = slice(html, `id="user-${owner.id}"`, '</tr>');
-    expect(self).toContain('This is you. Another owner can change your account.');
+    expect(self).toContain(
+      '<span class="meta">This is you<span class="vh">. Another owner can change your account.</span></span>',
+    );
     expect(self).not.toContain('person-actions');
+  });
+
+  it('lists active people by role (owners first), then invitations with who sent them', async () => {
+    const session = await sessionFor('owner');
+    await linked('a-viewer@example.com', { role: 'viewer' });
+    await linked('b-token@example.com', { role: 'token_manager' });
+    await linked('c-admin@example.com', { role: 'admin' });
+    await adminPost(app, session, '/admin/users', { email: 'a-new@example.com', role: 'admin' });
+    const html = await page(session);
+    const rows = [
+      ...html.matchAll(/<tr id="user-[^"]+"[^>]*>.*?class="ent-n"[^>]*>([^<]+)</gs),
+    ].map((match) => match[1]);
+    expect(rows).toEqual([
+      'owner@example.com',
+      'c-admin@example.com',
+      'b-token@example.com',
+      'a-viewer@example.com',
+      'a-new@example.com',
+    ]);
+    const invited = slice(html, 'a-new@example.com</a>', '</tr>');
+    expect(invited).toContain('Invited by owner@example.com');
   });
 
   it('has a captioned table with row headers and a Changes link', async () => {
@@ -141,9 +196,11 @@ describe('GET /admin/users', () => {
     const session = await sessionFor('owner');
     await adminPost(app, session, `/admin/users/${admin.id}`, { role: 'viewer' });
     const html = await page(session);
-    expect(html).toContain('<caption id="people-cap">People (2 shown of 2)</caption>');
-    expect(html).toMatch(new RegExp(`<th scope="row"><a id="user-${owner.id}"`));
-    expect(html).toContain(`href="/admin/audit?actor=${owner.id}">1 in 30 days`);
+    expect(html).toContain('<caption class="vh">People (2 shown of 2)</caption>');
+    expect(html).toContain(`<tr id="user-${owner.id}"><th scope="row">`);
+    expect(html).toContain(
+      `href="/admin/audit?actor=${owner.id}">1 change<span class="vh"> by owner@example.com</span></a> in 30 days`,
+    );
   });
 
   it('escapes user-controlled text', async () => {
@@ -157,7 +214,7 @@ describe('GET /admin/users', () => {
     const session = await sessionFor('viewer');
     const html = await page(session, '/admin/users?notice=%3Cb%3Ehi&done=%3Cb%3E');
     expect(html).not.toContain('<b>hi');
-    expect(html).not.toContain('class="notice"');
+    expect(html).not.toContain('class="callout ok notice"');
   });
 
   it('filters with link chips; unknown values are ignored', async () => {
@@ -165,12 +222,18 @@ describe('GET /admin/users', () => {
     await createUser({ email: 'late@example.com', status: 'invited', inviteExpiresAt: T0 - 1 }, T0);
     const session = await sessionFor('viewer');
     const html = await page(session, '/admin/users?status=suspended');
-    const nav = slice(html, '<nav aria-label="Filter people">', '</nav>');
+    const nav = slice(html, '<nav class="qlinks" aria-label="Filter people">', '</nav>');
     expect(nav).toContain('href="/admin/users?status=suspended" aria-current="true"');
-    expect(nav).toContain('Invitation expired <span class="count">1</span>');
-    expect(nav).toContain('Clear filters');
+    expect(nav).toContain('Invitation expired <span class="n">1</span>');
+    expect(slice(html, 'id="people-h"', '</section>')).toContain(
+      '<a href="/admin/users">Clear filters</a>',
+    );
     expect(html).toContain('People (1 shown of 4)');
-    expect(html).not.toContain('late@example.com</a>');
+    const late = await env.DB.prepare('SELECT id FROM users WHERE email = ?')
+      .bind('late@example.com')
+      .first<{ id: string }>();
+    expect(late?.id).toBeTruthy();
+    expect(html).not.toContain(`id="user-${late?.id}"`);
     const ignored = await page(session, '/admin/users?status=bogus&role=root');
     expect(ignored).toContain('People (4 shown of 4)');
     const none = await page(session, '/admin/users?role=token_manager');
@@ -208,7 +271,7 @@ describe('dialogs and implicit submission (no client script)', () => {
   it('Enter in the invite form invites as Viewer; the Owner dialog follows the form', async () => {
     const html = await page(await sessionFor('owner'));
     const form = slice(html, 'id="invite-form"', '</form>');
-    const firstSubmit = /<button type="submit"[^>]*>/.exec(form)?.[0] ?? '';
+    const firstSubmit = /<button\b[^>]*\btype="submit"[^>]*>/.exec(form)?.[0] ?? '';
     expect(firstSubmit).toContain('value="viewer"');
     expect(form).not.toContain('value="owner"');
     expect(html.indexOf('id="dlg-invite-owner"')).toBeGreaterThan(
@@ -216,7 +279,7 @@ describe('dialogs and implicit submission (no client script)', () => {
     );
     const dialog = slice(html, 'id="dlg-invite-owner"', '</dialog>');
     expect(dialog).toMatch(
-      /<button type="submit" form="invite-form" name="role" value="owner" formnovalidate/,
+      /<button class="btn [^"]+" type="submit" name="role" value="owner" form="invite-form" formnovalidate/,
     );
   });
 
@@ -246,9 +309,11 @@ describe('dialogs and implicit submission (no client script)', () => {
     const html = await page(await sessionFor('owner'));
     const outside = html.replace(/<dialog[\s\S]*?<\/dialog>/g, '');
     expect(outside).not.toContain('value="owner"');
-    expect(slice(html, `id="dlg-owner-${admin.id}"`, '</dialog>')).toContain(
-      `form="role-${admin.id}" name="role" value="owner"`,
-    );
+    // The dialog posts the change itself (no shared role form on People).
+    const dialog = slice(html, `id="dlg-owner-${admin.id}"`, '</dialog>');
+    expect(dialog).toContain(`<form method="post" action="/admin/users/${admin.id}">`);
+    expect(dialog).toContain('<input type="hidden" name="role" value="owner"/>');
+    expect(dialog).toContain(`name="expected_updated_at" value="${admin.updated_at}"`);
   });
 });
 
@@ -330,11 +395,29 @@ describe('POST /admin/users (invite)', () => {
     expect(await auditActions()).toEqual(['user.invite']);
     const html = await follow(session, res);
     expect(html).toContain(
-      'Invited new.person@example.com as Token manager until 2026-10-20 12:00:00 UTC. Nothing was sent.',
+      'Invited new.person@example.com as Token manager until 20 Oct 2026, 12:00 UTC. Nothing was sent.',
     );
     expect(html).toContain('href="mailto:new.person@example.com?subject=');
     expect(html).toContain('Email new.person@example.com the sign-in link');
     expect(html).toContain('https%3A%2F%2Fgw.test%2Fadmin');
+    expect(html).toContain(
+      '<p class="more">Send them https://gw.test/admin. They sign in with Cloudflare Access as new.person@example.com.</p>',
+    );
+    // The invited row is highlighted; the invite tray is closed again (no fragment opens it).
+    expect(html).toContain(`<tr class="hl" id="user-${row?.id}">`);
+    expect(html).toContain('<section class="tray span-12" id="invite"');
+  });
+
+  it('opens the invite tray only when targeted or after a failed invite', async () => {
+    const session = await sessionFor('owner');
+    const html = await page(session);
+    expect(html).toContain('<section class="tray span-12" id="invite"');
+    // The header primary and the single-owner callout target it.
+    expect(html).toContain(
+      '<a class="btn primary" href="/admin/users#invite"><span class="plus" aria-hidden="true">+</span>Invite someone</a>',
+    );
+    const failed = await adminPost(app, session, '/admin/users', { email: 'nope', role: 'admin' });
+    expect(await failed.text()).toContain('<section class="tray span-12 is-open" id="invite"');
   });
 
   it('shows the detail only for the viewer’s own recent audit row', async () => {
@@ -396,14 +479,16 @@ describe('POST /admin/users (invite)', () => {
     const html = await res.text();
     const form = slice(html, 'id="invite-form"', '</form>');
     expect(form).not.toContain('<form');
-    expect(/<button type="submit"[^>]*>/.exec(form)?.[0] ?? '').toContain('value="viewer"');
+    expect(/<button\b[^>]*\btype="submit"[^>]*>/.exec(form)?.[0] ?? '').toContain('value="viewer"');
     expect(form).toContain('value="admin"');
     const existing = slice(html, 'id="invite-existing"', '</div>');
     expect(html.indexOf('id="invite-existing"')).toBeGreaterThan(
       html.indexOf('</form>', html.indexOf('id="invite-form"')),
     );
     expect(existing).toContain(`href="/admin/users#user-${gone.id}"`);
-    expect(existing).toContain(`<form method="post" action="/admin/users/${gone.id}"`);
+    expect(existing).toContain(
+      `<form class="action-form" method="post" action="/admin/users/${gone.id}"`,
+    );
     expect(existing).toContain('name="status" value="active"');
     expect(existing).toContain('Reactivate');
     expect(html).toMatch(/id="f-email"[^>]*aria-describedby="[^"]*invite-existing"/);
@@ -486,10 +571,29 @@ describe('POST /admin/users/:id (role and status, one click each)', () => {
     expect(after.status).toBe(403);
     const html = await follow(session, res);
     expect(html).toContain('Made a1@example.com Viewer (was Admin).');
-    const notice = slice(html, '<div class="notice"', '</div>');
+    const notice = slice(html, '<div class="callout ok notice"', '</div></div>');
     expect(notice).toContain(`action="/admin/users/${admin.id}"`);
     expect(notice).toContain('name="role" value="admin"');
     expect(await auditActions()).toEqual(['user.update']);
+  });
+
+  it('marks the changed row, says what the role does, and names the Undo', async () => {
+    const admin = await linked('a1@example.com');
+    const session = await sessionFor('owner');
+    const res = await adminPost(app, session, `/admin/users/${admin.id}`, {
+      role: 'viewer',
+      expected_updated_at: String(admin.updated_at),
+    });
+    const html = await follow(session, res);
+    expect(html).toContain(`<tr class="hl" id="user-${admin.id}">`);
+    expect(html.match(/<tr class="hl"/g)).toHaveLength(1);
+    const notice = slice(html, '<div class="callout ok notice"', '</div></div>');
+    expect(notice).toContain('<p class="more">Viewer: Sees every page. Changes nothing.');
+    expect(notice).toContain('Undo<span class="vh">: make a1@example.com Admin again</span>');
+    // Hidden fields: the token first, then where to return, then the change.
+    expect(notice).toMatch(
+      /name="_csrf" value="[^"]+"\/><input type="hidden" name="_return" value="list"\/><input type="hidden" name="role" value="admin"\/>/,
+    );
   });
 
   it('suspends a non-owner in one click; Undo reactivates; a stale Undo disappears', async () => {
@@ -503,7 +607,7 @@ describe('POST /admin/users/:id (role and status, one click each)', () => {
     expect(html).toContain(
       'Suspended u@example.com. Their Access session stays valid, but tokengate refuses every request they make.',
     );
-    const undo = slice(html, '<div class="notice"', '</div>');
+    const undo = slice(html, '<div class="callout ok notice"', '</div></div>');
     expect(undo).toContain('name="status" value="active"');
     const version = /name="expected_updated_at" value="(\d+)"/.exec(undo)?.[1] ?? '';
     const back = await adminPost(app, session, `/admin/users/${user.id}`, {
@@ -514,7 +618,7 @@ describe('POST /admin/users/:id (role and status, one click each)', () => {
     expect((await getUser(env.DB, user.id))?.status).toBe('active');
     // The first notice's row changed again: no Undo any more.
     const stale = await page(session, suspend.headers.get('location') ?? '');
-    expect(slice(stale, '<div class="notice"', '</div>')).not.toContain('Undo');
+    expect(slice(stale, '<div class="callout ok notice"', '</div></div>')).not.toContain('Undo');
   });
 
   it('offers no Undo for owner transitions', async () => {
@@ -523,7 +627,7 @@ describe('POST /admin/users/:id (role and status, one click each)', () => {
     const res = await adminPost(app, session, `/admin/users/${other.id}`, { role: 'admin' });
     const html = await follow(session, res);
     expect(html).toContain('Made o2@example.com Admin (was Owner).');
-    expect(slice(html, '<div class="notice"', '</div>')).not.toContain('Undo');
+    expect(slice(html, '<div class="callout ok notice"', '</div></div>')).not.toContain('Undo');
   });
 
   it('refuses a stale page with 409 and the current state', async () => {
@@ -540,7 +644,7 @@ describe('POST /admin/users/:id (role and status, one click each)', () => {
     expect(html).toContain(`id="f-user-${admin.id}"`);
     expect(html).toMatch(
       new RegExp(
-        `<details name="person-actions" class="person-actions" open(="")?>\\s*<summary>Change<span class="vh"> s@example.com`,
+        `<details class="rowmenu" name="person-actions" open(="")?><summary class="btn sm secondary">Change<span class="vh"> s@example.com`,
       ),
     );
     expect((await getUser(env.DB, admin.id))?.role).toBe('admin');
@@ -638,7 +742,7 @@ describe('reset sign-in, renew and cancel an invitation', () => {
     await refusedAt(cancelled.id, T0 - 60_000);
     const session = await sessionFor('owner');
     const html = await page(session);
-    const card = slice(html, `id="decide-${cancelled.id}-h"`, '</article>');
+    const card = slice(html, `id="decide-${cancelled.id}-h"`, '</li>');
     expect(card).toContain('but their invitation as Owner was cancelled.');
     expect(card).toContain(`commandfor="dlg-card-again-${cancelled.id}"`);
     expect(card).toContain('Invite again as Owner…');
@@ -723,15 +827,23 @@ describe('Needs your decision', () => {
   it('lists pending people as cards with one submit per role, not in the table', async () => {
     const pending = await pendingUser();
     const html = await page(await sessionFor('owner'));
-    const decide = slice(html, '<section id="decide"', '</section>');
-    expect(decide).toContain('Needs your decision (1)');
+    const decide = slice(html, '<section class="tray tone-warn" id="decide"', '</section>');
+    expect(decide).toContain('Needs your decision<span class="count">1</span>');
     expect(decide).toContain('wait@example.com');
     expect(decide).toContain(`action="/admin/users/${pending.id}/approve"`);
     expect(decide).toContain(`action="/admin/users/${pending.id}/reject"`);
     for (const role of ['viewer', 'token_manager', 'access_manager', 'admin']) {
       expect(decide).toContain(`name="role" value="${role}"`);
     }
-    expect(slice(html, '<table id="people"', '</table>')).not.toContain('wait@example.com');
+    const rows = slice(
+      slice(html, '<section class="tray span-12" id="people"', '</table>'),
+      '<tbody',
+    );
+    expect(rows).not.toContain('wait@example.com');
+    expect(html).not.toContain(`id="user-${pending.id}"`);
+    // The Accounts tray says where the pending person is instead.
+    expect(html).toContain('wait@example.com waits above, under “Needs your decision”.');
+    expect(html).toContain('<a class="ql warn" href="#decide">');
   });
 
   it('approve with a role is user.approve, reject is user.reject', async () => {
@@ -784,7 +896,11 @@ describe('Needs your decision', () => {
     expect(await countNeedsDecision(env.DB, T0)).toBe(1);
 
     const session = await sessionFor('owner');
-    const decide = slice(await page(session), '<section id="decide"', '</section>');
+    const decide = slice(
+      await page(session),
+      '<section class="tray tone-warn" id="decide"',
+      '</section>',
+    );
     expect(decide).toContain(
       'late@example.com tried to sign in just now, but the invitation expired',
     );
@@ -806,14 +922,20 @@ describe('Needs your decision', () => {
     expect(await countNeedsDecision(env.DB, T0)).toBe(0);
     const html = await page(await sessionFor('owner'));
     expect(html).not.toContain('id="decide"');
-    expect(slice(html, `id="user-${user.id}"`, '</tr>')).toContain('· tried 1 min ago');
+    expect(slice(html, `id="user-${user.id}"`, '</tr>')).toContain(
+      '<span class="meta">tried 1 min ago</span>',
+    );
   });
 
   it('a different sign-in account card offers Reset sign-in… and Dismiss removes it', async () => {
     const user = await linked('d@example.com');
     await refusedAt(user.id, T0 - 60_000);
     const session = await sessionFor('owner');
-    const decide = slice(await page(session), '<section id="decide"', '</section>');
+    const decide = slice(
+      await page(session),
+      '<section class="tray tone-warn" id="decide"',
+      '</section>',
+    );
     expect(decide).toContain(
       'with a different sign-in account (Access user ID <code>…1234</code>)',
     );
@@ -844,9 +966,7 @@ describe('Needs your decision', () => {
     // The error is at the card's Dismiss, and the summary links to it.
     const html = await res.text();
     expect(html).toContain(`<a href="#f-dismiss-${user.id}">`);
-    expect(slice(html, `id="decide-${user.id}-h"`, '</article>')).toContain(
-      `id="f-dismiss-${user.id}"`,
-    );
+    expect(slice(html, `id="decide-${user.id}-h"`, '</li>')).toContain(`id="f-dismiss-${user.id}"`);
     expect(html).not.toContain(`id="f-user-${user.id}"`);
   });
 });

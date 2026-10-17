@@ -42,6 +42,19 @@ describe('DangerZone', () => {
       ),
     ).toContain('<h2 id="d-h">Remove</h2>');
   });
+
+  it('shows a description under the title, and none by default', () => {
+    expect(
+      render(
+        <DangerZone id="d" description="Stop Tom from using the console.">
+          x
+        </DangerZone>,
+      ),
+    ).toContain(
+      '<div class="t"><h2 id="d-h">Danger zone</h2><p>Stop Tom from using the console.</p></div>',
+    );
+    expect(html).toContain('<div class="t"><h2 id="danger-h">Danger zone</h2></div>');
+  });
 });
 
 describe('Disclosure', () => {

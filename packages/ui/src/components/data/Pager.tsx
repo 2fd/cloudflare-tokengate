@@ -10,6 +10,13 @@ export interface PagerProps {
   older?: string;
   newerLabel?: string;
   olderLabel?: string;
+  /**
+   * Link to the first page (the newest entries), shown first and only when set: an older page of a
+   * log. Never a faint placeholder.
+   */
+  newest?: string;
+  /** Text of the `newest` link. Default "Newest". */
+  newestLabel?: string;
   /** Render the links as small secondary buttons with an arrow (long logs: Requests, Audit log). */
   buttons?: boolean;
   /** Accessible name of the navigation landmark. Unique on the page. */
@@ -41,14 +48,20 @@ function PagerLink(props: {
 }
 
 /**
- * Pager under a table (`nav.pager`): what is shown, then Newer and Older. Cursor links (GET),
- * newest first; an end that does not exist is plain faint text, never a dead link.
+ * Pager under a table (`nav.pager`): what is shown, then Newest (optional), Newer and Older.
+ * Cursor links (GET), newest first; an end that does not exist is plain faint text, never a dead
+ * link.
  */
 export function Pager(props: PagerProps) {
   return (
     <nav class={cx('pager', props.class)} aria-label={props.label ?? 'Pages'}>
       <span>{props.summary}</span>
       <span class="end">
+        {props.newest ? (
+          <a class={props.buttons ? 'btn sm secondary' : undefined} href={props.newest}>
+            {props.newestLabel ?? 'Newest'}
+          </a>
+        ) : null}
         <PagerLink
           href={props.newer}
           label={props.newerLabel ?? 'Newer'}

@@ -133,6 +133,9 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
 .skip-link:focus{left:var(--sp-2)}
 .side{min-width:0;background:var(--nav-bg);border-right:1px solid var(--line)}
 .side-in{display:flex;flex-direction:column;gap:var(--sp-3);min-height:100%;padding:var(--sp-3)}
+/* from 40rem the sidebar stays in view, so the health line and the account block (export, docs,
+   sign out) never scroll away on a long page; a sidebar taller than the window scrolls on its own */
+@media (min-width:40rem){ .side-in{position:sticky;top:0;height:100vh;height:100dvh;min-height:0;overflow-y:auto} }
 /* instance block */
 .inst{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:var(--sp-3);align-items:center;padding:var(--sp-2)}
 .mark{grid-row:span 2;display:grid;place-items:center;width:2rem;height:2rem;border-radius:var(--r-2);background:var(--accent);color:var(--on-accent);box-shadow:var(--primary-shadow);flex:none}
@@ -146,8 +149,6 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
 .navd>summary{display:none}
 @media (min-width:40rem){ .navd::details-content{content-visibility:visible;display:contents} }
 .navd-in{display:flex;flex-direction:column;gap:var(--sp-3);flex:1;min-height:0}
-.navd>summary .navd-x,.navd[open]>summary .navd-l{display:none}
-.navd[open]>summary .navd-x{display:inline}
 .navd>summary .chev{font-size:10px;transition:transform .15s}
 .navd[open]>summary .chev{transform:rotate(180deg)}
 .nav{display:flex;flex-direction:column;gap:2px}
@@ -156,13 +157,13 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
 .nav-item:hover{background:var(--nav-hover-bg);color:var(--text)}
 .nav-item.is-open{color:var(--text)}
 .nav-item.is-open svg{color:var(--accent-text)}
-.nav-item[aria-current="page"]{background:var(--nav-active-bg);color:var(--nav-active-text);box-shadow:inset 3px 0 0 var(--nav-active-bar)}  /* a section without sub-items that is the current page */
+.nav-item[aria-current]{background:var(--nav-active-bg);color:var(--nav-active-text);box-shadow:inset 3px 0 0 var(--nav-active-bar)}  /* a section without sub-items that is the current page, or holds it ("true") */
 .nav-count{margin-left:auto;font-size:var(--fs-xs);font-weight:var(--fw-regular);color:var(--nav-muted);font-variant-numeric:tabular-nums}
 .nav-pill{margin-left:auto;padding:0 6px;border-radius:var(--r-1);background:var(--warn-bg);color:var(--warn);font-size:var(--fs-xs);line-height:1.25rem;font-weight:var(--fw-medium);white-space:nowrap}
 .nav-sub{display:flex;flex-direction:column;gap:2px;margin:2px 0 var(--sp-1) 15px;padding:0 0 0 var(--sp-2);border-left:1px solid var(--line-strong);list-style:none}
 .nav-sub a{display:flex;align-items:center;gap:var(--sp-2);min-height:1.875rem;padding:0 var(--sp-2);border-radius:var(--r-2);color:var(--nav-text);text-decoration:none}
 .nav-sub a:hover{background:var(--nav-hover-bg);color:var(--text)}
-.nav-sub a[aria-current="page"]{background:var(--nav-active-bg);color:var(--nav-active-text);font-weight:var(--fw-medium);box-shadow:inset 3px 0 0 var(--nav-active-bar)}
+.nav-sub a[aria-current]{background:var(--nav-active-bg);color:var(--nav-active-text);font-weight:var(--fw-medium);box-shadow:inset 3px 0 0 var(--nav-active-bar)}
 /* account */
 .acct{margin-top:auto;padding-top:var(--sp-3);border-top:1px solid var(--line)}
 .acct-btn{display:flex;align-items:center;gap:var(--sp-2);width:100%;min-height:2.75rem;padding:var(--sp-1) var(--sp-2);border:1px solid transparent;border-radius:var(--r-2);background:none;text-align:left;cursor:pointer}
@@ -216,6 +217,7 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
 .hstrip a{color:var(--bad);font-weight:var(--fw-medium)}
 /* main column */
 .main{min-width:0;background:var(--page-bg)}
+.main:focus{outline:none}                       /* skip-link / programmatic target (tabindex=-1), never reached by Tab */
 /* content column: centered on the WHOLE shell (the window in the app), not on the space left of
    the sidebar. 100cqi is the .app width. The column is its page width (--page-w: content max or the
    form measure, plus gutters), but no wider than the window minus a sidebar on EACH side, so it stays
@@ -246,6 +248,8 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
 }
 /* top bar below 40rem: the bar keeps its height when the shell is taller than its content */
 @media (max-width:39.99rem){ .app{grid-template-rows:auto minmax(0,1fr)} }
+/* forced colors: the current sub-item (the page, or an ancestor of a deeper page) keeps a mark */
+@media (forced-colors:active){ .nav-sub a[aria-current]{outline:2px solid Highlight} }
 
 /* ===== 3. Page header ===================================================== */
 .ph{display:flex;flex-direction:column;gap:var(--sp-4)}
@@ -259,11 +263,13 @@ h1,.h1{font-size:var(--fs-3xl);line-height:var(--lh-3xl);font-weight:var(--fw-me
 :is(h1,.h1) .count{margin-left:var(--sp-2);color:var(--text-3);font-weight:var(--fw-regular);font-variant-numeric:tabular-nums}
 .ph-actions{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center}
 .ph-actions form{display:contents}
+.ph-actions form.field-inline{display:inline-flex} /* a form that is itself a component keeps its box */
 .desc{max-width:70ch;color:var(--text-2)}
 .relline{color:var(--text-2)}
 .relline b,.relline a{color:var(--text);font-weight:var(--fw-medium)}
 /* detail identity row: logo 40 + H1 + status + mono ID chip */
 .ident{display:flex;align-items:center;gap:var(--sp-4);min-width:0}
+.ph-row>.ident{flex:1 1 20rem}   /* the identity takes the rest of the row and its meta wraps, so the actions stay top right */
 .ident :is(h1,.h1){font-size:var(--fs-2xl);line-height:var(--lh-2xl);display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2) var(--sp-3)}
 .ident-meta{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-1) var(--sp-3);margin-top:2px;font-size:var(--fs-sm);color:var(--text-2)}
 .idchip{display:inline-flex;align-items:center;max-width:100%;height:var(--h-badge);padding:0 6px;border-radius:var(--r-1);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line);font:var(--fs-xs)/1 var(--font-mono);color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;user-select:all;-webkit-user-select:all}
@@ -370,14 +376,14 @@ fieldset.tray>legend+*{clear:both}
 .danger-zone .tray-h :is(h2,h3,h4,h5,h6){color:var(--bad)}
 .dz-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--sp-4);padding:var(--sp-4) var(--sp-5);border-top:1px solid var(--line)}
 .dz-row:first-child{border-top:0}
-.dz-row>div{flex:1 1 18rem;min-width:0}
+.dz-row>div{flex:1 1 14rem;min-width:0}   /* the action stays beside its text in an 8-column detail main column; narrower, it moves under it */
 .dz-row :is(h3,h4,h5,h6){font-size:var(--fs-md);font-weight:var(--fw-medium)}
 .dz-row p{margin-top:2px;font-size:var(--fs-sm);color:var(--text-2)}
 .dz-row form{display:contents}
 .dz-row form.field-inline{display:inline-flex} /* a form that is itself a component keeps its box */
 .dz-row .field-inline{max-width:var(--w-form)}
 /* disclosure inside a panel */
-details.disc>summary{display:inline-flex;align-items:center;gap:var(--sp-2);min-height:2rem;color:var(--accent-text);font-weight:var(--fw-medium)}
+details.disc>summary{display:inline-flex;flex-wrap:wrap;align-items:center;gap:var(--sp-1) var(--sp-2);min-height:2rem;color:var(--accent-text);font-weight:var(--fw-medium)}
 details.disc>summary::before{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .12s}
 details.disc[open]>summary::before{transform:rotate(45deg)}
 details.disc>summary .hint{font-weight:var(--fw-regular)}
@@ -444,6 +450,8 @@ a.ent-n:hover{color:var(--accent-text);text-decoration:underline}
 .callout code{padding:1px var(--sp-1);border-radius:var(--r-1);background:var(--surface);box-shadow:inset 0 0 0 1px var(--line);font-size:var(--fs-sm)}
 /* notice = toast replacement, role=status, under the header */
 .callout.notice{margin-bottom:0}
+/* a callout focused on load (Notice autofocus after a redirect): the ring of .errsum:focus */
+.callout[tabindex]:focus{outline:var(--focus-ring);outline-offset:2px}
 /* empty state: inside the panel where the table would be */
 .empty{display:flex;flex-direction:column;align-items:center;gap:var(--sp-2);padding:var(--sp-9) var(--sp-5);text-align:center}
 .empty .glyph{display:grid;place-items:center;width:var(--logo-lg);height:var(--logo-lg);margin-bottom:var(--sp-2);border-radius:var(--r-3);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--text-2)}
@@ -645,11 +653,13 @@ pre.code .k{color:var(--accent-text)}
      summary phrase: .sv1 > [data-o="K"]   (inline, shown when option K of field 1 is checked)
      reveal box:     .rv1[data-o="K"]      (block, shown when option K of field 1 is checked)
      empty phrase:   .sv1 > [data-o="0"]   (shown while field 1 has nothing checked)
-   An option label with data-risk reveals .riskacc and swaps .if-risk / .if-norisk.
+   An option label with data-risk reveals .riskacc and swaps .if-risk / .if-norisk;
+   .riskacc.always (a risk the server computed) shows without one.
    Never put `required` on inputs inside a .rv box: the server validates them. */
 .lform :is(.sv1,.sv2,.sv3,.sv4,.sv5,.sv6,.sv7,.sv8)>[data-o]{display:none}
 .lform :is(.rv1,.rv2,.rv3,.rv4,.rv5,.rv6,.rv7,.rv8)[data-o]{display:none}
 .lform .riskacc,.lform .if-risk{display:none}
+.lform .riskacc.always{display:grid}
 .lform:has([data-risk] input:checked) .riskacc{display:grid}
 .lform:has([data-risk] input:checked) .if-risk{display:inline}
 .lform:has([data-risk] input:checked) .if-norisk{display:none}
@@ -706,6 +716,7 @@ pre.code .k{color:var(--accent-text)}
 .kv>div{display:contents}
 .kv dt,.kv dd{padding:var(--sp-3) 0;border-top:1px solid var(--line)}
 .kv>div:first-child>*{border-top:0;padding-top:0}
+.kv>div:last-child>*{padding-bottom:0}   /* the panel padding is the only space around the list, the same above and below */
 .kv dt{font-size:var(--fs-sm);color:var(--text-2)}
 .kv dd{min-width:0;overflow-wrap:anywhere}
 .kv dd .line{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center}
@@ -762,6 +773,10 @@ pre.code .k{color:var(--accent-text)}
 .fpop a:hover{background:var(--surface-2)}
 .fpop a .n{margin-left:auto;font-size:var(--fs-sm);color:var(--text-3)}
 .fpop hr{border:0;border-top:1px solid var(--line);margin:var(--sp-1) 0}
+.fpop{max-height:min(24rem,60vh);overflow:auto}   /* a long menu (about 45 reason codes) scrolls */
+/* titled option groups: the title is decorative, the group's aria-label names it */
+.fpop-h{margin:0;padding:var(--sp-2) var(--sp-2) 2px;font-size:var(--fs-xs);font-weight:var(--fw-medium);color:var(--text-3)}
+.fpop [role=group]+[role=group]{border-top:1px solid var(--line);margin-top:var(--sp-1)}
 .tray-h .end .fpop,.filters.end .fpop{left:auto;right:0}   /* menus at the right edge of the tray header open towards the content */
 /* active filter chips: links that remove the filter */
 .achips{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center}
@@ -783,7 +798,7 @@ dialog.dlg{width:min(32rem,calc(100vw - 2rem));max-height:calc(100dvh - 4rem);pa
 dialog.dlg.wide{width:min(40rem,calc(100vw - 2rem))}
 dialog.dlg::backdrop{background:var(--backdrop)}
 dialog.dlg[open]{display:flex;flex-direction:column}
-dialog.dlg>form{display:flex;flex-direction:column;min-height:0;max-height:inherit}
+dialog.dlg>:is(form,.dlg-in){display:flex;flex-direction:column;min-height:0;max-height:inherit}
 /* fallback: where command="show-modal" is missing, the trigger's popovertarget opens the dialog as a popover */
 dialog.dlg:popover-open{display:flex;flex-direction:column;inset:0;margin:auto}
 /* server-rendered open (re-shown after a failed submit, or a GET confirm page): in the page flow, not an overlay */
@@ -908,17 +923,20 @@ a.drop:hover .drop-go{text-decoration-thickness:2px}
 .att-b b{color:var(--text);font-weight:var(--fw-medium)}
 .att-a{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center;margin-top:auto;padding-top:var(--sp-3)}
 .att-a form{display:contents}
-.att-a.roles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
-.att-a.roles .btn{width:100%}
-.att-a.roles .linkish{grid-column:1/-1;justify-self:start;font-size:var(--fs-sm)}
+.att-a.roles .linkish{flex-basis:100%;font-size:var(--fs-sm)}  /* role buttons wrap at their own width: a 4-up card is too narrow for two "Access manager" columns */
+.att-a+.att-a{margin-top:0;padding-top:var(--sp-2)}  /* a second action row (Reject under the roles) follows the first instead of splitting the space */
 /* decision item (NeedsAttention who): the person, then Approve as … and a separate Reject */
 .att-who{display:flex;align-items:center;gap:var(--sp-3);min-width:0}
 .att-who :is(h2,h3,h4,h5,h6){display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2);font-size:var(--fs-md);line-height:var(--lh-md);font-weight:var(--fw-medium)}
 .att-a fieldset{display:flex;flex-direction:column;gap:6px;min-width:0}
 .att-a fieldset>legend{float:left;font-size:var(--fs-sm);font-weight:var(--fw-medium);color:var(--text-2)}
 .att-a fieldset>legend+*{clear:both}
-.att-a .reject{margin-left:auto;align-self:flex-end}
-@media (max-width:48rem){ .att-a .reject{margin-left:0;align-self:flex-start} }
+/* a decision's Reject keeps its own box (not display:contents like the other forms), so it sits at the end of the row under the roles */
+.att-a:has(fieldset)>form.reject{display:flex;margin-left:auto;align-self:flex-end}
+/* a decision row fits the four roles and Owner… on one line in a 7-column card at 1440 */
+.att-a fieldset .btn-row{gap:6px}
+.att-a fieldset .btn.sm{padding-inline:10px}
+@media (max-width:48rem){ .att-a:has(fieldset)>form.reject{margin-left:0;align-self:flex-start} }
 
 /* --- Request trace (4 checks) */
 .trace{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--sp-5);margin:0;padding:0;list-style:none}
@@ -960,7 +978,7 @@ a.arrow:hover .ent-n{color:var(--accent-text);text-decoration:underline}
    (56 + 8 = 64 CSS px). SVG viewBox height = rows * 64 - 8; node i center y = i*64 + 28.
    Above 7 nodes per side the server shows the 6 busiest plus one .group node
    ("+ 8 more consumers") and the .cmap-note pointing to the matrix (see block .matrix). */
-.cmap{--map-gap:.5rem;display:grid;grid-template-columns:minmax(14rem,17rem) minmax(4rem,.55fr) minmax(0,2.6fr);padding:0 var(--sp-4) var(--sp-4)}
+.cmap{--map-gap:.5rem;display:grid;grid-template-columns:minmax(13rem,16rem) minmax(4.5rem,.35fr) minmax(0,2.6fr);padding:0 var(--sp-4) var(--sp-4)}
 .cmap-h{display:flex;align-items:center;gap:var(--sp-2);height:2.25rem;margin-bottom:var(--sp-3);border-bottom:1px solid var(--line);font-size:var(--fs-xs);font-weight:var(--fw-medium);color:var(--text-2);white-space:nowrap}
 .cmap-h .n{color:var(--text-3);font-weight:var(--fw-regular)}
 .cmap-mid .cmap-h{justify-content:center}
@@ -988,6 +1006,7 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 .node.group{background:transparent;box-shadow:none;border:1px dashed var(--control-border);color:var(--text-2)}
 .node.group .nm{color:var(--accent-text)}
 .node .tag{position:absolute;top:-.5rem;left:var(--sp-4);padding:0 var(--sp-1);background:var(--tray-bg);font-size:var(--fs-xs);line-height:var(--lh-xs);font-weight:var(--fw-medium);color:var(--text-2)}  /* label on a node edge ("1 idle token"); absolute, so the 64px pitch stays */
+.node:has(>.tag) .nl{-webkit-line-clamp:1;line-clamp:1}   /* with an edge label the node keeps a line free above the name */
 .node.is-on{box-shadow:inset 0 0 0 2px var(--accent);background:var(--accent-soft)}
 .node.dim{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}
 .node.dim :is(.nm,.m){color:var(--text-2)}
@@ -996,15 +1015,18 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 /* access count pill sits on the wire side */
 .cnt{display:inline-grid;place-items:center;flex:none;min-width:1.5rem;height:1.375rem;padding:0 6px;border-radius:var(--r-1);background:var(--accent-soft);color:var(--accent-soft-text);font-size:var(--fs-xs);font-weight:600;font-variant-numeric:tabular-nums}
 .cnode .cnt{position:absolute;right:-.75rem;top:50%;transform:translateY(-50%);box-shadow:0 0 0 3px var(--tray-bg)}
-.tnode{display:grid;grid-template-columns:auto minmax(0,1fr) repeat(3,4rem) 5.75rem;gap:var(--sp-3);padding-left:0}
+.tnode{display:grid;grid-template-columns:auto minmax(0,1fr) 3.5rem 3rem 3rem 4.75rem;gap:var(--sp-2);padding-left:0}  /* tight number columns: the token name and its status get the room in a 56rem column */
 .tnode .cnt{margin-left:-.75rem;box-shadow:0 0 0 3px var(--tray-bg)}
-.tnode .idw{display:flex;align-items:center;gap:var(--sp-3);min-width:0}
+.tnode .idw{display:flex;align-items:center;gap:var(--sp-2);min-width:0}
 .tnode .m{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .tnode .m.bad{color:var(--bad);font-weight:var(--fw-medium)}
 .tnode .m.warn{color:var(--warn);font-weight:var(--fw-medium)}
 .tnode .m.z{color:var(--text-3)}
 .tnode .m .u{display:none;color:var(--text-2);font-size:var(--fs-sm)}
-.tok-h{display:grid;grid-template-columns:auto minmax(0,1fr) repeat(3,4rem) 5.75rem;gap:var(--sp-3);padding-right:var(--sp-4)}
+/* count links (MapToken.hrefs): the number keeps its tone; underline on hover */
+.tnode .m a{color:inherit;text-decoration:none}
+.tnode .m a:hover{text-decoration:underline}
+.tok-h{display:grid;grid-template-columns:auto minmax(0,1fr) 3.5rem 3rem 3rem 4.75rem;gap:var(--sp-2);padding-right:var(--sp-4)}
 .tok-h>span{text-align:right} .tok-h>span:first-child{text-align:left;padding-left:var(--sp-4)}
 /* focus bar above the map: links to ?focus=consumer (server dims the rest) */
 .cmap-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--sp-2) var(--sp-4);padding:0 var(--sp-4) var(--sp-3)}
@@ -1031,9 +1053,9 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 .mx td{padding:4px;border-left:1px solid var(--line);vertical-align:top}
 .mx .grp th{position:static;padding:0;background:var(--tray-bg);border-bottom:1px solid var(--line-strong);text-align:left;font-weight:var(--fw-regular)}
 .mx .grp .gin{position:sticky;left:0;display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px var(--sp-3);min-height:2.5rem;padding:var(--sp-2) var(--sp-4)}
-.mcell{display:grid;gap:1px;padding:5px 8px;border:1px solid var(--line-strong);border-radius:var(--r-2);background:var(--panel-bg);color:var(--text);text-decoration:none;font-size:var(--fs-sm);line-height:var(--lh-sm)}
+.mcell{display:grid;gap:1px;padding:5px 8px;text-align:left;border:1px solid var(--line-strong);border-radius:var(--r-2);background:var(--panel-bg);color:var(--text);text-decoration:none;font-size:var(--fs-sm);line-height:var(--lh-sm)}
 .mcell:hover{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
-.mcell .s{display:flex;align-items:center;gap:4px;font-size:var(--fs-xs);font-weight:var(--fw-medium);color:var(--ok)}
+.mcell .s{display:flex;align-items:baseline;gap:4px;font-size:var(--fs-xs);font-weight:var(--fw-medium);color:var(--ok)}
 .mcell .c{font:var(--fs-xs)/16px var(--font-mono)}
 .mcell .o{font-size:var(--fs-xs);color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mcell.warn{background:var(--warn-bg);border-color:transparent} .mcell.warn .s{color:var(--warn)}
@@ -1041,6 +1063,9 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 .mcell.off{background:transparent;border-style:dashed;border-color:var(--control-border)} .mcell.off .s{color:var(--text-2)}
 .madd{display:grid;place-items:center;min-height:3.75rem;border:1px dashed transparent;border-radius:var(--r-2);color:var(--text-3);font-size:1.125rem;text-decoration:none}
 .madd:hover,.madd:focus-visible{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-text)}
+/* overlapping accesses stack in one cell; a read-only empty cell shows a dash */
+.mx td>.mcell+.mcell{margin-top:4px}
+.mnone{display:grid;place-items:center;min-height:3.75rem;color:var(--text-3)}
 .lg-sw{display:inline-block;width:14px;height:10px;border-radius:3px;border:1px solid var(--line-strong);background:var(--panel-bg)}
 .lg-sw.warn{background:var(--warn-bg);border-color:var(--warn-dot)}
 .lg-sw.bad{background:var(--bad-bg);border-color:var(--bad-dot)}
@@ -1057,9 +1082,10 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 .wrows{position:relative;display:grid;gap:var(--sp-2);margin:0;padding:0 0 0 var(--sp-5);list-style:none}
 .wrows::before{content:"";position:absolute;left:0;top:calc(var(--h-node) / 2);bottom:calc(var(--h-node) / 2);border-left:1.5px solid var(--wire)}
 .wrows:has(>.more:last-child)::before{bottom:1.125rem}
-.wrow{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:var(--sp-1) var(--sp-3);min-height:var(--h-node);padding:var(--sp-2) var(--sp-4);border-radius:var(--r-3);background:var(--panel-bg);box-shadow:var(--panel-ring)}
+.wrow{position:relative;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:var(--sp-1) var(--sp-3);min-height:var(--h-node);padding:var(--sp-2) var(--sp-4);border-radius:var(--r-3);background:var(--panel-bg);box-shadow:var(--panel-ring)}
 .wrow::before{content:"";position:absolute;right:100%;top:calc(var(--h-node) / 2);width:var(--sp-5);border-top:1.5px solid var(--wire)}
 .wrow::after{content:"";position:absolute;left:100%;top:calc(var(--h-node) / 2);width:var(--sp-8);border-top:1.5px solid var(--wire)}
+.wrow>.ent-t{flex:1 1 8rem;min-width:0}   /* a long status word (Inactive: token disabled) wraps under the text instead of squeezing it */
 .wrow .ctx{color:var(--text-2)}
 .wrow .meta code{font-size:var(--fs-xs);padding:1px 5px;border-radius:var(--r-1);background:var(--surface-2)}
 .wrow.warn{box-shadow:inset 0 0 0 1px var(--warn-dot)}
@@ -1095,7 +1121,7 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
   .wg{grid-template-columns:minmax(0,1fr);row-gap:var(--sp-2)}
   .wg>.node::after,.wrows::before,.wrow::before{display:none}
   .wrows{padding-left:var(--sp-4)}
-  .wrow{grid-template-columns:minmax(0,1fr);justify-items:start}
+  .wrow{justify-content:flex-start} .wrow>.ent-t{flex-basis:100%}
   .wst{flex-direction:row;align-items:center;gap:var(--sp-3)}
 }
 
@@ -1122,7 +1148,6 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 @media (max-width:80rem){
   .att.cols{grid-template-columns:repeat(2,minmax(0,1fr))}
   .span-8,.span-7,.span-6,.span-5,.span-4{grid-column:span 12}
-  .cmap{grid-template-columns:minmax(13rem,15rem) minmax(3rem,.7fr) minmax(0,2.6fr)}
   .tnode,.tok-h{grid-template-columns:auto minmax(0,1fr) repeat(2,4rem)}
   .tnode .m.x,.tok-h .x{display:none}
 }
@@ -1151,6 +1176,8 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
   .node{height:auto;min-height:var(--h-node);padding-block:var(--sp-2)}
   .node .nm,.node .nl{white-space:normal}
   .node .nl{display:block;-webkit-line-clamp:none;line-clamp:none}   /* nodes grow here: no clamp */
+  .node:has(>.tag){padding-top:var(--sp-4)}   /* the edge label ("1 idle token") keeps clear of the name */
+  .node:has(>.tag) .nl{-webkit-line-clamp:none;line-clamp:none}
   .tnode .slug{display:none}
   .tok-h>span:first-child{padding-left:0}
   .tray-f>.legend:has(.wire){display:none}
@@ -1174,7 +1201,7 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 }
 @media (max-width:39.99rem){
   :root{--gutter:1rem}
-  .app{grid-template-columns:minmax(0,1fr);min-height:0}
+  .app{grid-template-columns:minmax(0,1fr)}   /* keeps min-height:100dvh: main fills the window under the bar, with no band of --bg */
   .app .page{width:auto;max-width:var(--page-w);margin-inline:auto}
   .app .hstrip{padding-inline-start:var(--gutter)}
   .side{border-right:0;border-bottom:1px solid var(--line)}
@@ -1200,7 +1227,6 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
   .pipe-step+.pipe-step{position:relative}
   .pipe-step+.pipe-step::before{content:"↓";position:absolute;left:calc(var(--sp-5) - .3em);top:calc(-1 * var(--pipe-row) + .25rem);font-size:var(--fs-sm);line-height:1;color:var(--text-3)}
   .pipe-tot{display:none}
-  .att-a.roles{grid-template-columns:minmax(0,1fr)}
   .trace{grid-template-columns:minmax(0,1fr)}
   .tstep::before{display:none}
   .checklist>li{grid-template-columns:2rem minmax(0,1fr)}
@@ -1211,7 +1237,12 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
   .field-inline{width:100%}
   .field-inline>input{width:100%}
   .filters .search{max-width:none;flex-basis:100%}
-  .fadd:nth-of-type(n+2) .fpop{left:auto;right:0}
+  /* a "+ Filter" menu opens under the whole filter bar at its full width, so it never runs off
+     either edge of the screen, whichever chip opened it and wherever the bar wrapped */
+  .filters{position:relative}
+  .tray-h>.filters,.tray-h>.filters.end{flex:1 1 100%}
+  .filters .fadd{position:static}
+  .filters .fpop,.filters.end .fpop{left:0;right:0;width:auto;min-width:0;max-width:none}
   .dlg-h,.dlg-b,.dlg-f{padding-left:var(--sp-4);padding-right:var(--sp-4)}
   .feed>li{grid-template-columns:1.75rem minmax(0,1fr)}
   .feed time{grid-column:2;padding-top:0}

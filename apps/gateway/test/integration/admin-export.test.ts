@@ -1,4 +1,4 @@
-// Configuration export (`POST /admin/export`, the shell footer form): admins and owners only
+// Configuration export (`POST /admin/export`, the account menu form): admins and owners only
 // (config:export), a CSRF-checked POST with an audit row, never a link or a GET.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -43,15 +43,21 @@ async function auditActions(): Promise<string[]> {
   return results.map((row) => row.action);
 }
 
-describe('the footer export form', () => {
+describe('the account menu export item', () => {
   it.each(['admin', 'owner'] as const)(
     'is on every page for %s, as a POST with CSRF',
     async (role) => {
       const session = await sessionFor(role);
       const html = await (await adminGet(app, session, '/admin/retention')).text();
+      // A CSRF POST inside the account menu, never a link (a GET is the 404 page).
       const form =
-        /<form method="post" action="\/admin\/export" class="inline">(.*?)<\/form>/s.exec(html);
+        /<div class="menu" id="acct" popover="auto">[\s\S]*?<form method="post" action="\/admin\/export">(.*?)<\/form>/s.exec(
+          html,
+        );
       expect(form?.[1]).toContain(`name="_csrf" value="${session.csrfToken}"`);
+      expect(form?.[1]).toContain(
+        '<button class="menu-item two" type="submit"><b>Export configuration</b>',
+      );
       expect(html).not.toContain('href="/admin/export"');
     },
   );

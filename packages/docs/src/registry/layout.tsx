@@ -15,6 +15,7 @@ import {
   DialogClose,
   DialogTrigger,
   Disclosure,
+  FieldInline,
   HealthLine,
   Grid,
   HealthStrip,
@@ -45,11 +46,18 @@ type SectionKey = 'monitoring' | 'tokens' | 'consumers' | 'users';
 
 /**
  * The admin sidebar as every page renders it: the same four sections, only the open section and
- * the current item change. `counts: false` is the empty install (no counts, no pill).
+ * the current item change. `counts: false` is the empty install (no counts, no pill). `deeper`
+ * marks the current item as the ancestor of a deeper page (`current: 'true'`), as a detail page does.
  */
-function adminSections(open: SectionKey, current: string, counts = true): SideNavSection[] {
+function adminSections(
+  open: SectionKey,
+  current: string,
+  counts = true,
+  deeper = false,
+): SideNavSection[] {
+  const mark = deeper ? ('true' as const) : true;
   const sub = (items: Array<[string, string]>) =>
-    items.map(([label, href]) => ({ label, href, current: href === current }));
+    items.map(([label, href]) => ({ label, href, current: href === current ? mark : false }));
   return [
     {
       label: 'Monitoring',
@@ -327,6 +335,89 @@ const appShell: ComponentDoc = {
 </AppShell>`,
     },
     {
+      title: 'Deeper page: a token detail under Tokens',
+      description:
+        'A page that is not in the sidebar marks its ancestor with current: ‘true’ (aria-current="true"). It looks the same as the current page; screen readers hear “current” instead of “current page”.',
+      layout: 'frame',
+      render: () => (
+        <AppShell
+          landmarks={false}
+          mainId="ex-shell-4"
+          brand={BRAND}
+          nav={
+            <SideNav
+              label="Sections (deeper page example)"
+              sections={adminSections('tokens', '?p=tokens', true, true)}
+            />
+          }
+        >
+          <Page>
+            <PageHeader
+              crumbs={[{ label: 'Service tokens', href: '#' }, { label: 'Slack' }]}
+              crumbsLabel="Breadcrumb (deeper page example)"
+              title="Slack"
+            />
+          </Page>
+        </AppShell>
+      ),
+      code: `// /admin/tokens/slack: Tokens holds the page, it is not the page
+const sections = [
+  …,
+  { label: 'Service tokens', href: '/admin/tokens', icon: <Icon name="token" />, count: 6, open: true,
+    items: [{ label: 'Tokens', href: '/admin/tokens', current: 'true' }, …] },
+  …,
+];
+
+<AppShell brand={brand} nav={<SideNav label="Sections" sections={sections} />} account={account}>
+  <Page>…</Page>
+</AppShell>`,
+    },
+    {
+      title: 'Brand only (pre-login)',
+      description:
+        'With neither nav nor account (Sign-in problem, Set up sign-in), the sidebar holds the instance block alone and there is no Menu button on phones. main keeps tabindex="-1" for the skip link.',
+      layout: 'frame',
+      render: () => (
+        <AppShell landmarks={false} mainId="ex-shell-5" brand={BRAND}>
+          <Page>
+            <PageHeader
+              title="Set up sign-in"
+              description="Connect an identity provider before anyone can use the console."
+            />
+          </Page>
+        </AppShell>
+      ),
+      code: `<AppShell brand={{ name: 'tokengate', href: '/admin', host: 'gate.acme.dev' }}>
+  <Page>
+    <PageHeader title="Set up sign-in" description="…" />
+  </Page>
+</AppShell>`,
+    },
+    {
+      title: 'Health strip, unannounced, with prefix',
+      description:
+        'role={null} for a strip that is part of every page load: it is not announced each time. srPrefix keeps the word the glyph stands for (“Error:”).',
+      layout: 'frame',
+      render: () => (
+        <HealthStrip
+          title="Keyring unavailable."
+          role={null}
+          srPrefix="Error:"
+          action={<a href="#">Fix encryption keys</a>}
+        >
+          Stored secrets cannot be opened, so every call fails.
+        </HealthStrip>
+      ),
+      code: `<HealthStrip
+  title="Keyring unavailable."
+  role={null}
+  srPrefix="Error:"
+  action={<a href="/admin/tokens/keys">Fix encryption keys</a>}
+>
+  Stored secrets cannot be opened, so every call fails.
+</HealthStrip>`,
+    },
+    {
       title: 'Health line tones',
       description: 'One dot and the words. The dot never stands alone.',
       layout: 'stack',
@@ -379,7 +470,12 @@ const appShell: ComponentDoc = {
           required: true,
           description: 'Instance block: the name links home, the host is the mono line under it.',
         },
-        { name: 'nav', type: 'Child', required: true, description: 'A SideNav.' },
+        {
+          name: 'nav',
+          type: 'Child',
+          description:
+            'A SideNav. With neither nav nor account (pre-login pages) the Menu disclosure is left out.',
+        },
         { name: 'health', type: 'Child', description: 'A HealthLine, under the instance block.' },
         {
           name: 'account',
@@ -395,7 +491,7 @@ const appShell: ComponentDoc = {
           name: 'mainId',
           type: 'string',
           default: "'main'",
-          description: 'Id of main; the skip link target.',
+          description: 'Id of main (tabindex="-1"); the skip link target.',
         },
         {
           name: 'landmarks',
@@ -422,7 +518,7 @@ const appShell: ComponentDoc = {
           type: 'readonly SideNavSection[]',
           required: true,
           description:
-            'label, href, icon, count, pill { label, srSuffix }, open, current, items[] { label, href, current }.',
+            "label, href, icon, count, pill { label, srSuffix }, open, current, items[] { label, href, current }. current is boolean | 'page' | 'true': true or 'page' is the current page, 'true' an ancestor of a deeper page.",
         },
         { name: 'class', type: 'string', description: 'Extra classes on the nav.' },
       ],
@@ -494,6 +590,19 @@ const appShell: ComponentDoc = {
           default: "'✕'",
           description: 'Decorative glyph before the title.',
         },
+        {
+          name: 'srPrefix',
+          type: 'string',
+          description:
+            'Hidden text read before the title, after the glyph ("Error:"). The space is added.',
+        },
+        {
+          name: 'role',
+          type: "'alert' | null",
+          default: "'alert'",
+          description:
+            'null leaves out the role: for a strip shown on every page load, which must not be announced each time.',
+        },
         { name: 'children', type: 'Child', description: 'What it means: what fails.' },
         { name: 'action', type: 'Child', description: 'The fix, usually one link.' },
         { name: 'class', type: 'string', description: 'Extra classes on the strip.' },
@@ -501,12 +610,13 @@ const appShell: ComponentDoc = {
     },
   ],
   accessibility: [
-    'The skip link is the first focusable element and targets main; there is one main per page.',
-    'The current page carries aria-current="page", on the sub-item or on a section without items.',
-    'The navigation is a nav landmark with the name you pass. Below 40rem it sits behind a native details “Menu” button.',
+    'The skip link is the first focusable element and targets main; there is one main per page. main has tabindex="-1" so it takes the focus, with no outline; Tab never stops there.',
+    'The current page carries aria-current="page", on the sub-item or on a section without items. On a deeper page that is not in the nav (a token detail), its ancestor carries aria-current="true" and looks the same; forced-colors mode outlines it.',
+    'The navigation is a nav landmark with the name you pass. Below 40rem it sits behind a native details “Menu” button. Its name stays “Menu”: the state is read from aria-expanded, and the chevron turns.',
+    'From 40rem the sidebar is sticky and as tall as the window, so the account menu (the only way to Sign out) stays in reach on a long page. A sidebar taller than the window scrolls on its own.',
     'The pending pill and the health line finish their sentence for screen readers (srSuffix), so the link names are complete.',
     'The account button opens a popover: the browser sets aria-expanded, Esc and a click outside close it. Its name ends with “, account menu”.',
-    'The health strip is role="alert": it is announced when the page loads. Use it for one error-level problem only.',
+    'The health strip is role="alert" by default: it is announced when the page loads. Use it for one error-level problem only. A shell that shows it on every page load passes role={null}, and srPrefix="Error:" so the hidden glyph keeps its word.',
   ],
   do: [
     'Render the sidebar from one data structure, so it is the same markup on every page.',
@@ -1076,6 +1186,44 @@ const pageHeader: ComponentDoc = {
   description="GitHub Actions (acme) › acme/api called Slack and no access matched."
 />`,
     },
+    {
+      title: 'A one-line form in the actions',
+      description:
+        'A FieldInline (“Find a request”) keeps its 40px box in the actions; other forms there (an ActionForm) dissolve so their button lines up with the others. Full width below 40rem.',
+      layout: 'frame',
+      render: () => (
+        <PageHeader
+          title="Requests"
+          description="Every call through tokengate in the last 30 days."
+          actions={
+            <FieldInline
+              id="ex-ph-find"
+              label="Request ID"
+              name="id"
+              placeholder="req_…"
+              submit="Find"
+              formLabel="Find a request (example)"
+              action="#"
+            />
+          }
+        />
+      ),
+      code: `<PageHeader
+  title="Requests"
+  description="Every call through tokengate in the last 30 days."
+  actions={
+    <FieldInline
+      id="find"
+      label="Request ID"
+      name="id"
+      placeholder="req_…"
+      submit="Find"
+      formLabel="Find a request"
+      action="/admin/requests/find"
+    />
+  }
+/>`,
+    },
   ],
   props: [
     {
@@ -1112,7 +1260,12 @@ const pageHeader: ComponentDoc = {
           default: "'Breadcrumb'",
           description: 'Name of the breadcrumb landmark, for a second trail on the page.',
         },
-        { name: 'actions', type: 'Child', description: 'Buttons; at most one primary, last.' },
+        {
+          name: 'actions',
+          type: 'Child',
+          description:
+            'Buttons; at most one primary, last. A FieldInline keeps its box; other forms dissolve (display: contents).',
+        },
         { name: 'class', type: 'string', description: 'Extra classes on the header.' },
         {
           name: 'children',
@@ -1187,6 +1340,7 @@ const pageHeader: ComponentDoc = {
   do: [
     'Name the first crumb after the list page the object belongs to.',
     'Keep the identity meta order: type, slug, ID chip, facts.',
+    'Keep the actions at the top right: the identity takes the rest of the row, and its meta line wraps instead of pushing the buttons down.',
   ],
   dont: [
     'Do not put more than one primary button in the header.',
@@ -1292,6 +1446,29 @@ const tabs: ComponentDoc = {
 </TabRow>`,
     },
     {
+      title: 'Deeper page: a request under All',
+      description:
+        'On a page below a view (a request opened from the All outcome), the tab of that view has current: ‘true’ (aria-current="true"). It looks like the current tab.',
+      layout: 'stack',
+      render: () => (
+        <Tabs
+          label="Outcome (deeper page example)"
+          items={[
+            { label: 'All', href: '#', current: 'true' },
+            { label: 'Allowed', href: '#' },
+            { label: 'Denied', href: '#' },
+            { label: 'Errors', href: '#' },
+          ]}
+        />
+      ),
+      code: `<Tabs label="Outcome" items={[
+  { label: 'All', href: '/admin/requests', current: 'true' },
+  { label: 'Allowed', href: '/admin/requests?outcome=allowed' },
+  { label: 'Denied', href: '/admin/requests?outcome=denied' },
+  { label: 'Errors', href: '/admin/requests?outcome=error' },
+]} />`,
+    },
+    {
       title: 'Segmented control, default size',
       description: 'The view switch in a tray header of the connections map.',
       render: () => (
@@ -1316,9 +1493,10 @@ const tabs: ComponentDoc = {
         { name: 'label', type: 'string', required: true, description: 'Name of the nav landmark.' },
         {
           name: 'items',
-          type: 'readonly { label: Child; href: string; count?: number | string; current?: boolean }[]',
+          type: "readonly { label: Child; href: string; count?: number | string; current?: boolean | 'page' | 'true' }[]",
           required: true,
-          description: 'The tabs; mark exactly one current.',
+          description:
+            "The tabs; mark exactly one current: true or 'page' for the current view, 'true' when a deeper page of it is shown.",
         },
         { name: 'class', type: 'string', description: 'Extra classes on the nav.' },
       ],
@@ -1346,7 +1524,7 @@ const tabs: ComponentDoc = {
     },
   ],
   accessibility: [
-    'Each tab and segment is a link to a page; the current one has aria-current="page". No ARIA tab roles: they would need scripted arrow keys.',
+    'Each tab and segment is a link to a page; the current one has aria-current="page", or aria-current="true" on a deeper page of that view. No ARIA tab roles: they would need scripted arrow keys.',
     'Each nav has its own name (label), so a page with tabs and a range lists both landmarks clearly.',
     'The current tab is marked by color and a 2px bar; in forced colors by an outline.',
   ],
@@ -1437,6 +1615,26 @@ const tray: ComponentDoc = {
   <Panel variant="flush">…table…</Panel>
 </Tray>`,
     },
+    {
+      title: 'Hidden title, nothing beside it: a tray that only wraps a Disclosure',
+      description:
+        'With hideTitle and neither bar nor actions there is no title row: the screen-reader heading opens the section and the panel starts at the top of the tray.',
+      layout: 'stack',
+      render: () => (
+        <Tray id="ex-tray-4" title="Advanced trust settings" hideTitle>
+          <Panel variant="pad">
+            <Disclosure summary="Advanced trust settings" hint="issuer, audience, algorithms">
+              <p class="hint">Defaults fit GitHub Actions.</p>
+            </Disclosure>
+          </Panel>
+        </Tray>
+      ),
+      code: `<Tray id="advanced" title="Advanced trust settings" hideTitle>
+  <Panel variant="pad">
+    <Disclosure summary="Advanced trust settings" hint="issuer, audience, algorithms">…</Disclosure>
+  </Panel>
+</Tray>`,
+    },
   ],
   props: [
     {
@@ -1461,7 +1659,7 @@ const tray: ComponentDoc = {
           name: 'hideTitle',
           type: 'boolean',
           description:
-            'Keeps the title for screen readers only, so the title row holds just the bar.',
+            'Keeps the title for screen readers only, so the title row holds just the bar and actions. With neither, there is no title row.',
         },
         { name: 'actions', type: 'Child', description: 'Right side of the title row.' },
         { name: 'footer', type: 'Child', description: 'Footer facts.' },
@@ -1575,6 +1773,33 @@ const dangerZone: ComponentDoc = {
 </DangerZone>
 <ConfirmDialog id="dlg-del" … />`,
     },
+    {
+      title: 'With a description',
+      description: 'One line under the title says what the zone is about, on a person page.',
+      layout: 'stack',
+      render: () => (
+        <DangerZone id="ex-dz-2" headingLevel={3} description="Stop Tom from using the console.">
+          <DangerRow
+            title="Disable Tom Weber"
+            description="Tom cannot sign in until you enable him again. His audit entries stay."
+            action={
+              <form method="post" action="#">
+                <button class="btn secondary" type="submit">
+                  Disable Tom
+                </button>
+              </form>
+            }
+          />
+        </DangerZone>
+      ),
+      code: `<DangerZone id="danger" headingLevel={3} description="Stop Tom from using the console.">
+  <DangerRow
+    title="Disable Tom Weber"
+    description="Tom cannot sign in until you enable him again. His audit entries stay."
+    action={<ActionForm action="/admin/users/usr_…/disable" hidden={{ _csrf }}>Disable Tom</ActionForm>}
+  />
+</DangerZone>`,
+    },
   ],
   props: [
     {
@@ -1591,6 +1816,11 @@ const dangerZone: ComponentDoc = {
           type: 'Child',
           default: "'Danger zone'",
           description: 'Tray title, in the bad color.',
+        },
+        {
+          name: 'description',
+          type: 'Child',
+          description: 'One line under the title (the tray description).',
         },
         {
           name: 'headingLevel',
@@ -1633,7 +1863,11 @@ const dangerZone: ComponentDoc = {
     'A named region (its h2); each row is an h3, so the actions are reachable by heading.',
     'Button labels name the object (“Disable Slack”, “Delete Slack…”), so they make sense out of context.',
   ],
-  do: ['Put the reversible action first.', 'Say what is kept and what is lost.'],
+  do: [
+    'Put the reversible action first.',
+    'Say what is kept and what is lost.',
+    'Keep the action beside its text: the row wraps the action under the text only when the text column would be narrower than 14rem.',
+  ],
   dont: [
     'Do not use the solid danger button on the page: it lives only inside the confirm dialog.',
     'Do not delete without a confirm dialog.',
@@ -1982,6 +2216,52 @@ const dialog: ComponentDoc = {
   <div class="field"><label for="dlg-rename-name">Name</label><input class="input" id="dlg-rename-name" name="name" value="GitHub Actions (acme)" required /></div>
 </Dialog>`,
     },
+    {
+      title: 'Approve as Owner… (submits the approve form)',
+      description:
+        'With form, the dialog has no form of its own: its confirm button submits the approve form on the page (form="…", name="role", value="owner"), so the fields of that form are sent and nothing nests. The dialog sits after the form here; inside it, it must come after the form’s default button.',
+      render: () => (
+        <>
+          <form id="ex-dlg-approve" method="post" action="#">
+            <input type="hidden" name="user" value="usr_01JB9C4R7T2V5X8Z1B3D6F9H2K" />
+            <button class="btn secondary" type="submit" name="role" value="viewer">
+              Approve as Viewer
+            </button>{' '}
+            <DialogTrigger dialog="ex-dlg-4">Approve as Owner…</DialogTrigger>
+          </form>
+          <ConfirmDialog
+            id="ex-dlg-4"
+            form="ex-dlg-approve"
+            name="role"
+            value="owner"
+            title="Approve Sam Ito as Owner?"
+            description="Owners can change sign-in and remove other owners."
+            confirmLabel="Approve as Owner"
+            confirmVariant="primary"
+            consequences={[
+              'Sam can change who signs in and how.',
+              'Sam can give and remove every role, Owner included.',
+            ]}
+          />
+        </>
+      ),
+      code: `<form id="approve" method="post" action="/admin/users/usr_…/approve">
+  <input type="hidden" name="_csrf" value={csrf} />
+  <Button type="submit" name="role" value="viewer">Approve as Viewer</Button>
+  <DialogTrigger dialog="dlg-owner">Approve as Owner…</DialogTrigger>
+</form>
+<ConfirmDialog
+  id="dlg-owner"
+  form="approve"
+  name="role"
+  value="owner"
+  title="Approve Sam Ito as Owner?"
+  description="Owners can change sign-in and remove other owners."
+  confirmLabel="Approve as Owner"
+  confirmVariant="primary"
+  consequences={['Sam can change who signs in and how.', 'Sam can give and remove every role, Owner included.']}
+/>`,
+    },
   ],
   props: [
     {
@@ -2005,6 +2285,12 @@ const dialog: ComponentDoc = {
           name: 'hidden',
           type: 'HiddenFields',
           description: 'Hidden fields at the top of the form (_csrf, ids).',
+        },
+        {
+          name: 'form',
+          type: 'string',
+          description:
+            'Id of an outer form the footer buttons submit (form="…"). The dialog then renders no form (div.dlg-in) and takes no action, method or hidden.',
         },
         {
           name: 'headingLevel',
@@ -2044,8 +2330,25 @@ const dialog: ComponentDoc = {
         {
           name: 'action',
           type: 'string',
-          required: true,
-          description: 'Where the confirm button posts.',
+          description:
+            'Where the confirm button posts (the dialog’s own form). Pass action or form.',
+        },
+        {
+          name: 'form',
+          type: 'string',
+          description:
+            'Id of an outer form the confirm button submits instead (see Dialog form). The type-to-confirm field joins it too.',
+        },
+        {
+          name: 'name / value',
+          type: 'string',
+          default: "'confirm' / '1'",
+          description: 'With form: the name and value of the confirm submit.',
+        },
+        {
+          name: 'formnovalidate',
+          type: 'boolean',
+          description: 'With form: the confirm submit skips the outer form’s browser validation.',
         },
         {
           name: 'confirmLabel',
@@ -2075,7 +2378,11 @@ const dialog: ComponentDoc = {
           type: '{ value: string; label?: Child; hint?: Child; name?: string }',
           description: 'Type-to-confirm, only for irreversible cascades. Matched literally.',
         },
-        { name: 'hidden', type: 'HiddenFields', description: 'Hidden fields (_csrf, ids).' },
+        {
+          name: 'hidden',
+          type: 'HiddenFields',
+          description: 'Hidden fields of its own form (_csrf, ids). Not with form.',
+        },
         {
           name: 'children',
           type: 'Child',
@@ -2154,6 +2461,7 @@ const dialog: ComponentDoc = {
       <code>popovertarget</code>), with Esc to close.
     </>,
     'Cancel and the trigger are type="button", so they never submit a form; only the confirm button submits.',
+    'Focus starts in the type-to-confirm field, or on Cancel, never on the confirm button. With form (the confirm submits a form outside the dialog) Cancel keeps the autofocus too.',
     'The type-to-confirm field is required with a literal pattern, and its hint is wired with aria-describedby. The server checks it again.',
   ],
   do: [
@@ -2166,7 +2474,17 @@ const dialog: ComponentDoc = {
     'Do not open a dialog from a menu or from another dialog.',
     'Do not put the solid danger button anywhere but the dialog footer.',
   ],
-  classes: ['dlg', 'wide', 'dlg-h', 'dlg-b', 'dlg-f', 'conseq', 'dlg-list', 'danger-solid'],
+  classes: [
+    'dlg',
+    'wide',
+    'dlg-in',
+    'dlg-h',
+    'dlg-b',
+    'dlg-f',
+    'conseq',
+    'dlg-list',
+    'danger-solid',
+  ],
 };
 
 const disclosure: ComponentDoc = {

@@ -51,18 +51,39 @@ const controls = (nodes: Node[]) =>
       node.tag === 'textarea',
   );
 
+/**
+ * Classes of a branch that CSS hides until its choice is checked: the old `.reveal`, the ui live
+ * reveals (`.rv1` … `.rv8`), and the page-local scoped branches of the access forms (consumer and
+ * type branches, token branches, scoped reveals, the copy form's "Another…").
+ */
+const BRANCH_CLASSES = new Set([
+  'reveal',
+  ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => `rv${n}`),
+  ...[3, 4, 5, 6].map((n) => `ga-r${n}`),
+  'ga-branch',
+  'ga-tbranch',
+  'ga-tok',
+  'ga-copy-other',
+]);
+
+const isBranch = (attrs: Map<string, string>) =>
+  (attrs.get('class') ?? '').split(' ').some((name) => BRANCH_CLASSES.has(name));
+
 const hidden = (node: Node) =>
   node.ancestors.some(
     (ancestor) =>
-      ancestor.attrs.get('class')?.split(' ').includes('reveal') ||
+      isBranch(ancestor.attrs) ||
       (ancestor.tag === 'details' && !ancestor.attrs.has('open')) ||
       ancestor.tag === 'dialog',
   );
 
-/** The innermost reveal a node sits in: its branch. */
+/** The innermost hidden branch a node sits in. */
 const branchOf = (node: Node) =>
-  [...node.ancestors].reverse().find((a) => a.attrs.get('class')?.split(' ').includes('reveal'))
-    ?.key ?? -1;
+  [...node.ancestors].reverse().find((a) => isBranch(a.attrs))?.key ?? -1;
+
+/** The form a node belongs to. */
+const formOf = (node: Node) =>
+  [...node.ancestors].reverse().find((a) => a.tag === 'form')?.key ?? -1;
 
 async function checkPage(html: string, label: string) {
   const nodes = await parse(html);
@@ -76,9 +97,12 @@ async function checkPage(html: string, label: string) {
   for (const node of controls(nodes)) {
     const id = node.attrs.get('id') ?? '';
     const name = node.attrs.get('name') ?? '';
-    expect(labelled.has(id) || node.attrs.has('aria-label'), `${label}: label for ${name}`).toBe(
-      true,
-    );
+    // A <label for> or a wrapping <label> (implicit label: ui radio cards and checkboxes).
+    const implicit = node.ancestors.some((a) => a.tag === 'label');
+    expect(
+      labelled.has(id) || implicit || node.attrs.has('aria-label'),
+      `${label}: label for ${name}`,
+    ).toBe(true);
     for (const ref of (node.attrs.get('aria-describedby') ?? '').split(' ').filter(Boolean)) {
       expect(ids.has(ref), `${label}: ${name} describedby ${ref}`).toBe(true);
     }
@@ -107,22 +131,19 @@ async function checkPage(html: string, label: string) {
         expect(compiled.test(example), `${label}: ${name} placeholder ${example}`).toBe(true);
     }
   }
-  // A name belongs to one branch: hidden inputs of other branches are submitted too.
+  // A name belongs to one branch of its form: hidden inputs of other branches are submitted too.
+  // Another form of the page (the copy form next to the edit form) is submitted on its own.
   const branches = new Map<string, Set<number>>();
   for (const node of nodes.filter((n) => ['input', 'select', 'textarea'].includes(n.tag))) {
     const name = node.attrs.get('name');
     if (!name || name === '_csrf') continue;
-    const set = branches.get(name) ?? new Set<number>();
+    const key = `${formOf(node)} ${name}`;
+    const set = branches.get(key) ?? new Set<number>();
     set.add(branchOf(node));
-    branches.set(name, set);
+    branches.set(key, set);
   }
-  for (const [name, set] of branches) {
-    const forms = nodes.filter((n) => n.tag === 'form').length;
-    if (
-      forms > 2 &&
-      ['expected_updated_at', 'intent', 'enabled', '_return', 'confirm'].includes(name)
-    )
-      continue;
+  for (const [key, set] of branches) {
+    const name = key.slice(key.indexOf(' ') + 1);
     expect(set.size, `${label}: ${name} in ${set.size} branches`).toBe(1);
   }
   return nodes;
@@ -184,14 +205,22 @@ describe('consumer access markup (WCAG 2.2 AA)', () => {
     expect(error.status).toBe(422);
     const html = await error.text();
     expect(html).toContain('<title>Error: ');
-    expect(html).toMatch(/<div class="error-summary"[^>]*tabindex="-1"[^>]*autofocus/);
+    expect(html).toMatch(/<div class="callout bad errsum"[^>]*tabindex="-1"[^>]*autofocus/);
     expect(html).not.toContain('role="alert"');
     const nodes = await checkPage(html, 'error re-render');
-    const ids = new Set(nodes.map((node) => node.attrs.get('id')));
-    for (const match of html.matchAll(/<li><a href="#([^"]+)"/g)) {
-      expect(ids.has(match[1]), `summary link #${match[1]}`).toBe(true);
+    // Every summary link lands on a control that can take focus (never a group's fieldset), and
+    // that control is aria-invalid.
+    const links = [...html.matchAll(/<li><a href="#([^"]+)"/g)].map((match) => match[1] ?? '');
+    expect(links.length).toBeGreaterThan(0);
+    for (const id of links) {
+      const target = nodes.find((node) => node.attrs.get('id') === id);
+      expect(target, `summary link #${id}`).toBeDefined();
+      expect(['input', 'select', 'textarea'], `summary link #${id} is a control`).toContain(
+        target?.tag,
+      );
+      expect(target?.attrs.get('type'), `summary link #${id}`).not.toBe('hidden');
+      expect(target?.attrs.get('aria-invalid'), `summary link #${id} is invalid`).toBe('true');
     }
-    expect(html).toMatch(/aria-invalid="true"/);
     // One page-level autofocus outside dialogs.
     const focused = nodes.filter(
       (n) => n.attrs.has('autofocus') && !n.ancestors.some((a) => a.tag === 'dialog'),
@@ -203,6 +232,33 @@ describe('consumer access markup (WCAG 2.2 AA)', () => {
       `/admin/access/new?consumer=${provider.id}&mode=rows`,
     );
     await checkPage(await rows.text(), 'rows editor');
+  });
+
+  it('a risk to accept: the summary link lands on the invalid box', async () => {
+    const provider = await seedGithubProvider(world.app.deps);
+    const token = await seedService(world.app.deps);
+    const res = await adminPost(world.app, session(), '/admin/access', {
+      consumer_id: provider.id,
+      token_id: token,
+      editor: 'rows',
+      'cond.0.claim': 'repository_owner_id',
+      'cond.0.values': '4242',
+      'cond.1.claim': 'repository_id',
+      'cond.1.values': '5',
+      'rule.0.m': 'GET',
+      'rule.0.path': '/x',
+      expires: 'never',
+    });
+    expect(res.status).toBe(422);
+    const html = await res.text();
+    const nodes = await checkPage(html, 'risk re-render');
+    expect(html).toContain('<li><a href="#ga-risk-ack">');
+    const box = nodes.find((node) => node.attrs.get('id') === 'ga-risk-ack');
+    expect(box?.tag).toBe('input');
+    expect(box?.attrs.get('aria-invalid')).toBe('true');
+    expect(box?.attrs.has('required')).toBe(true);
+    // Shown without a risky choice in the form (a server-computed risk).
+    expect(html).toContain('<div class="riskacc always" id="ga-risk"');
   });
 
   it('the consumer list, add form and consumer page', async () => {
@@ -258,10 +314,13 @@ describe('consumer access markup (WCAG 2.2 AA)', () => {
     });
     const riskyPath = (risky.headers.get('location') ?? '').split('?')[0] ?? '';
     const riskyPage = await (await adminGet(world.app, session(), riskyPath)).text();
-    expect(riskyPage).toContain('<fieldset class="ack">');
+    expect(riskyPage).toContain('<div class="riskacc always" id="ga-risk"');
     for (const path of [
       '/admin/access',
       '/admin/access?view=list',
+      '/admin/access?view=matrix',
+      `/admin/access?token=${token}`,
+      `/admin/access/new?token=${token}`,
       location.split('?')[0] ?? '',
       `${location.split('?')[0]}?open=edit`,
       riskyPath,

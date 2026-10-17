@@ -76,7 +76,7 @@ describe('copy an access', () => {
       base_url: 'https://slack.com/api',
     });
     const page = await (await adminGet(world.app, session(), `/admin/access/${sourceId}`)).text();
-    expect(page).toContain('Slack (review operations)');
+    expect(page).toContain('Slack<span class="meta">(review operations)</span>');
     const before = await auditActions();
     const res = await adminPost(world.app, session(), `/admin/access/${sourceId}/copy`, {
       repository: 'acme/api (987654321)',
@@ -179,7 +179,7 @@ describe('copy an access', () => {
     expect(form).toContain('for acme/web (987654322)');
     // "Change token" keeps the copy and the repository, and drops only the token.
     expect(form).toContain(
-      `href="/admin/access/new?consumer=${provider.id}&amp;copy=${sourceId}&amp;repository=acme%2Fweb+%28987654322%29">Change token`,
+      `href="/admin/access/new?consumer=${provider.id}&amp;copy=${sourceId}&amp;repository=acme%2Fweb+%28987654322%29">Change<span class="vh"> token</span>`,
     );
     const saved = await adminPost(
       world.app,
@@ -245,7 +245,8 @@ describe('copy an access', () => {
     expect(form).toContain('Some operations name the source repository');
     expect(form).toContain('value="/repos/acme/api/dispatches"');
     // The preset follows the new repository; the literal path is shown for review.
-    expect(form).toContain('Read repository contents: GET /repos/acme/web/**');
+    expect(form).toContain('Read repository contents');
+    expect(form).toContain('<code>GET /repos/acme/web/**</code>');
   });
 
   it('sends the copy of an expired access to the form to choose its expiry', async () => {

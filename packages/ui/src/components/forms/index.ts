@@ -1,6 +1,6 @@
 // Group "forms" barrel: export every component of this group from its own file, one line each, e.g.
 // `export { Name, type NameProps } from './Name';`. Only the forms group agent edits this file.
-export type { ChoiceBase } from './choice';
+export { firstChoiceId, type ChoiceBase } from './choice';
 export type { LiveSlot } from './context';
 export { ActionForm, type ActionFormProps } from './ActionForm';
 export { ActionCards, type ActionCard, type ActionCardsProps } from './ActionCards';
@@ -41,7 +41,7 @@ export { RadioCards, type RadioCard, type RadioCardsProps } from './RadioCards';
 export { Reveal, type RevealProps } from './Reveal';
 export { RiskAcceptance, type AcceptedRisk, type RiskAcceptanceProps } from './RiskAcceptance';
 export { Or, RowPicker, type OrProps, type RowPick, type RowPickerProps } from './RowPicker';
-export { Select, type SelectOption, type SelectProps } from './Select';
+export { Select, type SelectOption, type SelectOptionGroup, type SelectProps } from './Select';
 export { FormStep, Stepper, type FormStepProps, type StepperProps } from './Stepper';
 export { SubBox, type SubBoxProps } from './SubBox';
 export { SubmitRow, type SubmitRowProps } from './SubmitRow';

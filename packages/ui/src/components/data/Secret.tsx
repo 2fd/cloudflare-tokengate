@@ -5,9 +5,10 @@ import { Mask } from '../base/Mask';
 export interface SecretProps {
   /**
    * The last 4 characters, the only part tokengate keeps for display ("9fQa"). Only the last 4
-   * are ever rendered, whatever is passed (the mask is a `Mask`).
+   * are ever rendered, whatever is passed (the mask is a `Mask`). Missing or empty when the
+   * secret is too short to keep any: the mask then says the last characters are not stored.
    */
-  last4: string;
+  last4?: string;
   /** First fact line: kind and length ("Bot token · 51 characters"). */
   facts?: Child;
   /** Muted second line: when and by whom it was set, expiry, sealing key. */

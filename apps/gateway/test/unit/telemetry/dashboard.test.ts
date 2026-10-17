@@ -353,7 +353,7 @@ describe('loadAlertData', () => {
       label: 'beta API',
     });
     expect(byCode.get('credential_expiring')?.title).toBe(
-      'The secret of alpha API expires on 2026-10-16 (in 3 days).',
+      'The secret of alpha API expires on 16 Oct 2026 (in 3 days).',
     );
     expect(byCode.get('credential_malformed')?.fix).toMatchObject({
       href: '/admin/tokens/svc_C?open=destination#destination',

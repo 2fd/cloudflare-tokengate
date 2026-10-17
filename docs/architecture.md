@@ -15,9 +15,9 @@ tokengate is one Cloudflare Worker with two D1 databases. Each company deploys i
 | Component | Binding or route | Role |
 |---|---|---|
 | Proxy | `ANY /proxy/:slug`, `ANY /proxy/:slug/*` | Verifies the caller token, authorizes the request, injects the credential and forwards. |
-| Admin UI | `/admin/*` | Server-rendered pages in four sections: Monitoring (`/admin`), Users (`/admin/users`), Service tokens (`/admin/tokens`) and Service consumers (`/admin/consumers`, with consumer access at `/admin/access`); `apps/gateway/src/admin/paths.ts` builds every URL ([ADR 0019](adr/0019-admin-information-architecture.md)). Every request is authenticated by its Cloudflare Access JWT; there are no gateway sessions and no `/auth` routes ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). |
+| Admin UI | `/admin/*` | Server-rendered pages in four sections: Monitoring (`/admin`), Service tokens (`/admin/tokens`), Service consumers (`/admin/consumers`, with consumer access at `/admin/access`) and Users (`/admin/users`), in a sidebar shell built from `@tokengate/ui` ([ADR 0022](adr/0022-admin-ui-on-design-system-d.md)); `apps/gateway/src/admin/paths.ts` builds every URL ([ADR 0019](adr/0019-admin-information-architecture.md)). Every request is authenticated by its Cloudflare Access JWT; there are no gateway sessions and no `/auth` routes ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). |
 | Health | `GET /healthz`, `GET /readyz` | Liveness without I/O; readiness as booleans only. See [observability.md](observability.md). |
-| Static files | `/static/*` (Workers Assets, binding `ASSETS`) | `apps/gateway/public/static/app.css`. `run_worker_first` sends every other path to the Worker. |
+| Stylesheets | `GET /static/:file` | The admin stylesheets: `ui.css` of `@tokengate/ui` and `apps/gateway/src/admin/pages.css`, bundled as text and served by the Worker at a hashed URL (`apps/gateway/src/http/static.ts`, [ADR 0022](adr/0022-admin-ui-on-design-system-d.md)). Any other `/static` path is a 404. |
 | Cron | `scheduled`, `7 * * * *` | Rollups, retention purge, credential-expiry notices, heartbeat. |
 | Queue consumer | `queue`, binding `REQUEST_LOG_QUEUE` (optional) | Batches request records into `TELEMETRY_DB`. |
 | Control plane | D1 binding `DB` | Users, caller providers, services, grants, settings, audit log. |
@@ -184,6 +184,7 @@ apps/gateway/src/
   config.ts             Per-feature config parsing; a malformed feature is disabled (I-CFG-1); admin host pinning predicate (I-DEPLOY-1).
   health.ts             /healthz and /readyz; keyring and cron checks reused by the dashboard.
   http/security.ts      Browser security headers and host pinning for non-proxy routes (I-DEPLOY-1).
+  http/static.ts        The admin stylesheets at hashed /static URLs (ADR 0022).
   lib/
     errors.ts           gatewayError(): the only builder of proxy error responses; codes are public.
     ids.ts              <prefix>_<ULID> generator.
@@ -242,7 +243,11 @@ apps/gateway/src/
                         middleware (I-SESS-1, I-CSRF-1, I-LINK-1, I-BOOT-1, I-RBAC-1).
     ops/                Mutations; one change and one audit event per batch (I-AUDIT-1); credentials never in results (I-CRED-1).
     routes/             Server-rendered pages (dashboard, services, caller providers, grants, requests, audit, users, settings).
-    views/              Layout, components, formatting, reason texts. No client JavaScript.
+    views/              Shell (layout.tsx: the ui AppShell, sidebar, account menu), adapters over @tokengate/ui
+                        (components.tsx), alerts, header helpers, formatting, reason texts. No client JavaScript.
+    pages.css           Page-local styles of the admin, one block per section, ui tokens only (ADR 0022).
+    assets.ts           The stylesheets every admin page links: ui.css, then pages.css.
+    shell-health.ts     Health line and health strip of the shell, from the alert catalogue.
     grant-text.ts       Text format of conditions and rules in the grant form.
     service-templates.ts Prefill values for the "Add a service" form.
     render.tsx          Page rendering, size-capped form parsing, redirect after POST.

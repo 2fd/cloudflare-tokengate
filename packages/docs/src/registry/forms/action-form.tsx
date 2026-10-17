@@ -109,7 +109,7 @@ export const actionForm: ComponentDoc = {
           description: 'Button style. danger for a reversible destructive action (Reject).',
         },
         {
-          name: 'size / block / disabled / plus / icon / id / describedBy / name / value',
+          name: 'size / block / disabled / plus / icon / id / describedBy / name / value / formnovalidate',
           type: 'as Button',
           description: 'Passed to the submit Button.',
         },

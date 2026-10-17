@@ -7,12 +7,22 @@ export interface SelectOption {
   disabled?: boolean;
 }
 
+/** Options under a group label (`optgroup`): the audit target filter's "Settings", "Tokens". */
+export interface SelectOptionGroup {
+  /** The group label (`optgroup label`). */
+  group: string;
+  options: readonly SelectOption[];
+}
+
 export interface SelectProps {
   /** Defaults to the id of the Field around it. */
   id?: string;
   name?: string;
-  /** Seven options or more; for 2–6 use RadioCards, for short values Picks. */
-  options: readonly SelectOption[];
+  /**
+   * Seven options or more; for 2–6 use RadioCards, for short values Picks. Options and option
+   * groups mix, rendered in the order given.
+   */
+  options: readonly (SelectOption | SelectOptionGroup)[];
   /** The selected value. */
   value?: string;
   /** First option with an empty value ("Choose a region"); not selectable once a value is set. */
@@ -22,6 +32,7 @@ export interface SelectProps {
   disabled?: boolean;
   autocomplete?: string;
   invalid?: boolean;
+  /** Ids added after the Field's hint, error and note ids (a shared hint). */
   describedBy?: string;
   class?: string;
 }
@@ -30,6 +41,11 @@ export interface SelectProps {
 export function Select(props: SelectProps) {
   const control = useControl('Select', props);
   const hasValue = props.value !== undefined && props.value !== '';
+  const option = (item: SelectOption) => (
+    <option value={item.value} selected={item.value === props.value} disabled={item.disabled}>
+      {item.label}
+    </option>
+  );
   return (
     <select
       class={cx('select', props.class)}
@@ -46,15 +62,13 @@ export function Select(props: SelectProps) {
           {props.placeholder}
         </option>
       ) : null}
-      {props.options.map((option) => (
-        <option
-          value={option.value}
-          selected={option.value === props.value}
-          disabled={option.disabled}
-        >
-          {option.label}
-        </option>
-      ))}
+      {props.options.map((item) =>
+        'group' in item ? (
+          <optgroup label={item.group}>{item.options.map(option)}</optgroup>
+        ) : (
+          option(item)
+        ),
+      )}
     </select>
   );
 }

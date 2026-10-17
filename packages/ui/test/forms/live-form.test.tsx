@@ -31,6 +31,31 @@ describe('LiveForm', () => {
         </LiveForm>,
       ),
     ).toBe('<form class="lform form-layout y" method="get"><div class="stack">x</div></form>');
+    expect(render(<LiveForm layout="form-layout">x</LiveForm>)).toContain(
+      'class="lform form-layout"',
+    );
+  });
+
+  it('layout="fields" renders the column alone, without .form-layout', () => {
+    expect(
+      render(
+        <LiveForm layout="fields" action="/admin/access/1" class="y" hidden={{ _csrf: 't' }}>
+          x
+        </LiveForm>,
+      ),
+    ).toBe(
+      '<form class="lform y" method="post" action="/admin/access/1"><input type="hidden" name="_csrf" value="t"/><div class="stack">x</div></form>',
+    );
+  });
+
+  it('refuses a rail with layout="fields"', () => {
+    expect(() =>
+      render(
+        <LiveForm layout="fields" rail={<aside>r</aside>}>
+          x
+        </LiveForm>,
+      ),
+    ).toThrow(/a rail needs layout="form-layout"/);
   });
 });
 

@@ -2,7 +2,7 @@ import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
 import { LogoTile, type LogoSpec } from '../base/Logo';
 import { RiskTag } from '../base/RiskTag';
-import { type ChoiceBase, choiceAttrs, isChecked } from './choice';
+import { type ChoiceBase, choiceAttrs, firstChoiceId, isChecked } from './choice';
 import { useChoiceIds } from './context';
 
 export interface RadioCard extends ChoiceBase {
@@ -34,6 +34,11 @@ export interface RadioCardsProps {
   id?: string;
   /** Never inside a Reveal. */
   required?: boolean;
+  /**
+   * The server rejected the group (the FieldSet shows the error): the first option that is not
+   * disabled gets `aria-invalid`. It is the ErrorSummary link target (`firstChoiceId`).
+   */
+  invalid?: boolean;
   class?: string;
 }
 
@@ -49,6 +54,7 @@ export function cardsClass(columns: 1 | 2 | 3 | undefined, className: string | u
  */
 export function RadioCards(props: RadioCardsProps) {
   const prefix = useChoiceIds('RadioCards', props);
+  const invalidId = props.invalid && prefix ? firstChoiceId(prefix, props.options) : undefined;
   return (
     <div class={cardsClass(props.columns, props.class)}>
       {props.options.map((option, index) => {
@@ -67,6 +73,9 @@ export function RadioCards(props: RadioCardsProps) {
               checked={isChecked(option, props.value)}
               disabled={option.disabled}
               required={props.required}
+              aria-invalid={
+                invalidId !== undefined && attrs.inputId === invalidId ? 'true' : undefined
+              }
             />
             <span class="rc-b">
               {option.logo !== undefined ? <LogoTile logo={option.logo} /> : null}

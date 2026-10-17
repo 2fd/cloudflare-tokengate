@@ -27,6 +27,7 @@ Each ADR uses the format from [0001](0001-record-architecture-decisions.md): Sta
 | [0019](0019-admin-information-architecture.md) | Admin information architecture and URL scheme | Accepted |
 | [0020](0020-sealed-credential-drafts.md) | Sealed credential drafts | Accepted |
 | [0021](0021-structured-consumer-access-and-labels.md) | Structured consumer access, claim labels and risk acceptance | Accepted |
+| [0022](0022-admin-ui-on-design-system-d.md) | Admin UI on design system D: sidebar shell, section order, export in the account menu, stylesheets served by the Worker | Accepted |
 
 ## Adding an ADR
 

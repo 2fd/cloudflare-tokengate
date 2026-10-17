@@ -39,6 +39,16 @@ describe('Mask', () => {
     expect(html).not.toContain('xoxb');
   });
 
+  it.each([undefined, ''])('says the last characters are not stored (last4 %j)', (last4) => {
+    expect(render(<Mask last4={last4} srPrefix="Old secret ending in" />)).toBe(
+      '<span class="mask"><span aria-hidden="true">••••</span><span class="vh">Secret, last characters not stored</span></span>',
+    );
+  });
+
+  it('keeps the size and class without last4', () => {
+    expect(render(<Mask size="lg" class="x" />)).toMatch(/^<span class="mask lg x">/);
+  });
+
   it('takes another screen-reader label and escapes', () => {
     expect(render(<Mask last4="<&>" srPrefix="Old secret ending in" />)).toContain(
       '<span class="vh">Old secret ending in </span>&lt;&amp;&gt;',

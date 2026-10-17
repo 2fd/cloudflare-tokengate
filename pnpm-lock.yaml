@@ -20,6 +20,9 @@ importers:
 
   apps/gateway:
     dependencies:
+      '@tokengate/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       hono:
         specifier: ^4.13.13
         version: 4.13.13

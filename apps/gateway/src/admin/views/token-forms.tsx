@@ -1,23 +1,35 @@
 // Service token forms: the submitted values as strings (so a rejected form re-renders what was
 // typed), their parsing into op inputs, and the field groups the create cards and the token page
-// share. The secret is never part of the values and never rendered back (I-CRED-1); a re-render
-// carries a sealed draft instead (A13.6, ADR 0020). Field ids carry a per-form prefix
-// (`f-slack-credential`), and errors name `<prefix>.<field>` so the ErrorSummary links to them.
-import type { Child } from 'hono/jsx';
+// share, built on @tokengate/ui. The secret is never part of the values and never rendered back
+// (I-CRED-1); a re-render carries a sealed draft instead (A13.6, ADR 0020). Field ids carry a
+// per-form prefix (`f-slack-credential`), and errors name `<prefix>.<field>` so the ErrorSummary
+// links to them. Controls in a hidden branch (a Reveal, a closed More) carry no native validation:
+// the server checks them (A7.6).
+import {
+  Button,
+  Callout,
+  Checkbox as UiCheckbox,
+  CodeBlock,
+  Field,
+  FieldGrid,
+  FieldSet,
+  firstChoiceId,
+  Input,
+  More,
+  RadioCards as UiRadioCards,
+  Reveal,
+  Select as UiSelect,
+  SubmitRow,
+  type Suggestion,
+  Textarea,
+} from '@tokengate/ui';
+import { type Child, useContext } from 'hono/jsx';
 import type { Service } from '../../db/types';
 import type { Injection, VerifyCheck } from '../../policy/types';
 import type { FieldError } from '../ops/shared';
 import type { VerifyOutcome } from '../ops/verify';
 import type { FormFields } from '../render';
-import {
-  Checkbox,
-  Field,
-  fieldId,
-  RadioCards,
-  Select,
-  type Suggestion,
-  TextArea,
-} from './components';
+import { fieldId, FocusTargets } from './components';
 import { formatTime } from './format';
 
 export const DEFAULT_TIMEOUT_MS = 120_000;
@@ -276,7 +288,11 @@ export function draftHint(hint: string | null): string {
 // ---------------------------------------------------------------------------------------------
 // Field groups
 
-/** The secret input (A7.8): password type, no autofill, a fake exact-format example. */
+/**
+ * The secret input (A7.8): a ui secret (password type, mono, ignored by password managers, never
+ * a value), a fake exact-format placeholder, and after a failed submit the kept draft as a note
+ * plus its hidden field. A `credential_draft` error is shown here and its summary link lands here.
+ */
 export function SecretField(props: {
   ids: FormIds;
   label: string;
@@ -286,32 +302,40 @@ export function SecretField(props: {
   draft: FormState['draft'];
 }) {
   const { ids } = props;
+  // The summary entry of a draft error links to this visible input, not to the hidden field.
+  useContext(FocusTargets)?.set(ids.id('credential_draft'), ids.id('credential'));
   return (
     <>
       <Field
-        name="credential"
         id={ids.id('credential')}
         label={props.label}
-        type="password"
-        autocomplete="off"
-        example={props.placeholder}
-        required={props.draft === null}
-        optional={false}
-        pattern={props.pattern}
-        hint={
-          props.draft ? (
-            <>
-              {props.hint} {props.draft.hint}
-            </>
-          ) : (
-            props.hint
-          )
-        }
-        error={ids.error('credential', 'credential_draft')}
-      />
+        hint={props.hint}
+        error={ids.error('credential', 'credential_draft') ?? undefined}
+        note={props.draft ? <DraftNote hint={props.draft.hint} /> : undefined}
+      >
+        <Input
+          name="credential"
+          secret
+          placeholder={props.placeholder}
+          pattern={props.pattern}
+          required={props.draft === null ? true : undefined}
+        />
+      </Field>
       {props.draft ? (
         <input type="hidden" name="credential_draft" value={props.draft.value} />
       ) : null}
+    </>
+  );
+}
+
+/** "Secret kept for 15 minutes (…WXYZ, 34 characters)." in bold, then what to do. */
+function DraftNote(props: { hint: string }) {
+  const at = props.hint.indexOf('. ');
+  if (at < 0) return <>{props.hint}</>;
+  return (
+    <>
+      <b class="t-ok">{props.hint.slice(0, at + 1)}</b>
+      {props.hint.slice(at + 1)}
     </>
   );
 }
@@ -321,95 +345,157 @@ export function ExpiryField(props: {
   values: TokenFormValues;
   /** `min` = today (UTC); the details form has none, so a stored past date still saves. */
   min?: string;
-  hint: Child;
+  hint?: Child;
   label?: string;
+  optional?: boolean;
+  class?: string;
+  /** A hint shared with other fields (the "Name and options" hint). */
+  describedBy?: string;
 }) {
   return (
     <Field
-      name="credential_expires_at"
       id={props.ids.id('credential_expires_at')}
       label={props.label ?? 'Secret expires on'}
-      type="date"
-      optional
-      autocomplete="off"
-      value={props.values.credential_expires_at}
-      min={props.min}
+      optional={props.optional}
       hint={props.hint}
-      error={props.ids.error('credential_expires_at')}
-    />
+      error={props.ids.error('credential_expires_at') ?? undefined}
+      class={props.class}
+    >
+      <Input
+        name="credential_expires_at"
+        type="date"
+        width="date"
+        value={props.values.credential_expires_at}
+        min={props.min}
+        describedBy={props.describedBy}
+      />
+    </Field>
   );
 }
 
-/** Name, slug, description and expiry of a new token: all optional, derived when empty. */
+const DESCRIPTION_EXAMPLE = 'Bot "deploy-bot" in workspace acme; owner: platform team';
+
+/**
+ * Name, slug, expiry and description of a new token, as one optional group ("Name and options")
+ * with one shared hint: every field is derived when left empty.
+ */
 export function OptionalFields(props: {
   ids: FormIds;
   values: TokenFormValues;
   slugPlaceholder: string;
   namePlaceholder: string;
-  proxyOrigin: string;
   /** False for GitHub types: the expiry is read from GitHub. */
   expiry: boolean;
   today: string;
-  /** How an empty slug and name are derived; default: the placeholders are the derived values. */
+  /** How an empty slug and name are derived; default: the suggestions shown are the derived values. */
   derived?: { slug: string; name: string };
 }) {
   const { ids, values } = props;
+  const groupId = ids.id('options');
+  const hintId = `${groupId}-hint`;
+  return (
+    <FieldSet
+      id={groupId}
+      legend="Name and options"
+      optional
+      hint={
+        <>
+          {props.derived
+            ? `Slug: ${props.derived.slug} Name: ${props.derived.name}`
+            : 'Leave empty to use the suggestions shown.'}{' '}
+          {props.expiry ? 'An empty expiry means the secret does not expire. ' : ''}
+          Consumers call <code>{`/proxy/${props.slugPlaceholder}`}</code>; the slug cannot be
+          changed later.
+        </>
+      }
+    >
+      <FieldGrid>
+        <Field id={ids.id('name')} label="Name" error={ids.error('name') ?? undefined}>
+          <Input
+            name="name"
+            value={values.name}
+            placeholder={props.namePlaceholder}
+            maxlength={100}
+            autocomplete="off"
+            describedBy={hintId}
+          />
+        </Field>
+        <Field id={ids.id('slug')} label="Slug" error={ids.error('slug') ?? undefined}>
+          <Input
+            name="slug"
+            mono
+            value={values.slug}
+            placeholder={props.slugPlaceholder}
+            pattern="[a-z0-9][a-z0-9\-]{0,62}"
+            maxlength={63}
+            describedBy={hintId}
+          />
+        </Field>
+        {props.expiry ? (
+          <ExpiryField
+            ids={ids}
+            values={values}
+            label="Secret expires"
+            min={props.today}
+            describedBy={hintId}
+          />
+        ) : null}
+        <Field
+          id={ids.id('description')}
+          label="Description"
+          hint="Which account the secret belongs to and who owns it. Access managers see this."
+          error={ids.error('description') ?? undefined}
+          class="span-all"
+        >
+          <Textarea
+            name="description"
+            rows={2}
+            maxlength={2000}
+            value={values.description}
+            placeholder={DESCRIPTION_EXAMPLE}
+          />
+        </Field>
+      </FieldGrid>
+    </FieldSet>
+  );
+}
+
+/** Name, description and expiry of a stored token (the details form). */
+export function DetailFields(props: { ids: FormIds; values: TokenFormValues; example: string }) {
+  const { ids, values } = props;
   return (
     <>
+      <Field id={ids.id('name')} label="Name" error={ids.error('name') ?? undefined}>
+        <Input
+          name="name"
+          value={values.name}
+          placeholder={props.example}
+          required
+          maxlength={100}
+          autocomplete="off"
+        />
+      </Field>
       <Field
-        name="name"
-        id={ids.id('name')}
-        label="Name"
-        optional
-        autocomplete="off"
-        value={values.name}
-        example={props.namePlaceholder}
-        maxlength={100}
-        hint={`Shown to people who give access. ${props.derived?.name ?? 'Leave empty to use the placeholder.'}`}
-        error={ids.error('name')}
-      />
-      <Field
-        name="slug"
-        id={ids.id('slug')}
-        label="Slug"
-        optional
-        autocomplete="off"
-        spellcheck={false}
-        autocapitalize="none"
-        value={values.slug}
-        example={props.slugPlaceholder}
-        pattern="[a-z0-9][a-z0-9\-]{0,62}"
-        maxlength={63}
-        hint={
-          <>
-            Consumers call <code>{`${props.proxyOrigin}/proxy/<slug>`}</code>. Lower-case letters,
-            digits and dashes. Cannot be changed later.{' '}
-            {props.derived?.slug ?? 'Leave empty to use the placeholder.'}
-          </>
-        }
-        error={ids.error('slug')}
-      />
-      <TextArea
-        name="description"
         id={ids.id('description')}
         label="Description"
         optional
-        autocomplete="off"
-        rows={2}
-        maxlength={2000}
-        value={values.description}
-        example={'Bot "deploy-bot" in workspace acme; owner: platform team'}
         hint="Which account the secret belongs to and who owns it. Access managers see this."
-        error={ids.error('description')}
-      />
-      {props.expiry ? (
-        <ExpiryField
-          ids={ids}
-          values={values}
-          min={props.today}
-          hint="Leave empty if it does not expire. The Overview warns 14 days before."
+        error={ids.error('description') ?? undefined}
+      >
+        <Textarea
+          name="description"
+          rows={2}
+          maxlength={2000}
+          value={values.description}
+          placeholder={DESCRIPTION_EXAMPLE}
         />
-      ) : null}
+      </Field>
+      <ExpiryField
+        ids={ids}
+        values={values}
+        optional
+        hint="Fix the expiry without pasting the secret again. Empty = does not expire."
+      />
     </>
   );
 }
@@ -452,7 +538,13 @@ export function injectionSuggestions(tokens: readonly Service[]): {
   };
 }
 
-/** "How the secret is sent": 5 kinds as cards, each kind's sub-fields revealed with it. */
+const INJECTION_KINDS = ['bearer', 'header', 'basic', 'path', 'query'] as const;
+
+/**
+ * "How the secret is sent": 5 kinds as radio cards (live slot 1), each kind's sub-fields in a
+ * Reveal shown while it is checked. The form or disclosure around it carries `lform`. Nothing in
+ * a Reveal is required or typed: the server validates the sub-fields of the chosen kind.
+ */
 export function InjectionFields(props: {
   ids: FormIds;
   values: TokenFormValues;
@@ -467,125 +559,119 @@ export function InjectionFields(props: {
       ? [values.injection_header_prefix]
       : []),
   ];
+  const groupId = ids.id('injection_kind');
+  const options = INJECTION_KINDS.map((kind) => ({ value: kind, title: INJECTION_LABELS[kind] }));
+  useContext(FocusTargets)?.set(groupId, firstChoiceId(groupId, options));
+  const error = ids.error('injection_kind');
+  const option = (kind: (typeof INJECTION_KINDS)[number]) => INJECTION_KINDS.indexOf(kind) + 1;
   return (
-    <RadioCards
-      name="injection_kind"
-      legend="How the secret is sent"
-      idPrefix={ids.id('injection_kind')}
-      value={values.injection_kind}
-      hint="Check the API's authentication docs."
-      error={ids.error('injection_kind')}
-      options={[
-        { value: 'bearer', title: INJECTION_LABELS.bearer },
-        {
-          value: 'header',
-          title: INJECTION_LABELS.header,
-          reveal: (
-            <>
-              <Field
-                name="injection_header_name"
-                id={ids.id('injection_header_name')}
-                label="Header name"
-                conditional
-                autocomplete="off"
-                spellcheck={false}
-                autocapitalize="none"
-                maxlength={64}
-                value={values.injection_header_name}
-                example="x-api-key"
-                suggestions={suggestions.headerNames}
-                hint="Lower-case header name, e.g. x-api-key. Not a reserved header."
-                error={ids.error('injection_header_name')}
-              />
-              <Select
-                name="injection_header_prefix"
-                id={ids.id('injection_header_prefix')}
-                label="Text before the secret"
-                conditional
-                value={values.injection_header_prefix}
-                options={[
-                  { value: '', label: '(none)' },
-                  ...prefixes.map((prefix) => ({
-                    value: prefix,
-                    label: prefix.endsWith(' ') ? `${prefix.trimEnd()} + space` : prefix,
-                  })),
-                ]}
-                hint="Text sent before the secret."
-                error={ids.error('injection_header_prefix')}
-              />
-            </>
-          ),
-        },
-        {
-          value: 'basic',
-          title: INJECTION_LABELS.basic,
-          reveal: (
-            <Field
-              name="injection_username"
-              id={ids.id('injection_username')}
-              label="Username"
-              optional
-              conditional
-              autocomplete="off"
-              spellcheck={false}
-              maxlength={256}
-              value={values.injection_username}
-              example="apikey"
-              hint="Leave empty if the secret is username:password."
-              error={ids.error('injection_username')}
-            />
-          ),
-        },
-        {
-          value: 'path',
-          title: INJECTION_LABELS.path,
-          reveal: (
-            <>
-              <p class="hint">{PATH_WARNING}</p>
-              <Field
-                name="injection_path_prefix"
-                id={ids.id('injection_path_prefix')}
-                label="Path before the secret"
-                optional
-                conditional
-                autocomplete="off"
-                spellcheck={false}
-                autocapitalize="none"
-                maxlength={256}
-                value={values.injection_path_prefix}
-                example="/bot"
-                hint="Path before the secret, e.g. Telegram /bot. Usually empty."
-                error={ids.error('injection_path_prefix')}
-              />
-            </>
-          ),
-        },
-        {
-          value: 'query',
-          title: INJECTION_LABELS.query,
-          reveal: (
-            <>
-              <p class="hint">{QUERY_WARNING}</p>
-              <Field
-                name="injection_param"
-                id={ids.id('injection_param')}
-                label="Query parameter name"
-                conditional
-                autocomplete="off"
-                spellcheck={false}
-                autocapitalize="none"
-                maxlength={64}
-                value={values.injection_param}
-                example="api_key"
-                suggestions={suggestions.params}
-                hint="Letters, digits and . _ ~ -"
-                error={ids.error('injection_param')}
-              />
-            </>
-          ),
-        },
-      ]}
-    />
+    <>
+      <FieldSet
+        id={groupId}
+        legend="How the secret is sent"
+        hint="Check the API's authentication docs."
+        error={error ?? undefined}
+        live={1}
+      >
+        <UiRadioCards
+          name="injection_kind"
+          columns={1}
+          value={values.injection_kind}
+          invalid={error ? true : undefined}
+          options={options}
+        />
+      </FieldSet>
+      <Reveal field={1} option={option('header')}>
+        <Field
+          id={ids.id('injection_header_name')}
+          label="Header name"
+          neededFor="Custom header"
+          hint="Lower-case header name, e.g. x-api-key. Not a reserved header."
+          error={ids.error('injection_header_name') ?? undefined}
+        >
+          <Input
+            name="injection_header_name"
+            mono
+            maxlength={64}
+            value={values.injection_header_name}
+            placeholder="x-api-key"
+            suggestions={suggestions.headerNames}
+          />
+        </Field>
+        <Field
+          id={ids.id('injection_header_prefix')}
+          label="Text before the secret"
+          hint="Text sent before the secret."
+          error={ids.error('injection_header_prefix') ?? undefined}
+        >
+          <UiSelect
+            name="injection_header_prefix"
+            value={values.injection_header_prefix}
+            options={[
+              { value: '', label: '(none)' },
+              ...prefixes.map((prefix) => ({
+                value: prefix,
+                label: prefix.endsWith(' ') ? `${prefix.trimEnd()} + space` : prefix,
+              })),
+            ]}
+          />
+        </Field>
+      </Reveal>
+      <Reveal field={1} option={option('basic')}>
+        <Field
+          id={ids.id('injection_username')}
+          label="Username"
+          optional
+          hint="Leave empty if the secret is username:password."
+          error={ids.error('injection_username') ?? undefined}
+        >
+          <Input
+            name="injection_username"
+            mono
+            maxlength={256}
+            value={values.injection_username}
+            placeholder="apikey"
+          />
+        </Field>
+      </Reveal>
+      <Reveal field={1} option={option('path')}>
+        <p class="hint">{PATH_WARNING}</p>
+        <Field
+          id={ids.id('injection_path_prefix')}
+          label="Path before the secret"
+          optional
+          hint="Path before the secret, e.g. Telegram /bot. Usually empty."
+          error={ids.error('injection_path_prefix') ?? undefined}
+        >
+          <Input
+            name="injection_path_prefix"
+            mono
+            maxlength={256}
+            value={values.injection_path_prefix}
+            placeholder="/bot"
+          />
+        </Field>
+      </Reveal>
+      <Reveal field={1} option={option('query')}>
+        <p class="hint">{QUERY_WARNING}</p>
+        <Field
+          id={ids.id('injection_param')}
+          label="Query parameter name"
+          neededFor="Query parameter"
+          hint="Letters, digits and . _ ~ -"
+          error={ids.error('injection_param') ?? undefined}
+        >
+          <Input
+            name="injection_param"
+            mono
+            maxlength={64}
+            value={values.injection_param}
+            placeholder="api_key"
+            suggestions={suggestions.params}
+          />
+        </Field>
+      </Reveal>
+    </>
   );
 }
 
@@ -601,8 +687,8 @@ const TIMEOUTS: ReadonlyArray<[number, string]> = [
 const STATUSES = ['200', '201', '204'];
 
 /**
- * Forward headers, timeout and the check, in a collapsed "Advanced (optional)" details: nothing
- * in it carries native validation (A7.6). Opens when one of its fields has an error.
+ * Forward headers, timeout and the check, in a collapsed "Advanced (optional)" More: nothing in
+ * it carries native validation (A7.6). Opens when one of its fields has an error.
  */
 export function AdvancedFields(props: {
   ids: FormIds;
@@ -628,152 +714,185 @@ export function AdvancedFields(props: {
     'verify_expect_status',
   );
   return (
-    <details class="advanced" open={open}>
-      <summary>Advanced (optional)</summary>
-      <div class="stack">
-        <Field
+    <More summary="Advanced (optional)" meta="extra headers, timeout, secret check" open={open}>
+      <Field
+        id={ids.id('forward_headers')}
+        label="Extra headers consumers may send"
+        optional
+        hint={
+          <>
+            Comma separated. Common headers such as content-type and accept are always passed
+            through; all others are dropped.
+            {inUse.length > 0 ? <> In use by other tokens: {inUse.join(', ')}.</> : null}
+          </>
+        }
+        error={ids.error('forward_headers') ?? undefined}
+      >
+        <Input
           name="forward_headers"
-          id={ids.id('forward_headers')}
-          label="Extra headers consumers may send"
-          optional
-          conditional
-          autocomplete="off"
-          spellcheck={false}
-          autocapitalize="none"
+          mono
           maxlength={1024}
           value={values.forward_headers}
-          example="openai-organization, openai-beta"
-          hint={
-            <>
-              Comma separated. Common headers such as content-type and accept are always passed
-              through; all others are dropped.
-              {inUse.length > 0 ? <> In use by other tokens: {inUse.join(', ')}.</> : null}
-            </>
-          }
-          error={ids.error('forward_headers')}
+          placeholder="openai-organization, openai-beta"
         />
-        <Select
+      </Field>
+      <Field
+        id={ids.id('timeout_ms')}
+        label="Timeout"
+        hint="How long to wait for the upstream to start answering."
+        error={ids.error('timeout_ms') ?? undefined}
+      >
+        <UiSelect
           name="timeout_ms"
-          id={ids.id('timeout_ms')}
-          label="Timeout"
-          conditional
           value={values.timeout_ms}
           options={timeouts.map(([ms, label]) => ({ value: String(ms), label }))}
-          hint="How long to wait for the upstream to start answering."
-          error={ids.error('timeout_ms')}
         />
-        <fieldset>
-          <legend>Secret check</legend>
-          <Field
+      </Field>
+      <FieldSet id={ids.id('verify')} legend="Secret check">
+        <Field
+          id={ids.id('verify_path')}
+          label="Check path"
+          optional
+          hint="A read-only path that proves the secret works. Empty: no check."
+          error={ids.error('verify_path') ?? undefined}
+        >
+          <Input
             name="verify_path"
-            id={ids.id('verify_path')}
-            label="Check path"
-            optional
-            conditional
-            autocomplete="off"
-            spellcheck={false}
-            autocapitalize="none"
+            mono
             maxlength={512}
             value={values.verify_path}
-            example="/v1/models"
-            hint="A read-only path that proves the secret works. Empty: no check."
-            error={ids.error('verify_path')}
+            placeholder="/v1/models"
           />
-          <Select
+        </Field>
+        <Field
+          id={ids.id('verify_method')}
+          label="Check method"
+          error={ids.error('verify_method') ?? undefined}
+        >
+          <UiSelect
             name="verify_method"
-            id={ids.id('verify_method')}
-            label="Check method"
-            conditional
             value={values.verify_method === 'POST' ? 'POST' : 'GET'}
             options={[
               { value: 'GET', label: 'GET' },
               { value: 'POST', label: 'POST' },
             ]}
-            error={ids.error('verify_method')}
           />
-          <Select
+        </Field>
+        <Field
+          id={ids.id('verify_expect_status')}
+          label="Expected HTTP status"
+          error={ids.error('verify_expect_status') ?? undefined}
+        >
+          <UiSelect
             name="verify_expect_status"
-            id={ids.id('verify_expect_status')}
-            label="Expected HTTP status"
-            conditional
             value={values.verify_expect_status}
             options={statuses.map((status) => ({ value: status, label: status }))}
-            error={ids.error('verify_expect_status')}
           />
-          <Checkbox
-            name="verify_expect_ok_field"
-            id={ids.id('verify_expect_ok_field')}
-            label='Response JSON must have "ok": true (Slack-style)'
-            checked={values.verify_expect_ok_field}
-          />
-          {props.verifyHeaders && Object.keys(props.verifyHeaders).length > 0 ? (
-            <p class="hint">
-              The check also sends{' '}
-              {Object.entries(props.verifyHeaders).map(([name, value], index) => (
-                <>
-                  {index > 0 ? ', ' : ''}
-                  <code>
-                    {name}: {value}
-                  </code>
-                </>
-              ))}{' '}
-              (set by the token type; kept).
-            </p>
-          ) : null}
-        </fieldset>
-      </div>
-    </details>
+        </Field>
+        <UiCheckbox
+          name="verify_expect_ok_field"
+          id={ids.id('verify_expect_ok_field')}
+          value="1"
+          checked={values.verify_expect_ok_field}
+        >
+          Response JSON must have "ok": true (Slack-style)
+        </UiCheckbox>
+        {props.verifyHeaders && Object.keys(props.verifyHeaders).length > 0 ? (
+          <p class="hint">
+            The check also sends{' '}
+            {Object.entries(props.verifyHeaders).map(([name, value], index) => (
+              <>
+                {index > 0 ? ', ' : ''}
+                <code>
+                  {name}: {value}
+                </code>
+              </>
+            ))}{' '}
+            (set by the token type; kept).
+          </p>
+        ) : null}
+      </FieldSet>
+    </More>
   );
 }
 
-/** The result of a credential check: preview of the upstream answer, the reported expiry. */
-export function VerifyResult(props: { verify: VerifyOutcome; title?: string }) {
-  const { verify } = props;
+/** "Check passed (HTTP 200)." or "Check failed (HTTP 401): invalid key." */
+export function checkTitle(verify: VerifyOutcome): string {
   const status = verify.status === null ? '' : ` (HTTP ${verify.status})`;
-  return (
-    <div class={verify.passed ? 'check-result passed' : 'check-result failed'}>
-      <p>
-        <strong>{verify.passed ? 'Check passed' : 'Check failed'}</strong>
-        {status}
-        {verify.passed ? '.' : `: ${verify.error ?? 'unknown error'}.`}
-      </p>
-      {verify.bodyPreview ? (
-        <>
-          <p class="hint">Start of the upstream response (any copy of the secret is masked):</p>
-          <pre>{verify.bodyPreview}</pre>
-        </>
-      ) : null}
-      {verify.expiresAt !== null ? (
-        <p>The upstream reports that this secret expires {formatTime(verify.expiresAt)}.</p>
-      ) : null}
-    </div>
-  );
+  return verify.passed
+    ? `Check passed${status}.`
+    : `Check failed${status}: ${verify.error ?? 'unknown error'}.`;
 }
 
 /**
- * The submits of a form that sends the secret: the primary first in tree order; after a failed
- * check, "Check again and save" plus `save_anyway` (the draft keeps the secret).
+ * The result of a credential check: a callout with the outcome and the reported expiry, then the
+ * start of the upstream answer (any copy of the secret is masked). `role="status"` right after
+ * a Test, so the result is announced.
+ */
+export function CheckResult(props: {
+  verify: VerifyOutcome;
+  /** Name of the upstream answer block ("Slack response"). */
+  label?: string;
+  announce?: boolean;
+}) {
+  const { verify } = props;
+  return (
+    <>
+      <Callout
+        tone={verify.passed ? 'ok' : 'bad'}
+        role={props.announce ? 'status' : undefined}
+        title={checkTitle(verify)}
+        more={
+          verify.expiresAt !== null
+            ? `The upstream reports that this secret expires ${formatTime(verify.expiresAt)}.`
+            : undefined
+        }
+      />
+      {verify.bodyPreview ? (
+        <CodeBlock
+          label={props.label ?? 'Upstream response'}
+          caption="Start of the upstream response (any copy of the secret is masked)"
+        >
+          {verify.bodyPreview}
+        </CodeBlock>
+      ) : null}
+    </>
+  );
+}
+
+export const SAVE_ANYWAY_HINT =
+  'Saving without a passing check stores the secret as it is. The token page shows the failed check until a test passes, and consumers get the upstream’s error.';
+
+/**
+ * The submits of a form that sends the secret (a SubmitRow): the primary first in tree order;
+ * after a failed check, "Check again and save" plus `save_anyway` (the draft keeps the secret).
+ * `secondary` for a form under a page header that already holds the page's primary.
  */
 export function SecretSubmits(props: {
   label: string;
   context?: string;
   failedCheck: boolean;
+  id?: string;
+  /** After the submits on the row (a docs link). */
   extra?: Child;
+  secondary?: boolean;
 }) {
   return (
-    <div class="actions">
-      <button type="submit" class="primary">
+    <SubmitRow id={props.id} hint={props.failedCheck ? SAVE_ANYWAY_HINT : undefined}>
+      <Button
+        variant={props.secondary && !props.failedCheck ? 'secondary' : 'primary'}
+        type="submit"
+        srSuffix={props.context}
+      >
         {props.failedCheck ? 'Check again and save' : props.label}
-        {props.context ? <span class="vh"> {props.context}</span> : null}
-      </button>
+      </Button>
       {props.failedCheck ? (
-        <button type="submit" name="save_anyway" value="1" class="secondary">
+        <Button type="submit" name="save_anyway" value="1" srSuffix={props.context}>
           Save without a passing check
-          {props.context ? <span class="vh"> {props.context}</span> : null}
-        </button>
+        </Button>
       ) : null}
       {props.extra}
-    </div>
+    </SubmitRow>
   );
 }
 

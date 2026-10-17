@@ -205,3 +205,93 @@ describe('ConfirmDialog focus', () => {
     expect(open).not.toContain('autofocus');
   });
 });
+
+describe('Dialog with an outer form', () => {
+  const html = render(
+    <Dialog
+      id="d"
+      title="Approve as Owner?"
+      description="Owners can change sign-in."
+      form="f-approve"
+      footer="f"
+    >
+      body
+    </Dialog>,
+  );
+
+  it('renders no form of its own: the content goes in div.dlg-in', () => {
+    expect(html).toBe(
+      '<dialog class="dlg" id="d" aria-labelledby="d-h" aria-describedby="d-d" popover="auto"><div class="dlg-in"><div class="dlg-h"><h2 id="d-h">Approve as Owner?</h2><p id="d-d">Owners can change sign-in.</p></div><div class="dlg-b">body</div><div class="dlg-f">f</div></div></dialog>',
+    );
+    expect(html).not.toContain('<form');
+  });
+
+  it('drops an empty body and still renders open in the page flow', () => {
+    expect(render(<Dialog id="d" title="T" form="f" footer="f" open />)).toBe(
+      '<dialog class="dlg" id="d" aria-labelledby="d-h" open=""><div class="dlg-in"><div class="dlg-h"><h2 id="d-h">T</h2></div><div class="dlg-f">f</div></div></dialog>',
+    );
+  });
+});
+
+describe('ConfirmDialog with an outer form', () => {
+  it('submits the outer form with name="confirm" value="1" by default', () => {
+    const html = render(
+      <ConfirmDialog
+        id="d"
+        title="Approve as Owner?"
+        form="f-approve"
+        confirmLabel="Approve as Owner"
+      />,
+    );
+    expect(html).toContain('<div class="dlg-in">');
+    expect(html).not.toContain('<form');
+    expect(html).toContain(
+      '<button class="btn danger-solid" type="submit" name="confirm" value="1" form="f-approve">Approve as Owner</button>',
+    );
+    // Cancel keeps the autofocus
+    expect(html).toContain('popovertargetaction="hide" autofocus="">Cancel</button>');
+  });
+
+  it('takes the submit name and value, and joins the confirm field to the outer form', () => {
+    const html = render(
+      <ConfirmDialog
+        id="d"
+        title="Make Tom an Owner?"
+        form="f-role"
+        name="role"
+        value="owner"
+        confirmLabel="Make Owner"
+        confirmVariant="primary"
+        confirmText={{ value: 'tom' }}
+      />,
+    );
+    expect(html).toContain(
+      '<button class="btn primary" type="submit" name="role" value="owner" form="f-role">Make Owner</button>',
+    );
+    expect(html).toContain(
+      '<input class="input mono" type="text" id="d-confirm" form="f-role" name="confirm_text"',
+    );
+  });
+
+  it('lets the confirm submit skip the outer form validation', () => {
+    const html = render(
+      <ConfirmDialog
+        id="d"
+        title="Invite as Owner?"
+        form="f-invite"
+        formnovalidate
+        confirmLabel="Invite as Owner"
+      />,
+    );
+    expect(html).toContain('form="f-invite" formnovalidate="">Invite as Owner</button>');
+  });
+
+  it('keeps the own-form markup without name, value or form attributes', () => {
+    const html = render(
+      <ConfirmDialog id="d" title="T" action="/x" confirmLabel="Go" confirmText={{ value: 'x' }} />,
+    );
+    expect(html).toContain('<form method="post" action="/x">');
+    expect(html).toContain('<button class="btn danger-solid" type="submit">Go</button>');
+    expect(html).not.toContain(' form=');
+  });
+});

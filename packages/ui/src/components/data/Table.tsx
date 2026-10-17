@@ -22,6 +22,11 @@ type TableName =
   | { scroll: false; label?: undefined; labelledBy?: undefined; caption: Child };
 
 export type TableProps = TableName & {
+  /**
+   * Id of the `table` element, not of the scroll region: a fragment target (`#requests`), and the
+   * start of the table for checkers that read from it to its `caption`. Unique on the page.
+   */
+  id?: string;
   /** Header cells, left to right. Kept for an empty table, so the empty state shows the shape. */
   columns: readonly TableColumn[];
   /**
@@ -52,7 +57,10 @@ export function Table(props: TableProps) {
     rows !== false &&
     !(Array.isArray(rows) && rows.length === 0);
   const table = (
-    <table class={cx('tbl', props.dense && 'dense', props.stackable && 'stackable', props.class)}>
+    <table
+      class={cx('tbl', props.dense && 'dense', props.stackable && 'stackable', props.class)}
+      id={props.id}
+    >
       {props.caption !== undefined ? (
         <caption class={props.captionVisible ? undefined : 'vh'}>{props.caption}</caption>
       ) : null}
@@ -83,6 +91,8 @@ export function Table(props: TableProps) {
 }
 
 export interface RowProps {
+  /** Id of the `tr`: the fragment target of a redirect back to this row (`#user-usr_1`). Unique on the page. */
+  id?: string;
   /** Highlighted row (`tr.hl`, accent-soft): the row just changed or arrived from. Decorative: say why in the row too. */
   highlight?: boolean;
   class?: string;
@@ -91,8 +101,12 @@ export interface RowProps {
 }
 
 /** A body row (`tr`). */
-export function Row({ highlight, class: className, children }: RowProps) {
-  return <tr class={cx(highlight && 'hl', className)}>{children}</tr>;
+export function Row({ id, highlight, class: className, children }: RowProps) {
+  return (
+    <tr class={cx(highlight && 'hl', className)} id={id}>
+      {children}
+    </tr>
+  );
 }
 
 export interface RowHeaderProps {

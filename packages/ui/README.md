@@ -76,10 +76,11 @@ Most of design D is in `ui.css` with a component. A few patterns are used by one
 
 | Page | Page-local classes |
 |---|---|
-| Monitoring | `.flink` (filter link in a cell), `.find` + `.tray-h .t.row` (a find form beside a tray title), `.tbl.log` (one-line request rows) |
-| Users | `.cmap.rmap` + `.rmap-txt` (the role map: the connections map vocabulary at a 48px pitch), `.trace.c3`, `.now`, the `.can` yes / no list, `.gain` / `.lose`, `.ent-l` |
-| Tokens | `.rot-row` (secret · expiry · submit in one row) |
-| Consumers | `.tbl th .arrow` (arrow rows on a two-line grid), the risk gating of the give-access forms (`#f-new`, `#f-risk`), `.nw`, `.d-block` |
+| Shell | `#nf-sections .tcards` (the not-found page's four sections as a 2 × 2 grid) |
+| Monitoring | `.flink` (filter link in a cell), `.find` (Find a request in a page header, a tray header or a panel), `.tray-h > details.disc` (a disclosure as the whole tray header), `#denials .tbl th .arrow` (Top denied callers), `.tbl.log` (one-line request rows), `.notes` (empty install) |
+| Tokens | `.rot-row` (secret · expiry · submit in one row), `#tokens > .tray-h > .filters` |
+| Consumers | `.con-stack` / `.con-fields` (fields 24px apart), `.con-types`, `.con-preset`, `.con-confirm`, `.con-list`, `.con-tenant`, `ul.operations`, `.tbl th .arrow` (arrow rows on a two-line grid), the give-access gating and review (`.ga-*`), `.nw`, `.d-block` |
+| Users | `.cmap.u-rmap` (the role map: the connections map vocabulary at a 48px pitch), `.trace.u-c3`, `.u-now`, `.u-can` (the yes / no list), `.gain` / `.lose`, `.u-compare`, `.u-person`, `.u-hosts`, `.u-pad`, the `#invite` tray opened by its fragment |
 
 The mechanism: the app keeps them in its own stylesheet (for example `apps/gateway/src/admin/pages.css`), served like `ui.css` with `cssAsset('pages', text)` and linked after it. That stylesheet uses the tokens only (no hard-coded colors, the same `light-dark()` pairs), never restyles a `ui.css` class outside its own page's markup, and keeps the WCAG rules of the system (contrast, forced colors). Promoted already: the grid columns (`Grid`, `Column`), the row menu (`RowMenu`), decision items (`NeedsAttention` `who`), action cards (`ActionCards`), logo radio cards (`RadioCard.logo`), group rows (`GroupRow`), the 7th and 8th live-form fields (`LiveSlot` 1–8), the who-can-use map (`WhoCanUse`), the sparkline (`Sparkline`), compact KPIs (`Kpis columns={2}`), the plan summary (`LiveSummary variant="plan"`), `FieldGrid`, `RailFoot`, `Stack` and the one-button POST form (`ActionForm`).
 

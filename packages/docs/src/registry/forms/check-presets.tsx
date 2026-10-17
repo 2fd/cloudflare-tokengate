@@ -117,6 +117,12 @@ export const checkPresets: ComponentDoc = {
           type: 'string',
           description: 'Input id prefix; defaults to the FieldSet’s id.',
         },
+        {
+          name: 'invalid',
+          type: 'boolean',
+          description:
+            'The server rejected the group (the FieldSet or FormStep shows the error): the first enabled box gets aria-invalid, the ErrorSummary link target.',
+        },
         { name: 'class', type: 'string', description: 'Extra classes on .ops.' },
       ],
     },

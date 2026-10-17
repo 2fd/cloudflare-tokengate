@@ -79,7 +79,9 @@ function checkPage(html: string, label: string): { controls: number; hidden: num
     if (control) {
       controls++;
       expect(node.attrs.id, where).toBeDefined();
-      expect(labelled.has(node.attrs.id), where).toBe(true);
+      // A <label for> or a wrapping <label> (implicit label: ui radio cards and checkboxes).
+      const implicit = node.ancestors.some((a) => a.tag === 'label');
+      expect(labelled.has(node.attrs.id) || implicit, where).toBe(true);
     }
     for (const id of (node.attrs['aria-describedby'] ?? '').split(' ').filter(Boolean)) {
       expect(idSet.has(id), `${where} describedby ${id}`).toBe(true);
@@ -90,10 +92,13 @@ function checkPage(html: string, label: string): { controls: number; hidden: num
         where,
       ).toBe(true);
     }
-    // A7.6: no native validation inside a CSS-conditional panel or a details nested in the form.
+    // A7.6: no native validation inside a CSS-conditional panel (the old `.reveal`, a ui Reveal
+    // `.rvN`) or a details nested in the form.
     const form = node.ancestors.findIndex((a) => a.tag === 'form');
     const hidden =
-      node.ancestors.some((a) => (a.attrs.class ?? '').split(' ').includes('reveal')) ||
+      node.ancestors.some((a) =>
+        (a.attrs.class ?? '').split(' ').some((name) => name === 'reveal' || /^rv\d$/.test(name)),
+      ) ||
       (form >= 0 && node.ancestors.slice(form + 1).some((a) => a.tag === 'details'));
     if (control && hidden) {
       hiddenControls++;
@@ -120,17 +125,23 @@ function checkPage(html: string, label: string): { controls: number; hidden: num
   return { controls, hidden: hiddenControls };
 }
 
-/** On an error re-render: every summary link names a rendered field whose details are open. */
+/**
+ * On an error re-render: every summary link names a rendered control that can take focus (an
+ * input, select or textarea, never a fieldset or a hidden input) whose details are open.
+ */
 function checkErrorPage(html: string, label: string) {
   expect(html, label).toMatch(/<title>Error: /);
   const nodes = parse(html);
-  const links = [...html.matchAll(/<div class="error-summary"[\s\S]*?<\/div>/g)].flatMap((match) =>
-    [...match[0].matchAll(/href="#([^"]+)"/g)].map((link) => link[1] ?? ''),
+  const links = [...html.matchAll(/<div class="callout bad errsum"[\s\S]*?<\/ul>/g)].flatMap(
+    (match) => [...match[0].matchAll(/href="#([^"]+)"/g)].map((link) => link[1] ?? ''),
   );
   expect(links.length, `${label}: summary links`).toBeGreaterThan(0);
   for (const id of links) {
     const target = nodes.find((node) => node.attrs.id === id);
     expect(target, `${label}: #${id}`).toBeDefined();
+    expect(['input', 'select', 'textarea'], `${label}: #${id} is a control`).toContain(target?.tag);
+    expect(target?.attrs.type, `${label}: #${id} is not hidden`).not.toBe('hidden');
+    expect(target?.attrs.disabled, `${label}: #${id} is enabled`).toBeUndefined();
     for (const details of target?.ancestors.filter((a) => a.tag === 'details') ?? []) {
       expect(
         details.attrs.open,

@@ -123,9 +123,14 @@ describe('Cloudflare Access login', () => {
     expect(html).toContain(text);
     // A refused user can switch accounts from the sign-in problem page.
     if (code === 403) {
-      expect(html).toContain('<a href="/cdn-cgi/access/logout">Sign out</a>');
-      // The message is a shared alert, not a legacy banner.
-      expect(html).toContain('<div class="alert alert-error"><p><strong>Error:</strong> ');
+      expect(html).toContain('<a class="btn secondary" href="/cdn-cgi/access/logout">Sign out</a>');
+      // The message is a bad callout under the "Sign-in problem" header, not a legacy banner.
+      expect(html).toContain('<h1>Sign-in problem</h1>');
+      expect(html).toContain(
+        '<div class="callout bad"><span class="gl" aria-hidden="true">✕</span>',
+      );
+      // Before sign-in there is no navigation and no account menu.
+      expect(html).not.toContain('class="navd"');
       expect(html).not.toContain('class="banner');
     }
     const user = await env.DB.prepare(
@@ -236,7 +241,7 @@ describe('Cloudflare Access login', () => {
     });
     const owner = await createUser({ email: 'o@acme.com', role: 'owner' });
     const html = await (await adminGet(app, await loginAs(app, owner), '/admin/users')).text();
-    expect(html).toContain('<a href="/cdn-cgi/access/logout">Sign out</a>');
+    expect(html).toContain('<a class="menu-item" href="/cdn-cgi/access/logout">Sign out</a>');
   });
 });
 

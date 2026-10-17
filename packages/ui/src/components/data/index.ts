@@ -1,7 +1,12 @@
 // Group "data" barrel: export every component of this group from its own file, one line each, e.g.
 // `export { Name, type NameProps } from './Name';`. Only the data group agent edits this file.
 export { ActiveFilters, type ActiveFilter, type ActiveFiltersProps } from './ActiveFilters';
-export { AddFilter, type AddFilterProps, type FilterOption } from './AddFilter';
+export {
+  AddFilter,
+  type AddFilterProps,
+  type FilterOption,
+  type FilterOptionGroup,
+} from './AddFilter';
 export { CountLink, type CountLinkProps } from './CountLink';
 export { DiffTable, type DiffRow, type DiffTableProps } from './DiffTable';
 export { EmptyState, type EmptyStateProps } from './EmptyState';

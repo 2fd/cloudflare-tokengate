@@ -76,6 +76,9 @@ async function serviceRow(slug: string) {
     .first<Record<string, unknown>>();
 }
 
+/** Tomorrow as a date field value (an expiring secret). */
+const tomorrow = () => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
+
 const CUSTOM_FORM = {
   template: 'custom',
   base_url: 'https://api.example.com/v1',
@@ -146,48 +149,62 @@ beforeEach(async () => {
 });
 
 describe('token list', () => {
-  it('opens "Add your first token" with one form per token type for token writers', async () => {
-    const html = await (
-      await adminGet(app, await sessionFor('token_manager'), '/admin/tokens')
-    ).text();
-    expect(html).toContain('<title>Service tokens – Service tokens – tokengate</title>');
+  it('an empty list offers "Add a service token"; the catalog has one form per token type', async () => {
+    const manager = await sessionFor('token_manager');
+    const html = await (await adminGet(app, manager, '/admin/tokens')).text();
+    expect(html).toContain('<title>Service tokens – tokengate</title>');
+    expect(html).toContain('No service tokens yet');
+    // One primary per view: the empty state holds it, the header has none.
+    const primaries = html.match(/<a class="btn primary" href="\/admin\/tokens\/new">/g) ?? [];
+    expect(primaries).toHaveLength(1);
     expect(html).toMatch(
-      /<details id="add" class="add-token" open=""><summary>Add your first token/,
+      /<a class="btn primary" href="\/admin\/tokens\/new">[\s\S]*?Add a service token<\/a>/,
     );
-    const forms = html.match(/<form method="post" action="\/admin\/tokens"/g) ?? [];
+    expect(html).not.toMatch(/<form\b[^>]*\bmethod="post"[^>]*action="\/admin\/tokens"/);
+
+    const catalog = await (await adminGet(app, manager, '/admin/tokens/new')).text();
+    const forms =
+      catalog.match(/<form class="type-body[^"]*" method="post" action="\/admin\/tokens"/g) ?? [];
     expect(forms).toHaveLength(SERVICE_TEMPLATES.length + 1);
     for (const template of SERVICE_TEMPLATES) {
-      expect(html).toContain(`id="type-${template.id}"`);
-      expect(html).toContain(`name="template" value="${template.id}"`);
+      expect(catalog).toContain(`id="type-${template.id}"`);
+      expect(catalog).toContain(`name="template" value="${template.id}"`);
     }
-    expect(html).toContain('name="template" value="custom"');
+    expect(catalog).toContain('name="template" value="custom"');
     // No picker page: the cards are the choice, so there is no link to ?template=.
-    expect(html).not.toContain('/admin/tokens/new?template=');
+    expect(catalog).not.toContain('/admin/tokens/new?template=');
   });
 
-  it('lists tokens for a viewer without the accordion, with the secret hint only', async () => {
+  it('lists tokens for a viewer with the masked secret and who to ask, and no form', async () => {
     const admin = await sessionFor('admin');
     await createOpenAi(admin);
     const html = await (await adminGet(app, await sessionFor('viewer'), '/admin/tokens')).text();
-    expect(html).toContain('<caption id="tokens-cap">Service tokens (1)</caption>');
-    expect(html).toContain('<code>openai</code>');
+    expect(html).toContain('<caption class="vh">Service tokens (1)</caption>');
+    expect(html).toMatch(
+      /<a class="ent-n" href="\/admin\/tokens\/svc_[0-9A-Z]{26}">OpenAI<\/a> <span class="slug">openai<\/span>/,
+    );
     expect(html).toContain('OpenAI API');
     expect(html).toContain('api.openai.com');
-    expect(html).toContain('…WXYZ');
+    expect(html).toContain('<span class="vh">Secret ending in </span>WXYZ');
     expect(html).toContain('0 consumers');
-    expect(html).not.toContain('id="add"');
+    expect(html).not.toContain('Add token');
     expect(html).not.toContain('type="password"');
-    expect(html).toContain('Ask a token manager to add a token');
+    expect(html).toContain('Only token managers can add a token');
     expect(html).not.toContain(SECRET);
   });
 
-  it('shows "Used by" chips with consumer, subject and context', async () => {
+  it('shows who uses a token: consumer tiles, a count link and the consumer names', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
     await insertGrant(id, 'deploy');
     const html = await (await adminGet(app, admin, '/admin/tokens')).text();
-    expect(html).toContain('GitHub Actions · acme/api · environment production');
-    expect(html).toContain('href="/admin/access/grt_TEST"');
+    expect(html).toMatch(
+      /<span class="lstack" aria-hidden="true"><span class="tiles"><span class="logo sm lg-github"/,
+    );
+    expect(html).toContain(
+      `<a class="nlink" href="/admin/access?token=${id}">1 consumer · 1 access<span class="vh"> can use OpenAI</span></a>`,
+    );
+    expect(html).toContain('<span class="meta">GitHub Actions · <span class="t-warn">');
   });
 
   it('filters by status and key, and ignores unknown values', async () => {
@@ -195,9 +212,16 @@ describe('token list', () => {
     await createOpenAi(admin);
     const missing = await (await adminGet(app, admin, '/admin/tokens?status=no_credential')).text();
     expect(missing).toContain('No token matches these filters.');
-    expect(missing).toContain('No secret');
+    // The filter in use stays a current quick link, also with no match.
+    expect(missing).toMatch(
+      /<a class="ql bad" href="\/admin\/tokens\?status=no_credential" aria-current="true">[\s\S]*?No secret/,
+    );
+    expect(missing).toContain(
+      '<a class="btn sm secondary" href="/admin/tokens">Show all tokens</a>',
+    );
     const byKey = await (await adminGet(app, admin, '/admin/tokens?key=k1')).text();
     expect(byKey).toContain('Service tokens (1)');
+    expect(byKey).toContain('Key k1');
     const unknown = await (
       await adminGet(app, admin, '/admin/tokens?status=<b>x</b>&key=zz')
     ).text();
@@ -205,30 +229,54 @@ describe('token list', () => {
     expect(unknown).not.toContain('<b>x</b>');
   });
 
-  it('the chip a screen reader hears starts with its visible text (WCAG 2.5.3)', async () => {
+  it('filters disabled tokens, and by name or slug without echoing markup', async () => {
+    const admin = await sessionFor('admin');
+    const id = await createOpenAi(admin);
+    await createCustom(admin);
+    await adminPost(app, admin, `/admin/tokens/${id}/toggle`, { enabled: '0' });
+    const all = await (await adminGet(app, admin, '/admin/tokens')).text();
+    expect(all).toMatch(
+      /<a class="ql" href="\/admin\/tokens\?status=disabled">[\s\S]*?Disabled <span class="n">1<\/span>/,
+    );
+    const disabled = await (await adminGet(app, admin, '/admin/tokens?status=disabled')).text();
+    expect(disabled).toContain('Service tokens (1)');
+    expect(disabled).toContain('>OpenAI</a>');
+    expect(disabled).not.toContain('>example</a>');
+    const found = await (await adminGet(app, admin, '/admin/tokens?q=EXAM')).text();
+    expect(found).toContain('Service tokens (1)');
+    expect(found).toContain('>example</a>');
+    expect(found).toContain('value="EXAM"');
+    const markup = await (
+      await adminGet(app, admin, `/admin/tokens?q=${encodeURIComponent('<b>x</b>')}`)
+    ).text();
+    expect(markup).toContain('No token matches these filters.');
+    expect(markup).not.toContain('<b>x</b>');
+  });
+
+  it('the count link a screen reader hears starts with its visible text (WCAG 2.5.3)', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
     await insertGrant(id, 'deploy');
     const html = await (await adminGet(app, admin, '/admin/tokens')).text();
-    expect(html).toContain(
-      '<span class="vh">GitHub Actions · acme/api · environment production: can use OpenAI',
-    );
+    expect(html).toContain('1 consumer · 1 access<span class="vh"> can use OpenAI</span>');
     const page = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
     expect(page).toContain(
-      '<span class="vh">acme/api · environment production · 1 operation: can use OpenAI',
+      '<a class="ent-n" href="/admin/access/grt_TEST">acme/api</a> <span class="ctx">· environment production</span>',
     );
   });
 
-  it('keeps the key filter when the status filter is submitted', async () => {
+  it('keeps the key filter in the status links and the search', async () => {
     const admin = await sessionFor('admin');
-    for (let n = 0; n < 11; n++) await createCustom(admin, { slug: `api-${n}` });
+    await createCustom(admin, { slug: 'api-0' });
+    await createCustom(admin, { slug: 'api-1', credential_expires_at: tomorrow() });
     const html = await (await adminGet(app, admin, '/admin/tokens?key=k1')).text();
-    const form =
-      /<form method="get" action="\/admin\/tokens"[\s\S]*?<\/form>/.exec(html)?.[0] ?? '';
+    expect(html).toContain('href="/admin/tokens?key=k1"');
+    expect(html).toContain('href="/admin/tokens?status=expiring&amp;key=k1"');
+    const form = /<form class="filters" role="search"[\s\S]*?<\/form>/.exec(html)?.[0] ?? '';
     expect(form).toContain('<input type="hidden" name="key" value="k1"/>');
     const none = await (await adminGet(app, admin, '/admin/tokens')).text();
-    const plain =
-      /<form method="get" action="\/admin\/tokens"[\s\S]*?<\/form>/.exec(none)?.[0] ?? '';
+    const plain = /<form class="filters" role="search"[\s\S]*?<\/form>/.exec(none)?.[0] ?? '';
+    expect(plain).toContain('name="q"');
     expect(plain).not.toContain('name="key"');
   });
 
@@ -246,7 +294,7 @@ describe('token list', () => {
     expect(page.status).toBe(200);
     const pageHtml = await page.text();
     expect(pageHtml).toContain('The stored base URL cannot be read');
-    expect(pageHtml).toMatch(/<details id="destination-edit" open="">/);
+    expect(pageHtml).toMatch(/<details[^>]*id="destination-edit"[^>]*open=""/);
     // The destination form fixes it, with the host typed again (the binding is not attested).
     const calls = upstream.calls.length;
     const saved = await adminPost(app, owner, `/admin/tokens/${id}/destination`, {
@@ -262,17 +310,25 @@ describe('token list', () => {
     ).toBe(true);
   });
 
-  it('opens the accordion with ?open=add once tokens exist', async () => {
+  it('has "Add token" as the header primary, and sends old ?open=add links to the catalog', async () => {
     const admin = await sessionFor('admin');
     await createOpenAi(admin);
-    const closed = await (await adminGet(app, admin, '/admin/tokens')).text();
-    expect(closed).toMatch(/<details id="add" class="add-token"><summary>Add a token/);
-    const open = await (await adminGet(app, admin, '/admin/tokens?open=add')).text();
-    expect(open).toMatch(/<details id="add" class="add-token" open=""><summary>Add a token/);
+    const list = await (await adminGet(app, admin, '/admin/tokens')).text();
+    const header = /<header class="ph">[\s\S]*?<\/header>/.exec(list)?.[0] ?? '';
+    expect(header).toMatch(
+      /<a class="btn primary" href="\/admin\/tokens\/new">[\s\S]*?Add token<\/a>/,
+    );
+    expect(header).toContain('Service tokens<span class="count">1</span>');
+    const old = await adminGet(app, admin, '/admin/tokens?open=add');
+    expect(old.status).toBe(302);
+    expect(old.headers.get('location')).toBe('/admin/tokens/new');
+    // Someone who cannot add tokens gets the list, not a forbidden page.
+    const viewer = await adminGet(app, await sessionFor('viewer'), '/admin/tokens?open=add');
+    expect(viewer.status).toBe(200);
   });
 });
 
-describe('the standalone accordion', () => {
+describe('the Add token catalog', () => {
   it('opens the card named by ?template=', async () => {
     const res = await adminGet(
       app,
@@ -283,7 +339,7 @@ describe('the standalone accordion', () => {
     const html = await res.text();
     expect(html).toContain('<title>Add a service token – Service tokens – tokengate</title>');
     expect(html).toMatch(
-      /<details name="token-type" class="type-card" id="type-slack-webhook" open="">/,
+      /<details class="type-card" name="token-type" id="type-slack-webhook" open="">/,
     );
     expect(html).not.toMatch(/id="type-slack" open/);
     expect(html).toContain(
@@ -324,7 +380,7 @@ describe('create', () => {
     ).text();
     expect(page).toContain('OpenAI created (slug openai); the secret check passed.');
     expect(page).toContain('href="/admin/access/new?token=' + id);
-    expect(page).toContain('value="https://gw.test/proxy/openai"');
+    expect(page).toContain('aria-label="Proxy base URL">https://gw.test/proxy/openai</pre>');
     expect(page).not.toContain(SECRET);
   });
 
@@ -384,7 +440,9 @@ describe('create', () => {
     expect(html).toMatch(/id="f-custom-base_url"[^>]*aria-invalid="true"/);
     expect(html).toContain('value="Bad Slug"');
     expect(html).toContain('value="http://127.0.0.1/api"');
-    expect(html).toMatch(/<details name="token-type" class="type-card" id="type-custom" open="">/);
+    expect(html).toMatch(
+      /<details class="type-card lform" name="token-type" id="type-custom" open="">/,
+    );
     // No draft: the destination is invalid, so there is nothing to bind it to.
     expect(html).not.toContain('name="credential_draft"');
     expect(html).not.toContain(SECRET);
@@ -520,9 +578,14 @@ describe('token page', () => {
     for (const section of ['consumers', 'secret', 'use', 'destination']) {
       expect(html).toContain(`id="${section}"`);
     }
-    expect(html).toContain('0 consumers can use this token');
+    expect(html).toContain('<p class="relline">No consumer can use OpenAI yet.</p>');
+    expect(html).toContain('No consumer access yet');
     expect(html).toContain('OpenAI API');
-    expect(html).not.toContain('<form method="post" action="/admin/tokens/');
+    // Identity: one H1 with the status, the ID chip, and no header action for a viewer.
+    expect(html).toMatch(/<h1>OpenAI <span class="badge ok">/);
+    expect(html).toContain(`>${id}</span>`);
+    expect(html).not.toContain('class="ph-actions"');
+    expect(html).not.toMatch(/<form\b[^>]*\bmethod="post" action="\/admin\/tokens\//);
     expect(html).not.toContain('id="danger"');
     expect(html).toContain(`href="/admin/audit?target=${id}"`);
 
@@ -546,7 +609,7 @@ describe('token page', () => {
       .run();
     const html = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
     expect(html).toContain('No secret is stored, so requests through this token fail.');
-    expect(html).toMatch(/<details id="destination-edit" open="">/);
+    expect(html).toMatch(/<details[^>]*id="destination-edit"[^>]*open=""/);
     expect(html).toContain('name="confirm_destination"');
     expect(html).toContain('Set the secret through Change destination below');
     expect(html).not.toContain(`action="/admin/tokens/${id}/secret"`);
@@ -561,18 +624,31 @@ describe('token page', () => {
     await insertGrant(id, 'old', 'grt_OLD');
     await env.DB.prepare("UPDATE grants SET enabled = 0 WHERE id = 'grt_OLD'").run();
     const html = await (await adminGet(app, manager, `/admin/tokens/${id}`)).text();
-    expect(html).toContain('1 consumer can use this token (1 access)');
-    expect(html).toContain('acme/api · environment production · 1 operation');
+    expect(html).toContain(
+      `<a href="/admin/access?token=${id}">1 consumer</a> can use OpenAI through <a href="/admin/access?token=${id}">1 access</a>.`,
+    );
+    expect(html).toContain(
+      '<a class="ent-n" href="/admin/access/grt_TEST">acme/api</a> <span class="ctx">· environment production</span>',
+    );
+    expect(html).toContain('<code>POST /responses</code>');
+    // The disabled access is listed, but not counted as one that can call.
+    expect(html).toContain('href="/admin/access/grt_OLD"');
     expect(html).toContain('Consumer access is granted by access managers. Send them this link:');
     expect(html).toContain(`value="https://gw.test/admin/access/new?token=${id}"`);
     expect(html).toContain('mailto:am@example.com?subject=Access%20to%20service%20token%20OpenAI');
+    // The page's one primary hands the token to an access manager, with the link in the mail.
+    const header = /<header class="ph">[\s\S]*?<\/header>/.exec(html)?.[0] ?? '';
+    expect(header).toMatch(
+      /<a class="btn primary" href="mailto:am@example\.com\?subject=Access%20to%20service%20token%20OpenAI&amp;body=[^"]*admin%2Faccess%2Fnew%3Ftoken%3D/,
+    );
+    expect(header).toContain('Ask an access manager');
     expect(html).not.toContain('gone@example.com');
     expect(html).not.toContain('>Give a consumer access<');
 
     const access = await sessionFor('access_manager', 'am2@example.com');
     const accessHtml = await (await adminGet(app, access, `/admin/tokens/${id}`)).text();
     expect(accessHtml).toContain(`href="/admin/access/new?token=${id}"`);
-    expect(accessHtml).not.toContain('<form method="post" action="/admin/tokens/');
+    expect(accessHtml).not.toMatch(/<form\b[^>]*\bmethod="post" action="\/admin\/tokens\//);
   });
 });
 
@@ -635,16 +711,16 @@ describe('details form', () => {
     });
     expect(res.status).toBe(400);
     const html = await res.text();
-    expect(html).toMatch(/<details id="details" open="">/);
+    expect(html).toMatch(/<details[^>]*id="details"[^>]*open=""/);
     expect(html).toContain('href="#f-details-forward_headers"');
-    expect(html).toMatch(/<details class="advanced" open="">/);
+    expect(html).toMatch(/<details class="more" open="">/);
     expect(await auditActions()).toEqual(['service.create']);
   });
 
   it('refuses a save over a newer change with 409 and keeps the stored time of day', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
-    const page = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
+    const page = await (await adminGet(app, admin, `/admin/tokens/${id}?open=details`)).text();
     const opened = /name="expected_updated_at" value="(\d+)"/.exec(page)?.[1] ?? '';
     const first = await adminPost(app, admin, `/admin/tokens/${id}`, {
       name: 'First',
@@ -705,7 +781,7 @@ describe('rotate (POST /admin/tokens/:id/secret)', () => {
     const form =
       new RegExp(`action="/admin/tokens/${id}/secret"[\\s\\S]*?</form>`).exec(html)?.[0] ?? '';
     expect(form).toMatch(/name="credential_expires_at" type="date" value=""/);
-    expect(html).toContain('enter the new one&#39;s');
+    expect(html).toContain('The old secret expired on');
   });
 
   it('keeps the stored destination, ignores a posted base URL and keeps an unchanged expiry', async () => {
@@ -805,7 +881,7 @@ describe('rotate (POST /admin/tokens/:id/secret)', () => {
     expect(res.status).toBe(422);
     const html = await res.text();
     expect(html).toContain('href="#f-destination-base_url"');
-    expect(html).toMatch(/<details id="destination-edit" open="">/);
+    expect(html).toMatch(/<details[^>]*id="destination-edit"[^>]*open=""/);
     expect(upstream.calls.filter((call) => call.includes('/v2'))).toEqual([]);
   });
 
@@ -883,7 +959,7 @@ describe('change destination (POST /admin/tokens/:id/destination)', () => {
     });
     expect(failed.status).toBe(422);
     const html = await failed.text();
-    expect(html).toMatch(/<details id="destination-edit" open="">/);
+    expect(html).toMatch(/<details[^>]*id="destination-edit"[^>]*open=""/);
     expect(html).toContain('value="https://api.openai.com/v2"');
     expect(html).not.toContain(BAD_SECRET);
     const draft = /name="credential_draft" value="([^"]+)"/.exec(html)?.[1] ?? '';
@@ -939,7 +1015,9 @@ describe('test, toggle, delete', () => {
     const res = await adminPost(app, admin, `/admin/tokens/${id}/test`);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toMatch(/<div class="check-result passed" role="status">/);
+    expect(html).toMatch(
+      /<div class="callout ok" role="status">[\s\S]*?Check passed \(HTTP 200\)\./,
+    );
     expect(await auditActions()).toEqual(['service.create', 'service.credential.test']);
   });
 
@@ -1019,11 +1097,32 @@ describe('review: forms and notices', () => {
   it('puts a CSRF token in every POST form of the token page', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
+    // test, rotate, disable, delete (+ the account menu export), and the one edit form that
+    // `?open=` draws: destination or details
+    for (const open of ['destination', 'details']) {
+      const html = await (await adminGet(app, admin, `/admin/tokens/${id}?open=${open}`)).text();
+      const forms = html.match(/<form\b[^>]*\bmethod="post"[\s\S]*?<\/form>/g) ?? [];
+      expect(forms.length).toBeGreaterThanOrEqual(5);
+      expect(html).toContain(
+        `action="/admin/tokens/${id}${open === 'details' ? '' : '/destination'}"`,
+      );
+      for (const form of forms) expect(form).toContain(`name="_csrf" value="${admin.csrfToken}"`);
+    }
+  });
+
+  it('draws the destination and details forms only when their header button opens them', async () => {
+    const admin = await sessionFor('admin');
+    const id = await createOpenAi(admin);
     const html = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
-    const forms = html.match(/<form method="post"[\s\S]*?<\/form>/g) ?? [];
-    // test, rotate, destination, details, disable, delete (+ the footer export)
-    expect(forms.length).toBeGreaterThanOrEqual(6);
-    for (const form of forms) expect(form).toContain(`name="_csrf" value="${admin.csrfToken}"`);
+    expect(html).toContain(`href="/admin/tokens/${id}?open=destination#destination"`);
+    expect(html).toContain(`href="/admin/tokens/${id}?open=details#details"`);
+    expect(html).not.toContain(`action="/admin/tokens/${id}/destination"`);
+    expect(html).not.toContain('id="destination-edit"');
+    expect(html).not.toMatch(/<details[^>]*id="details"/);
+    const open = await (await adminGet(app, admin, `/admin/tokens/${id}?open=details`)).text();
+    expect(open).toMatch(/<details[^>]*id="details"[^>]*open=""/);
+    expect(open).not.toContain(`href="/admin/tokens/${id}?open=details#details"`);
+    expect(open).toContain(`href="/admin/tokens/${id}?open=destination#destination"`);
   });
 
   it('refuses a POST without the CSRF token and writes nothing', async () => {
@@ -1053,7 +1152,7 @@ describe('review: forms and notices', () => {
       ).text();
       expect(html).not.toContain('pwned');
       expect(html).not.toContain('<i>x</i>');
-      expect(html).not.toContain('class="notice"');
+      expect(html).not.toMatch(/class="[^"]*\bnotice\b/);
     }
   });
 });

@@ -38,6 +38,22 @@ describe('CheckPresets', () => {
     );
   });
 
+  it('marks the first enabled preset invalid, the ErrorSummary link target', () => {
+    const options = [
+      { value: 'a', title: 'A', disabled: true },
+      { value: 'b', title: 'B' },
+      { value: 'c', title: 'C' },
+    ];
+    const html = render(<CheckPresets id="g" name="g" options={options} invalid />);
+    expect(html).toContain(
+      '<input type="checkbox" id="g-2" name="g" value="b" aria-invalid="true"/>',
+    );
+    expect(html.match(/aria-invalid/g)).toHaveLength(1);
+    expect(render(<CheckPresets id="g" name="g" options={options} />)).not.toContain(
+      'aria-invalid',
+    );
+  });
+
   it('escapes the calls', () => {
     expect(
       render(<CheckPresets name="o" options={[{ value: 'a', title: 'A', code: '<x>' }]} />),

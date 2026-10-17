@@ -50,7 +50,30 @@ describe('LogoStack', () => {
         </LogoStack>,
       ),
     ).toBe(
-      '<span class="lstack x"><span class="tiles" aria-hidden="true"><span class="logo lg-github">GH</span><span class="logo lg-gitlab">GL</span></span>2 consumers</span>',
+      '<span class="lstack x"><span class="tiles" aria-hidden="true"><span class="logo sm lg-github" aria-hidden="true">GH</span><span class="logo sm lg-gitlab" aria-hidden="true">GL</span></span>2 consumers</span>',
+    );
+  });
+
+  it('draws LogoSpec tiles: other letters and a disabled tile', () => {
+    expect(
+      render(
+        <LogoStack
+          brands={[
+            { brand: 'custom', text: 'AC' },
+            { brand: 'slack', disabled: true },
+          ]}
+        >
+          2 tokens
+        </LogoStack>,
+      ),
+    ).toBe(
+      '<span class="lstack"><span class="tiles" aria-hidden="true"><span class="logo sm lg-custom" aria-hidden="true">AC</span><span class="logo sm lg-slack dis" aria-hidden="true">S</span></span>2 tokens</span>',
+    );
+  });
+
+  it('is decorative without a count', () => {
+    expect(render(<LogoStack brands={['github', 'gitlab']} />)).toBe(
+      '<span class="lstack" aria-hidden="true"><span class="tiles"><span class="logo sm lg-github" aria-hidden="true">GH</span><span class="logo sm lg-gitlab" aria-hidden="true">GL</span></span></span>',
     );
   });
 });

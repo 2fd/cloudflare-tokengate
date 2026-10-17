@@ -111,7 +111,7 @@ describe('request log with records from the proxy', () => {
     expect(requestLinks(html)).toEqual([noToken.id, noGrant.id, allowed.id]);
     expect(html).toContain('acme/app');
     expect(html).toContain('no_matching_grant');
-    expect(html).toContain('no consumer access allows this call');
+    expect(html).toContain('No consumer access allows this call');
     expect(html).toContain('unverified token');
   });
 
@@ -222,13 +222,60 @@ describe('request log with records from the proxy', () => {
     expect(html).toContain('1 enabled access checked.');
   });
 
+  it('lays the detail out as a runbook: where the call stopped, the check, what to do', async () => {
+    const html = await (
+      await adminGet(fixture.app, ownerSession, `/admin/requests/${noGrant.id}`)
+    ).text();
+    expect(html).toContain('<ol class="trace" aria-label="Where the call stopped">');
+    expect(html).toMatch(
+      /<li class="tstep fail"><span class="s"><span aria-hidden="true">✕ <\/span>Failed, stopped here<\/span><span class="v">Access matched<\/span>/,
+    );
+    expect(html).toMatch(/<h2 id="recheck-h"><span class="fstep-n" aria-hidden="true">2<\/span>/);
+    expect(html).toContain('Still denied now');
+    // One primary, last in the header; the What to do buttons are secondary.
+    expect(html.match(/class="btn primary"/g)).toHaveLength(1);
+    expect(html).toContain(
+      `<a class="btn primary" href="/admin/access/new?from_request=${noGrant.id}">Give access from this request</a></div>`,
+    );
+    expect(html).toContain('<p class="prefill"><span class="vh">Filled in: </span>');
+    // Retention: when the record goes away.
+    expect(html).toContain('(14 days, <a href="/admin/retention">Data retention</a>)');
+    // An unverified record has no re-evaluation tray: What happened, then What to do.
+    const unverified = await (
+      await adminGet(fixture.app, ownerSession, `/admin/requests/${noToken.id}`)
+    ).text();
+    expect(unverified).not.toContain('id="recheck"');
+    expect(unverified).toMatch(
+      /<h2 id="next-h"><span class="fstep-n" aria-hidden="true">2<\/span>/,
+    );
+  });
+
+  it('offers the access form from the newest row when one caller is behind every denial', async () => {
+    expect((await fixture.call('/other', { method: 'POST' })).status).toBe(403);
+    await fixture.app.settle();
+    const records = await fixture.records();
+    const newest = records
+      .filter((r) => r.reason === 'no_matching_grant')
+      .sort((a, b) => (a.id < b.id ? 1 : -1))[0];
+    const query = `/admin/requests?outcome=denied&token=${fixture.serviceId}`;
+    const owner = await (await adminGet(fixture.app, ownerSession, query)).text();
+    expect(owner).toContain('All 2 on this page come from one caller: acme/app');
+    expect(owner).toContain(
+      `<a class="btn primary" href="/admin/access/new?from_request=${newest?.id}">Give access from the latest request</a>`,
+    );
+    const view = await (await adminGet(fixture.app, viewerSession, query)).text();
+    expect(view).not.toContain('from_request=');
+  });
+
   it('explains the reason and what to do without offering viewers the access form', async () => {
     const html = await (
       await adminGet(fixture.app, viewerSession, `/admin/requests/${noGrant.id}`)
     ).text();
-    expect(html).toContain('<h2 id="next-h">What to do</h2>');
+    expect(html).toMatch(
+      /<h2 id="next-h"><span class="fstep-n" aria-hidden="true">\d<\/span>What to do<\/h2>/,
+    );
     expect(html).toContain('An access manager, admin or owner can give access from this request.');
-    expect(html).toContain('Ask an access manager to give access from this request');
+    expect(html).toContain('Only access managers can give access from this request');
     expect(html).not.toContain('/admin/access/new');
   });
 
@@ -267,7 +314,8 @@ describe('request log pages without proxy traffic', () => {
 
     const second = await (await adminGet(a, session, olderUrl)).text();
     expect(requestLinks(second)).toEqual(newest.slice(50).map((r) => r.id));
-    expect(second).not.toContain('Older entries');
+    // The last page has no Older link (the pager shows the word as plain faint text).
+    expect(second).not.toMatch(/<a [^>]*rel="next"/);
     expect(second).toContain('Newest entries');
     const newer = second.match(/href="(\/admin\/requests\?[^"]*after=[^"]*)"/)?.[1];
     expect(newer).toBeDefined();
@@ -284,16 +332,17 @@ describe('request log pages without proxy traffic', () => {
       const res = await adminGet(a, session, `/admin/requests?${query}`);
       expect(res.status).toBe(400);
       const html = await res.text();
-      expect(html).toContain('class="error-summary"');
+      expect(html).toContain('class="callout bad errsum"');
       expect(requestLinks(html)).toEqual([record.id]);
       expect(html).not.toContain('<script>');
     }
     const html = await (
       await adminGet(a, session, '/admin/requests?token=svc_%3Cscript%3E')
     ).text();
-    expect(html).toMatch(
-      /<select id="f-token" name="token" aria-describedby="f-token-hint f-token-error" aria-invalid="true">/,
-    );
+    // The summary links the "+ Token" menu, rendered open on a list of valid tokens, and the
+    // error follows the menus in the filter bar.
+    expect(html).toContain('<details class="fadd" id="f-token" open="">');
+    expect(html).toContain('<p class="field-error" id="f-token-error">');
     expect(html).toContain('<a href="#f-token">Choose a token from the list.</a>');
   });
 

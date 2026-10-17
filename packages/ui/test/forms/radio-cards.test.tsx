@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FieldSet, RadioCards, Reveal } from '../../src';
+import { FieldSet, firstChoiceId, RadioCards, Reveal } from '../../src';
 import { render } from '../render';
 
 const contexts = [
@@ -75,6 +75,24 @@ describe('RadioCards', () => {
     expect(
       render(<RadioCards id="own" name="n" options={[{ value: 'a', title: 'A' }]} />),
     ).toContain('id="own-1"');
+  });
+
+  it('marks the first enabled radio invalid, the ErrorSummary link target', () => {
+    const options = [
+      { value: 'a', title: 'A', disabled: true },
+      { value: 'b', title: 'B' },
+      { value: 'c', title: 'C' },
+    ];
+    const html = render(
+      <FieldSet id="g" legend="G" error="Choose one.">
+        <RadioCards name="g" options={options} invalid />
+      </FieldSet>,
+    );
+    expect(firstChoiceId('g', options)).toBe('g-2');
+    expect(html).toContain('<input type="radio" id="g-2" name="g" value="b" aria-invalid="true"/>');
+    expect(html.match(/aria-invalid/g)).toHaveLength(1);
+    expect(render(<RadioCards name="g" id="g" options={options} />)).not.toContain('aria-invalid');
+    expect(firstChoiceId('g', [{ value: 'x', o: 4 }])).toBe('g-4');
   });
 
   it('escapes titles and descriptions', () => {

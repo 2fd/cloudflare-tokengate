@@ -25,7 +25,7 @@ export type LogoBrand = keyof typeof LOGO_BRANDS;
 /** Tile sizes: `xs` 18, `sm` 24, `md` 32 (default), `lg` 40. */
 export type LogoSize = 'xs' | 'sm' | 'md' | 'lg';
 
-/** The tile content of a brand: its letters, or the icon of the set (internal: Logo, LogoStack). */
+/** The tile content of a brand: its letters, or the icon of the set (internal: Logo). */
 export function logoContent(brand: LogoBrand): Child {
   const entry: { letters?: string; icon?: 'token' } = LOGO_BRANDS[brand];
   return entry.icon ? <svg viewBox="0 0 24 24">{iconShapes(entry.icon)}</svg> : entry.letters;

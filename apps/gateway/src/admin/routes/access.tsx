@@ -1,12 +1,40 @@
-// Admin pages: consumer access (grants). The matrix and list show which consumers can use which
-// tokens; the structured form builds the conditions and rules (consumer-access.ts) and every save
-// goes through ops/grants.ts (validateGrant: anchors I-AUTHZ-2, tenant pin containment, event
-// guard I-AUTHZ-3; audit I-AUDIT-1). Risks are accepted by the selection that causes them, or by
-// ticking a box bound to a digest of exactly the risks shown (A7.7). Autocomplete reads only
-// control-plane data; a request record prefills the form only on request, verified (I-LOG-2).
+// Admin pages: consumer access (grants). The connections map, the matrix and the access list show
+// which consumers can use which tokens; the structured form builds the conditions and rules
+// (consumer-access.ts) and every save goes through ops/grants.ts (validateGrant: anchors
+// I-AUTHZ-2, tenant pin containment, event guard I-AUTHZ-3; audit I-AUDIT-1). Risks are accepted
+// by the selection that causes them, or by ticking a box bound to a digest of exactly the risks
+// shown (A7.7). Autocomplete reads only control-plane data; a request record prefills the form
+// only on request, verified (I-LOG-2).
+import {
+  ActiveFilters,
+  AddFilter,
+  ArrowRow,
+  Button,
+  Callout,
+  Cell,
+  ConnectionsMap,
+  EmptyState as UiEmptyState,
+  Entity,
+  Filters,
+  FilterSearch,
+  formatTime,
+  GroupRow,
+  Legend,
+  Mono,
+  PageHeader,
+  Panel,
+  QuickLinks,
+  Row,
+  RowHeader,
+  Segmented,
+  Table,
+  Tray,
+  ZeroState,
+} from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
 import type { App } from '../../app';
 import { sha256Hex } from '../../crypto/hash';
+import { listAuditEvents } from '../../db/audit';
 import { labelFor, parseIdWithLabel } from '../../db/claim-labels';
 import { getGrant } from '../../db/grants';
 import { getRequest } from '../../db/requests';
@@ -29,6 +57,7 @@ import {
   type WarningCode,
   type WarningDetail,
 } from '../../policy/validate';
+import { loadTokenTraffic, type TokenTraffic } from '../access-traffic';
 import { type AccessEdge, type Connections, loadConnections } from '../connections';
 import {
   accessFormFromGrant,
@@ -95,11 +124,26 @@ import {
   type AccessFormModel,
   type ConsumerBranch,
   type ConsumerChoice,
+  type FormEntry,
   type NewConsumerBranch,
+  type RequestFacts,
   type TokenBranch,
   type TokenChoice,
 } from '../views/access-form';
-import { AccessPage, type AccessPageModel } from '../views/access-page';
+import { groupedRest, mapModel } from '../views/access-map';
+import {
+  AccessHeader,
+  AccessPage,
+  type AccessPageModel,
+  type HistoryEntry,
+} from '../views/access-page';
+import {
+  accessesText,
+  consumerLogo,
+  operationsText,
+  PathName,
+  tokenLogo,
+} from '../views/access-visuals';
 import {
   blankConsumerForm,
   CONSUMER_TYPES,
@@ -110,34 +154,37 @@ import {
 import {
   ActionButton,
   AskSomeone,
-  DataTable,
-  EmptyState,
-  Field,
-  FilterChips,
   NotFound,
-  Select,
-  StatusBadge,
+  notFoundText,
   type Suggestion,
-  Tabs,
-  Time,
 } from '../views/components';
-import { relativeTime } from '../views/format';
+import { formatCount, lastUsedTime, relativeTime } from '../views/format';
+import { LearnMore } from '../views/header';
 import {
   anchorsOf,
+  AccessMatrix,
   buildMatrix,
   credentialText,
-  Matrix,
   MATRIX_MAX_COLUMNS,
   MATRIX_MAX_ROWS,
 } from '../views/matrix';
-import { accessFixable } from '../views/reasons';
-import { consumerFailureErrors } from './consumers';
+import { accessFixable, reasonText } from '../views/reasons';
+import { AccessStatus, consumerFailureErrors } from './consumers';
 
-const HOUR_MS = 3_600_000;
-const STATUS_FILTERS = ['active', 'inactive', 'expiring', 'unused', 'risk'] as const;
+const STATUS_FILTERS = ['active', 'inactive', 'expiring', 'expired', 'unused', 'risk'] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
+const STATUS_WORDS: Readonly<Record<StatusFilter, string>> = {
+  active: 'Active',
+  inactive: 'Inactive',
+  expiring: 'Expiring in 14 days',
+  expired: 'Expired',
+  unused: 'Unused 30 days',
+  risk: 'Risk accepted',
+};
 /** At most this many cards; more choices become a select (A7.1, Choice). */
 const MAX_CARDS = 6;
+/** Rows per side of the connections map (its scale rule). */
+const MAP_ROWS = 7;
 
 export function registerAccessRoutes(app: App): void {
   app.get('/admin/access', listPage);
@@ -178,6 +225,7 @@ const NOTICES: NoticeTable<NoticeContext & AccessNoticeData> = {
             action: `${paths.accessItem(grant.id)}/toggle`,
             fields: { enabled: '1', _return: 'detail' },
             label: 'Enable again',
+            srSuffix: grant.name,
           },
         }
       : {}),
@@ -217,61 +265,60 @@ function notice(c: AdminContext, data: AccessNoticeData) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// List: matrix and list views
+// The connections view: Map (default) and Matrix
+
+interface ListQuery {
+  view: 'map' | 'matrix';
+  consumerId: string;
+  tokenId: string;
+  repository: string;
+  status: StatusFilter | '';
+  focusId: string;
+  rest: { consumers: boolean; tokens: boolean };
+}
 
 async function listPage(c: AdminContext) {
   const deps = c.get('deps');
   const connections = withAnyRefFlags(await loadConnections(deps));
   const query = (name: string) => c.req.query(name) ?? '';
   const notes: string[] = [];
+  const known = (id: string) => connections.consumers.some((consumer) => consumer.id === id);
   let consumerId = query('consumer');
-  if (consumerId && !connections.consumers.some((consumer) => consumer.id === consumerId)) {
+  if (consumerId && !known(consumerId)) {
     notes.push('That consumer no longer exists.');
     consumerId = '';
+  }
+  let focusId = query('focus');
+  if (focusId && !known(focusId)) {
+    if (!notes.includes('That consumer no longer exists.')) {
+      notes.push('That consumer no longer exists.');
+    }
+    focusId = '';
   }
   let tokenId = query('token');
   if (tokenId && !connections.tokens.some((token) => token.id === tokenId)) {
     notes.push('That token no longer exists.');
     tokenId = '';
   }
-  const repository = query('repository').trim().slice(0, 200);
-  const status = (STATUS_FILTERS as readonly string[]).includes(query('status'))
-    ? (query('status') as StatusFilter)
-    : '';
-  const filtered = filterAccesses(connections, { consumerId, tokenId, repository, status });
-  const model = buildMatrix({
-    ...connections,
-    consumers: consumerId
-      ? connections.consumers.filter((consumer) => consumer.id === consumerId)
-      : repository || status
-        ? connections.consumers.filter((consumer) =>
-            filtered.some((edge) => edge.grant.caller_provider_id === consumer.id),
-          )
-        : connections.consumers,
-    tokens: tokenId
-      ? connections.tokens.filter((token) => token.id === tokenId)
-      : connections.tokens,
-    accesses: filtered,
-  });
-  const tooBig = model.columns.length > MATRIX_MAX_COLUMNS || model.rowCount > MATRIX_MAX_ROWS;
-  const view =
-    query('view') === 'list' || (query('view') !== 'matrix' && tooBig) ? 'list' : 'matrix';
-  const anyFilter = consumerId !== '' || tokenId !== '' || repository !== '' || status !== '';
-  const base = {
-    consumer: consumerId || undefined,
-    token: tokenId || undefined,
-    repository: repository || undefined,
-    status: status || undefined,
+  const q: ListQuery = {
+    view: query('view') === 'matrix' ? 'matrix' : 'map',
+    consumerId,
+    tokenId,
+    repository: query('repository').trim().slice(0, 200),
+    status: (STATUS_FILTERS as readonly string[]).includes(query('status'))
+      ? (query('status') as StatusFilter)
+      : '',
+    focusId,
+    rest: { consumers: query('consumers') === 'rest', tokens: query('tokens') === 'rest' },
   };
-  const counts = {
-    inactive: connections.accesses.filter((edge) => edge.status === 'inactive').length,
-    expiring: connections.accesses.filter((edge) => edge.status === 'expiring').length,
-    unused: connections.accesses.filter((edge) => edge.flags.some((f) => f.status === 'unused'))
-      .length,
-    risk: connections.accesses.filter((edge) =>
-      edge.flags.some((f) => f.status === 'risk_accepted'),
-    ).length,
-  };
+  // Both views order the tokens by their 24-hour requests (the map draws them too).
+  const traffic: TokenTraffic = await loadTokenTraffic(deps);
+  const filtered = filterAccesses(connections, q);
+  const anyFilter =
+    q.consumerId !== '' || q.tokenId !== '' || q.repository !== '' || q.status !== '';
+  const consumer = connections.consumers.find((item) => item.id === q.consumerId) ?? null;
+  const token = connections.tokens.find((item) => item.id === q.tokenId) ?? null;
+  const total = connections.accesses.length;
   return renderPage(
     c,
     {
@@ -279,169 +326,257 @@ async function listPage(c: AdminContext) {
       section: 'consumers',
       subsection: 'access',
       notice: notice(c, { grant: null, consumer: null }),
+      header: (ctx) => (
+        <PageHeader
+          title="Consumer access"
+          count={anyFilter ? `${filtered.length} of ${total}` : total}
+          description={
+            <ListDescription
+              q={q}
+              token={token}
+              filtered={filtered}
+              traffic={traffic}
+              canWrite={ctx.can('access:write')}
+            />
+          }
+          actions={
+            ctx.can('access:write') && connections.tokens.length > 0 ? (
+              <Button
+                variant="primary"
+                plus
+                href={paths.accessNew({
+                  consumer:
+                    q.consumerId || (connections.consumers.length === 0 ? 'new' : undefined),
+                  token: q.tokenId || undefined,
+                })}
+              >
+                {token ? `Give a consumer access to ${token.name}` : 'Give a consumer access'}
+              </Button>
+            ) : undefined
+          }
+        >
+          {connections.tokens.length > 0 && connections.consumers.length > 0 ? (
+            <ListFilters connections={connections} q={q} consumer={consumer} token={token} />
+          ) : null}
+        </PageHeader>
+      ),
     },
     (ctx) => (
       <>
-        <p>
-          Which service consumers can use which service tokens, and in which jobs.{' '}
-          <a href={paths.docs('concepts.md#consumer-access')}>What is consumer access?</a>
-        </p>
         {notes.map((note) => (
-          <p class="moved">{note}</p>
+          <Callout title={note} />
         ))}
-        <Tabs
-          label="Consumer access views"
-          items={[
-            { key: 'matrix', href: paths.access({ ...base, view: 'matrix' }), label: 'Matrix' },
-            { key: 'list', href: paths.access({ ...base, view: 'list' }), label: 'List' },
-          ]}
-          current={view}
+        <ListBody
+          connections={connections}
+          q={q}
+          filtered={filtered}
+          anyFilter={anyFilter}
+          traffic={traffic}
+          ctx={ctx}
         />
-        {connections.tokens.length === 0 ? (
-          <EmptyState
-            action={
-              ctx.can('tokens:write') ? (
-                <a class="button" href={paths.tokenNew()}>
-                  Add a service token
-                </a>
-              ) : (
-                <AskSomeone permission="tokens:write" ctx={ctx} verb="add one" />
-              )
-            }
-          >
-            A token manager must add a service token first.
-          </EmptyState>
-        ) : (
-          <>
-            {ctx.can('access:write') ? (
-              <p class="actions">
-                <a
-                  class="button"
-                  href={paths.accessNew({
-                    consumer:
-                      consumerId || (connections.consumers.length === 0 ? 'new' : undefined),
-                    token: tokenId || undefined,
-                  })}
-                >
-                  Give a consumer access
-                </a>
-              </p>
-            ) : null}
-            {connections.consumers.length === 0 ? (
-              <EmptyState>
-                No consumer yet.{' '}
-                {ctx.can('access:write') ? (
-                  <>Give a consumer access: the form adds the consumer in the same step.</>
-                ) : (
-                  <AskSomeone permission="access:write" ctx={ctx} verb="add one" />
-                )}
-              </EmptyState>
-            ) : (
-              <>
-                <ul class="quick-links">
-                  <li>
-                    <a href={paths.access({ view, status: 'inactive' })}>
-                      Inactive ({counts.inactive})
-                    </a>
-                  </li>
-                  <li>
-                    <a href={paths.access({ view, status: 'expiring' })}>
-                      Expiring in 14 days ({counts.expiring})
-                    </a>
-                  </li>
-                  <li>
-                    <a href={paths.access({ view, status: 'unused' })}>
-                      Unused 30 days ({counts.unused})
-                    </a>
-                  </li>
-                  <li>
-                    <a href={paths.access({ view, status: 'risk' })}>
-                      Risk accepted ({counts.risk})
-                    </a>
-                  </li>
-                </ul>
-                <FilterForm
-                  connections={connections}
-                  view={view}
-                  consumerId={consumerId}
-                  tokenId={tokenId}
-                  repository={repository}
-                  status={status}
-                />
-                <FilterChips
-                  items={[
-                    ...(consumerId
-                      ? [
-                          {
-                            label: `Consumer: ${connections.consumers.find((x) => x.id === consumerId)?.name ?? ''}`,
-                            removeHref: paths.access({ ...base, view, consumer: undefined }),
-                          },
-                        ]
-                      : []),
-                    ...(tokenId
-                      ? [
-                          {
-                            label: `Token: ${connections.tokens.find((x) => x.id === tokenId)?.name ?? ''}`,
-                            removeHref: paths.access({ ...base, view, token: undefined }),
-                          },
-                        ]
-                      : []),
-                    ...(repository
-                      ? [
-                          {
-                            label: `Repository: ${repository}`,
-                            removeHref: paths.access({ ...base, view, repository: undefined }),
-                          },
-                        ]
-                      : []),
-                    ...(status
-                      ? [
-                          {
-                            label: `Status: ${status}`,
-                            removeHref: paths.access({ ...base, view, status: undefined }),
-                          },
-                        ]
-                      : []),
-                  ]}
-                  clearHref={paths.access({ view })}
-                />
-                {tooBig && view === 'list' && query('view') !== 'list' ? (
-                  <p class="moved">Too many to show as a matrix; filter by consumer or token.</p>
-                ) : null}
-                {anyFilter && filtered.length === 0 ? (
-                  <EmptyState>
-                    No consumer access matches these filters.{' '}
-                    <a href={paths.access({ view })}>Clear filters</a>
-                  </EmptyState>
-                ) : (
-                  <>
-                    {connections.accesses.length === 0 ? (
-                      <p>No consumer can use any token yet.</p>
-                    ) : null}
-                    {view === 'matrix' ? (
-                      <Matrix model={model} connections={connections} ctx={ctx} />
-                    ) : (
-                      <AccessList edges={filtered} connections={connections} ctx={ctx} />
-                    )}
-                  </>
-                )}
-              </>
-            )}
-          </>
-        )}
       </>
     ),
   );
 }
 
-function filterAccesses(
-  connections: Connections,
-  filter: { consumerId: string; tokenId: string; repository: string; status: StatusFilter | '' },
-): AccessEdge[] {
-  const needle = filter.repository.toLowerCase();
+function ListDescription(props: {
+  q: ListQuery;
+  token: Service | null;
+  filtered: readonly AccessEdge[];
+  traffic: TokenTraffic;
+  canWrite: boolean;
+}) {
+  const { q, token, filtered, traffic } = props;
+  if (token) {
+    const consumers = new Set(filtered.map((edge) => edge.grant.caller_provider_id)).size;
+    const requests = traffic.byToken.get(token.id)?.requests ?? 0;
+    return (
+      <>
+        <b>
+          {consumers} {consumers === 1 ? 'consumer' : 'consumers'}
+        </b>{' '}
+        can use <a href={paths.token(token.id)}>{token.name}</a> through{' '}
+        <b>{accessesText(filtered.length)}</b>.
+        {traffic.available ? ` ${formatCount(requests)} requests in the last 24 hours.` : null}
+      </>
+    );
+  }
+  return (
+    <>
+      Which consumer jobs can use which service token, and for what.
+      {q.view === 'matrix' && props.canWrite
+        ? ' Select + in a row to give the same jobs another token.'
+        : null}
+      <LearnMore path="concepts.md#consumer-access" about="consumer access" />
+    </>
+  );
+}
+
+/** The access list query without one key (for the active filter chips and quick links). */
+function listHref(q: ListQuery, change: Partial<Parameters<typeof paths.access>[0]> = {}) {
+  return paths.access({
+    view: q.view === 'matrix' ? 'matrix' : undefined,
+    consumer: q.consumerId || undefined,
+    token: q.tokenId || undefined,
+    repository: q.repository || undefined,
+    status: q.status || undefined,
+    focus: q.focusId || undefined,
+    ...change,
+  });
+}
+
+function ListFilters(props: {
+  connections: Connections;
+  q: ListQuery;
+  consumer: CallerProvider | null;
+  token: Service | null;
+}) {
+  const { connections, q } = props;
+  const all = connections.accesses;
+  const count = (test: (edge: AccessEdge) => boolean) => all.filter(test).length;
+  const statusCount: Record<StatusFilter, number> = {
+    active: count((edge) => edge.status === 'active'),
+    inactive: count((edge) => edge.status === 'inactive'),
+    expiring: count((edge) => edge.status === 'expiring'),
+    expired: count((edge) => edge.status === 'expired'),
+    unused: count((edge) => edge.flags.some((f) => f.status === 'unused')),
+    risk: count((edge) => edge.flags.some((f) => f.status === 'risk_accepted')),
+  };
+  const repositories = [
+    ...new Set(
+      connections.labels
+        .filter((label) => label.claim === 'repository_id' || label.claim === 'project_id')
+        .map((label) => `${label.label} (${label.value})`),
+    ),
+  ];
+  const statusOption = (status: StatusFilter) => ({
+    href: listHref(q, { status }),
+    label: STATUS_WORDS[status],
+    count: statusCount[status],
+  });
+  const quick: Array<{ status: StatusFilter; glyph: string; tone?: 'warn' | 'bad' }> = [
+    { status: 'inactive', glyph: '⏸' },
+    { status: 'expiring', glyph: '⌛', tone: 'warn' },
+    { status: 'expired', glyph: '✕', tone: 'bad' },
+    { status: 'risk', glyph: '⚠', tone: 'warn' },
+    { status: 'unused', glyph: '' },
+  ];
+  return (
+    <>
+      <Filters
+        label="Filter consumer access"
+        action={paths.access()}
+        hidden={Object.fromEntries(
+          Object.entries({
+            view: q.view === 'matrix' ? 'matrix' : '',
+            consumer: q.consumerId,
+            token: q.tokenId,
+            status: q.status,
+            focus: q.focusId,
+          }).filter(([, value]) => value !== ''),
+        )}
+        submitLabel="Apply"
+      >
+        <FilterSearch
+          id="f-access-repository"
+          label="Repository"
+          name="repository"
+          value={q.repository}
+          placeholder="acme/api (89012345)"
+          maxlength={200}
+          suggestions={repositories}
+        />
+        {props.consumer ? null : (
+          <AddFilter
+            label="Consumer"
+            options={connections.consumers.map((consumer) => ({
+              href: listHref(q, { consumer: consumer.id }),
+              label: consumer.name,
+              logo: consumerLogo(consumer),
+              count: count((edge) => edge.grant.caller_provider_id === consumer.id),
+            }))}
+            srSuffix="accesses"
+          />
+        )}
+        {props.token ? null : (
+          <AddFilter
+            label="Token"
+            options={connections.tokens.map((token) => ({
+              href: listHref(q, { token: token.id }),
+              label: token.name,
+              logo: tokenLogo(token),
+              slug: token.slug,
+              count: count((edge) => edge.grant.service_id === token.id),
+            }))}
+            srSuffix="accesses"
+          />
+        )}
+        <AddFilter
+          label="Status"
+          options={[statusOption('active')]}
+          extra={(['inactive', 'expiring', 'expired', 'risk', 'unused'] as const).map(statusOption)}
+          srSuffix="accesses"
+        />
+      </Filters>
+      <ActiveFilters
+        filters={[
+          ...(props.consumer
+            ? [
+                {
+                  label: `Consumer: ${props.consumer.name}`,
+                  href: listHref(q, { consumer: undefined }),
+                },
+              ]
+            : []),
+          ...(props.token
+            ? [{ label: `Token: ${props.token.name}`, href: listHref(q, { token: undefined }) }]
+            : []),
+          ...(q.repository
+            ? [
+                {
+                  label: `Repository: ${q.repository}`,
+                  href: listHref(q, { repository: undefined }),
+                },
+              ]
+            : []),
+          ...(q.status
+            ? [
+                {
+                  label: `Status: ${STATUS_WORDS[q.status]}`,
+                  href: listHref(q, { status: undefined }),
+                },
+              ]
+            : []),
+        ]}
+        clearHref={paths.access({ view: q.view === 'matrix' ? 'matrix' : undefined })}
+        clearLabel="Clear filters"
+      />
+      {props.consumer || props.token || q.repository ? null : (
+        <QuickLinks
+          label="Accesses that need attention"
+          lead="Needs attention"
+          links={quick.map((link) => ({
+            label: STATUS_WORDS[link.status],
+            glyph: link.glyph || undefined,
+            tone: link.tone,
+            count: statusCount[link.status],
+            href: paths.access({
+              view: q.view === 'matrix' ? 'matrix' : undefined,
+              status: link.status,
+            }),
+            current: q.status === link.status,
+          }))}
+        />
+      )}
+    </>
+  );
+}
+
+function filterAccesses(connections: Connections, q: ListQuery): AccessEdge[] {
+  const needle = q.repository.toLowerCase();
   return connections.accesses.filter((edge) => {
-    if (filter.consumerId && edge.grant.caller_provider_id !== filter.consumerId) return false;
-    if (filter.tokenId && edge.grant.service_id !== filter.tokenId) return false;
+    if (q.consumerId && edge.grant.caller_provider_id !== q.consumerId) return false;
+    if (q.tokenId && edge.grant.service_id !== q.tokenId) return false;
     if (needle) {
       const labels = connections.labels.filter(
         (l) => l.caller_provider_id === edge.grant.caller_provider_id,
@@ -449,17 +584,21 @@ function filterAccesses(
       const anchors = anchorsOf(edge, labels);
       const hit = anchors.some(
         (anchor) =>
-          anchor.repositoryId === filter.repository || anchor.header.toLowerCase().includes(needle),
+          anchor.repositoryId === q.repository ||
+          anchor.header.toLowerCase().includes(needle) ||
+          `${anchor.subject} (${anchor.repositoryId ?? ''})`.toLowerCase() === needle,
       );
       if (!hit) return false;
     }
-    switch (filter.status) {
+    switch (q.status) {
       case 'active':
         return edge.status === 'active';
       case 'inactive':
         return edge.status === 'inactive';
       case 'expiring':
         return edge.status === 'expiring';
+      case 'expired':
+        return edge.status === 'expired';
       case 'unused':
         return edge.flags.some((f) => f.status === 'unused');
       case 'risk':
@@ -470,174 +609,460 @@ function filterAccesses(
   });
 }
 
-function FilterForm(props: {
+function ListBody(props: {
   connections: Connections;
-  view: string;
-  consumerId: string;
-  tokenId: string;
-  repository: string;
-  status: string;
+  q: ListQuery;
+  filtered: AccessEdge[];
+  anyFilter: boolean;
+  traffic: TokenTraffic;
+  ctx: ViewContext;
 }) {
-  const repositories = props.connections.labels
-    .filter((label) => label.claim === 'repository_id' || label.claim === 'project_id')
-    .map((label) => ({ value: label.label, label: `${label.label} (${label.value})` }));
+  const { connections, q, filtered, ctx } = props;
+  const canWrite = ctx.can('access:write');
+  if (connections.tokens.length === 0) {
+    return (
+      <UiEmptyState
+        headingLevel={2}
+        title="A token manager must add a service token first."
+        description="Consumer access lets the jobs of a service consumer use a service token."
+        actions={
+          ctx.can('tokens:write') ? (
+            <Button variant="primary" plus href={paths.tokenNew()}>
+              Add token
+            </Button>
+          ) : (
+            <AskSomeone permission="tokens:write" ctx={ctx} verb="add a service token" />
+          )
+        }
+      />
+    );
+  }
+  if (connections.consumers.length === 0) {
+    return (
+      <UiEmptyState
+        headingLevel={2}
+        title="No consumer yet."
+        description={
+          canWrite
+            ? 'Give a consumer access: the form adds the consumer in the same step.'
+            : undefined
+        }
+        actions={
+          canWrite ? undefined : (
+            <AskSomeone permission="access:write" ctx={ctx} verb="add a service consumer" />
+          )
+        }
+      />
+    );
+  }
+  const segmented = (current: 'map' | 'matrix') => (
+    <Segmented
+      label="View"
+      size="sm"
+      items={[
+        { label: 'Map', href: listHref(q, { view: undefined }), current: current === 'map' },
+        {
+          label: 'Matrix',
+          href: listHref(q, { view: 'matrix', focus: undefined }),
+          current: current === 'matrix',
+        },
+      ]}
+    />
+  );
+  if (q.view === 'matrix') {
+    return <MatrixView {...props} segmented={segmented('matrix')} />;
+  }
+  const token = connections.tokens.find((item) => item.id === q.tokenId) ?? null;
+  const focus = connections.consumers.find((item) => item.id === q.focusId) ?? null;
+  // Filtered to one token only: the map keeps every line and lights up that token's (focusToken).
+  const tokenFocus =
+    token !== null && !q.consumerId && !q.repository && !q.status && !focus ? token : null;
+  const model = mapModel(
+    connections,
+    tokenFocus ? connections.accesses : filtered,
+    props.traffic,
+    ctx.now,
+  );
+  const focusEdges = focus
+    ? connections.accesses.filter((edge) => edge.grant.caller_provider_id === focus.id)
+    : [];
   return (
-    <form
-      method="get"
-      action={paths.access()}
-      role="search"
-      aria-label="Filter consumer access"
-      class="filters"
-    >
-      <input type="hidden" name="view" value={props.view} />
-      <Select
-        name="consumer"
-        label="Consumer"
-        value={props.consumerId}
-        options={[
-          { value: '', label: 'All consumers' },
-          ...props.connections.consumers.map((consumer) => ({
-            value: consumer.id,
-            label: consumer.name,
-          })),
-        ]}
+    <>
+      <Tray
+        id="map"
+        title={token ? `Connections to ${token.name}` : 'Connections'}
+        description={
+          focus
+            ? `Focused on ${focus.name}: ${accessesText(focusEdges.length)} to ${new Set(focusEdges.map((e) => e.grant.service_id)).size} tokens. Everything else is dimmed.`
+            : token
+              ? tokenFocus
+                ? `Other connections are dimmed. Remove the filter to see all.`
+                : `Only the lines to ${token.name} are drawn. Remove the filter to see all.`
+              : `${connections.consumers.length} consumers can use ${new Set(connections.accesses.map((e) => e.grant.service_id)).size} tokens through ${accessesText(connections.accesses.length)}. Each line is one or more accesses; the token's second line says why a line needs attention.`
+        }
+        actions={segmented('map')}
+      >
+        {connections.accesses.length === 0 ? (
+          <Panel variant="pad">
+            <ZeroState>No consumer can use any token yet.</ZeroState>
+          </Panel>
+        ) : null}
+        <ConnectionsMap
+          id="cmap"
+          baseHref={paths.access()}
+          focus={focus?.id}
+          focusToken={tokenFocus?.id}
+          maxRows={MAP_ROWS}
+          focusLinks={3}
+          consumers={model.consumers}
+          tokens={model.tokens}
+          accesses={model.accesses}
+          footer={
+            props.traffic.available ? (
+              <>
+                Refused before a token was chosen:{' '}
+                <b class="t-bad">{formatCount(props.traffic.refused)}</b> ·{' '}
+                <a href={paths.requests({ token: 'none' })}>See them</a>
+              </>
+            ) : undefined
+          }
+        />
+      </Tray>
+      <AccessListTray
+        connections={connections}
+        edges={focus ? filtered.filter((e) => e.grant.caller_provider_id === focus.id) : filtered}
+        title={
+          focus ? `Accesses of ${focus.name}` : token ? `Accesses to ${token.name}` : 'All accesses'
+        }
+        description={
+          focus
+            ? 'The list follows the focus. Clear the focus to list all.'
+            : 'Busiest consumer first, then by repository. Disable stops an access at once; you can enable it again.'
+        }
+        anyFilter={props.anyFilter}
+        clearHref={paths.access()}
+        ctx={ctx}
       />
-      <Select
-        name="token"
-        label="Token"
-        value={props.tokenId}
-        options={[
-          { value: '', label: 'All tokens' },
-          ...props.connections.tokens.map((token) => ({ value: token.id, label: token.name })),
-        ]}
-      />
-      <Field
-        name="repository"
-        label="Repository"
-        type="search"
-        value={props.repository}
-        example="acme/api"
-        hint="Name or ID."
-        maxlength={200}
-        suggestions={[...new Map(repositories.map((r) => [r.value, r])).values()]}
-        autocomplete="off"
-        spellcheck={false}
-        autocapitalize="none"
-      />
-      <Select
-        name="status"
-        label="Status"
-        value={props.status}
-        options={[
-          { value: '', label: 'Any status' },
-          { value: 'active', label: 'Active' },
-          { value: 'inactive', label: 'Inactive' },
-          { value: 'expiring', label: 'Expiring in 14 days' },
-          { value: 'unused', label: 'Unused 30 days' },
-          { value: 'risk', label: 'Risk accepted' },
-        ]}
-      />
-      <button type="submit" class="secondary">
-        Apply
-      </button>
-    </form>
+    </>
   );
 }
 
-function AccessList(props: { edges: AccessEdge[]; connections: Connections; ctx: ViewContext }) {
-  const { ctx } = props;
+function MatrixView(props: {
+  connections: Connections;
+  q: ListQuery;
+  filtered: AccessEdge[];
+  anyFilter: boolean;
+  traffic: TokenTraffic;
+  ctx: ViewContext;
+  segmented: Child;
+}) {
+  const { connections, q, filtered, ctx } = props;
+  const canWrite = ctx.can('access:write');
+  // The nodes the map grouped as "+ N more": the same busiest-first rule as ConnectionsMap.
+  const count = (id: string) =>
+    connections.accesses.filter((edge) => edge.grant.caller_provider_id === id).length;
+  const restConsumers = q.rest.consumers
+    ? groupedRest(
+        [...connections.consumers].sort((a, b) => count(b.id) - count(a.id)),
+        MAP_ROWS,
+      )
+    : null;
+  const restTokens = q.rest.tokens
+    ? groupedRest(
+        [...connections.tokens].sort(
+          (a, b) =>
+            (props.traffic.byToken.get(b.id)?.requests ?? 0) -
+            (props.traffic.byToken.get(a.id)?.requests ?? 0),
+        ),
+        MAP_ROWS,
+      )
+    : null;
+  const edges = filtered.filter(
+    (edge) =>
+      (!restConsumers || restConsumers.has(edge.grant.caller_provider_id)) &&
+      (!restTokens || restTokens.has(edge.grant.service_id)),
+  );
+  const filteredConsumers = props.anyFilter && !q.consumerId;
+  const model = buildMatrix(
+    {
+      ...connections,
+      consumers: connections.consumers.filter(
+        (consumer) =>
+          (!q.consumerId || consumer.id === q.consumerId) &&
+          (!restConsumers || restConsumers.has(consumer.id)) &&
+          (!filteredConsumers || edges.some((e) => e.grant.caller_provider_id === consumer.id)),
+      ),
+      tokens: connections.tokens.filter(
+        (token) =>
+          (!q.tokenId || token.id === q.tokenId) && (!restTokens || restTokens.has(token.id)),
+      ),
+      accesses: edges,
+    },
+    props.traffic.available ? (id) => props.traffic.byToken.get(id)?.requests ?? 0 : undefined,
+  );
+  const tooBig = model.columns.length > MATRIX_MAX_COLUMNS || model.rowCount > MATRIX_MAX_ROWS;
+  if (tooBig) {
+    return (
+      <>
+        <Callout title="Too many to show as a matrix; filter by consumer or token.">
+          The list below shows the same accesses as rows.
+        </Callout>
+        <AccessListTray
+          connections={connections}
+          edges={edges}
+          title="All accesses"
+          description="Busiest consumer first, then by repository."
+          anyFilter={props.anyFilter}
+          clearHref={paths.access({ view: 'matrix' })}
+          ctx={ctx}
+        />
+      </>
+    );
+  }
+  return (
+    <Tray
+      id="mx"
+      title={
+        restConsumers
+          ? 'Connections of the other consumers'
+          : restTokens
+            ? 'Connections to the other tokens'
+            : 'Connections'
+      }
+      description="Rows: consumer › repository. Columns: tokens, busiest first. Each cell is one consumer access."
+      actions={props.segmented}
+      footer={
+        <>
+          <Legend
+            items={[
+              { mark: 'cell', label: '✓ Active' },
+              { mark: 'cell-warn', label: '⌛ Expiring · ⚠ Risk accepted' },
+              { mark: 'cell-bad', label: '✕ Expired' },
+              { mark: 'cell-off', label: '⏸ Inactive' },
+            ]}
+          />
+          {canWrite ? (
+            <span>
+              <b class="mono">+</b> Give these jobs this token
+            </span>
+          ) : null}
+          <span>
+            The <a href={listHref(q, { view: undefined })}>Map</a> view lists the same{' '}
+            {accessesText(edges.length)} as rows.
+          </span>
+        </>
+      }
+    >
+      {connections.accesses.length === 0 ? (
+        <Panel variant="pad">
+          <ZeroState>No consumer can use any token yet.</ZeroState>
+        </Panel>
+      ) : null}
+      {props.anyFilter && edges.length === 0 ? (
+        <Panel variant="pad">
+          <UiEmptyState
+            title="No consumer access matches these filters."
+            actions={<Button href={paths.access({ view: 'matrix' })}>Clear filters</Button>}
+          />
+        </Panel>
+      ) : (
+        <Panel variant="flush">
+          <AccessMatrix model={model} connections={connections} ctx={ctx} />
+        </Panel>
+      )}
+    </Tray>
+  );
+}
+
+function AccessListTray(props: {
+  connections: Connections;
+  edges: AccessEdge[];
+  title: string;
+  description: string;
+  anyFilter: boolean;
+  clearHref: string;
+  ctx: ViewContext;
+}) {
+  const { connections, ctx } = props;
+  const canWrite = ctx.can('access:write');
+  const total = (consumerId: string) =>
+    connections.accesses.filter((edge) => edge.grant.caller_provider_id === consumerId).length;
   const rows = [...props.edges].sort(
     (a, b) =>
+      total(b.grant.caller_provider_id) - total(a.grant.caller_provider_id) ||
       (a.consumer?.name ?? '').localeCompare(b.consumer?.name ?? '') ||
       a.subject.localeCompare(b.subject) ||
       (a.token?.name ?? '').localeCompare(b.token?.name ?? ''),
   );
+  const groups = new Map<string, AccessEdge[]>();
+  for (const edge of rows) {
+    const list = groups.get(edge.grant.caller_provider_id) ?? [];
+    list.push(edge);
+    groups.set(edge.grant.caller_provider_id, list);
+  }
+  const columns = [
+    { label: 'Jobs → token · operations' },
+    { label: 'Status' },
+    { label: 'Expires' },
+    { label: 'Last used · 30 days', num: true },
+    ...(canWrite ? [{ label: 'Actions', act: true }] : []),
+  ];
+  const empty = rows.length === 0;
   return (
-    <DataTable<AccessEdge>
-      id="access-list"
-      caption="Consumer access"
-      rowHeader="subject"
-      rows={rows}
-      columns={[
-        {
-          key: 'consumer',
-          header: 'Consumer',
-          render: (edge) =>
-            edge.consumer ? (
-              <a href={paths.consumer(edge.consumer.id)}>{edge.consumer.name}</a>
-            ) : (
-              '—'
-            ),
-        },
-        {
-          key: 'subject',
-          header: 'Repository / workflow',
-          render: (edge) => <a href={paths.accessItem(edge.grant.id)}>{edge.subject}</a>,
-        },
-        { key: 'context', header: 'Constraint', render: (edge) => edge.context },
-        {
-          key: 'token',
-          header: 'Token',
-          render: (edge) =>
-            edge.token ? <a href={paths.token(edge.token.id)}>{edge.token.name}</a> : '—',
-        },
-        {
-          key: 'operations',
-          header: 'Operations',
-          render: (edge) =>
-            edge.operations.length === 0
-              ? '—'
-              : `${edge.operations[0]}${edge.operations.length > 1 ? `; +${edge.operations.length - 1}` : ''}`,
-        },
-        {
-          key: 'status',
-          header: 'Status',
-          render: (edge) => (
-            <>
-              <StatusBadge status={edge.status} detail={edge.statusDetail} />
-              {edge.flags.map((flagItem) => (
-                <>
-                  {' '}
-                  <StatusBadge status={flagItem.status} detail={flagItem.detail} />
-                </>
-              ))}
-            </>
-          ),
-        },
-        {
-          key: 'expires',
-          header: 'Expires',
-          render: (edge) =>
-            edge.grant.expires_at === null ? 'Never' : <Time ms={edge.grant.expires_at} />,
-        },
-        {
-          key: 'last',
-          header: 'Last used',
-          render: (edge) =>
-            edge.lastUsedHour === null
-              ? 'No allowed calls in 30 days'
-              : relativeTime(edge.lastUsedHour + HOUR_MS / 2, ctx.now),
-        },
-        ...(ctx.can('access:write')
-          ? [
-              {
-                key: 'actions',
-                header: 'Actions',
-                render: (edge: AccessEdge) => (
-                  <ActionButton
-                    action={`${paths.accessItem(edge.grant.id)}/toggle`}
-                    csrf={ctx.csrf}
-                    label={edge.grant.enabled ? 'Disable' : 'Enable'}
-                    context={edge.grant.name}
-                    fields={{ enabled: edge.grant.enabled ? '0' : '1' }}
-                    returnTo="list"
-                  />
-                ),
-              },
-            ]
-          : []),
-      ]}
+    <Tray id="al" title={props.title} count={rows.length} description={props.description}>
+      <Panel variant="flush">
+        <Table id="access-list" labelledBy="al-h" stackable columns={columns}>
+          {empty
+            ? undefined
+            : [...groups.entries()].map(([consumerId, edges]) => {
+                const consumer = edges[0]?.consumer ?? null;
+                const all = connections.accesses.filter(
+                  (edge) => edge.grant.caller_provider_id === consumerId,
+                ).length;
+                return (
+                  <>
+                    <GroupRow colspan={columns.length}>
+                      <Entity
+                        logo={consumerLogo(consumer)}
+                        logoSize="sm"
+                        href={consumer ? paths.consumer(consumer.id) : undefined}
+                        name={consumer?.name ?? 'Deleted consumer'}
+                        after={
+                          <span class="meta">
+                            {edges.length === all
+                              ? accessesText(all)
+                              : `${edges.length} of ${accessesText(all)}`}
+                          </span>
+                        }
+                      />
+                    </GroupRow>
+                    {edges.map((edge) => (
+                      <AccessListRow edge={edge} connections={connections} ctx={ctx} />
+                    ))}
+                  </>
+                );
+              })}
+        </Table>
+        {empty ? (
+          props.anyFilter ? (
+            <UiEmptyState
+              title="No consumer access matches these filters."
+              actions={<Button href={props.clearHref}>Clear filters</Button>}
+            />
+          ) : (
+            <UiEmptyState title="No consumer can use any token yet." />
+          )
+        ) : null}
+      </Panel>
+    </Tray>
+  );
+}
+
+/**
+ * The one action a row offers, the fix its status asks for: Extend an expired or expiring access
+ * (its Change form, expiry step), open the disabled token of an inactive one, else Disable/Enable.
+ */
+function RowAction(props: { edge: AccessEdge; ctx: ViewContext }) {
+  const { edge, ctx } = props;
+  if (edge.grant.enabled && (edge.status === 'expired' || edge.status === 'expiring')) {
+    return (
+      <Button
+        size="sm"
+        href={paths.accessItem(edge.grant.id, { open: 'edit', hash: 'edit' })}
+        srSuffix={edge.grant.name}
+      >
+        Extend
+      </Button>
+    );
+  }
+  if (edge.status === 'inactive' && edge.statusDetail === 'token disabled' && edge.token) {
+    return (
+      <Button size="sm" href={paths.token(edge.token.id)} srSuffix={edge.token.name}>
+        Open token
+      </Button>
+    );
+  }
+  return (
+    <ActionButton
+      action={`${paths.accessItem(edge.grant.id)}/toggle`}
+      csrf={ctx.csrf}
+      label={edge.grant.enabled ? 'Disable' : 'Enable'}
+      context={edge.grant.name}
+      fields={{ enabled: edge.grant.enabled ? '0' : '1' }}
+      returnTo="list"
+      size="sm"
     />
+  );
+}
+
+function protectedRefs(edge: AccessEdge): boolean {
+  return edge.grant.conditions.some(
+    (c) => c.claim === 'ref_protected' && c.match === 'exact' && c.values.includes('true'),
+  );
+}
+
+function AccessListRow(props: { edge: AccessEdge; connections: Connections; ctx: ViewContext }) {
+  const { edge, connections, ctx } = props;
+  const expires = edge.grant.expires_at;
+  const risky = edge.flags.some((f) => f.status === 'risk_accepted');
+  const usage = connections.usage.get(edge.grant.id)?.requests ?? 0;
+  return (
+    <Row>
+      <RowHeader>
+        <ArrowRow
+          href={paths.accessItem(edge.grant.id)}
+          verb={['expired', 'disabled', 'inactive'].includes(edge.status) ? 'could use' : 'can use'}
+          consumer={{
+            name: (
+              <span class="mono">
+                <PathName text={edge.subject} />
+              </span>
+            ),
+            context: (
+              <span class={risky ? 't-warn' : edge.status === 'expired' ? 't-bad' : undefined}>
+                {edge.context}
+                {protectedRefs(edge) ? ' · protected refs' : ''}
+              </span>
+            ),
+          }}
+          token={{
+            name: edge.token?.name ?? 'Deleted token',
+            logo: tokenLogo(edge.token),
+            context: operationsText(edge),
+          }}
+        />
+      </RowHeader>
+      <Cell label="Status">
+        <AccessStatus edge={edge} now={ctx.now} expiry={false} />
+      </Cell>
+      <Cell label="Expires" nowrap>
+        {expires === null ? (
+          'Never'
+        ) : (
+          <>
+            {formatTime(new Date(expires), 'date')}
+            {expires > ctx.now ? (
+              <span class="meta d-block">{relativeTime(expires, ctx.now)}</span>
+            ) : null}
+          </>
+        )}
+      </Cell>
+      <Cell label="Last used · 30 days" num nowrap>
+        {!connections.usageAvailable
+          ? 'Unknown'
+          : edge.lastUsedHour === null
+            ? 'None in 30 days'
+            : lastUsedTime(edge.lastUsedHour, ctx.now)}
+        {connections.usageAvailable && usage > 0 ? (
+          <span class="meta d-block">{formatCount(usage)} allowed</span>
+        ) : null}
+      </Cell>
+      {ctx.can('access:write') ? (
+        <Cell act>
+          <RowAction edge={edge} ctx={ctx} />
+        </Cell>
+      ) : null}
+    </Row>
   );
 }
 
@@ -652,8 +1077,12 @@ interface FormData {
 
 async function loadFormData(c: AdminContext): Promise<FormData> {
   const connections = withAnyRefFlags(await loadConnections(c.get('deps')));
+  // Enabled first, then the busiest: the first card is the one most likely meant.
   const consumers = [...connections.consumers].sort(
-    (a, b) => Number(b.enabled) - Number(a.enabled) || a.name.localeCompare(b.name),
+    (a, b) =>
+      Number(b.enabled) - Number(a.enabled) ||
+      grantCount(connections, b.id) - grantCount(connections, a.id) ||
+      a.name.localeCompare(b.name),
   );
   const tokens = [...connections.tokens].sort(
     (a, b) => Number(b.enabled) - Number(a.enabled) || a.name.localeCompare(b.name),
@@ -685,12 +1114,45 @@ interface FormSeed {
   prefill?: { copy?: string; repository?: string };
 }
 
+/**
+ * The consumer a plain "Give a consumer access" preselects (input rule 2: the most used value):
+ * the enabled consumer with the most accesses, when one has strictly more than every other.
+ */
+function mostUsedConsumer(data: FormData): string {
+  const ranked = data.consumers
+    .filter((consumer) => consumer.enabled)
+    .map((consumer) => ({ id: consumer.id, n: grantCount(data.connections, consumer.id) }))
+    .sort((a, b) => b.n - a.n);
+  const [first, second] = ranked;
+  if (!first || first.n === 0 || (second && second.n === first.n)) return '';
+  return first.id;
+}
+
 function labelsOf(connections: Connections, consumerId: string): ClaimLabel[] {
   return connections.labels.filter((label) => label.caller_provider_id === consumerId);
 }
 
 function grantCount(connections: Connections, consumerId: string): number {
   return connections.accesses.filter((edge) => edge.grant.caller_provider_id === consumerId).length;
+}
+
+/** Accesses per repository ID of one consumer. */
+function repositoryUse(
+  profile: Pick<IssuerProfile, 'id'>,
+  connections: Connections,
+  consumerId: string,
+): Map<string, number> {
+  const claims = anchorClaims(profile);
+  const use = new Map<string, number>();
+  if (claims === null) return use;
+  for (const edge of connections.accesses) {
+    if (edge.grant.caller_provider_id !== consumerId) continue;
+    for (const c of edge.grant.conditions) {
+      if (c.claim !== claims.repository) continue;
+      for (const value of c.values) use.set(value, (use.get(value) ?? 0) + 1);
+    }
+  }
+  return use;
 }
 
 function repositoryOptions(
@@ -701,20 +1163,30 @@ function repositoryOptions(
 ): Suggestion[] {
   const claims = anchorClaims(profile);
   if (claims === null) return [];
-  const use = new Map<string, number>();
-  for (const edge of connections.accesses) {
-    if (edge.grant.caller_provider_id !== consumerId) continue;
-    for (const c of edge.grant.conditions) {
-      if (c.claim !== claims.repository) continue;
-      for (const value of c.values) use.set(value, (use.get(value) ?? 0) + 1);
-    }
-  }
+  const use = repositoryUse(profile, connections, consumerId);
   return labels
     .filter((label) => label.claim === claims.repository)
     .sort(
       (a, b) => (use.get(b.value) ?? 0) - (use.get(a.value) ?? 0) || a.label.localeCompare(b.label),
     )
     .map((label) => ({ value: idText(label.value, label.label) }));
+}
+
+/** Accesses per repository option value (`name (ID)`), for the picker's usage column. */
+function repositoryCounts(
+  profile: Pick<IssuerProfile, 'id'>,
+  labels: readonly ClaimLabel[],
+  connections: Connections,
+  consumerId: string,
+): Record<string, number> {
+  const claims = anchorClaims(profile);
+  if (claims === null) return {};
+  const use = repositoryUse(profile, connections, consumerId);
+  return Object.fromEntries(
+    labels
+      .filter((label) => label.claim === claims.repository)
+      .map((label) => [idText(label.value, label.label), use.get(label.value) ?? 0]),
+  );
 }
 
 /** A consumer built in memory from the add fields, for validation before anything is written. */
@@ -809,6 +1281,8 @@ async function consumerBranch(
     labels,
     suggestions,
     repositoryOptions: repositoryOptions(profile, labels, data.connections, provider.id),
+    repositoryCounts: repositoryCounts(profile, labels, data.connections, provider.id),
+    mostUsedContext: shapes.length > 0 ? mostUsedContext(shapes, profile) : null,
     unknownOwner: selected ? (seed.unknownOwner ?? null) : null,
     accessCount: provider.id === 'cpr_new' ? 0 : grantCount(data.connections, provider.id),
   };
@@ -1002,6 +1476,7 @@ async function buildFormModel(
     existingConsumers: consumers,
     expiry: fields ? readExpiryForm(fields) : (seed.expiry ?? { expires: 'never', expires_on: '' }),
     now: ctxNow,
+    origin: new URL(c.req.url).origin,
     ack: seed.ack,
     errors: seed.errors,
     hidden,
@@ -1054,8 +1529,20 @@ async function renderForm(
     status?: 200 | 400 | 409 | 422;
     banner?: Child;
     notice?: ReturnType<typeof notice>;
+    /** The denied request the form was prefilled from (header, rail, Back link). */
+    request?: RequestFacts;
   } = {},
 ) {
+  const plainHeader = (
+    <PageHeader
+      crumbs={[
+        { label: 'Consumer access', href: paths.access() },
+        { label: 'Give a consumer access' },
+      ]}
+      title="Give a consumer access"
+      description="Choose a consumer, the jobs, and what they may call. Everything is preset; change only what differs."
+    />
+  );
   if (data.tokens.length === 0) {
     return renderPage(
       c,
@@ -1064,42 +1551,76 @@ async function renderForm(
         section: 'consumers',
         subsection: 'access',
         status: options.status ?? 200,
+        header: plainHeader,
       },
       (ctx) => (
-        <EmptyState
-          action={
+        <UiEmptyState
+          headingLevel={2}
+          title="A token manager must add a service token first."
+          description="Consumer access lets the jobs of a service consumer use a service token."
+          actions={
             ctx.can('tokens:write') ? (
-              <a class="button" href={paths.tokenNew()}>
-                Add a service token
-              </a>
+              <Button variant="primary" plus href={paths.tokenNew()}>
+                Add token
+              </Button>
             ) : (
-              <AskSomeone permission="tokens:write" ctx={ctx} verb="add one" />
+              <AskSomeone permission="tokens:write" ctx={ctx} verb="add a service token" />
             )
           }
-        >
-          A token manager must add a service token first.
-        </EmptyState>
+        />
       ),
     );
   }
   const model = await buildFormModel(c, data, seed);
+  const fixedToken =
+    seed.tokenView === 'fixed' ? data.tokens.find((token) => token.id === seed.tokenId) : undefined;
+  const request = options.request;
+  const consumer = data.consumers.find((item) => item.id === seed.consumerId);
+  let header: Child = plainHeader;
+  let entry: FormEntry = { cancelHref: paths.access(), cancelLabel: 'Cancel' };
+  if (request) {
+    header = (
+      <PageHeader
+        crumbs={[
+          { label: 'Requests', href: paths.requests() },
+          { label: `${request.id.slice(0, 12)}…`, href: paths.request(request.id) },
+          { label: 'Give access' },
+        ]}
+        title={`Allow this call from ${request.repository ?? consumer?.name ?? 'this caller'}`}
+        description="Creates a consumer access that lets exactly this caller make exactly this call."
+      />
+    );
+    entry = { cancelHref: paths.request(request.id), cancelLabel: 'Back to the request', request };
+  } else if (fixedToken) {
+    header = (
+      <PageHeader
+        crumbs={[
+          { label: 'Service tokens', href: paths.tokens() },
+          { label: fixedToken.name, href: paths.token(fixedToken.id) },
+          { label: 'Give a consumer access' },
+        ]}
+        title={`Give a consumer access to ${fixedToken.name}`}
+        description={`Choose which jobs can call ${fixedToken.name} and what they may do. Everything is preset; change only what differs.`}
+      />
+    );
+    entry = { cancelHref: paths.token(fixedToken.id), cancelLabel: 'Cancel' };
+  }
+  model.entry = entry;
   return renderPage(
     c,
     {
       title: 'Give a consumer access',
       section: 'consumers',
       subsection: 'access',
-      breadcrumbs: [
-        { href: paths.access(), label: 'Consumer access' },
-        { href: paths.accessNew(), label: 'Give a consumer access' },
-      ],
       errors: seed.errors,
+      errorSummary: seed.errors.length > 0 ? { title: 'The access was not saved' } : undefined,
       status: options.status ?? 200,
       notice: seed.errors.length > 0 ? null : (options.notice ?? null),
+      header,
     },
     () => (
       <>
-        {options.banner ? <div class="prefill">{options.banner}</div> : null}
+        {options.banner ?? null}
         <AccessForm model={model} />
       </>
     ),
@@ -1150,13 +1671,22 @@ async function newPage(c: AdminContext) {
         );
       }
       banner = (
-        <p>
-          Copied the constraints of “{source.name}”
-          {retargeted && repository ? <> for {idText(repository.id, repository.label)}</> : null}.
-        </p>
+        <Callout
+          title={
+            <>
+              Copied the constraints of “{source.name}”
+              {retargeted && repository ? (
+                <> for {idText(repository.id, repository.label)}</>
+              ) : null}
+              .
+            </>
+          }
+        >
+          Change what differs, then save.
+        </Callout>
       );
     } else {
-      banner = <p>That access no longer exists; nothing was copied.</p>;
+      banner = <Callout tone="warn" title="That access no longer exists; nothing was copied." />;
     }
   } else if (query('repository') && consumerId) {
     const provider = data.consumers.find((p) => p.id === consumerId);
@@ -1194,7 +1724,7 @@ async function newPage(c: AdminContext) {
         ? consumerId
         : data.consumers.length === 1
           ? (data.consumers[0]?.id ?? '')
-          : '',
+          : mostUsedConsumer(data),
     tokenId: data.tokens.some((token) => token.id === tokenId)
       ? tokenId
       : data.tokens.length === 1
@@ -1429,7 +1959,7 @@ async function prefillFromRequest(c: AdminContext, data: FormData, requestId: st
       },
       () => (
         <p>
-          <a href={paths.accessNew()}>Give a consumer access from scratch</a>
+          <Button href={paths.accessNew()}>Give a consumer access from scratch</Button>
         </p>
       ),
     );
@@ -1446,10 +1976,11 @@ async function prefillFromRequest(c: AdminContext, data: FormData, requestId: st
   const seed: FormSeed = {
     fields: null,
     consumerId: provider.id,
-    // The request's token is preselected; another one is a click away (its default operations).
+    // Consumer and token are those of the request (brief con-access-risk); Change opens the
+    // plain form for another token.
     tokenId: token.id,
     consumerView: 'fixed',
-    tokenView: 'auto',
+    tokenView: 'fixed',
     jobs,
     ops,
     errors: [],
@@ -1457,17 +1988,38 @@ async function prefillFromRequest(c: AdminContext, data: FormData, requestId: st
     hidden: { from_request: record.id },
   };
   seed.ack = await prefillAck(c, data, seed);
+  const ref = claimText(claims, 'ref');
   return renderForm(c, data, seed, {
+    request: {
+      id: record.id,
+      ts: record.ts,
+      method: record.method,
+      path: record.path,
+      status: record.status,
+      reason: reasonText(record.reason) ?? 'Denied',
+      repository: repositoryLabel,
+      ref: ref ? ref.replace(/^refs\/(heads|tags)\//, '') : null,
+    },
     banner: (
-      <p>
-        Prefilled from request <a href={paths.request(record.id)}>{record.id}</a>: these values
-        match exactly that caller and call. Change what you need, then save.
+      <Callout
+        title={
+          <>
+            Prefilled from request <Mono>{record.id.slice(0, 12)}…</Mono>:
+          </>
+        }
+        actions={
+          <Button size="sm" href={paths.request(record.id)}>
+            Open the request
+          </Button>
+        }
+      >
+        these values match exactly that caller and call. Change what you need, then save.
         {ops.op.length === 0 && ops.rule.length === 0
           ? literalPath
             ? ''
             : ' No operation was prefilled: the path contains "*" or "%2F", which an operation cannot match literally ("*" is a wildcard; "%2F" needs "**"). Add the narrowest one under Other operations.'
           : ''}
-      </p>
+      </Callout>
     ),
   });
 }
@@ -2195,7 +2747,10 @@ async function renderAccessPage(c: AdminContext, loaded: LoadedAccess, state: Pa
         ?.values[0] ?? null)
     : null;
   const sourceToken = token;
+  const { history, acceptedBy } = await accessHistory(c, grant.id);
   const model: AccessPageModel = {
+    history,
+    acceptedBy,
     grant,
     edge,
     consumer,
@@ -2247,16 +2802,35 @@ async function renderAccessPage(c: AdminContext, loaded: LoadedAccess, state: Pa
       title: grant.name,
       section: 'consumers',
       subsection: 'access',
-      breadcrumbs: [
-        { href: paths.access(), label: 'Consumer access' },
-        { href: paths.accessItem(grant.id), label: grant.name },
-      ],
       errors,
       status: state.status ?? 200,
       notice: errors.length > 0 ? null : notice(c, { grant, consumer }),
+      header: (ctx) => <AccessHeader model={model} ctx={ctx} />,
     },
     (ctx) => <AccessPage model={model} ctx={ctx} />,
   );
+}
+
+/** The rail history of an access (newest audit rows) and who accepted its current risks. */
+async function accessHistory(
+  c: AdminContext,
+  grantId: string,
+): Promise<{ history: HistoryEntry[]; acceptedBy: AccessPageModel['acceptedBy'] }> {
+  const events = await listAuditEvents(c.get('deps').env.DB, { targetId: grantId, limit: 20 });
+  const actor = (event: (typeof events)[number]) =>
+    event.actor_email ?? (event.actor_type === 'system' ? 'tokengate' : 'Someone');
+  const accepted = events.find((event) => {
+    const risks = event.diff?.accepted_risks;
+    return Array.isArray(risks) && risks.length > 0;
+  });
+  return {
+    history: events.slice(0, 3).map((event) => ({
+      ts: event.ts,
+      actor: actor(event),
+      summary: `${actor(event)}: ${event.summary}`,
+    })),
+    acceptedBy: accepted ? { actor: actor(accepted), ts: accepted.ts } : null,
+  };
 }
 
 async function update(c: AdminContext) {
@@ -2386,7 +2960,8 @@ async function copy(c: AdminContext) {
   if (!loaded) return notFound(c);
   const { grant, consumer, token: sourceToken, profile, data } = loaded;
   const fields = await formData(c);
-  const repositoryRaw = text(fields, 'repository');
+  // A picked repository, else the one typed under "Another…" (repository_other).
+  const repositoryRaw = text(fields, 'repository') || text(fields, 'repository_other');
   const tokenId = text(fields, 'token_id') || sourceToken.id;
   const target = data.tokens.find((item) => item.id === tokenId);
   const labels = labelsOf(data.connections, consumer.id);
@@ -2444,9 +3019,15 @@ async function copy(c: AdminContext) {
   }
   jobs.repository = idText(repository.id, repository.label);
   const banner = (
-    <p>
-      Copied the constraints of “{grant.name}” for {jobs.repository}.
-    </p>
+    <Callout
+      title={
+        <>
+          Copied the constraints of “{grant.name}” for {jobs.repository}.
+        </>
+      }
+    >
+      Change what differs, then save.
+    </Callout>
   );
   const seed: FormSeed = {
     fields: null,
@@ -2569,8 +3150,20 @@ async function rerenderDetail(c: AdminContext, failure: OpFailure) {
 function notFound(c: AdminContext) {
   return renderPage(
     c,
-    { title: 'Consumer access not found', section: 'consumers', subsection: 'access', status: 404 },
-    () => <NotFound what="access" />,
+    {
+      title: 'Consumer access not found',
+      section: 'consumers',
+      subsection: 'access',
+      status: 404,
+      header: (
+        <PageHeader
+          crumbs={[{ href: paths.access(), label: 'Consumer access' }, { label: 'Not found' }]}
+          title="Consumer access not found"
+          description={notFoundText('access')}
+        />
+      ),
+    },
+    () => <NotFound />,
   );
 }
 

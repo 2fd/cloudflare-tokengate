@@ -1,13 +1,57 @@
-// The token page (A13.3): problems, who can use the token, the secret (with the inline rotate
-// form), how consumers call it, the destination (changed only with the secret, I-CRED-2), the
-// details form and the danger zone. Viewers and access managers get the same page without forms,
-// except the access manager's "Give a consumer access".
+// The token page (A13.3): the header (identity, relation line, Test and the page's one primary),
+// problems as callouts, who can use the token (a WhoCanUse map with the scale rule, or the
+// hand-off), then the secret (with the inline rotate form), how consumers call it, the
+// destination (changed only with the secret, I-CRED-2) with the details form, the danger zone,
+// and a rail with the record and its history. Viewers and access managers get the same page
+// without token forms, except the access manager's "Give a consumer access".
+import {
+  Avatar,
+  Badge,
+  Button,
+  Callout,
+  CodeBlock,
+  ConfirmDialog,
+  DangerRow,
+  DangerZone,
+  DetailLayout,
+  DialogTrigger,
+  Disclosure,
+  Entity,
+  Feed,
+  FeedItem,
+  Field,
+  Icon,
+  Identity,
+  Input,
+  KeyValue,
+  Kpis,
+  LinkAction,
+  Mono,
+  PageHeader,
+  Panel,
+  RailFoot,
+  RailKeyValue,
+  RelationLine,
+  Secret,
+  SubmitRow,
+  Time,
+  Tray,
+  type WhoAccess,
+  WhoCanUse,
+  type WhoGroup,
+  ZeroState,
+  formatTime as uiFormatTime,
+} from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
 import { sealedKid } from '../../crypto/envelope';
 import type { KeyringError } from '../../crypto/keyring';
-import type { Service } from '../../db/types';
+import type { GrantUsage } from '../../db/rollups';
+import type { AuditEvent, Service } from '../../db/types';
 import type { Injection, VerifyCheck } from '../../policy/types';
-import { EXPIRY_WARNING_MS } from '../../telemetry/dashboard';
+import { CALLER_TOKEN_HEADER } from '../../proxy/caller-token';
+import { EXPIRY_WARNING_MS, type TrafficStats } from '../../telemetry/dashboard';
+import { CSRF_FIELD } from '../auth/csrf';
+import type { Permission } from '../auth/rbac';
 import type { AccessEdge } from '../connections';
 import { KEYRING_ERROR_TEXT } from '../ops/keyring';
 import type { StoredBinding } from '../ops/services';
@@ -15,32 +59,27 @@ import { storedUpstreamHost } from '../ops/upstream-hosts';
 import type { VerifyOutcome } from '../ops/verify';
 import { paths } from '../paths';
 import type { ViewContext } from '../render';
-import { SERVICE_TEMPLATES, type ServiceTemplate } from '../service-templates';
+import { REPO_PLACEHOLDER, SERVICE_TEMPLATES, type ServiceTemplate } from '../service-templates';
+import { consumerLogo } from './access-visuals';
 import {
   ActionButton,
-  type Alert,
-  AlertList,
   AskSomeone,
   Checkbox,
-  type ChipProps,
-  ChipList,
-  ConfirmDialog,
-  Details,
-  Field,
   PostForm,
   StatusBadge,
-  Time,
   VersionField,
-  TextArea,
 } from './components';
-import { formatTime, relativeTime } from './format';
+import { formatCount, formatPercent, relativeTime } from './format';
+import { percentileText } from './monitoring';
 import type { StatusKey } from './status';
 import { CUSTOM_SECRET } from './token-cards';
 import {
   AdvancedFields,
   allowlistPattern,
   baseUrlSuggestions,
+  CheckResult,
   dateInput,
+  DetailFields,
   EMPTY_VALUES,
   ExpiryField,
   FormIds,
@@ -53,10 +92,22 @@ import {
   SecretSubmits,
   type TokenFormValues,
   valuesFromService,
-  VerifyResult,
 } from './token-forms';
+import {
+  plural,
+  secretParts,
+  templateLogo,
+  typeLabel,
+  upstreamHost,
+  upstreamShort,
+} from './token-ui';
+
+export { typeLabel, upstreamHost } from './token-ui';
 
 const DAY_MS = 86_400_000;
+/** The scale rule of the "Who can use" map: consumers drawn, and accesses per consumer. */
+const MAP_GROUPS = 3;
+const MAP_ROWS = 3;
 
 export type BindingState = StoredBinding | { status: 'unknown' };
 
@@ -79,6 +130,11 @@ const PAIR_FAILURE_REASONS: Partial<Record<TokenAlso, string>> = {
   pair_failed_check: 'its secret check failed',
 };
 
+/** Days until `at`, rounded up (the "Expires in N days" count). */
+export function daysUntil(at: number, now: number): number {
+  return Math.ceil((at - now) / DAY_MS);
+}
+
 /** One token's status in the A9 vocabulary, most severe first. */
 export function tokenStatus(
   service: Pick<Service, 'enabled' | 'credential_sealed' | 'credential_expires_at'>,
@@ -91,55 +147,9 @@ export function tokenStatus(
   const expires = service.credential_expires_at;
   if (expires !== null && expires <= o.now) return { status: 'expired' };
   if (expires !== null && expires - o.now <= EXPIRY_WARNING_MS) {
-    return { status: 'expiring', detail: String(Math.ceil((expires - o.now) / DAY_MS)) };
+    return { status: 'expiring', detail: String(daysUntil(expires, o.now)) };
   }
   return { status: 'active' };
-}
-
-/** The secret as a badge: missing, does not open, expired, expiring, or set with its hint. */
-export function SecretBadge(props: {
-  service: Pick<Service, 'credential_sealed' | 'credential_hint' | 'credential_expires_at'>;
-  unreadable: boolean;
-  now: number;
-}) {
-  const { service, now } = props;
-  if (service.credential_sealed === null) return <StatusBadge status="no_credential" />;
-  if (props.unreadable) return <StatusBadge status="credential_unreadable" />;
-  const expires = service.credential_expires_at;
-  const hint = service.credential_hint ? (
-    <>
-      {' '}
-      <code>{service.credential_hint}</code>
-    </>
-  ) : null;
-  if (expires !== null && expires <= now) {
-    return (
-      <>
-        <StatusBadge status="expired" />
-        {hint}
-      </>
-    );
-  }
-  if (expires !== null && expires - now <= EXPIRY_WARNING_MS) {
-    return (
-      <>
-        <StatusBadge status="expiring" detail={String(Math.ceil((expires - now) / DAY_MS))} />
-        {hint}
-      </>
-    );
-  }
-  return (
-    <>
-      <span class="badge ok">
-        <span aria-hidden="true">✓ </span>Set
-      </span>
-      {hint}
-    </>
-  );
-}
-
-export function typeLabel(template: ServiceTemplate | null): string {
-  return template?.label ?? 'Custom API';
 }
 
 export function injectionText(injection: Injection): string {
@@ -168,14 +178,6 @@ export function verifyText(verify: VerifyCheck | null): string {
   return `${verify.method} ${verify.path}, expecting HTTP ${verify.expect_status}${okField}`;
 }
 
-export function upstreamHost(baseUrl: string): string {
-  try {
-    return new URL(baseUrl).host;
-  } catch {
-    return baseUrl;
-  }
-}
-
 /** "3 h ago", or why there is no time. */
 export function LastUsed(props: {
   hour: number | null;
@@ -191,6 +193,16 @@ export function LastUsed(props: {
   );
 }
 
+/** Accesses that let a consumer call: enabled, unexpired, of an enabled consumer. */
+export function usableAccesses(accesses: readonly AccessEdge[], now: number): AccessEdge[] {
+  return accesses.filter(
+    (edge) =>
+      edge.grant.enabled &&
+      (edge.grant.expires_at === null || edge.grant.expires_at > now) &&
+      edge.consumer?.enabled === true,
+  );
+}
+
 // ---------------------------------------------------------------------------------------------
 // Page
 
@@ -203,9 +215,17 @@ export interface TokenPageData {
   /** The base URL's host is not on the allowlist (requests are refused). */
   outside: boolean;
   accesses: AccessEdge[];
+  /** Allowed requests per access in the last 30 days (map order, relation line). */
+  usage: ReadonlyMap<string, GrantUsage>;
   usageAvailable: boolean;
   sampleRate: number;
+  /** Requests through the token in the last 24 hours (rail); null when telemetry is unreadable. */
+  traffic: TrafficStats | null;
   lastSet: { ts: number; actor_email: string | null } | null;
+  /** Who created the token (the `service.create` audit row), when recorded. */
+  creator: string | null;
+  /** The newest audit events of the token (the rail history). */
+  recent: AuditEvent[];
   /** Tokens of the same family holding the same secret (rotate pre-ticks them). */
   siblings: Service[];
   /** destinationFingerprint of the stored destination: the rotate form posts it back (I-CRED-2). */
@@ -226,140 +246,274 @@ export interface TokenPageState {
   open?: 'destination' | 'details' | null;
 }
 
-export function TokenPage(props: { ctx: ViewContext; data: TokenPageData; state: TokenPageState }) {
-  const { ctx, data, state } = props;
+function unreadable(data: TokenPageData): boolean {
+  return data.binding.status === 'unattested' || data.keyringError !== null;
+}
+
+/** Allowed requests through the token's accesses in the last 30 days. */
+function usage30d(data: TokenPageData): number {
+  return data.accesses.reduce(
+    (sum, edge) => sum + (data.usage.get(edge.grant.id)?.requests ?? 0),
+    0,
+  );
+}
+
+/** The people to ask for an access, and one mail to all of them with the link in the body. */
+function handoffMail(ctx: ViewContext, service: Service, url: string): string | null {
+  const people = ctx.askers('access:write');
+  if (people.length === 0) return null;
+  const query = new URLSearchParams({
+    subject: `Access to service token ${service.name}`,
+    body: `Please give a consumer access to the service token ${service.name}: ${url}`,
+  })
+    .toString()
+    .replace(/\+/g, '%20');
+  return `mailto:${people.map((person) => person.email).join(',')}?${query}`;
+}
+
+/**
+ * The header of a token page: breadcrumb, identity (logo, name, status, type, slug, ID, host),
+ * Test, and the one primary: "Give a consumer access" for access managers, else "Ask an access
+ * manager" (a mail with the link) for token managers. Then the relation line.
+ */
+export function TokenHeader(props: { ctx: ViewContext; data: TokenPageData }) {
+  const { ctx, data } = props;
   const { service } = data;
-  const unattested = data.binding.status === 'unattested';
   const status = tokenStatus(service, {
-    unreadable: unattested || data.keyringError !== null,
+    unreadable: unreadable(data),
     outside: data.outside,
     now: ctx.now,
   });
+  const attested = data.binding.status === 'attested';
+  const giveHref = paths.accessNew({ token: service.id });
+  const mail = ctx.can('tokens:write')
+    ? handoffMail(ctx, service, `${data.proxyOrigin}${giveHref}`)
+    : null;
+  const test = ctx.can('tokens:write') && service.verify !== null && attested;
+  const primary = ctx.can('access:write') ? (
+    <Button variant="primary" plus href={giveHref}>
+      Give a consumer access
+    </Button>
+  ) : mail ? (
+    <Button variant="primary" href={mail}>
+      Ask an access manager
+    </Button>
+  ) : null;
+  return (
+    <PageHeader
+      crumbs={[{ href: paths.tokens(), label: 'Service tokens' }, { label: service.name }]}
+      identity={
+        <Identity
+          logo={templateLogo(data.template, { disabled: !service.enabled })}
+          title={service.name}
+          status={<StatusBadge status={status.status} detail={status.detail} />}
+          type={typeLabel(data.template)}
+          slug={service.slug}
+          entityId={{ value: service.id, kind: 'Token' }}
+          facts={[<Mono>{upstreamShort(service.base_url)}</Mono>]}
+        />
+      }
+      actions={
+        test || primary ? (
+          <>
+            {test ? (
+              <ActionButton
+                action={`${paths.token(service.id)}/test`}
+                csrf={ctx.csrf}
+                label="Test"
+                context={`${service.name} secret`}
+              />
+            ) : null}
+            {primary}
+          </>
+        ) : undefined
+      }
+    >
+      <RelationLine>
+        <Relation ctx={ctx} data={data} />
+      </RelationLine>
+    </PageHeader>
+  );
+}
+
+function Relation(props: { ctx: ViewContext; data: TokenPageData }) {
+  const { ctx, data } = props;
+  const { service } = data;
+  const usable = usableAccesses(data.accesses, ctx.now);
+  const consumers = new Set(usable.map((edge) => edge.grant.caller_provider_id)).size;
+  const reason = unusableReason(data);
+  const reasonText = reason !== null ? ` The token is not usable now: ${reason}.` : '';
+  const requests = data.usageAvailable && data.sampleRate > 0 ? usage30d(data) : 0;
+  const listHref = paths.access({ token: service.id });
+  if (usable.length === 0) {
+    return (
+      <>
+        No consumer can use {service.name} yet.{reasonText}
+      </>
+    );
+  }
   return (
     <>
-      <p class="status-line">
-        {typeLabel(data.template)} · <StatusBadge status={status.status} detail={status.detail} />
-      </p>
-      <Problems ctx={ctx} data={data} />
-      <ConsumersSection ctx={ctx} data={data} />
-      <SecretSection ctx={ctx} data={data} state={state} />
-      <UseSection data={data} />
-      <DestinationSection ctx={ctx} data={data} state={state} />
-      <DetailsSection ctx={ctx} data={data} state={state} />
-      <DangerSection ctx={ctx} data={data} />
-      <h2 id="record-h" class="vh">
-        Record
-      </h2>
-      <Details
-        rows={[
-          ['ID', <code>{service.id}</code>],
-          ['Created', <Time ms={service.created_at} />],
-          ['Updated', <Time ms={service.updated_at} />],
-          [
-            'Audit history',
-            <a href={paths.audit({ target: service.id })}>Changes to {service.name}</a>,
-          ],
-        ]}
-      />
+      <a href={listHref}>{plural(consumers, 'consumer')}</a> can use {service.name} through{' '}
+      <a href={listHref}>{plural(usable.length, 'access', 'accesses')}</a>.{reasonText}
+      {requests > 0
+        ? ` ${formatCount(requests)} allowed ${requests === 1 ? 'request' : 'requests'} in the last 30 days.`
+        : ''}
     </>
+  );
+}
+
+export function TokenPage(props: { ctx: ViewContext; data: TokenPageData; state: TokenPageState }) {
+  const { ctx, data, state } = props;
+  const { service } = data;
+  const canDelete =
+    ctx.can('tokens:write') && (data.accesses.length === 0 || ctx.can('access:write'));
+  return (
+    <>
+      <Problems ctx={ctx} data={data} />
+      <ConsumersTray ctx={ctx} data={data} />
+      <DetailLayout railLabel={`${service.name} details`} rail={<Rail ctx={ctx} data={data} />}>
+        <SecretTray ctx={ctx} data={data} state={state} />
+        <UseTray data={data} />
+        <DestinationTray ctx={ctx} data={data} state={state} />
+        <Danger ctx={ctx} data={data} />
+      </DetailLayout>
+      {canDelete ? <DeleteDialog ctx={ctx} data={data} /> : null}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Problems
+
+interface Problem {
+  tone: 'bad' | 'warn';
+  title: Child;
+  more?: Child;
+  fix?: { href: string; label: string; srSuffix?: string; permission?: Permission };
+}
+
+/** One problem as a callout; its fix as a small button, or who can fix it. */
+function ProblemCallout(props: { ctx: ViewContext; problem: Problem }) {
+  const { ctx, problem } = props;
+  const fix = problem.fix;
+  const allowed = fix && (fix.permission === undefined || ctx.can(fix.permission));
+  return (
+    <Callout
+      tone={problem.tone}
+      title={problem.title}
+      more={problem.more}
+      actions={
+        fix && allowed ? (
+          <Button size="sm" href={fix.href} srSuffix={fix.srSuffix}>
+            {fix.label}
+          </Button>
+        ) : fix?.permission ? (
+          <AskSomeone
+            permission={fix.permission}
+            ctx={ctx}
+            verb={`${fix.label.charAt(0).toLowerCase()}${fix.label.slice(1)}`}
+          />
+        ) : undefined
+      }
+    />
   );
 }
 
 function Problems(props: { ctx: ViewContext; data: TokenPageData }) {
   const { ctx, data } = props;
   const { service } = data;
-  const alerts: Alert[] = [];
+  const problems: Problem[] = [];
   const destinationFix = {
     href: paths.token(service.id, { open: 'destination', hash: 'destination' }),
     label: 'Change destination',
     permission: 'tokens:write' as const,
   };
   if (data.binding.status === 'unattested') {
-    alerts.push({
-      code: 'credential_malformed',
-      level: 'error',
+    problems.push({
+      tone: 'bad',
       title: 'The stored destination is not confirmed.',
-      detail: bindingText(data.binding),
-      objects: [],
+      more: bindingText(data.binding),
       fix: destinationFix,
     });
   }
   if (service.credential_sealed === null) {
-    alerts.push({
-      code: 'credential_missing_used',
-      level: 'error',
+    problems.push({
+      tone: 'bad',
       title: 'No secret is stored, so requests through this token fail.',
-      detail: 'Set it under Destination; you will be asked to confirm the host.',
-      objects: [],
+      more: 'Set it under Destination; you will be asked to confirm the host.',
       fix: destinationFix,
     });
   }
   if (data.keyringError !== null) {
-    alerts.push({
-      code: 'keyring_unavailable',
-      level: 'error',
+    problems.push({
+      tone: 'bad',
       title: 'Encryption keys are not loaded: the secret cannot be used or changed.',
-      detail: KEYRING_ERROR_TEXT[data.keyringError],
-      objects: [{ href: paths.tokenKeys(), label: 'Encryption keys' }],
+      more: KEYRING_ERROR_TEXT[data.keyringError],
+      fix: { href: paths.tokenKeys(), label: 'Open encryption keys' },
     });
   }
   if (storedUpstreamHost(service.base_url) === null) {
-    alerts.push({
-      code: 'config_problem',
-      level: 'error',
+    problems.push({
+      tone: 'bad',
       title: 'The stored base URL cannot be read, so requests through this token are refused.',
-      detail: 'Set the destination again under Change destination.',
-      objects: [],
+      more: 'Set the destination again under Change destination.',
       fix: destinationFix,
     });
   } else if (data.outside) {
-    alerts.push({
-      code: 'outside_hosts',
-      level: 'error',
+    problems.push({
+      tone: 'bad',
       title: `${upstreamHost(service.base_url)} is not an allowed host, so requests through this token are refused.`,
-      detail: '',
-      objects: [],
       fix: { href: paths.tokenHosts(), label: 'Open allowed hosts', permission: 'settings:write' },
     });
   }
   const expires = service.credential_expires_at;
   if (service.credential_sealed !== null && expires !== null) {
+    const date = uiFormatTime(new Date(expires), 'date');
+    const replace = {
+      href: paths.token(service.id, { hash: 'secret' }),
+      label: 'Replace the secret',
+      permission: 'tokens:write' as const,
+    };
     if (expires <= ctx.now) {
-      alerts.push({
-        code: 'credential_expired',
-        level: 'error',
-        title: `The secret expired on ${formatTime(expires)}.`,
-        detail: 'Upstream calls fail until it is replaced.',
-        objects: [],
-        fix: {
-          href: paths.token(service.id, { hash: 'secret' }),
-          label: 'Replace the secret',
-          permission: 'tokens:write',
-        },
+      problems.push({
+        tone: 'bad',
+        title: `The secret of ${service.name} expired on ${date}.`,
+        more: 'Upstream calls fail until it is replaced.',
+        fix: replace,
       });
     } else if (expires - ctx.now <= EXPIRY_WARNING_MS) {
-      alerts.push({
-        code: 'credential_expiring',
-        level: 'warning',
-        title: `The secret expires on ${formatTime(expires)}.`,
-        detail: 'Replace it before then.',
-        objects: [],
-        fix: {
-          href: paths.token(service.id, { hash: 'secret' }),
-          label: 'Replace the secret',
-          permission: 'tokens:write',
-        },
+      const days = daysUntil(expires, ctx.now);
+      // The consequence, when calls are recorded: who would be refused after that date.
+      const calls = data.usageAvailable && data.sampleRate > 0 ? usage30d(data) : 0;
+      const subjects = [
+        ...new Set(
+          data.accesses
+            .filter((edge) => (data.usage.get(edge.grant.id)?.requests ?? 0) > 0)
+            .map((edge) => edge.subject),
+        ),
+      ];
+      const who =
+        subjects.length <= 2
+          ? subjects.join(' and ')
+          : plural(subjects.length, 'repository', 'repositories');
+      problems.push({
+        tone: 'warn',
+        title: `The secret of ${service.name} expires on ${date} (in ${plural(days, 'day')}).`,
+        more:
+          calls > 0
+            ? `${who} made ${formatCount(calls)} ${calls === 1 ? 'call' : 'calls'} through it in the last 30 days. After ${uiFormatTime(new Date(expires), 'day')}, they are refused.`
+            : 'Replace it before then.',
+        fix: replace,
       });
     }
   }
   const pairReason = data.also === null ? undefined : PAIR_FAILURE_REASONS[data.also];
   if (pairReason !== undefined) {
-    alerts.push({
-      code: 'config_problem',
-      level: 'warning',
+    problems.push({
+      tone: 'warn',
       title: `The GitHub release asset uploads token was not created: ${pairReason}.`,
-      detail: 'This token was saved; add the uploads token on its own.',
-      objects: [],
+      more: 'This token was saved; add the uploads token on its own.',
       fix: {
         href: paths.tokenNew({ template: 'github-uploads' }),
         label: 'Add GitHub release asset uploads',
@@ -367,48 +521,33 @@ function Problems(props: { ctx: ViewContext; data: TokenPageData }) {
       },
     });
   }
-  if (service.injection.kind === 'query') {
-    alerts.push({
-      code: 'config_problem',
-      level: 'info',
-      title: QUERY_WARNING,
-      detail: '',
-      objects: [],
-    });
-  }
-  if (service.injection.kind === 'path') {
-    alerts.push({
-      code: 'config_problem',
-      level: 'info',
-      title: PATH_WARNING,
-      detail: '',
-      objects: [],
-    });
-  }
-  const disabled = !service.enabled;
-  if (alerts.length === 0 && !disabled) return null;
+  if (service.enabled && problems.length === 0) return null;
   return (
-    <section aria-labelledby="problems-h">
-      <h2 id="problems-h">Problems</h2>
-      {disabled ? (
-        <div class="alert alert-warning disabled-note">
-          <p>
-            <strong>Warning:</strong> This token is disabled: requests through it are refused.
-          </p>
-          {ctx.can('tokens:write') ? (
-            <ActionButton
-              action={`${paths.token(service.id)}/toggle`}
-              csrf={ctx.csrf}
-              label="Enable"
-              context={service.name}
-              fields={{ enabled: '1' }}
-              returnTo="detail"
-            />
-          ) : null}
-        </div>
-      ) : null}
-      <AlertList alerts={alerts} ctx={ctx} />
-    </section>
+    <>
+      {service.enabled ? null : (
+        <Callout
+          tone="warn"
+          glyph="⏸"
+          title={`${service.name} is disabled: requests through it are refused.`}
+          actions={
+            ctx.can('tokens:write') ? (
+              <ActionButton
+                action={`${paths.token(service.id)}/toggle`}
+                csrf={ctx.csrf}
+                label="Enable"
+                context={service.name}
+                size="sm"
+                fields={{ enabled: '1' }}
+                returnTo="detail"
+              />
+            ) : undefined
+          }
+        />
+      )}
+      {problems.map((problem) => (
+        <ProblemCallout ctx={ctx} problem={problem} />
+      ))}
+    </>
   );
 }
 
@@ -429,141 +568,249 @@ function unusableReason(data: TokenPageData): string | null {
   const { service } = data;
   if (!service.enabled) return 'the token is disabled';
   if (service.credential_sealed === null) return 'no secret is stored';
-  if (data.binding.status === 'unattested' || data.keyringError !== null) {
-    return 'the stored secret does not open';
-  }
+  if (unreadable(data)) return 'the stored secret does not open';
   if (storedUpstreamHost(service.base_url) === null) return 'its base URL cannot be read';
   if (data.outside) return `${upstreamHost(service.base_url)} is not an allowed host`;
   return null;
 }
 
-/** Accesses that let a consumer call: enabled, unexpired, of an enabled consumer. */
-export function usableAccesses(accesses: readonly AccessEdge[], now: number): AccessEdge[] {
-  return accesses.filter(
-    (edge) =>
-      edge.grant.enabled &&
-      (edge.grant.expires_at === null || edge.grant.expires_at > now) &&
-      edge.consumer?.enabled === true,
-  );
+// ---------------------------------------------------------------------------------------------
+// Who can use it
+
+function lastUsedText(edge: AccessEdge, data: TokenPageData, now: number): string | null {
+  if (data.sampleRate === 0 || !data.usageAvailable) return null;
+  return edge.lastUsedHour === null
+    ? 'not used in 30 days'
+    : `last used ${relativeTime(edge.lastUsedHour, now)}`;
 }
 
-function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
-function ConsumersSection(props: { ctx: ViewContext; data: TokenPageData }) {
-  const { ctx, data } = props;
-  const { service } = data;
-  const usable = usableAccesses(data.accesses, ctx.now);
-  const consumers = new Set(usable.map((edge) => edge.grant.caller_provider_id));
-  const reason = unusableReason(data);
-  const heading = `${plural(consumers.size, 'consumer', 'consumers')} can use this token${
-    usable.length > 0 ? ` (${plural(usable.length, 'access', 'accesses')})` : ''
-  }${reason !== null && usable.length > 0 ? `, but the token is not usable now: ${reason}` : ''}`;
-  const groups = new Map<string, AccessEdge[]>();
-  for (const edge of data.accesses) {
-    const list = groups.get(edge.grant.caller_provider_id) ?? [];
-    list.push(edge);
-    groups.set(edge.grant.caller_provider_id, list);
-  }
-  const giveHref = paths.accessNew({ token: service.id });
-  const absolute = `${data.proxyOrigin}${giveHref}`;
-  return (
-    <section id="consumers" aria-labelledby="consumers-h">
-      <h2 id="consumers-h">{heading}</h2>
-      {[...groups.values()].map((edges) => {
-        const consumer = edges[0]?.consumer;
-        const name = consumer?.name ?? 'Deleted consumer';
-        return (
-          <>
-            <h3>{consumer ? <a href={paths.consumer(consumer.id)}>{name}</a> : name}</h3>
-            <ChipList
-              label={`Accesses of ${name} to ${service.name}`}
-              items={edges.map((edge) => accessChip(edge, service.name, data, ctx.now))}
-            />
-          </>
-        );
-      })}
-      {ctx.can('access:write') ? (
-        <p class="actions">
-          <a class="button" href={giveHref}>
-            Give a consumer access
-          </a>
-        </p>
-      ) : (
-        <div class="handoff">
-          <p>Consumer access is granted by access managers. Send them this link:</p>
-          <Field
-            name="handoff"
-            id="handoff"
-            label="Link to give a consumer access to this token"
-            autocomplete="off"
-            readonly
-            value={absolute}
-          />
-          <HandOff ctx={ctx} service={service} url={absolute} />
-        </div>
-      )}
-      <p>
-        <a href={paths.requests({ token: service.id })}>Requests through this token</a> ·{' '}
-        <a href={paths.access({ token: service.id })}>All consumers and tokens</a>
-      </p>
-    </section>
-  );
-}
-
-function accessChip(
+function accessRow(
   edge: AccessEdge,
-  tokenName: string,
   data: TokenPageData,
-  now: number,
-): ChipProps {
-  const operations = plural(edge.operations.length, 'operation', 'operations');
-  const used =
-    data.sampleRate === 0 || !data.usageAvailable
-      ? null
-      : edge.lastUsedHour === null
-        ? 'not used in 30 days'
-        : `last used ${relativeTime(edge.lastUsedHour, now)}`;
-  const text = `${edge.subject} · ${edge.context} · ${operations}`;
-  const statusText = edge.statusDetail
-    ? `${edge.status === 'inactive' ? 'Inactive: ' : ''}${edge.statusDetail}`
-    : edge.status;
+  ctx: ViewContext,
+  tokenName: string,
+): WhoAccess {
+  const [first, ...more] = edge.operations;
+  const used = lastUsedText(edge, data, ctx.now);
+  const expires = edge.grant.expires_at;
+  const risky = edge.flags.some((flag) => flag.status === 'risk_accepted');
   return {
+    name: edge.subject,
     href: paths.accessItem(edge.grant.id),
-    text,
-    ...(used ? { secondary: used } : {}),
-    status: edge.status,
-    ...(edge.statusDetail ? { statusDetail: edge.statusDetail } : {}),
-    // The accessible name starts with the visible text (WCAG 2.5.3).
-    srText: `${text}: can use ${tokenName}, ${statusText}${used ? `, ${used}` : ''}`,
+    context: edge.context,
+    meta: (
+      <>
+        {first ? <code>{first}</code> : 'no operations'}
+        {more.length > 0 ? ` +${more.length}` : ''} ·{' '}
+        {expires === null ? 'never expires' : `ends ${uiFormatTime(new Date(expires), 'day')}`}
+        {used ? ` · ${used}` : ''}
+      </>
+    ),
+    // One grid cell for both words: the row is a two-column grid (text, status).
+    status: risky ? (
+      <span class="wst">
+        <StatusBadge status={edge.status} detail={edge.statusDetail} />
+        <StatusBadge status="risk_accepted" />
+      </span>
+    ) : (
+      <StatusBadge status={edge.status} detail={edge.statusDetail} />
+    ),
+    statusAction:
+      edge.status === 'expiring' && ctx.can('access:write') ? (
+        <a class="sm" href={paths.accessItem(edge.grant.id, { open: 'edit', hash: 'edit' })}>
+          Extend
+          <span class="vh">
+            {' '}
+            {edge.subject} → {tokenName}
+          </span>
+        </a>
+      ) : undefined,
+    warn: edge.status === 'expiring' || edge.status === 'inactive' || edge.status === 'expired',
   };
 }
 
-/** The access managers to mail, with the link in the body (AskSomeone with a prefilled mail). */
-function HandOff(props: { ctx: ViewContext; service: Service; url: string }) {
-  const people = props.ctx.askers('access:write');
-  if (people.length === 0) return <AskSomeone permission="access:write" ctx={props.ctx} />;
-  const query = new URLSearchParams({
-    subject: `Access to service token ${props.service.name}`,
-    body: `Please give a consumer access to the service token ${props.service.name}: ${props.url}`,
-  })
-    .toString()
-    .replace(/\+/g, '%20');
-  const more = props.ctx.askersMore('access:write');
+function ConsumersTray(props: { ctx: ViewContext; data: TokenPageData }) {
+  const { ctx, data } = props;
+  const { service } = data;
+  const byConsumer = new Map<string, AccessEdge[]>();
+  for (const edge of data.accesses) {
+    const list = byConsumer.get(edge.grant.caller_provider_id) ?? [];
+    list.push(edge);
+    byConsumer.set(edge.grant.caller_provider_id, list);
+  }
+  const requests = (edge: AccessEdge) => data.usage.get(edge.grant.id)?.requests ?? 0;
+  const ordered = [...byConsumer.entries()]
+    .map(([id, edges]) => ({
+      id,
+      edges: [...edges].sort((a, b) => requests(b) - requests(a)),
+      total: edges.reduce((sum, edge) => sum + requests(edge), 0),
+      name: edges[0]?.consumer?.name ?? 'Deleted consumer',
+    }))
+    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+  const shown = ordered.slice(0, MAP_GROUPS);
+  const hidden = ordered.slice(MAP_GROUPS);
+  const groups: WhoGroup[] = shown.map((group) => {
+    const consumer = group.edges[0]?.consumer ?? null;
+    const rows = group.edges.slice(0, MAP_ROWS);
+    const rest = group.edges.slice(MAP_ROWS);
+    const restExpiring = rest.filter((edge) => edge.status === 'expiring').length;
+    return {
+      consumer: {
+        name: group.name,
+        href: consumer ? paths.consumer(consumer.id) : paths.access({ token: service.id }),
+        line: plural(group.edges.length, 'access', 'accesses'),
+        logo: consumerLogo(consumer),
+        count: group.edges.length,
+      },
+      accesses: rows.map((edge) => accessRow(edge, data, ctx, service.name)),
+      more:
+        rest.length > 0
+          ? {
+              href: paths.access({ token: service.id, consumer: group.id }),
+              label: `+ ${plural(rest.length, 'more access', 'more accesses')}`,
+              srSuffix: `of ${group.name} to ${service.name}`,
+              meta: restExpiring > 0 ? `${restExpiring} expiring` : undefined,
+            }
+          : undefined,
+    };
+  });
+  const hiddenAccesses = hidden.reduce((sum, group) => sum + group.edges.length, 0);
+  const cut = hidden.length > 0 || shown.some((group) => group.edges.length > MAP_ROWS);
+  const expiring = data.accesses.filter((edge) => edge.status === 'expiring').length;
+  const inactive = data.accesses.filter((edge) => edge.status === 'inactive').length;
+  const giveHref = paths.accessNew({ token: service.id });
+  const canGive = ctx.can('access:write');
   return (
-    <p class="ask">
-      Ask an access manager:{' '}
-      {people.map((person, index) => (
+    <Tray
+      id="consumers"
+      title={`Who can use ${service.name}`}
+      count={data.accesses.length}
+      description={
         <>
-          {index > 0 ? (index === people.length - 1 && more === 0 ? ' or ' : ', ') : null}
-          <a href={`mailto:${person.email}?${query}`}>{person.email}</a>
+          Each line is one consumer access. Consumers call <code>{`/proxy/${service.slug}`}</code>;
+          they never see the secret.
         </>
-      ))}
-      {more > 0 ? ` and ${more} more` : ''}.
-    </p>
+      }
+      actions={
+        <>
+          <LinkAction href={paths.requests({ token: service.id })} arrow>
+            Requests through {service.name}
+          </LinkAction>
+          <LinkAction href={paths.access({ token: service.id })} arrow>
+            Connections map
+          </LinkAction>
+        </>
+      }
+    >
+      <WhoCanUse
+        label={`Accesses to ${service.name}, grouped by consumer`}
+        token={{
+          name: service.name,
+          logo: templateLogo(data.template, { disabled: !service.enabled }),
+          path: `/proxy/${service.slug}`,
+        }}
+        groups={groups}
+        rest={
+          hidden.length > 0
+            ? {
+                href: paths.access({ token: service.id, view: 'matrix' }),
+                label: `+ ${plural(hidden.length, 'more consumer')} · ${plural(hiddenAccesses, 'access', 'accesses')}`,
+                line: `Open them in the matrix, filtered to ${service.name}`,
+              }
+            : undefined
+        }
+        empty={{
+          title: 'No consumer access yet',
+          children: canGive ? (
+            <>
+              <p>
+                Give a consumer access so its jobs can call <code>{`/proxy/${service.slug}`}</code>.
+              </p>
+              <div>
+                <Button size="sm" plus href={giveHref}>
+                  Give a consumer access
+                </Button>
+              </div>
+            </>
+          ) : (
+            <HandOff ctx={ctx} data={data} />
+          ),
+        }}
+        note={
+          cut ? (
+            <>
+              <b>
+                {plural(byConsumer.size, 'consumer')},{' '}
+                {plural(data.accesses.length, 'access', 'accesses')}.
+              </b>{' '}
+              The map shows the {plural(shown.length, 'consumer')} with the most requests and up to{' '}
+              {MAP_ROWS} accesses each. The{' '}
+              <a href={paths.access({ token: service.id, view: 'matrix' })}>matrix</a> shows all of
+              them
+              {expiring > 0 ? (
+                <>
+                  ;{' '}
+                  <a href={paths.access({ token: service.id, status: 'expiring' })}>
+                    {expiring} expiring
+                  </a>
+                </>
+              ) : null}
+              {inactive > 0 ? (
+                <>
+                  {expiring > 0 ? ' and ' : '; '}
+                  <a href={paths.access({ token: service.id, status: 'inactive' })}>
+                    {inactive} inactive
+                  </a>
+                </>
+              ) : null}
+              .
+            </>
+          ) : undefined
+        }
+        footerAction={
+          canGive && groups.length > 0 ? (
+            <Button variant="ghost" size="sm" plus href={giveHref}>
+              Give another consumer access
+            </Button>
+          ) : undefined
+        }
+      />
+      {!canGive && groups.length > 0 ? (
+        <Panel variant="pad">
+          <HandOff ctx={ctx} data={data} />
+        </Panel>
+      ) : null}
+    </Tray>
   );
 }
+
+/** For people who cannot give access: the link that opens the form, and whom to send it to. */
+function HandOff(props: { ctx: ViewContext; data: TokenPageData }) {
+  const { ctx, data } = props;
+  const { service } = data;
+  const absolute = `${data.proxyOrigin}${paths.accessNew({ token: service.id })}`;
+  return (
+    <div class="stack-sm">
+      <p>Consumer access is granted by access managers. Send them this link:</p>
+      <Field
+        id="handoff"
+        label={`Link that opens “Give a consumer access” for ${service.name}`}
+        hint="Select to copy."
+      >
+        <Input name="handoff" mono readonly value={absolute} />
+      </Field>
+      <AskSomeone
+        permission="access:write"
+        ctx={ctx}
+        verb="give a consumer access"
+        subject={`Access to service token ${service.name}`}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Secret
 
 /** Rotate prefill: the stored expiry only when it is more than 14 days away (A13.8.2). */
 function rotateExpiry(service: Service, now: number): { value: string; past: string | null } {
@@ -577,89 +824,107 @@ function secretPlaceholder(template: ServiceTemplate | null) {
   return template?.secret ?? CUSTOM_SECRET;
 }
 
-function SecretSection(props: { ctx: ViewContext; data: TokenPageData; state: TokenPageState }) {
+function SecretTray(props: { ctx: ViewContext; data: TokenPageData; state: TokenPageState }) {
   const { ctx, data, state } = props;
-  const { service, template } = data;
+  const { service } = data;
   const attested = data.binding.status === 'attested';
   const canWrite = ctx.can('tokens:write');
-  const kid = sealedKid(service.credential_sealed);
   return (
-    <section id="secret" aria-labelledby="secret-h">
-      <h2 id="secret-h">Secret</h2>
-      <Details
-        rows={[
-          [
-            'Secret',
-            service.credential_sealed === null ? (
-              <span class="muted">missing</span>
-            ) : (
-              <SecretBadge
-                service={service}
-                unreadable={data.binding.status === 'unattested' || data.keyringError !== null}
-                now={ctx.now}
-              />
-            ),
-          ],
-          [
-            'Set on',
-            service.credential_updated_at === null ? (
-              <span class="muted">never</span>
-            ) : (
-              <Time ms={service.credential_updated_at} relative now={ctx.now} />
-            ),
-          ],
-          ['Set by', data.lastSet?.actor_email ?? <span class="muted">not recorded</span>],
-          [
-            'Expires',
-            <>
-              {service.credential_expires_at === null ? (
-                <span class="muted">does not expire, or not known</span>
-              ) : (
-                <Time ms={service.credential_expires_at} />
-              )}
-              {template?.expiry_from_check ? <span class="muted"> (read from GitHub)</span> : null}
-            </>,
-          ],
-          ['Key', kid ? <code>{kid}</code> : <span class="muted">none</span>],
-        ]}
-      />
-      {state.test ? (
-        state.test.passed ? (
-          <div class="check-result passed" role="status">
-            <VerifyResult verify={state.test} />
-          </div>
-        ) : (
-          <VerifyResult verify={state.test} />
-        )
-      ) : null}
-      {canWrite && service.verify && attested ? (
-        <div class="actions">
-          <ActionButton
-            action={`${paths.token(service.id)}/test`}
-            csrf={ctx.csrf}
-            label={`Test ${service.name} secret`}
-          />
-          <span class="hint">Sends {verifyText(service.verify)} to the upstream now.</span>
-        </div>
-      ) : null}
+    <Tray
+      id="secret"
+      title="Secret"
+      description="Only the last 4 characters are kept for display. The secret is never shown again."
+    >
+      <Panel variant="pad">
+        <StoredSecret ctx={ctx} data={data} />
+        {state.test ? <CheckResult verify={state.test} announce /> : null}
+        {canWrite && service.verify && attested ? (
+          <p class="hint">Test sends {verifyText(service.verify)} to the upstream now.</p>
+        ) : null}
+      </Panel>
       {canWrite ? (
-        attested ? (
-          <RotateForm ctx={ctx} data={data} state={state.secret} />
-        ) : data.keyringError !== null ? (
-          <p>
-            Secrets cannot be changed while the encryption keys are not loaded.{' '}
-            <a href={paths.tokenKeys()}>Open encryption keys</a>
-          </p>
-        ) : (
-          <p>
-            <a href={paths.token(service.id, { open: 'destination', hash: 'destination' })}>
-              Set the secret through Change destination below
-            </a>
-            : the host is confirmed there first.
-          </p>
-        )
+        <Panel variant="pad">
+          {attested ? (
+            <RotateForm ctx={ctx} data={data} state={state.secret} />
+          ) : data.keyringError !== null ? (
+            <p>
+              Secrets cannot be changed while the encryption keys are not loaded.{' '}
+              <a href={paths.tokenKeys()}>Open encryption keys</a>
+            </p>
+          ) : (
+            <p>
+              <a href={paths.token(service.id, { open: 'destination', hash: 'destination' })}>
+                Set the secret through Change destination below
+              </a>
+              : the host is confirmed there first.
+            </p>
+          )}
+        </Panel>
       ) : null}
-    </section>
+    </Tray>
+  );
+}
+
+function StoredSecret(props: { ctx: ViewContext; data: TokenPageData }) {
+  const { ctx, data } = props;
+  const { service, template } = data;
+  if (service.credential_sealed === null) {
+    return (
+      <p>
+        <StatusBadge status="no_credential" /> No secret is stored.
+      </p>
+    );
+  }
+  const parts = secretParts(service.credential_hint);
+  const kid = sealedKid(service.credential_sealed);
+  const expires = service.credential_expires_at;
+  const set = service.credential_updated_at;
+  return (
+    <Secret
+      last4={parts.last4 ?? undefined}
+      facts={
+        <>
+          {template?.secret.label ?? 'Secret'}
+          {parts.length !== null ? ` · ${parts.length} characters` : ''}
+          {unreadable(data) ? (
+            <>
+              {' '}
+              <StatusBadge status="credential_unreadable" />
+            </>
+          ) : null}
+        </>
+      }
+      meta={
+        <>
+          {set === null ? (
+            'Set at an unknown time'
+          ) : (
+            <>
+              Set{' '}
+              <Time datetime={new Date(set)} format="datetime">
+                {relativeTime(set, ctx.now)}
+              </Time>
+            </>
+          )}{' '}
+          by {data.lastSet?.actor_email ?? 'someone (not recorded)'} ·{' '}
+          {expires === null ? (
+            'does not expire, or not known'
+          ) : (
+            <>
+              {expires <= ctx.now ? 'expired ' : 'expires '}
+              <Time datetime={new Date(expires)} format="date" />
+            </>
+          )}
+          {template?.expiry_from_check ? ' (read from GitHub)' : ''}
+          {kid ? (
+            <>
+              {' '}
+              · sealed with key <code>{kid}</code>
+            </>
+          ) : null}
+        </>
+      }
+    />
   );
 }
 
@@ -674,33 +939,45 @@ function RotateForm(props: { ctx: ViewContext; data: TokenPageData; state?: Form
   };
   const secret = secretPlaceholder(template);
   const submitted = state ? new Set(state.values.also_replace.split(',')) : null;
+  const failedCheck = !!state?.verify;
+  const context = `of ${service.name}`;
   return (
-    <PostForm action={`${paths.token(service.id)}/secret`} csrf={ctx.csrf} class="stack">
-      <h3>Replace secret</h3>
+    <PostForm action={`${paths.token(service.id)}/secret`} csrf={ctx.csrf} class="stack-sm">
+      <h3 class="lbl" id="rotate-h">
+        Replace secret
+      </h3>
       {/* The destination shown here, so a token repointed since is refused (I-CRED-2). */}
       <input type="hidden" name="expected_destination" value={data.destinationFingerprint} />
-      <SecretField
-        ids={ids}
-        label={`New ${inSentence(secret.label)}`}
-        placeholder={secret.placeholder}
-        hint={`Sent to ${upstreamHost(service.base_url)}. Replaces ${service.credential_hint ?? 'the stored secret'}. Consumers keep working, with the new secret from the next request.`}
-        pattern={template?.secret.pattern}
-        draft={state?.draft ?? null}
-      />
-      {state?.verify ? <VerifyResult verify={state.verify} /> : null}
-      {template?.expiry_from_check ? null : (
-        <ExpiryField
+      <div class="rot-row">
+        <SecretField
           ids={ids}
-          values={values}
-          label="New secret expires on"
-          min={data.today}
-          hint={
-            expiry.past
-              ? `The old secret expires or expired on ${expiry.past}; enter the new one's. Empty = does not expire.`
-              : 'Change it if the new secret expires on another date. Empty = does not expire.'
-          }
+          label={`New ${inSentence(secret.label)}`}
+          placeholder={secret.placeholder}
+          hint={`Sent to ${upstreamHost(service.base_url)}. Replaces ${service.credential_hint ?? 'the stored secret'}. Consumers keep working, with the new secret from the next request.`}
+          pattern={template?.secret.pattern}
+          draft={state?.draft ?? null}
         />
-      )}
+        {template?.expiry_from_check ? null : (
+          <ExpiryField
+            ids={ids}
+            values={values}
+            label="New secret expires on"
+            optional
+            min={data.today}
+            hint={
+              expiry.past
+                ? `The old secret ${(service.credential_expires_at ?? 0) <= ctx.now ? 'expired' : 'expires'} on ${uiFormatTime(new Date(service.credential_expires_at ?? 0), 'date')}. Empty = does not expire.`
+                : 'Empty = does not expire.'
+            }
+          />
+        )}
+        {failedCheck ? null : (
+          <Button type="submit" srSuffix={context}>
+            {service.verify ? 'Check and replace' : 'Replace secret'}
+          </Button>
+        )}
+      </div>
+      {state?.verify ? <CheckResult verify={state.verify} /> : null}
       {data.siblings.map((sibling) => (
         <Checkbox
           name="also_replace"
@@ -710,93 +987,175 @@ function RotateForm(props: { ctx: ViewContext; data: TokenPageData; state?: Form
           label={`Also replace in ${sibling.slug} (same secret, ${sibling.credential_hint ?? 'stored'})`}
         />
       ))}
-      <SecretSubmits
-        label={service.verify ? 'Check and replace secret' : 'Replace secret'}
-        context={`of ${service.name}`}
-        failedCheck={!!state?.verify}
-      />
+      {failedCheck ? <SecretSubmits label="Replace secret" context={context} failedCheck /> : null}
     </PostForm>
   );
 }
 
-function UseSection(props: { data: TokenPageData }) {
-  const { service, template } = props.data;
+// ---------------------------------------------------------------------------------------------
+// How consumers call it
+
+/** A curl of the type's first default operation, when its path is a plain one. */
+function exampleCall(data: TokenPageData, base: string): string | null {
+  const rule = data.template?.operation_presets.find((preset) => preset.default)?.rules[0];
+  if (!rule || rule.path.includes(REPO_PLACEHOLDER) || /[*{]/.test(rule.path)) return null;
+  const method = rule.methods.find((m) => m !== '*') ?? 'GET';
+  return `curl -sS -X ${method} ${base}${rule.path} \\\n  -H "${CALLER_TOKEN_HEADER}: $TOKENGATE_TOKEN"`;
+}
+
+function UseTray(props: { data: TokenPageData }) {
+  const { data } = props;
+  const { service, template } = data;
+  const base = `${data.proxyOrigin}/proxy/${service.slug}`;
+  const example = exampleCall(data, base);
   return (
-    <section id="use" aria-labelledby="use-h">
-      <h2 id="use-h">How consumers call it</h2>
-      <Field
-        name="proxy_base_url"
-        id="proxy-base-url"
-        label="Proxy base URL"
-        autocomplete="off"
-        readonly
-        value={`${props.data.proxyOrigin}/proxy/${service.slug}`}
-        hint="Consumers send requests here with their CI identity token; the rest of the path is appended to the base URL."
-      />
-      {template ? <p class="hint">{template.notes}</p> : null}
-    </section>
+    <Tray
+      id="use"
+      title="How consumers call it"
+      description="Consumers send their tokengate token; tokengate adds the secret on the way out."
+    >
+      <Panel variant="pad">
+        <div>
+          <CodeBlock label="Proxy base URL" caption="Proxy base URL (select to copy)">
+            {base}
+          </CodeBlock>
+        </div>
+        {example ? (
+          <div>
+            <CodeBlock
+              label="Example call"
+              caption="Example call from a job that has access (select to copy)"
+            >
+              {example}
+            </CodeBlock>
+          </div>
+        ) : null}
+        {template ? <p class="hint">{template.notes}</p> : null}
+      </Panel>
+    </Tray>
   );
 }
 
-function DestinationSection(props: {
-  ctx: ViewContext;
-  data: TokenPageData;
-  state: TokenPageState;
-}) {
+// ---------------------------------------------------------------------------------------------
+// Destination and details
+
+function DestinationTray(props: { ctx: ViewContext; data: TokenPageData; state: TokenPageState }) {
   const { ctx, data, state } = props;
-  const { service } = data;
+  const { service, template } = data;
   const unattested = data.binding.status === 'unattested';
   const none = service.credential_sealed === null;
-  const open = unattested || none || !!state.destination || state.open === 'destination';
+  const canWrite = ctx.can('tokens:write');
+  const editDestination = unattested || none || !!state.destination || state.open === 'destination';
+  const editDetails = !!state.details || state.open === 'details';
   const notConfirmed = unattested ? (
     <>
       {' '}
-      <span class="badge bad">not confirmed</span>
+      <Badge tone="bad">not confirmed</Badge>
     </>
   ) : null;
   return (
-    <section id="destination" aria-labelledby="destination-h">
-      <h2 id="destination-h">Destination</h2>
-      <Details
-        rows={[
-          [
-            'Base URL',
-            <>
-              <code>{service.base_url}</code>
-              {notConfirmed}
-            </>,
-          ],
-          [
-            'Secret sent as',
-            <>
-              {injectionText(service.injection)}
-              {notConfirmed}
-            </>,
-          ],
-          [
-            'Extra forwarded headers',
-            service.forward_headers.length > 0 ? (
-              service.forward_headers.join(', ')
-            ) : (
-              <span class="muted">none</span>
-            ),
-          ],
-          ['Timeout', `${service.timeout_ms / 1000} s`],
-          ['Secret check', verifyText(service.verify)],
-        ]}
-      />
-      {unattested ? (
-        <p class="hint">
-          May have been changed outside the admin UI. Do not copy it into the destination form.
-        </p>
+    <Tray
+      id="destination"
+      title="Destination"
+      description={
+        template ? `Set by the ${template.label} type.` : 'Set when the token was added.'
+      }
+      actions={
+        canWrite && !(editDestination && editDetails) ? (
+          <>
+            {editDestination ? null : (
+              <Button
+                size="sm"
+                href={paths.token(service.id, { open: 'destination', hash: 'destination' })}
+              >
+                Change destination…
+              </Button>
+            )}
+            {editDetails ? null : (
+              <Button
+                size="sm"
+                href={paths.token(service.id, { open: 'details', hash: 'details' })}
+              >
+                Edit name and options…
+              </Button>
+            )}
+          </>
+        ) : undefined
+      }
+    >
+      <Panel variant="pad">
+        <KeyValue
+          items={[
+            {
+              label: 'Base URL',
+              value: (
+                <>
+                  <code>{service.base_url}</code>
+                  {notConfirmed}
+                </>
+              ),
+            },
+            {
+              label: 'Secret sent as',
+              value: (
+                <>
+                  {injectionText(service.injection)}
+                  {notConfirmed}
+                </>
+              ),
+            },
+            {
+              label: 'Extra forwarded headers',
+              value:
+                service.forward_headers.length > 0 ? (
+                  service.forward_headers.join(', ')
+                ) : (
+                  <span class="muted">none</span>
+                ),
+            },
+            { label: 'Timeout', value: `${service.timeout_ms / 1000} s` },
+            { label: 'Secret check', value: verifyText(service.verify) },
+            {
+              label: 'Description',
+              value: service.description || (
+                <span class="muted">
+                  None. Add one so access managers know which account this is.
+                </span>
+              ),
+            },
+          ]}
+        />
+        {unattested ? (
+          <p class="hint">
+            May have been changed outside the admin UI. Do not copy it into the destination form.
+          </p>
+        ) : null}
+        {service.injection.kind === 'query' ? <Callout title={QUERY_WARNING} /> : null}
+        {service.injection.kind === 'path' ? <Callout title={PATH_WARNING} /> : null}
+      </Panel>
+      {/* The header buttons open one form at a time (`?open=`, no script); a closed form is not
+          drawn, so the tray never repeats its two buttons as two disclosures. */}
+      {canWrite && editDestination ? (
+        <Panel variant="pad">
+          <Disclosure
+            id="destination-edit"
+            class="lform"
+            summary="Change destination"
+            hint="base URL and how the secret is sent"
+            open
+          >
+            <DestinationForm ctx={ctx} data={data} state={state.destination} />
+          </Disclosure>
+        </Panel>
       ) : null}
-      {ctx.can('tokens:write') ? (
-        <details id="destination-edit" open={open}>
-          <summary>Change destination</summary>
-          <DestinationForm ctx={ctx} data={data} state={state.destination} />
-        </details>
+      {canWrite && editDetails ? (
+        <Panel variant="pad">
+          <Disclosure id="details" summary="Edit name, description and options" open>
+            <DetailsForm ctx={ctx} data={data} state={state.details} />
+          </Disclosure>
+        </Panel>
       ) : null}
-    </section>
+    </Tray>
   );
 }
 
@@ -828,21 +1187,10 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
     : SERVICE_TEMPLATES.map((t) => ({ value: t.base_url, label: t.label }));
   const secret = secretPlaceholder(template);
   return (
-    <PostForm action={`${paths.token(service.id)}/destination`} csrf={ctx.csrf} class="stack">
+    <PostForm action={`${paths.token(service.id)}/destination`} csrf={ctx.csrf} class="stack-sm">
       <Field
-        name="base_url"
         id={ids.id('base_url')}
         label="Base URL"
-        type="url"
-        required
-        autocomplete="off"
-        spellcheck={false}
-        autocapitalize="none"
-        value={values.base_url}
-        example="https://api.example.com/v1"
-        suggestions={suggestions}
-        // As on the custom card: no generated pattern when the owner may tick allow_host.
-        pattern={listed && !canAllow ? allowlistPattern(data.allowlist ?? []) : undefined}
         hint={
           <>
             https only, no query string. Changing it requires the secret again: the secret is bound
@@ -850,24 +1198,37 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
             {listed ? <> Allowed hosts: {data.allowlist?.join(', ')}.</> : null}
           </>
         }
-        error={ids.error('base_url')}
-      />
+        error={ids.error('base_url') ?? undefined}
+      >
+        <Input
+          name="base_url"
+          type="url"
+          mono
+          required
+          value={values.base_url}
+          placeholder="https://api.example.com/v1"
+          suggestions={suggestions}
+          // As on the custom card: no generated pattern when the owner may tick allow_host.
+          pattern={listed && !canAllow ? allowlistPattern(data.allowlist ?? []) : undefined}
+        />
+      </Field>
       <InjectionFields ids={ids} values={values} tokens={data.tokens} />
       {confirm ? (
         <Field
-          name="confirm_destination"
           id={ids.id('confirm_destination')}
           label="Confirm destination host"
-          required
-          autocomplete="off"
-          spellcheck={false}
-          autocapitalize="none"
-          example="api.example.com"
-          value=""
-          pattern={HOST_PATTERN}
           hint="Check the base URL against the provider's docs, then type its host only, without https:// or a path. Nothing is sent upstream until this matches."
-          error={ids.error('confirm_destination')}
-        />
+          error={ids.error('confirm_destination') ?? undefined}
+        >
+          <Input
+            name="confirm_destination"
+            mono
+            required
+            value=""
+            placeholder="api.example.com"
+            pattern={HOST_PATTERN}
+          />
+        </Field>
       ) : null}
       <SecretField
         ids={ids}
@@ -876,7 +1237,7 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
         hint="Required: a new destination needs the secret again."
         draft={state?.draft ?? null}
       />
-      {state?.verify ? <VerifyResult verify={state.verify} /> : null}
+      {state?.verify ? <CheckResult verify={state.verify} /> : null}
       {showAllow ? (
         <Checkbox
           name="allow_host"
@@ -892,6 +1253,7 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
         <ExpiryField
           ids={ids}
           values={values}
+          optional
           min={data.today}
           hint="Leave empty if it does not expire. GitHub tokens report their expiry when checked."
         />
@@ -905,147 +1267,299 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
   );
 }
 
-function DetailsSection(props: { ctx: ViewContext; data: TokenPageData; state: TokenPageState }) {
+function DetailsForm(props: { ctx: ViewContext; data: TokenPageData; state?: FormState }) {
   const { ctx, data, state } = props;
-  if (!ctx.can('tokens:write')) return null;
   const { service } = data;
-  const ids = new FormIds('details', state.details?.errors ?? []);
-  const values = state.details?.values ?? valuesFromService(service);
-  const open = !!state.details || state.open === 'details';
+  const ids = new FormIds('details', state?.errors ?? []);
+  const values = state?.values ?? valuesFromService(service);
   return (
-    <details id="details" open={open}>
-      <summary>Edit name, description and options</summary>
-      <PostForm action={paths.token(service.id)} csrf={ctx.csrf} class="stack">
-        <VersionField value={String(service.updated_at)} />
-        <Field
-          name="name"
-          id={ids.id('name')}
-          label="Name"
-          required
-          autocomplete="off"
-          maxlength={100}
-          value={values.name}
-          example={data.template?.name ?? 'Slack'}
-          error={ids.error('name')}
-        />
-        <TextArea
-          name="description"
-          id={ids.id('description')}
-          label="Description"
-          optional
-          autocomplete="off"
-          rows={2}
-          maxlength={2000}
-          value={values.description}
-          example={'Bot "deploy-bot" in workspace acme; owner: platform team'}
-          hint="Which account the secret belongs to and who owns it. Access managers see this."
-          error={ids.error('description')}
-        />
-        <ExpiryField
-          ids={ids}
-          values={values}
-          hint="Fix the expiry without pasting the secret again. Empty = does not expire."
-        />
-        <AdvancedFields
-          ids={ids}
-          values={values}
-          tokens={data.tokens}
-          verifyHeaders={service.verify?.headers}
-        />
-        <div class="actions">
-          <button type="submit" class="primary">
-            Save changes<span class="vh"> to {service.name}</span>
-          </button>
-        </div>
-      </PostForm>
-    </details>
+    <PostForm action={paths.token(service.id)} csrf={ctx.csrf} class="stack-sm">
+      <VersionField value={String(service.updated_at)} />
+      <DetailFields ids={ids} values={values} example={data.template?.name ?? 'Slack'} />
+      <AdvancedFields
+        ids={ids}
+        values={values}
+        tokens={data.tokens}
+        verifyHeaders={service.verify?.headers}
+      />
+      <SubmitRow>
+        <Button variant="primary" type="submit" srSuffix={`to ${service.name}`}>
+          Save changes
+        </Button>
+      </SubmitRow>
+    </PostForm>
   );
 }
 
-function DangerSection(props: { ctx: ViewContext; data: TokenPageData }) {
+// ---------------------------------------------------------------------------------------------
+// Danger zone and the delete dialog
+
+function Danger(props: { ctx: ViewContext; data: TokenPageData }) {
   const { ctx, data } = props;
   if (!ctx.can('tokens:write')) return null;
   const { service } = data;
   const usable = usableAccesses(data.accesses, ctx.now);
   const consumers = new Set(usable.map((edge) => edge.grant.caller_provider_id)).size;
   const accesses = data.accesses;
-  const ids = accesses.map((edge) => edge.grant.id).sort();
-  const listed: Child[] = accesses.map((edge) => (
-    <a href={paths.accessItem(edge.grant.id)}>
-      {edge.grant.name} ({edge.consumer?.name ?? 'deleted consumer'})
-    </a>
-  ));
+  const toggle = `${paths.token(service.id)}/toggle`;
+  const countText = plural(accesses.length, 'consumer access', 'consumer accesses');
   return (
-    <section id="danger" aria-labelledby="danger-h">
-      <h2 id="danger-h">Danger zone</h2>
+    <DangerZone id="danger">
       {service.enabled ? (
-        <div class="actions">
-          <ActionButton
-            action={`${paths.token(service.id)}/toggle`}
-            csrf={ctx.csrf}
-            label="Disable token"
-            context={service.name}
-            tone="danger"
-            fields={{ enabled: '0' }}
-            returnTo="detail"
-          />
-          <span class="hint">
-            {plural(consumers, 'consumer loses', 'consumers lose')} access until you enable it
-            again.
-          </span>
-        </div>
+        <DangerRow
+          title="Disable token"
+          description={`${plural(consumers, 'consumer loses', 'consumers lose')} access until you enable it again. Nothing is deleted.`}
+          action={
+            <ActionButton
+              action={toggle}
+              csrf={ctx.csrf}
+              label={`Disable ${service.name}`}
+              fields={{ enabled: '0' }}
+              returnTo="detail"
+            />
+          }
+        />
       ) : (
-        <div class="actions">
-          <ActionButton
-            action={`${paths.token(service.id)}/toggle`}
-            csrf={ctx.csrf}
-            label="Enable token"
-            context={service.name}
-            fields={{ enabled: '1' }}
-            returnTo="detail"
-          />
-        </div>
+        <DangerRow
+          title="Enable token"
+          description="Consumers with access can use it again."
+          action={
+            <ActionButton
+              action={toggle}
+              csrf={ctx.csrf}
+              label={`Enable ${service.name}`}
+              fields={{ enabled: '1' }}
+              returnTo="detail"
+            />
+          }
+        />
       )}
       {accesses.length === 0 ? (
-        <ConfirmDialog
-          id="delete"
-          variant="standalone"
-          action={`${paths.token(service.id)}/delete`}
-          csrf={ctx.csrf}
-          danger
-          trigger={`Delete ${service.name}…`}
-          title={`Delete ${service.name}?`}
-          body="The token and its stored secret are deleted. The audit log keeps its configuration, never the secret."
-          confirmLabel={`Delete ${service.name}`}
+        <DangerRow
+          title={`Delete ${service.name}`}
+          description="The token and its stored secret are deleted. The audit log keeps its configuration, never the secret."
+          action={
+            <DialogTrigger dialog="dlg-delete" variant="danger">
+              Delete {service.name}…
+            </DialogTrigger>
+          }
         />
       ) : ctx.can('access:write') ? (
-        <ConfirmDialog
-          id="delete"
-          variant="standalone"
-          action={`${paths.token(service.id)}/delete`}
-          csrf={ctx.csrf}
-          danger
-          trigger={`Delete ${service.name} and its ${plural(accesses.length, 'consumer access', 'consumer accesses')}…`}
-          title={`Delete ${service.name} and its ${plural(accesses.length, 'consumer access', 'consumer accesses')}?`}
-          body="These consumers stop being able to call the token at once. The audit log keeps every deleted row, never the secret."
-          affected={listed}
-          fields={{ with_accesses: '1', access_ids: ids.join(',') }}
-          confirmLabel={`Delete ${service.name} and ${plural(accesses.length, 'access', 'accesses')}`}
+        <DangerRow
+          title={`Delete ${service.name} and its ${countText}`}
+          description="The secret and the accesses are removed. This cannot be undone."
+          action={
+            <DialogTrigger dialog="dlg-delete" variant="danger">
+              Delete {service.name}…
+            </DialogTrigger>
+          }
         />
       ) : (
-        <div class="blocked">
-          <p>
-            {service.name} cannot be deleted while consumer access uses it. Disable the token now;
-            an access manager can delete the accesses, or an admin can delete both.
-          </p>
-          <ul>
-            {listed.map((item) => (
-              <li>{item}</li>
-            ))}
-          </ul>
-          <AskSomeone permission="access:write" ctx={ctx} verb="delete these accesses" />
-        </div>
+        <DangerRow
+          title={`Delete ${service.name}`}
+          description={
+            <>
+              {service.name} cannot be deleted while consumer access uses it. Disable the token now;
+              an access manager can delete the accesses, or an admin can delete both. Accesses:{' '}
+              {accesses.map((edge, index) => (
+                <>
+                  {index > 0 ? ' · ' : null}
+                  <a href={paths.accessItem(edge.grant.id)}>
+                    {edge.grant.name} ({edge.consumer?.name ?? 'deleted consumer'})
+                  </a>
+                </>
+              ))}
+            </>
+          }
+          action={<AskSomeone permission="access:write" ctx={ctx} verb="delete these accesses" />}
+        />
       )}
-    </section>
+    </DangerZone>
+  );
+}
+
+function DeleteDialog(props: { ctx: ViewContext; data: TokenPageData }) {
+  const { ctx, data } = props;
+  const { service } = data;
+  const accesses = data.accesses;
+  const countText = plural(accesses.length, 'consumer access', 'consumer accesses');
+  const cascade = accesses.length > 0;
+  const disableInstead = cascade && service.enabled;
+  return (
+    <>
+      <ConfirmDialog
+        id="dlg-delete"
+        title={cascade ? `Delete ${service.name} and its ${countText}?` : `Delete ${service.name}?`}
+        description={
+          cascade ? (
+            <>
+              This cannot be undone. The secret is destroyed, and from the next request these jobs
+              get <code>404</code> from <code>{`/proxy/${service.slug}`}</code>:
+            </>
+          ) : (
+            'The token and its stored secret are deleted. The audit log keeps its configuration, never the secret.'
+          )
+        }
+        action={`${paths.token(service.id)}/delete`}
+        hidden={ctx.hidden({
+          confirm: '1',
+          ...(cascade
+            ? {
+                with_accesses: '1',
+                access_ids: accesses
+                  .map((edge) => edge.grant.id)
+                  .sort()
+                  .join(','),
+              }
+            : {}),
+        })}
+        confirmLabel={`Delete ${service.name}`}
+        affected={accesses.map((edge) => (
+          <Entity
+            logo={consumerLogo(edge.consumer)}
+            logoSize="sm"
+            name={`${edge.subject} · ${edge.context}`}
+            href={paths.accessItem(edge.grant.id)}
+            meta={`${edge.consumer?.name ?? 'deleted consumer'}${
+              lastUsedText(edge, data, ctx.now) ? ` · ${lastUsedText(edge, data, ctx.now)}` : ''
+            }`}
+          />
+        ))}
+        confirmText={
+          cascade
+            ? {
+                value: service.slug,
+                name: 'confirm_slug',
+                hint: 'The slug of this token, in lower case.',
+              }
+            : undefined
+        }
+      >
+        {disableInstead ? (
+          <Callout
+            title="Disable instead?"
+            more={`${
+              data.traffic && data.traffic.requests > 0
+                ? `${formatCount(data.traffic.requests)} ${data.traffic.requests === 1 ? 'request' : 'requests'} used ${service.name} in the last 24 hours. `
+                : ''
+            }To stop them for now, disable the token instead: nothing is deleted and you can enable it again.`}
+            actions={
+              <Button size="sm" type="submit" form="dlg-disable">
+                Disable {service.name} instead
+              </Button>
+            }
+          />
+        ) : undefined}
+      </ConfirmDialog>
+      {disableInstead ? (
+        // The form the dialog's "Disable instead" button submits (no nested forms).
+        <form method="post" action={`${paths.token(service.id)}/toggle`} id="dlg-disable" hidden>
+          <input type="hidden" name={CSRF_FIELD} value={ctx.csrf} />
+          <input type="hidden" name="_return" value="detail" />
+          <input type="hidden" name="enabled" value="0" />
+        </form>
+      ) : null}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Rail
+
+/** "Created service openai with a credential" after the actor: "created service openai …". */
+function sentence(summary: string): string {
+  return `${summary.charAt(0).toLowerCase()}${summary.slice(1)}`;
+}
+
+function shortTime(ms: number): string {
+  const date = new Date(ms);
+  return `${uiFormatTime(date, 'day')}, ${uiFormatTime(date, 'clock')}`;
+}
+
+function Rail(props: { ctx: ViewContext; data: TokenPageData }) {
+  const { data } = props;
+  const { service } = data;
+  const traffic = data.traffic;
+  return (
+    <>
+      {traffic ? (
+        <Tray
+          id="traffic"
+          title="Last 24 hours"
+          actions={
+            <LinkAction href={paths.requests({ range: '24h', token: service.id })} arrow>
+              Requests
+            </LinkAction>
+          }
+        >
+          <Kpis
+            columns={2}
+            items={[
+              { label: 'Requests', value: traffic.requests },
+              {
+                label: 'Denied',
+                value: traffic.denied,
+                unit:
+                  traffic.denied > 0 && traffic.requests > 0
+                    ? formatPercent(traffic.denied / traffic.requests)
+                    : undefined,
+                worst: traffic.denied > 0,
+              },
+              { label: 'Errors', value: traffic.errors },
+              { label: 'p95', value: percentileText(traffic.p95) },
+            ]}
+          />
+        </Tray>
+      ) : null}
+      <Tray id="record" title="Details">
+        <Panel>
+          <RailKeyValue
+            items={[
+              { label: 'Token ID', value: service.id, mono: true, copyable: true },
+              {
+                label: 'Created',
+                value: <Time datetime={new Date(service.created_at)} format="date" />,
+                note: data.creator ? `by ${data.creator}` : undefined,
+              },
+              {
+                label: 'Updated',
+                value: <Time datetime={new Date(service.updated_at)} format="datetime" />,
+              },
+            ]}
+          />
+        </Panel>
+      </Tray>
+      <Tray id="history" title="History">
+        <Panel>
+          {data.recent.length > 0 ? (
+            <Feed compact>
+              {data.recent.map((event) => (
+                <FeedItem
+                  avatar={
+                    event.actor_type === 'system' ? (
+                      <Avatar variant="sys">
+                        <Icon name="system" />
+                      </Avatar>
+                    ) : (
+                      <Avatar name={event.actor_email ?? ''} />
+                    )
+                  }
+                  time={<Time datetime={new Date(event.ts)}>{shortTime(event.ts)}</Time>}
+                >
+                  <b>{event.actor_email ?? 'System'}</b> {sentence(event.summary)}
+                </FeedItem>
+              ))}
+            </Feed>
+          ) : (
+            <ZeroState>No changes recorded yet.</ZeroState>
+          )}
+          <RailFoot>
+            <LinkAction href={paths.audit({ target: service.id })} arrow>
+              Audit history
+            </LinkAction>
+          </RailFoot>
+        </Panel>
+      </Tray>
+    </>
   );
 }

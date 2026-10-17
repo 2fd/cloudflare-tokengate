@@ -227,6 +227,17 @@ export const radioCards: ComponentDoc = {
           description: 'Input id prefix; defaults to the FieldSet’s id.',
         },
         { name: 'required', type: 'boolean', description: 'Never inside a Reveal (it throws).' },
+        {
+          name: 'invalid',
+          type: 'boolean',
+          description: (
+            <>
+              The server rejected the group: the first option that is not disabled gets
+              aria-invalid. Link the ErrorSummary entry to it with{' '}
+              <code>firstChoiceId(id, options)</code>.
+            </>
+          ),
+        },
         { name: 'class', type: 'string', description: 'Extra classes on .rcs.' },
       ],
     },
@@ -236,6 +247,7 @@ export const radioCards: ComponentDoc = {
     '“✓ Selected” is decoration (aria-hidden); the radio state is read instead.',
     'The ⚠ glyph is hidden; the word “Risk” is read with the option, and its description says what the risk is.',
     'A disabled option keeps its text, so people learn why it is not available.',
+    'On an error re-render, the ErrorSummary links to the first enabled radio (a fieldset cannot take focus), and that radio is aria-invalid.',
     'Focus shows a 2px ring around the whole card.',
   ],
   do: [

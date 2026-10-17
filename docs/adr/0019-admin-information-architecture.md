@@ -42,3 +42,7 @@ The URL names were the internal names (`services`, `caller-providers`, `grants`)
 - A static segment registered after its `:id` sibling would take the `:id` route's permission, for example `tokens:write` for an allowlist change that needs `settings:write`. The route-order test catches that.
 - The RBAC table stays a bijection with the registered routes, and each section owns one block of it.
 - The 404 page shows the signed-in shell, so a person who follows an old link stays in the console.
+
+## Note (2026-10-17)
+
+[ADR 0022](0022-admin-ui-on-design-system-d.md) changes two parts of this decision. The sidebar lists the sections as Monitoring, Service tokens, Service consumers, Users (Users is last). The configuration export is an item of the account menu at the bottom of the sidebar, not a form in the page footer. The sections, their pages and every URL are unchanged.

@@ -79,7 +79,7 @@ describe('consumers: viewer and token manager', () => {
   it('shows the empty state with who to ask', async () => {
     const html = await (await adminGet(world.app, viewer(), '/admin/consumers')).text();
     expect(html).toContain('No consumers yet.');
-    expect(html).toContain('Ask an access manager');
+    expect(html).toContain('Only access managers can');
   });
 });
 
@@ -291,7 +291,7 @@ describe('consumers: page', () => {
     const serviceId = await seedService(world.app.deps);
     await seedGrant(world.app.deps, id, serviceId, 'deploy <b>x</b>');
     const html = await (await adminGet(world.app, admin(), `/admin/consumers/${id}`)).text();
-    expect(html).toMatch(/name="remove" value="4242" class="secondary" disabled/);
+    expect(html).toMatch(/name="remove" value="4242"[^>]*disabled/);
     expect(html).toContain('Used by 1 enabled access');
     expect(html).toContain('deploy &lt;b&gt;x&lt;/b&gt;');
     const blocked = await adminPost(world.app, admin(), `/admin/consumers/${id}/tenants`, {
@@ -332,7 +332,7 @@ describe('consumers: page', () => {
     ).text();
     expect(page).toContain('name="confirm_trust_change"');
     expect(page).toContain('deploy &lt;b&gt;grant&lt;/b&gt;');
-    expect(page).toMatch(/<details id="trust" open/);
+    expect(page).toMatch(/<details class="disc" id="trust" open/);
     const fields = {
       intent: 'trust',
       issuer: ENTERPRISE_ISSUER,
@@ -375,7 +375,7 @@ describe('consumers: page', () => {
     const page = await (
       await adminGet(world.app, admin(), `/admin/consumers/${provider.id}`)
     ).text();
-    expect(page).toContain('<strong>Risk:</strong> no tenant pin');
+    expect(page).toContain('<b>Risk:</b> no tenant pin');
     const res = await adminPost(world.app, admin(), `/admin/consumers/${provider.id}`, {
       intent: 'trust',
       pin_rows: '1',
@@ -418,7 +418,7 @@ describe('consumers: page', () => {
     const page = await (
       await adminGet(world.app, admin(), `/admin/consumers/${provider.id}?open=trust`)
     ).text();
-    expect(page).toMatch(/<details id="trust" open/);
+    expect(page).toMatch(/<details class="disc" id="trust" open/);
     expect(page).not.toContain('name="confirm_trust_change"');
   });
 
@@ -456,13 +456,89 @@ describe('consumers: page', () => {
     const html = await (
       await adminGet(world.app, admin(), `/admin/consumers/${provider.id}`)
     ).text();
-    expect(html).toContain('Tokens this consumer can use (1)');
-    expect(html).toContain('acme/api<span class="secondary-text"> (987654321)</span>');
+    expect(html).toContain('Accesses by repository<span class="count">1</span>');
+    expect(html).toContain(
+      '<span class="mono">acme/api</span> <span class="meta">(987654321)</span>',
+    );
     expect(html).toContain(`href="/admin/access/${grant.id}"`);
     expect(html).toContain(
       `/admin/access/new?consumer=${provider.id}&amp;repository=987654321&amp;copy=${grant.id}`,
     );
     expect(html).toContain('outputs.proxy-base }}/github/&lt;path&gt;');
+  });
+});
+
+describe('consumers: design D pages', () => {
+  it('lists consumers with their token chips, the row action for writers only, and one primary', async () => {
+    const provider = await seedGithubProvider(world.app.deps);
+    const serviceId = await seedService(world.app.deps);
+    await seedGrant(world.app.deps, provider.id, serviceId);
+    const html = await (await adminGet(world.app, admin(), '/admin/consumers')).text();
+    expect(html).toContain('<h1>Service consumers<span class="count">1</span></h1>');
+    expect(html).toContain('<table class="tbl stackable" id="consumers">');
+    expect(html).toContain(`href="/admin/access?consumer=${provider.id}&amp;token=${serviceId}"`);
+    expect(html).toMatch(/<span class="vh">: 1 access(, [a-z ]+)*\. Open\.<\/span>/);
+    expect(html).toContain(
+      `href="/admin/access/new?consumer=${provider.id}">Give access<span class="vh"> to ${provider.name}</span>`,
+    );
+    expect(html.match(/class="btn primary/g)).toHaveLength(1);
+    const viewerHtml = await (await adminGet(world.app, viewer(), '/admin/consumers')).text();
+    expect(viewerHtml).not.toContain('Give access<span class="vh">');
+    expect(viewerHtml).not.toContain('class="btn primary');
+  });
+
+  it('puts the primary in the empty state when there is no consumer yet', async () => {
+    await seedService(world.app.deps);
+    const html = await (await adminGet(world.app, admin(), '/admin/consumers')).text();
+    expect(html).toContain('No consumers yet.');
+    expect(html.match(/class="btn primary/g)).toHaveLength(1);
+    expect(html).toContain('href="/admin/access/new?consumer=new">Give a consumer access</a>');
+  });
+
+  it('shows the consumer header: identity, relation line and the rail facts', async () => {
+    const provider = await seedGithubProvider(world.app.deps);
+    await seedLabel(provider.id, 'repository_id', '987654321', 'acme/api');
+    const serviceId = await seedService(world.app.deps);
+    await seedGrant(world.app.deps, provider.id, serviceId);
+    const html = await (
+      await adminGet(world.app, admin(), `/admin/consumers/${provider.id}`)
+    ).text();
+    expect(html).toContain('<nav class="crumbs" aria-label="Breadcrumb">');
+    expect(html).toMatch(/<h1>GitHub Actions <span class="badge ok">/);
+    expect(html).toContain('<p class="relline">Can use <a href="/admin/access?consumer=');
+    expect(html).toContain('through <b>1 access</b> from <b>1 repository</b>');
+    expect(html).toContain('<aside class="rail" aria-label="Consumer facts">');
+    expect(html).toContain('<dialog class="dlg" id="dlg-rename-consumer"');
+    expect(html).toContain('command="show-modal" commandfor="dlg-rename-consumer"');
+    // Viewers get the read-only trust settings and no dialogs.
+    const viewerHtml = await (
+      await adminGet(world.app, viewer(), `/admin/consumers/${provider.id}`)
+    ).text();
+    expect(viewerHtml).toContain('<section class="tray" id="trust" aria-labelledby="trust-h">');
+    expect(viewerHtml).not.toContain('<dialog');
+  });
+
+  it('opens the rename dialog on a rename error and keeps the typed name', async () => {
+    const provider = await seedGithubProvider(world.app.deps);
+    const res = await adminPost(world.app, admin(), `/admin/consumers/${provider.id}`, {
+      intent: 'rename',
+      name: '',
+      expected_updated_at: String(provider.updated_at),
+    });
+    expect(res.status).toBe(422);
+    const html = await res.text();
+    expect(html).toMatch(/<dialog class="dlg" id="dlg-rename-consumer"[^>]*open/);
+  });
+
+  it('derives the rest of the consumer: the add page rail lists what is set for you', async () => {
+    const html = await (await adminGet(world.app, admin(), '/admin/consumers/new')).text();
+    expect(html).toContain(
+      '<form class="lform form-layout" method="post" action="/admin/consumers" id="f-add">',
+    );
+    expect(html).toContain('<fieldset class="field sf1 con-types" id="f-type"');
+    expect(html).toContain('id="ad-set-h">Set for you</h2>');
+    expect(html).toContain('<div class="rv1 con-fields" data-o="1">');
+    expect(html).toContain('Presets: Buildkite, CircleCI');
   });
 });
 

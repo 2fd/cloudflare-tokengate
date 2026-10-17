@@ -1,7 +1,9 @@
 // Helpers shared by admin pages: render inside the shell (one load of the shell data per page),
 // parse the form body once with a size cap applied before buffering (I-CSRF-1), audit actor,
 // repeating form rows and POST-redirect-GET with a notice key (notice.ts).
+import { PageHeader } from '@tokengate/ui';
 import type { Context } from 'hono';
+import { raw } from 'hono/html';
 import type { Child } from 'hono/jsx';
 import { parseBody } from 'hono/utils/body';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -10,17 +12,25 @@ import { parseConfig } from '../config';
 import { loadKeyring } from '../crypto/keyring';
 import { schemaStatusByDatabase } from '../db/migrations';
 import type { Role } from '../db/types';
-import { activeUsersByRole, countNeedsDecision } from '../db/users';
+import { activeUsersByRole } from '../db/users';
 import type { Deps } from '../deps';
+import { configErrorsForStatus } from '../health';
+import { type AlertData, loadAlertData, overviewAlerts } from '../telemetry/dashboard';
+import { CSRF_FIELD } from './auth/csrf';
 import { signOutUrl } from './auth/identity';
 import { can, type Permission, rolesWith } from './auth/rbac';
 import type { AdminActor, AdminViewer } from './auth/types';
 import type { Notice, PendingNotice } from './notice';
 import type { FieldError } from './ops/shared';
-import { paths } from './paths';
-import { docsUrl } from './views/docs';
-import { type HealthProblem, Layout, type SectionKey } from './views/layout';
-import type { Banner } from './views/legacy';
+import {
+  type HealthProblem,
+  type HealthSummary,
+  healthSummary,
+  stripProblems,
+  uncheckedHealth,
+} from './shell-health';
+import { ErrorSummary, FocusTargets, focusTarget, NoticeView } from './views/components';
+import { documentTitle, Layout, type SectionKey } from './views/layout';
 
 export { redirectWithNotice } from './notice';
 export { RETURN_PATHS, type ReturnRoute, returnPath } from './paths';
@@ -28,21 +38,34 @@ export { RETURN_PATHS, type ReturnRoute, returnPath } from './paths';
 export type AdminContext = Context<AppContext>;
 
 export interface PageProps {
+  /** The <title> part, and the H1 of the default header. */
   title: string;
-  section: SectionKey;
-  /** The subnav tab this page belongs to (a Tabs item key of the section). */
+  /** The open sidebar section; null for a page of no section (an unknown or moved URL). */
+  section: SectionKey | null;
+  /** The sidebar item of the section this page belongs to (a SECTIONS tabs key); '' for none. */
   subsection: string;
-  breadcrumbs?: Array<{ href: string; label: string }>;
-  /** Error re-render: the title gets "Error: " and an ErrorSummary heads the page. */
-  errors?: FieldError[];
-  /** Shown after the h1. A function is called with the view context (resolveNotice). */
-  notice?: Notice | PendingNotice | null;
-  /** Rendered after the subnav, for example a section-wide search form. */
-  subnavExtra?: Child;
   /** Defaults to 200. */
   status?: ContentfulStatusCode;
-  /** Transition only: notices and warnings of the legacy page bodies. */
-  legacyBanners?: Banner[];
+  /** Error re-render: the title gets "Error: " and an ErrorSummary follows the header. */
+  errors?: FieldError[];
+  /**
+   * The ErrorSummary link target of a field error. Default: the field's control, and for a group
+   * of choices rendered by the RadioCards or CheckboxGroup adapter its first enabled input
+   * (focusTarget). Pass it only for a control those adapters do not render.
+   */
+  errorTarget?: (field: string) => string;
+  /** ErrorSummary heading and sentence ("The token was not saved"); default "There is a problem". */
+  errorSummary?: { title?: Child; description?: Child };
+  /** Shown after the header and the ErrorSummary. A function is called with the view context. */
+  notice?: Notice | PendingNotice | null;
+  /**
+   * The page's own header: a ui PageHeader (title, count, description, actions; or crumbs, an
+   * Identity, a RelationLine and Tabs on a detail page). A function gets the view context. It
+   * holds the only H1 of the page. Default: a PageHeader with `title` only.
+   */
+  header?: Child | ((ctx: ViewContext) => Child);
+  /** The Overview's alert data, so the shell does not load it a second time. */
+  alertData?: AlertData;
 }
 
 /** What every page body can know about the viewer, from the shell data loaded once per page. */
@@ -58,6 +81,8 @@ export interface ViewContext {
   askers(permission: Permission): Array<{ email: string }>;
   /** How many more such users exist than `askers` lists. */
   askersMore(permission: Permission): number;
+  /** The `hidden` fields of a ui form (ActionForm, MenuItem, Dialog): `_csrf`, then `extra`. */
+  hidden(extra?: Record<string, string>): Record<string, string>;
 }
 
 /** The signed-in user a page is rendered for (the request's viewer, or the middleware's user). */
@@ -80,31 +105,58 @@ export async function renderPageFor(
 ): Promise<Response> {
   const deps = c.get('deps');
   const url = new URL(c.req.url);
-  const shell = await loadShell(deps, viewer, url.hostname);
-  const notice = typeof props.notice === 'function' ? props.notice(shell.view) : props.notice;
+  const shell = await loadShell(deps, viewer, url.hostname, props.alertData);
+  const view = shell.view;
+  const errors = props.errors ?? [];
+  const notice = typeof props.notice === 'function' ? props.notice(view) : props.notice;
+  // The body renders first: the group adapters record their link targets (FocusTargets) for the
+  // ErrorSummary, which comes before the body on the page.
+  const targets = new Map<string, string>();
+  const content = await toHtml(
+    <FocusTargets.Provider value={targets}>{body(view)}</FocusTargets.Provider>,
+  );
+  const header =
+    typeof props.header === 'function'
+      ? props.header(view)
+      : (props.header ?? <PageHeader title={props.title} />);
   return c.html(
     <Layout
-      title={props.title}
+      title={documentTitle(props.title, props.section, errors.length > 0)}
       shell={{
         section: props.section,
         subsection: props.subsection,
         path: url.pathname,
-        view: shell.view,
-        email: viewer.user.email,
+        view,
+        user: { email: viewer.user.email, name: viewer.user.name },
         signOutUrl: signOutUrl(viewer.loginProvider),
         needsDecision: shell.needsDecision,
+        counts: shell.counts,
+        health: shell.health,
+        // The Overview lists every problem itself.
         problems: props.section === 'monitoring' && url.pathname === '/admin' ? [] : shell.problems,
       }}
-      breadcrumbs={props.breadcrumbs}
-      errors={props.errors}
-      notice={notice ?? null}
-      subnavExtra={props.subnavExtra}
-      legacyBanners={props.legacyBanners}
     >
-      {body(shell.view)}
+      {header}
+      {errors.length > 0 ? (
+        <ErrorSummary
+          errors={errors}
+          target={props.errorTarget ?? ((field) => focusTarget(targets, field))}
+          title={props.errorSummary?.title}
+          description={props.errorSummary?.description}
+        />
+      ) : null}
+      {notice ? (
+        <NoticeView notice={notice} csrf={view.csrf} autofocus={errors.length === 0} />
+      ) : null}
+      {raw(content)}
     </Layout>,
     props.status ?? 200,
   );
+}
+
+/** A JSX tree as HTML (Hono's own escaping applied; async components resolved). */
+async function toHtml(node: Child): Promise<string> {
+  return String(await (node as { toString(): string | Promise<string> }).toString());
 }
 
 /** Names per role AskSomeone may need; the first ones by email. */
@@ -112,18 +164,47 @@ const ASKERS_SHOWN = 3;
 /** Roles that hold more than `read`, so someone may ask them for a change. */
 const ASKABLE_ROLES: readonly Role[] = ['token_manager', 'access_manager', 'admin', 'owner'];
 
+interface Shell {
+  view: ViewContext;
+  needsDecision: number;
+  counts: { tokens: number; consumers: number };
+  health: HealthSummary;
+  problems: HealthProblem[];
+}
+
+/**
+ * The data of the shell, in one round of parallel reads: the people AskSomeone names, the
+ * sidebar counts, and the alert catalogue behind the health line and strip (cheap: no traffic
+ * series; the keyring and schema status are cached per isolate). Values are never shown, only
+ * variable names and states. When the alert data does not load (a database behind on a migration
+ * that one of its queries needs), the page still renders: the strip falls back to the checks that
+ * read no table, and the health line says the checks did not run.
+ */
 async function loadShell(
   deps: Deps,
   viewer: ShellViewer,
   host: string,
-): Promise<{ view: ViewContext; needsDecision: number; problems: HealthProblem[] }> {
+  loaded?: AlertData,
+): Promise<Shell> {
   const now = deps.now();
   const role = viewer.user.role;
-  const [people, needsDecision, problems] = await Promise.all([
+  const [people, counts, alertData] = await Promise.all([
     activeUsersByRole(deps.env.DB, ASKABLE_ROLES, ASKERS_SHOWN),
-    can(role, 'users:write') ? countNeedsDecision(deps.env.DB, now) : Promise.resolve(0),
-    healthProblems(deps),
+    deps.env.DB.prepare(
+      'SELECT (SELECT COUNT(*) FROM services) AS tokens, (SELECT COUNT(*) FROM caller_providers) AS consumers',
+    ).first<{ tokens: number; consumers: number }>(),
+    loaded ??
+      loadAlertData(deps).catch((error: unknown) => {
+        console.warn(
+          JSON.stringify({
+            type: 'admin.shell_health_failed',
+            error: error instanceof Error ? error.message : 'unknown',
+          }),
+        );
+        return null;
+      }),
   ]);
+  const health = alertData ? shellHealth(alertData) : await fallbackHealth(deps);
   const holders = (permission: Permission) => {
     const roles = new Set(rolesWith(permission));
     const rows = people.filter((person) => roles.has(person.role));
@@ -148,42 +229,37 @@ async function loadShell(
       const { shown, total } = holders(permission);
       return Math.max(0, total - shown.length);
     },
+    hidden: (extra) => ({ [CSRF_FIELD]: viewer.csrfToken, ...extra }),
   };
-  return { view, needsDecision, problems };
+  return {
+    view,
+    needsDecision: alertData && can(role, 'users:write') ? alertData.needsDecision : 0,
+    counts: { tokens: Number(counts?.tokens ?? 0), consumers: Number(counts?.consumers ?? 0) },
+    ...health,
+  };
+}
+
+/** The health line and strip from the alert catalogue. */
+function shellHealth(data: AlertData): Pick<Shell, 'health' | 'problems'> {
+  return { health: healthSummary(overviewAlerts(data)), problems: stripProblems(data) };
 }
 
 /**
- * Error-level problems cheap enough to check on every page: the keyring (cached per isolate), a
- * database missing migrations (cached) and configuration errors (pure). Values are never shown,
- * only variable names and states. The Overview health panel lists every check.
+ * The health line and strip without the alert data: the keyring (cached per isolate), the schema
+ * status (cached; it reads only `d1_migrations`) and the configuration (pure).
  */
-async function healthProblems(deps: Deps): Promise<HealthProblem[]> {
+async function fallbackHealth(deps: Deps): Promise<Pick<Shell, 'health' | 'problems'>> {
   const [keyring, schema] = await Promise.all([
     loadKeyring(deps.env),
     schemaStatusByDatabase(deps),
   ]);
-  const problems: HealthProblem[] = [];
-  if (!keyring.ok) {
-    problems.push({
-      title: `Encryption keys are not loaded (${keyring.error}): token requests fail and secrets cannot change.`,
-      fix: { href: paths.tokenKeys(), label: 'Open encryption keys' },
-    });
-  }
-  for (const database of ['DB', 'TELEMETRY_DB'] as const) {
-    if (schema[database] === 'behind') {
-      problems.push({
-        title: `Database ${database} is missing migrations.`,
-        fix: { href: docsUrl('operations/upgrades.md'), label: 'How to apply migrations' },
-      });
-    }
-  }
-  for (const error of parseConfig(deps.env).errors) {
-    problems.push({
-      title: `${error.variable}: ${error.message}`,
-      fix: { href: docsUrl('configuration.md'), label: 'Configuration reference' },
-    });
-  }
-  return problems;
+  const problems = stripProblems({
+    keyring: { error: keyring.ok ? null : keyring.error },
+    schema,
+    config: configErrorsForStatus(parseConfig(deps.env)),
+    cron: null,
+  });
+  return { health: uncheckedHealth(problems.length), problems };
 }
 
 /** Audit actor for audit rows written during this admin request. */

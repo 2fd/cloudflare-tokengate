@@ -1,12 +1,17 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
 import { SrSuffix } from '../../lib/sr';
+import { ariaCurrent } from './current';
 
 export interface SideNavItem {
   label: string;
   href: string;
-  /** This item is the current page (`aria-current="page"`). */
-  current?: boolean;
+  /**
+   * `true` or `'page'`: this item is the current page (`aria-current="page"`). `'true'`: it holds
+   * the current page, a deeper page not in the nav (`aria-current="true"`): a token detail under
+   * Tokens. Both are highlighted.
+   */
+  current?: boolean | 'page' | 'true';
 }
 
 export interface SideNavSection {
@@ -20,8 +25,11 @@ export interface SideNavSection {
   pill?: { label: string; srSuffix?: string };
   /** The section holds the current page: its row is highlighted and its items are shown. */
   open?: boolean;
-  /** The section row itself is the current page (a section without sub-items). */
-  current?: boolean;
+  /**
+   * The section row itself is the current page (a section without sub-items): `true` or `'page'`
+   * (`aria-current="page"`); `'true'` when it holds a deeper page (`aria-current="true"`).
+   */
+  current?: boolean | 'page' | 'true';
   /** Sub-items, rendered only under the open section. */
   items?: readonly SideNavItem[];
 }
@@ -46,7 +54,7 @@ export function SideNav({ label, sections, class: className }: SideNavProps) {
           <a
             class={cx('nav-item', section.open && 'is-open')}
             href={section.href}
-            aria-current={section.current ? 'page' : undefined}
+            aria-current={ariaCurrent(section.current)}
           >
             {section.icon}
             {section.label}
@@ -62,7 +70,7 @@ export function SideNav({ label, sections, class: className }: SideNavProps) {
             <ul class="nav-sub">
               {section.items.map((item) => (
                 <li>
-                  <a href={item.href} aria-current={item.current ? 'page' : undefined}>
+                  <a href={item.href} aria-current={ariaCurrent(item.current)}>
                     {item.label}
                   </a>
                 </li>

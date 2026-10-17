@@ -1,7 +1,22 @@
-// Monitoring › Data retention (`/admin/retention`): how long request records, hourly summaries and
-// the audit log are kept, the share of allowed requests recorded, and the request record cap.
-// Owners edit them (settings:write); everyone else sees the same groups as a list. Every value is
-// prefilled and the numbers have suggestion lists; the sample rate is a pick from presets.
+// Monitoring › Data retention (`/admin/retention`), a settings page: how long request records,
+// hourly summaries and the audit log are kept, the share of allowed requests recorded, and the
+// request record cap. Three read-only cards for everyone; owners (settings:write) get "Edit…" on
+// each card, which opens one dialog holding the whole form (one POST, so the cross-field rule
+// reports where it belongs). Every value is prefilled and the numbers have suggestion lists; the
+// sample rate is a pick from presets. A failed save re-renders the dialog open in the page flow.
+import {
+  Badge,
+  Button,
+  Callout,
+  Dialog,
+  DialogClose,
+  DialogTrigger,
+  FieldSet,
+  KeyValue,
+  PageHeader,
+  Panel,
+  Tray,
+} from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
 import type { App } from '../../app';
 import { HOUR_MS, outcomeTotalsStatement } from '../../db/rollups';
@@ -21,11 +36,12 @@ import {
   renderPage,
   type ViewContext,
 } from '../render';
-import { AskSomeone, Details, Field, PostForm, RadioCards } from '../views/components';
+import { AskSomeone, Field, RadioCards } from '../views/components';
 import { formatCount, formatPercent } from '../views/format';
-import { FindRequestForm } from '../views/monitoring';
+import { FindRequest } from '../views/monitoring';
 
 const PAGE = paths.retention();
+const DIALOG = 'retention-edit';
 
 const NOTICES: NoticeTable = {
   saved: () => ({
@@ -50,13 +66,18 @@ const SAMPLE_PRESETS: ReadonlyArray<{ value: number; title: string; description?
   { value: 0, title: '0 % (none)', description: 'Recommended on the Workers Free plan.' },
 ];
 
-const GROUPS: ReadonlyArray<{ legend: string; keys: ReadonlyArray<keyof Settings> }> = [
+const GROUPS: ReadonlyArray<{
+  id: 'records' | 'summaries' | 'audit';
+  legend: string;
+  keys: ReadonlyArray<keyof Settings>;
+}> = [
   {
+    id: 'records',
     legend: 'Request records',
     keys: ['request_log_retention_days', 'allowed_sample_rate', 'request_log_max_rows'],
   },
-  { legend: 'Hourly summaries', keys: ['rollup_retention_days'] },
-  { legend: 'Audit log', keys: ['audit_log_retention_days'] },
+  { id: 'summaries', legend: 'Hourly summaries', keys: ['rollup_retention_days'] },
+  { id: 'audit', legend: 'Audit log', keys: ['audit_log_retention_days'] },
 ];
 
 type SettingValues = Partial<Record<keyof Settings, string>>;
@@ -130,6 +151,7 @@ async function retentionPage(
         perDay: (usage.other + usage.allowed * settings.allowed_sample_rate) / 7,
       }
     : { stored: null, perDay: null };
+  const errors = options.errors ?? [];
   return renderPage(
     c,
     {
@@ -137,45 +159,112 @@ async function retentionPage(
       section: 'monitoring',
       subsection: 'retention',
       notice: resolveNotice(NOTICES, options.notice, null),
-      errors: options.errors,
+      errors,
       status: options.status,
-      subnavExtra: <FindRequestForm />,
+      header: (
+        <PageHeader
+          title="Data retention"
+          description="How long tokengate keeps what it records, and how much of it. The hourly maintenance job deletes older data."
+          actions={<FindRequest placement="header" />}
+        />
+      ),
     },
-    (ctx) => (
-      <>
-        <p>
-          How long the gateway keeps what it records, and how much of it. The hourly maintenance job
-          deletes older data.
-        </p>
-        <UsageLine usage={kept} />
-        {ctx.can('settings:write') ? (
-          <SettingsForm
-            ctx={ctx}
-            settings={settings}
-            submitted={options.submitted}
-            errors={options.errors ?? []}
-            usage={kept}
-          />
-        ) : (
-          <ReadOnly ctx={ctx} settings={settings} />
-        )}
-      </>
-    ),
+    (ctx) => {
+      const canEdit = ctx.can('settings:write');
+      const edit = (what: string) =>
+        canEdit ? (
+          <DialogTrigger dialog={DIALOG} size="sm" srSuffix={what}>
+            Edit…
+          </DialogTrigger>
+        ) : undefined;
+      return (
+        <>
+          {canEdit ? null : (
+            <AskSomeone permission="settings:write" ctx={ctx} verb="change these settings" />
+          )}
+          {kept.stored === null ? (
+            <Callout tone="warn" title="The request log could not be read." />
+          ) : null}
+          <Tray
+            id="records"
+            title="Request records"
+            description={kept.stored === null ? undefined : <UsageLine usage={kept} />}
+            actions={edit('request records')}
+          >
+            <Panel variant="pad">
+              <KeyValue items={valueItems(GROUPS[0]?.keys ?? [], settings)} />
+            </Panel>
+          </Tray>
+          <Tray
+            id="summaries"
+            title="Hourly summaries"
+            description="Summaries feed the Overview and 'last used'."
+            actions={edit('hourly summaries')}
+          >
+            <Panel variant="pad">
+              <KeyValue items={valueItems(GROUPS[1]?.keys ?? [], settings)} />
+            </Panel>
+          </Tray>
+          <Tray
+            id="audit"
+            title="Audit log"
+            description="The 90-day floor protects the audit trail."
+            actions={edit('audit log')}
+          >
+            <Panel variant="pad">
+              <KeyValue items={valueItems(GROUPS[2]?.keys ?? [], settings)} />
+            </Panel>
+          </Tray>
+          {canEdit ? (
+            <SettingsDialog
+              ctx={ctx}
+              settings={settings}
+              submitted={options.submitted}
+              errors={errors}
+              usage={kept}
+            />
+          ) : null}
+        </>
+      );
+    },
   );
 }
 
+/** "Stored now: up to about N records (upper estimate). Last 7 days: …" */
 function UsageLine(props: { usage: Usage }) {
   const { usage } = props;
-  if (usage.stored === null) return <p class="muted">The request log could not be read.</p>;
   const perDay = usage.perDay;
   return (
-    <p>
-      Stored now: up to about {compact(usage.stored)} records (upper estimate).
+    <>
+      Stored now: up to about {compact(usage.stored ?? 0)} records (upper estimate).
       {perDay !== null
         ? ` Last 7 days: about ${compact(perDay)} records a day kept after sampling.`
         : ''}
-    </p>
+    </>
   );
+}
+
+/** The read-only values of a card: plain text, a badge only when allowed requests are sampled. */
+function valueItems(keys: ReadonlyArray<keyof Settings>, settings: Settings) {
+  return keys.map((key) => {
+    if (key !== 'allowed_sample_rate') {
+      return { label: SETTING_LABELS[key], value: formatCount(settings[key]) };
+    }
+    const rate = settings.allowed_sample_rate;
+    // No trailing space at 100 %: the value is exactly the text.
+    const value: Child =
+      rate < 1 ? (
+        <>
+          {sampleText(rate)}{' '}
+          <Badge tone="warn" glyph="⚠">
+            {rate === 0 ? 'Not recorded' : 'Sampled'}
+          </Badge>
+        </>
+      ) : (
+        sampleText(rate)
+      );
+    return { label: SETTING_LABELS[key], value };
+  });
 }
 
 /** 1.2 M, 85 k, 312: rounded counts for estimates. */
@@ -211,7 +300,11 @@ function hintFor(key: keyof Settings, settings: Settings, usage: Usage): Child {
   }
 }
 
-function SettingsForm(props: {
+/**
+ * The edit dialog: the whole form, one fieldset per card. Opened by every card's "Edit…"; after a
+ * failed save it renders open in the page flow, so the ErrorSummary links land on visible fields.
+ */
+function SettingsDialog(props: {
   ctx: ViewContext;
   settings: Settings;
   submitted?: SettingValues;
@@ -222,10 +315,25 @@ function SettingsForm(props: {
   const error = (key: string) => props.errors.find((e) => e.field === key)?.message ?? null;
   const value = (key: keyof Settings) => props.submitted?.[key] ?? String(settings[key]);
   return (
-    <PostForm action={PAGE} csrf={props.ctx.csrf} class="stack">
+    <Dialog
+      id={DIALOG}
+      title="Edit data retention"
+      description="The hourly maintenance job applies retention changes on its next run."
+      wide
+      action={PAGE}
+      hidden={props.ctx.hidden()}
+      open={props.errors.length > 0}
+      footer={
+        <>
+          <DialogClose dialog={DIALOG} />
+          <Button variant="primary" type="submit">
+            Save
+          </Button>
+        </>
+      }
+    >
       {GROUPS.map((group) => (
-        <fieldset>
-          <legend>{group.legend}</legend>
+        <FieldSet id={`g-${group.id}`} legend={group.legend}>
           {group.keys.map((key) => {
             if (key === 'allowed_sample_rate') {
               const current = settings.allowed_sample_rate;
@@ -270,36 +378,9 @@ function SettingsForm(props: {
               />
             );
           })}
-        </fieldset>
+        </FieldSet>
       ))}
-      <div class="actions">
-        <button type="submit" class="primary">
-          Save
-        </button>
-      </div>
-    </PostForm>
-  );
-}
-
-function ReadOnly(props: { ctx: ViewContext; settings: Settings }) {
-  const { settings } = props;
-  return (
-    <>
-      {GROUPS.map((group) => (
-        <section aria-labelledby={`g-${group.legend.replace(/\s+/g, '-').toLowerCase()}`}>
-          <h2 id={`g-${group.legend.replace(/\s+/g, '-').toLowerCase()}`}>{group.legend}</h2>
-          <Details
-            rows={group.keys.map((key) => [
-              SETTING_LABELS[key],
-              key === 'allowed_sample_rate'
-                ? sampleText(settings[key])
-                : formatCount(settings[key]),
-            ])}
-          />
-        </section>
-      ))}
-      <AskSomeone permission="settings:write" ctx={props.ctx} verb="change these settings" />
-    </>
+    </Dialog>
   );
 }
 

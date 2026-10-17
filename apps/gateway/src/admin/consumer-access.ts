@@ -350,11 +350,12 @@ export function readJobsForm(
     anchorClaims(profile) === null || get('editor') === 'rows' ? 'rows' : ('structured' as const);
   return {
     editor: rows,
-    repository: get('repository'),
+    // A picked option wins; "Another…" posts '' and the typed value under `*_other`.
+    repository: get('repository') || get('repository_other'),
     new_owner: get('new_owner'),
     owner_id: get('owner_id'),
     context: get('context') || 'environment',
-    environment: get('environment'),
+    environment: get('environment') || get('environment_other'),
     branch: get('branch'),
     tag: get('tag'),
     release_tag: get('release_tag'),

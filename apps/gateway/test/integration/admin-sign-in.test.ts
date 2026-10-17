@@ -61,12 +61,18 @@ describe('GET /admin/users/sign-in', () => {
       await storeHosts(['gw.test']);
       const html = await page(await sessionFor(role));
       expect(html).toContain('<title>Sign-in – Users – tokengate</title>');
-      expect(html).toContain('<code>https://gw.test/admin</code>');
-      expect(html).toContain('Now: <strong>Let them in as Viewer</strong>');
-      expect(html).toContain('<code>gw.test</code><span> · you are here</span>');
-      // The footer export form (admins) is not part of this page.
-      expect(html.slice(html.indexOf('<main'), html.indexOf('</main>'))).not.toContain(
-        '<form method="post"',
+      expect(html).toContain('aria-label="Console address">https://gw.test/admin</pre>');
+      expect(html).toContain(
+        '<p class="u-now"><span class="muted">Now</span><span class="big">Let them in as Viewer</span>',
+      );
+      expect(html).toContain(
+        '<span class="mono">gw.test</span> <span class="badge accent">you are here</span>',
+      );
+      // Nothing to open: the policy dialogs are for owners only.
+      expect(html).not.toContain('dlg-policy');
+      // The account menu export form (admins) is in the sidebar, not part of this page.
+      expect(html.slice(html.indexOf('<main'), html.indexOf('</main>'))).not.toMatch(
+        /<form\b[^>]*\bmethod="post"/,
       );
       expect(html).toContain('class="ask"');
     },
@@ -74,30 +80,67 @@ describe('GET /admin/users/sign-in', () => {
 
   it('shows owners six policy options; the three elevated ones are dialogs', async () => {
     const html = await page(await sessionFor('owner'));
-    const form = html.slice(
-      html.indexOf('id="policy-form"'),
-      html.indexOf('</form>', html.indexOf('id="policy-form"')),
+    expect(html).toContain(
+      '<button class="btn sm secondary" type="button" command="show-modal" commandfor="dlg-policy"',
     );
-    for (const value of ['pending', 'active:viewer', 'closed']) {
+    const start = html.indexOf('<dialog class="dlg wide" id="dlg-policy"');
+    expect(start).toBeGreaterThan(-1);
+    const form = html.slice(start, html.indexOf('</dialog>', start));
+    expect(form).toContain('<form method="post" action="/admin/users/sign-in/policy">');
+    expect(form).toContain('name="_csrf"');
+    for (const value of ['pending', 'closed']) {
       expect(form).toContain(`type="submit" name="join_policy" value="${value}"`);
     }
+    // The current policy is a plain card: choosing it again would change nothing.
+    expect(form).not.toContain('value="active:viewer"');
+    expect(form).toMatch(
+      /<div class="rc is-current" aria-current="true"><span class="rc-b"><span class="rc-t">Let them in as Viewer <span class="badge accent"><span aria-hidden="true">✓<\/span>Current<\/span>/,
+    );
     for (const value of ['active:token_manager', 'active:access_manager', 'active:admin']) {
       const id = `dlg-policy-${value.replace(':', '-')}`;
-      expect(form).toContain(`type="button" class="confirm-trigger secondary" commandfor="${id}"`);
-      expect(form).not.toContain(`value="${value}"`);
-      const dialog = html.slice(
-        html.indexOf(`id="${id}"`),
-        html.indexOf('</dialog>', html.indexOf(`id="${id}"`)),
+      expect(form).toContain(
+        `<button class="rc risk" type="button" command="show-modal" commandfor="${id}"`,
       );
-      expect(dialog).toContain(`form="policy-form" name="confirmed_join_policy" value="${value}"`);
+      expect(form).not.toContain(`value="${value}"`);
+      // The confirm is a sibling dialog with its own form, never nested in the policy form.
+      const at = html.indexOf(`<dialog class="dlg" id="${id}"`);
+      expect(at).toBeGreaterThan(html.indexOf('</dialog>', start));
+      const dialog = html.slice(at, html.indexOf('</dialog>', at));
+      expect(dialog).toContain(
+        `<input type="hidden" name="confirmed_join_policy" value="${value}"/>`,
+      );
+      expect(dialog).not.toContain('name="join_policy"');
     }
     expect(html).toContain('Anyone Access admits can let a consumer use any service token.');
-    expect(form).toContain('Let them in as Viewer <span class="badge">Current</span>');
+  });
+
+  it('explains the pending policy and links the people waiting', async () => {
+    await createUser(
+      {
+        email: 'wait@example.com',
+        status: 'pending',
+        identity: { loginProvider: 'access', subject: 't|w' },
+      },
+      T0,
+    );
+    const owner = await sessionFor('owner');
+    await adminPost(app, owner, '/admin/users/sign-in/policy', { join_policy: 'pending' });
+    const html = await page(owner);
+    expect(html).toContain('<span class="big">Ask an owner first</span>');
+    expect(html).toContain('<ol class="trace u-c3" aria-label="What happens now">');
+    expect(html).toContain(
+      '<li class="tstep is-on"><span class="s">2 · Waits</span><span class="v">In “Needs your decision”</span><span class="d"><a href="/admin/users#decide">1 person waiting: wait@example.com</a></span></li>',
+    );
   });
 
   it('names the login provider and its variables, never their values (I-CFG-1)', async () => {
     const html = await page(await sessionFor('owner'));
-    expect(html).toContain('<dt>Cloudflare Access</dt><dd>in use (you signed in with it)</dd>');
+    expect(html).toContain(
+      '<dt>Cloudflare Access</dt><dd><div class="line"><span class="badge ok"><span aria-hidden="true">✓</span>In use</span><span class="muted">You signed in with it.</span></div></dd>',
+    );
+    expect(html).toContain(
+      '<dt>Local development login</dt><dd><div class="line"><span class="badge off"><span aria-hidden="true">⏸</span>Off</span></div></dd>',
+    );
     expect(html).toContain('every person needs Reset sign-in before they can sign in again');
     expect(html).toContain('href="https://one.dash.cloudflare.com/"');
     expect(html).not.toContain(TEST_ACCESS_ENV.AUTH_ACCESS_AUD);
@@ -117,8 +160,12 @@ describe('GET /admin/users/sign-in', () => {
     await storeHosts(['gw.test']);
     const one = await page(owner);
     expect(one).not.toContain('name="remove"');
-    expect(one).toContain('Only this hostname is listed.');
-    expect(one).toContain('(covers this host, cannot be removed)');
+    // The note sits on the row of the host it is about.
+    expect(one).toContain(
+      '<span class="badge accent">you are here</span></span><span class="hint">Covers this host, so it cannot be removed.</span>',
+    );
+    expect(one).toContain('<p class="hint">Only this hostname is listed.</p>');
+    expect(one).not.toContain('dlg-host-');
 
     await storeHosts(['gw.test', 'old.example.com']);
     const two = await page(owner);
@@ -139,7 +186,9 @@ describe('GET /admin/users/sign-in', () => {
     const wild = await at();
     expect(wild).toContain('name="remove" value="admin.acme.com"');
     expect(wild).toContain('name="remove" value="*.acme.com"');
-    expect(wild).toContain('<code>*.acme.com</code><span> · you are here</span>');
+    expect(wild).toContain(
+      '<span class="mono">*.acme.com</span> <span class="badge accent">you are here</span>',
+    );
     await storeHosts(['*.acme.com']);
     expect(await at()).not.toContain('name="remove"');
   });
@@ -311,8 +360,13 @@ describe('I-LINK-1: POST /admin/users/sign-in/policy', () => {
     const html = await res.text();
     expect(html).toContain('<a href="#f-join_policy">Choose one of the listed options.</a>');
     expect(html).toMatch(
-      /<fieldset class="submits" id="f-join_policy" data-invalid="true"><legend>New people who sign in<\/legend><p class="field-error"><span class="vh">Error:<\/span> Choose one of the listed options.<\/p>/,
+      /<fieldset class="field" id="f-join_policy" aria-describedby="f-join_policy-error"><legend><span class="vh">New people who sign in<\/span><\/legend><p class="field-error" id="f-join_policy-error"><span aria-hidden="true">✕<\/span><span class="vh">Error:<\/span> Choose one of the listed options.<\/p>/,
     );
+    // The options sit open in the policy tray, next to the error, not in a closed modal.
+    const policy = html.slice(html.indexOf('id="policy"'), html.indexOf('id="address"'));
+    expect(policy).toContain('<dialog class="dlg wide" id="dlg-policy"');
+    expect(policy).toMatch(/<dialog class="dlg wide" id="dlg-policy"[^>]* open="">/);
+    expect(html.match(/id="dlg-policy"/g)).toHaveLength(1);
     expect(await getJoinDefaults(env.DB)).toEqual({ role: 'viewer', status: 'active' });
   });
 

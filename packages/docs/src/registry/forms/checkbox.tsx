@@ -53,6 +53,26 @@ export const checkbox: ComponentDoc = {
 </Checkbox>`,
     },
     {
+      title: 'Rejected box',
+      description:
+        'The server refused the form because of this box: the error line comes first, outside the label, and describes the box.',
+      layout: 'stack',
+      render: () => (
+        <Checkbox
+          name="allow_host"
+          id="cb-allow"
+          value="1"
+          error="Allow the new host, or remove it from the upstream URL."
+        >
+          Allow api.example.com as an upstream host
+        </Checkbox>
+      ),
+      code: `<Checkbox name="allow_host" id="allow-host" value="1"
+  error="Allow the new host, or remove it from the upstream URL.">
+  Allow api.example.com as an upstream host
+</Checkbox>`,
+    },
+    {
       title: 'Disabled',
       layout: 'stack',
       render: () => (
@@ -88,9 +108,15 @@ export const checkbox: ComponentDoc = {
         { name: 'hint', type: 'Child', description: 'Second line, part of the label.' },
         { name: 'invalid', type: 'boolean', description: 'Sets aria-invalid.' },
         {
+          name: 'error',
+          type: 'Child',
+          description:
+            'The server’s error: a line before the label (`${id}-error`) that describes the box; implies invalid. Needs id (it throws).',
+        },
+        {
           name: 'describedBy',
           type: 'string',
-          description: 'Ids that describe the box (an error line).',
+          description: 'Ids that describe the box, after the error.',
         },
         { name: 'class', type: 'string', description: 'Extra classes on the label.' },
         { name: 'children', type: 'Child', required: true, description: 'The statement.' },
@@ -100,6 +126,7 @@ export const checkbox: ComponentDoc = {
   accessibility: [
     'The whole row is the label, so the click target is the full text, not only the 16px box.',
     'The hint is inside the label, so it is read with the option name.',
+    'An error is a line before the row (a paragraph cannot sit in a label): the box is aria-invalid and described by it.',
     'Focus shows a 2px ring around the whole row.',
   ],
   do: ['Write the label as a statement that is true when checked.'],
@@ -107,5 +134,5 @@ export const checkbox: ComponentDoc = {
     'Do not use a negative label (“Do not allow …”).',
     'Do not use a checkbox to accept a risk: use RiskAcceptance, which names the risks.',
   ],
-  classes: ['check', 'hint'],
+  classes: ['check', 'hint', 'field-error'],
 };

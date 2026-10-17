@@ -87,9 +87,10 @@ the values. Defaults, bounds and the exact behavior of `request_log_max_rows` ar
 Monitoring › Requests (`/admin/requests`) lists records newest first, 50 per page, with Newest,
 Newer and Older links.
 
-- **Find a request:** every Monitoring page has this box under the tabs. Paste the
-  `x-tokengate-request-id` value, or the whole log line that holds it, in any case. The page opens
-  that record, or says it does not exist (records are kept for "Request log retention (days)").
+- **Find a request:** the Overview, Requests, Audit log and Data retention pages have this box.
+  Paste the `x-tokengate-request-id` value, or the whole log line that holds it, in any case. The
+  page opens that record, or says it does not exist (records are kept for "Request log retention
+  (days)").
 - **Tabs:** Time range (1 hour, 24 hours, 7 days, 30 days, All) and Outcome (All, Allowed, Denied,
   Errors). "Errors" are gateway errors plus allowed requests the upstream answered with 5xx, the
   same count as the Overview. A time range starts at the start of an hour (UTC), so the page states

@@ -1,6 +1,6 @@
 // HTTP surface of the docs: /docs pages generated from the registry and the foundations list, and
 // the hashed stylesheets under /docs/static/. Every route is under /docs, so the app can be mounted
-// next to the gateway's routes and Workers Assets (/static/*) without a collision.
+// next to the gateway's routes and its admin stylesheets (/static/*) without a collision.
 import { serveCss } from '@tokengate/ui/css';
 import { Hono } from 'hono';
 import { STYLESHEETS } from './assets';

@@ -1,17 +1,33 @@
 // "Which consumers can use which tokens" (A14.3): one column per token, one row group per
 // consumer and one row per anchor (a repository, a workflow pin, a generic anchor value, or a
 // custom condition set). A cell lists the accesses of that consumer, anchor and token, each with
-// its status as words; an empty cell is a "+" that opens the access form prefilled. The table sits
-// in a labelled, focusable region that scrolls on its own; the list view is its linear form.
+// its status as words; an empty cell is a "+" that opens the access form prefilled. The ui Matrix
+// sits in a labelled, focusable region that scrolls on its own; the access list is its linear form.
+import {
+  formatTime,
+  Matrix,
+  type MatrixCell,
+  type MatrixColumn,
+  type MatrixGroup as UiMatrixGroup,
+  type MatrixRow as UiMatrixRow,
+} from '@tokengate/ui';
 import { labelFor } from '../../db/claim-labels';
 import type { CallerProvider, ClaimLabel, Service } from '../../db/types';
 import { getProfile } from '../../identity/profiles';
 import type { AccessEdge, Connections } from '../connections';
 import { paths } from '../paths';
 import type { ViewContext } from '../render';
+import {
+  accessTone,
+  busiestFirst,
+  consumerLogo,
+  leadStatus,
+  tokenLogo,
+  trustLine,
+} from './access-visuals';
 import { STATUS, statusLabel } from './status';
 
-/** Above these the page defaults to the list view (A14.3). */
+/** Above these the matrix asks for a filter and shows the access list instead (A14.3). */
 export const MATRIX_MAX_COLUMNS = 40;
 export const MATRIX_MAX_ROWS = 300;
 
@@ -110,11 +126,29 @@ export function anchorsOf(edge: AccessEdge, labels: readonly ClaimLabel[]): Anch
   ];
 }
 
-export function buildMatrix(connections: Connections): MatrixModel {
-  const columns = [...connections.tokens].sort((a, b) => a.name.localeCompare(b.name));
+/**
+ * The matrix model. Columns: the busiest tokens first (`tokenWeight`, the 24-hour requests the map
+ * also sorts by; else their number of accesses), disabled ones last. Rows: the busiest consumers
+ * first, as on the map and in the lists.
+ */
+export function buildMatrix(
+  connections: Connections,
+  tokenWeight?: (tokenId: string) => number,
+): MatrixModel {
+  const accessCount = (key: 'caller_provider_id' | 'service_id', id: string) =>
+    connections.accesses.filter((edge) => edge.grant[key] === id).length;
+  const weight = tokenWeight ?? ((id: string) => accessCount('service_id', id));
+  const columns = [...connections.tokens].sort(
+    (a, b) =>
+      Number(b.enabled) - Number(a.enabled) ||
+      weight(b.id) - weight(a.id) ||
+      a.name.localeCompare(b.name),
+  );
   const groups: MatrixGroup[] = [];
   let rowCount = 0;
-  const consumers = [...connections.consumers].sort((a, b) => a.name.localeCompare(b.name));
+  const consumers = busiestFirst(connections.consumers, (id) =>
+    accessCount('caller_provider_id', id),
+  );
   for (const consumer of consumers) {
     const labels = connections.labels.filter((label) => label.caller_provider_id === consumer.id);
     const rows = new Map<string, MatrixRow>();
@@ -132,7 +166,11 @@ export function buildMatrix(connections: Connections): MatrixModel {
         rows.set(anchor.key, row);
       }
     }
-    const sorted = [...rows.values()].sort((a, b) => a.header.localeCompare(b.header));
+    const size = (row: MatrixRow) =>
+      [...row.cells.values()].reduce((n, list) => n + list.length, 0);
+    const sorted = [...rows.values()].sort(
+      (a, b) => size(b) - size(a) || a.header.localeCompare(b.header),
+    );
     rowCount += sorted.length;
     groups.push({ consumer, rows: sorted });
   }
@@ -148,162 +186,147 @@ function operationsText(count: number): string {
   return count === 1 ? '1 operation' : `${count} operations`;
 }
 
-/** The credential state of a token as text, for column headers and token cards. */
+/** The secret state of a token as words, for column headers, token cards and the fixed bar. */
 export function credentialText(
   token: Pick<Service, 'id' | 'credential_sealed' | 'credential_expires_at'>,
   unreadable: ReadonlySet<string>,
   now: number,
 ): string {
-  if (token.credential_sealed === null) return 'No credential yet';
-  if (unreadable.has(token.id)) return 'Credential unreadable';
+  if (token.credential_sealed === null) return 'No secret yet';
+  if (unreadable.has(token.id)) return 'Secret unreadable';
   if (token.credential_expires_at !== null && token.credential_expires_at <= now) {
-    return `Credential expired ${new Date(token.credential_expires_at).toISOString().slice(0, 10)}`;
+    return `Secret expired ${new Date(token.credential_expires_at).toISOString().slice(0, 10)}`;
   }
-  return 'Credential loaded';
+  return 'Secret set';
 }
 
-function AccessLine(props: { edge: AccessEdge; subject: string }) {
-  const { edge } = props;
-  const status = STATUS[edge.status];
-  const words = statusLabel(edge.status, edge.statusDetail);
+const DAY_MS = 86_400_000;
+const EXPIRY_WARNING_MS = 14 * DAY_MS;
+
+/** A column's second line: ⏸ Disabled, ⌛ Expires in N days, ✓ Secret set, or the secret problem. */
+function ColumnState(props: { token: Service; connections: Connections; now: number }) {
+  const { token, now } = props;
+  if (!token.enabled) return <>⏸ Disabled</>;
+  const text = credentialText(token, props.connections.unreadableTokenIds, now);
+  if (text !== 'Secret set') return <span class="t-bad">✕ {text}</span>;
+  const expires = token.credential_expires_at;
+  if (expires !== null && expires - now <= EXPIRY_WARNING_MS) {
+    const days = Math.max(1, Math.ceil((expires - now) / DAY_MS));
+    return <span class="t-warn">⌛ Expires in {days === 1 ? '1 day' : `${days} days`}</span>;
+  }
+  return <>✓ Secret set</>;
+}
+
+/** One matrix cell per access: the status in words, the constraint and the operations. */
+function cellOf(edge: AccessEdge, subject: string, now: number): MatrixCell {
   const unused = edge.flags.some((flag) => flag.status === 'unused');
   const credentialExpired = edge.flags.some((flag) => flag.status === 'credential_expired_warning');
-  const parts = [
-    shortContext(edge.context),
+  const expires = edge.grant.expires_at;
+  const operations = [
     operationsText(edge.operations.length),
-    ...(credentialExpired ? ['credential expired'] : []),
+    ...(expires !== null && expires > now
+      ? [`until ${formatTime(new Date(expires), 'date')}`]
+      : []),
+    ...(credentialExpired ? ['secret expired'] : []),
     ...(unused ? ['unused 30 days'] : []),
-  ];
-  const tokenName = edge.token?.name ?? 'a deleted token';
-  // The visible words are the accessible name, in order (WCAG 2.5.3 Label in Name); the hidden
-  // text only adds the subject and the token around them.
-  return (
-    <a class="access-line" href={paths.accessItem(edge.grant.id)}>
-      <span class="vh">
-        {props.subject} can use {tokenName}:{' '}
-      </span>
-      <span class={`badge ${status.tone}`}>
-        {status.glyph ? <span aria-hidden="true">{status.glyph} </span> : null}
-        {words}
-      </span>{' '}
-      {parts.join(' · ')}
-      <span class="vh">. Open access.</span>
-    </a>
-  );
+  ].join(' · ');
+  const lead = leadStatus(edge);
+  const tone = accessTone(lead.status);
+  return {
+    href: paths.accessItem(edge.grant.id),
+    srPrefix: `${subject} can use ${edge.token?.name ?? 'a deleted token'}:`,
+    tone,
+    status: statusLabel(lead.status, lead.detail),
+    // The legend's glyphs: an access that cannot work reads ⏸ like the dashed cell it sits in.
+    glyph: tone === 'off' ? '⏸' : STATUS[lead.status].glyph,
+    constraint: shortContext(edge.context),
+    operations,
+  };
 }
 
-export function Matrix(props: { model: MatrixModel; connections: Connections; ctx: ViewContext }) {
-  const { model, ctx } = props;
-  const canWrite = ctx.can('access:write');
-  const span = model.columns.length + 1;
-  return (
-    <div class="matrix" role="region" tabindex={0} aria-labelledby="matrix-cap">
-      <table>
-        <caption id="matrix-cap">Which consumers can use which tokens</caption>
-        <thead>
-          <tr>
-            <td class="corner" />
-            {model.columns.map((token) => (
-              <th scope="col">
-                <a href={paths.token(token.id)}>{token.name}</a>
-                <span class="secondary-text"> /proxy/{token.slug}</span>
-                <span class="column-status">
-                  {' '}
-                  {credentialText(token, props.connections.unreadableTokenIds, ctx.now)}
-                  {token.enabled ? '' : ', disabled'}
-                </span>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        {model.groups.map((group) => (
-          <tbody>
-            <tr class="consumer-row">
-              <th scope="rowgroup" colspan={span}>
-                <a href={paths.consumer(group.consumer.id)}>{group.consumer.name}</a>
-                {group.consumer.enabled ? null : <span class="secondary-text"> (disabled)</span>}
-              </th>
-            </tr>
-            {group.rows.length === 0 ? (
-              <tr>
-                <th scope="row" class="anchor">
-                  <span class="secondary-text">No access yet</span>
-                </th>
-                {model.columns.map((token) => (
-                  <td>
-                    <EmptyCell
-                      canWrite={canWrite}
-                      subject={group.consumer.name}
-                      token={token}
-                      href={paths.accessNew({ consumer: group.consumer.id, token: token.id })}
-                    />
-                  </td>
-                ))}
-              </tr>
-            ) : (
-              group.rows.map((row) => (
-                <tr>
-                  <th scope="row" class="anchor">
-                    {row.header}
-                  </th>
-                  {model.columns.map((token) => {
-                    const cell = row.cells.get(token.id) ?? [];
-                    return (
-                      <td>
-                        {cell.length > 0 ? (
-                          <ul class="cell-accesses">
-                            {cell.map((edge) => (
-                              <li>
-                                <AccessLine edge={edge} subject={row.subject} />
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <EmptyCell
-                            canWrite={canWrite}
-                            subject={row.subject}
-                            token={token}
-                            href={paths.accessNew({
-                              consumer: group.consumer.id,
-                              token: token.id,
-                              repository: row.repositoryId ?? undefined,
-                              copy: row.firstAccessId,
-                            })}
-                          />
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))
-            )}
-          </tbody>
-        ))}
-      </table>
-    </div>
-  );
-}
-
-function EmptyCell(props: {
-  canWrite: boolean;
-  subject: string;
-  token: Pick<Service, 'name'>;
-  href: string;
+/**
+ * The access matrix (ui Matrix): tokens across, each consumer's repositories down, one cell per
+ * access (overlapping accesses stack in one cell). Access managers get "+" in an empty cell, which
+ * opens the form prefilled with the row's constraints and the column's token; others get "—".
+ */
+export function AccessMatrix(props: {
+  model: MatrixModel;
+  connections: Connections;
+  ctx: ViewContext;
 }) {
-  if (!props.canWrite) {
-    return (
-      <span class="no-access">
-        <span aria-hidden="true">—</span>
-        <span class="vh">No access</span>
-      </span>
-    );
-  }
+  const { model, connections, ctx } = props;
+  const canWrite = ctx.can('access:write');
+  const source = new Map<UiMatrixRow, { consumer: CallerProvider; row: MatrixRow | null }>();
+  const groups: UiMatrixGroup[] = model.groups.map((group) => {
+    const { consumer } = group;
+    const labels = connections.labels.filter((l) => l.caller_provider_id === consumer.id);
+    const count = connections.accesses.filter(
+      (edge) => edge.grant.caller_provider_id === consumer.id,
+    ).length;
+    const rows: UiMatrixRow[] =
+      group.rows.length === 0
+        ? [{ label: 'No access yet', mono: false, cells: {} }]
+        : group.rows.map((row) => ({
+            label: row.subject,
+            href: row.repositoryId ? paths.access({ repository: row.repositoryId }) : undefined,
+            meta: row.repositoryId ?? undefined,
+            mono: !row.key.startsWith('custom:'),
+            cells: Object.fromEntries(
+              [...row.cells].map(([tokenId, edges]) => [
+                tokenId,
+                edges.map((edge) => cellOf(edge, row.subject, ctx.now)),
+              ]),
+            ),
+          }));
+    rows.forEach((ui, index) => {
+      source.set(ui, { consumer, row: group.rows[index] ?? null });
+    });
+    return {
+      name: `${consumer.name}${consumer.enabled ? '' : ' (disabled)'}`,
+      logo: consumerLogo(consumer),
+      href: paths.consumer(consumer.id),
+      meta: `${trustLine(consumer, labels)} · ${count === 1 ? '1 access' : `${count} accesses`}`,
+      rows,
+    };
+  });
+  const columns: MatrixColumn[] = model.columns.map((token) => ({
+    id: token.id,
+    name: token.name,
+    logo: tokenLogo(token),
+    href: paths.token(token.id),
+    meta: (
+      <>
+        <span class="mono d-block">{token.slug}</span>
+        <ColumnState token={token} connections={connections} now={ctx.now} />
+      </>
+    ),
+  }));
   return (
-    <a class="add-access" href={props.href}>
-      <span aria-hidden="true">+</span>
-      <span class="vh">
-        Give {props.subject} access to {props.token.name}
-      </span>
-    </a>
+    <Matrix
+      label="Which consumers can use which tokens"
+      caption="Which consumers can use which tokens"
+      corner="Consumer › repository"
+      columns={columns}
+      groups={groups}
+      addHref={
+        canWrite
+          ? (row, column) => {
+              const from = source.get(row);
+              if (!from) return paths.accessNew({ token: column.id });
+              return paths.accessNew({
+                consumer: from.consumer.id,
+                token: column.id,
+                repository: from.row?.repositoryId ?? undefined,
+                copy: from.row?.firstAccessId,
+              });
+            }
+          : undefined
+      }
+      addLabel={(row, column) => {
+        const from = source.get(row);
+        const subject = from && from.row === null ? from.consumer.name : row.label;
+        return `Give ${subject} access to ${column.name}`;
+      }}
+    />
   );
 }

@@ -17,6 +17,7 @@ export interface TextareaProps {
   /** Never inside a Reveal. */
   required?: boolean;
   invalid?: boolean;
+  /** Ids added after the Field's hint, error and note ids (a shared hint). */
   describedBy?: string;
   class?: string;
 }

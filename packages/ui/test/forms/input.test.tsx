@@ -7,18 +7,63 @@ describe('Input', () => {
     expect(() => render(<Input />)).toThrow(/needs an id/);
   });
 
-  it('mono turns off autocomplete, spellcheck and autocapitalize', () => {
+  it('mono turns off autocomplete, spellcheck, autocapitalize and autocorrect', () => {
     expect(render(<Input id="r" mono placeholder="acme/api (89012345)" />)).toBe(
-      '<input class="input mono" id="r" type="text" placeholder="acme/api (89012345)" autocomplete="off" spellcheck="false" autocapitalize="none"/>',
+      '<input class="input mono" id="r" type="text" placeholder="acme/api (89012345)" autocomplete="off" spellcheck="false" autocapitalize="none" autocorrect="off"/>',
     );
   });
 
-  it('secret is a mono password ignored by password managers', () => {
+  it('secret is a mono password ignored by password managers, without autocorrect', () => {
     const html = render(<Input id="s" secret name="credential" />);
     expect(html).toContain('class="input mono"');
     expect(html).toContain('type="password"');
-    expect(html).toContain('data-1p-ignore="true" data-lpignore="true"');
+    expect(html).toContain(
+      'autocorrect="off" data-1p-ignore="true" data-lpignore="true" data-bwignore="true"',
+    );
     expect(html).toContain('autocomplete="off"');
+  });
+
+  it('plain text renders no autocorrect or password-manager attributes', () => {
+    const html = render(<Input id="plain" />);
+    expect(html).toBe('<input class="input" id="plain" type="text"/>');
+  });
+
+  it('spellcheck and autocapitalize override the mono defaults', () => {
+    expect(
+      render(
+        <Input
+          id="e"
+          type="email"
+          spellcheck={false}
+          autocapitalize="none"
+          enterkeyhint="send"
+          autofocus
+        />,
+      ),
+    ).toBe(
+      '<input class="input" id="e" type="email" enterkeyhint="send" autofocus="" spellcheck="false" autocapitalize="none"/>',
+    );
+    const mono = render(<Input id="m" mono spellcheck autocapitalize="words" />);
+    expect(mono).toContain('spellcheck="true" autocapitalize="words" autocorrect="off"');
+  });
+
+  it('renders each enterkeyhint value', () => {
+    for (const hint of ['enter', 'done', 'go', 'next', 'previous', 'search', 'send'] as const) {
+      expect(render(<Input id="k" enterkeyhint={hint} />)).toContain(`enterkeyhint="${hint}"`);
+    }
+  });
+
+  it('a suggestion label is the datalist option text; the link keeps the value', () => {
+    const html = render(
+      <Input
+        id="h"
+        suggestions={[{ value: 'api.github.com', label: 'GitHub API', href: '?h=api' }]}
+      />,
+    );
+    expect(html).toContain(
+      '<datalist id="h-list"><option value="api.github.com">GitHub API</option></datalist>',
+    );
+    expect(html).toContain('<a href="?h=api">api.github.com</a>');
   });
 
   it('keeps an explicit autocomplete', () => {

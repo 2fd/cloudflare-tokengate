@@ -18,7 +18,8 @@ export interface TrayProps {
   bar?: Child;
   /**
    * Keep the title for screen readers only (`.vh`): the header row then holds just the `bar` and
-   * the actions, as on the request log ("Requests, newest first" over the filter bar).
+   * the actions, as on the request log ("Requests, newest first" over the filter bar). With
+   * neither `bar` nor `actions`, there is no header row: the hidden heading opens the section.
    */
   hideTitle?: boolean;
   /** Header actions on the right (`.tray-h .end`): secondary buttons, filters, a segmented link. */
@@ -51,24 +52,31 @@ export function Tray(props: TrayProps) {
       {props.count !== undefined ? <span class="count">{props.count}</span> : null}
     </H>
   );
+  // a hidden title with nothing beside it needs no header row (no empty 3rem bar)
+  const headerless =
+    props.hideTitle === true && (props.bar === undefined || props.bar === null) && !props.actions;
   return (
     <section
       class={cx('tray', props.tone === 'warn' && 'tone-warn', props.class)}
       id={props.id}
       aria-labelledby={headingId}
     >
-      <div class="tray-h">
-        {props.hideTitle ? (
-          heading
-        ) : (
-          <div class="t">
-            {heading}
-            {props.description ? <p>{props.description}</p> : null}
-          </div>
-        )}
-        {props.bar ?? null}
-        {props.actions ? <div class="end">{props.actions}</div> : null}
-      </div>
+      {headerless ? (
+        heading
+      ) : (
+        <div class="tray-h">
+          {props.hideTitle ? (
+            heading
+          ) : (
+            <div class="t">
+              {heading}
+              {props.description ? <p>{props.description}</p> : null}
+            </div>
+          )}
+          {props.bar ?? null}
+          {props.actions ? <div class="end">{props.actions}</div> : null}
+        </div>
+      )}
       {/* headings inside sit one level under the title, whatever level it took */}
       <HeadingScope by={nominal - 2}>{props.children}</HeadingScope>
       {props.footer ? <div class="tray-f">{props.footer}</div> : null}

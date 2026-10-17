@@ -30,10 +30,12 @@ export interface MapToken {
   /** Colors the status line. */
   lineTone?: 'warn' | 'bad';
   logo: LogoSpec;
-  /** Requests in the last 24 hours; also the token's busyness for the scale rule. */
+  /** Requests in the range (`rangeLabel`); also the token's busyness for the scale rule. */
   requests: number;
   denied: number;
   errors: number;
+  /** Links on the numbers: the requests log filtered to the token (and to denied or errors). */
+  hrefs?: { requests?: string; denied?: string; errors?: string };
   /** "1 min ago". */
   lastUsed: string;
   /** Idle or disabled token: dashed node, gray logo. */
@@ -69,8 +71,23 @@ export interface ConnectionsMapProps {
   accesses: readonly MapAccess[];
   /** `?focus=` consumer id: its node and tokens light up, the rest dims. */
   focus?: string;
+  /**
+   * A token id (the page is filtered to one token): its node, its wires and the consumers that
+   * can use it light up, the rest dims, and the focus bar gives way. Ignored with `focus`.
+   */
+  focusToken?: string;
   /** The access page every link points at, with query parameters. Default `/admin/access`. */
   baseHref?: string;
+  /**
+   * Base of the focus bar and `?focus=` links, so a map on another page keeps its focus there
+   * (the Overview: `/admin`). Default `baseHref`.
+   */
+  focusHref?: string;
+  /**
+   * The range of the token numbers: the column header (`short`) and the words read after each
+   * request count (`long`). Default `{ short: 'Req 24 h', long: 'requests in 24 hours' }`.
+   */
+  rangeLabel?: { short: string; long: string };
   /** Most rows per side (scale rule). Above it: the busiest `maxRows - 1` and one group node. */
   maxRows?: number;
   /** Consumers offered in the focus bar, busiest first. Default 3; 0 hides the bar. */
@@ -152,6 +169,11 @@ function layout<T>(
 
 const RANK: Record<Tone, number> = { off: 0, ok: 1, info: 1, warn: 2, bad: 2 };
 
+/** A token number with its hidden words, as a link when the page gives one (`MapToken.hrefs`). */
+function Num(props: { href: string | undefined; children: Child }) {
+  return props.href ? <a href={props.href}>{props.children}</a> : <>{props.children}</>;
+}
+
 /**
  * The connections map (`.cmap`): service consumers on the left, service tokens on the right,
  * one server-drawn SVG wire per consumer–token pair. Applies the scale rule (at most `maxRows`
@@ -164,6 +186,15 @@ const RANK: Record<Tone, number> = { off: 0, ok: 1, info: 1, warn: 2, bad: 2 };
  */
 export function ConnectionsMap(props: ConnectionsMapProps) {
   const base = props.baseHref ?? '/admin/access';
+  const focusBase = props.focusHref ?? base;
+  const range = props.rangeLabel ?? { short: 'Req 24 h', long: 'requests in 24 hours' };
+  // the narrow-screen unit stays outside a count link
+  const unit = (
+    <span class="u" aria-hidden="true">
+      {' '}
+      req
+    </span>
+  );
   const maxRows = Math.max(2, props.maxRows ?? 7);
   const focusLinks = props.focusLinks ?? 3;
   const { accesses } = props;
@@ -180,8 +211,15 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
     focused ? accesses.filter((a) => a.consumer === focused.id).map((a) => a.token) : [],
   );
 
-  const left = pick(consumers, maxRows, new Set(focused ? [focused.id] : []));
-  const right = pick(tokens, maxRows, focusTokens);
+  const focusedToken =
+    !focused && props.focusToken ? tokens.find((t) => t.id === props.focusToken) : undefined;
+  const tokenConsumers = new Set(
+    focusedToken ? accesses.filter((a) => a.token === focusedToken.id).map((a) => a.consumer) : [],
+  );
+  const lit = focused !== undefined || focusedToken !== undefined;
+
+  const left = pick(consumers, maxRows, focused ? new Set([focused.id]) : tokenConsumers);
+  const right = pick(tokens, maxRows, focusedToken ? new Set([focusedToken.id]) : focusTokens);
   const leftNodes: (MapConsumer | null)[] = [...left.shown, ...(left.hidden.length ? [null] : [])];
   const rightNodes: (MapToken | null)[] = [...right.shown, ...(right.hidden.length ? [null] : [])];
   const rows = Math.max(leftNodes.length, rightNodes.length, 1);
@@ -211,7 +249,9 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
     const r = rightKey(access.token);
     const key = `${l}\u0000${r}`;
     const rank = RANK[access.tone ?? 'ok'];
-    const on = focused !== undefined && access.consumer === focused.id;
+    const on = focused
+      ? access.consumer === focused.id
+      : focusedToken !== undefined && access.token === focusedToken.id;
     const wire = wires.get(key);
     if (wire) {
       wire.rank = Math.max(wire.rank, rank);
@@ -224,7 +264,9 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
   const height = rows * MAP_PITCH - 8;
 
   const consumerHref = (c: MapConsumer) =>
-    focused && c.id !== focused.id ? link(base, { focus: c.id }) : link(base, { consumer: c.id });
+    focused && c.id !== focused.id
+      ? link(focusBase, { focus: c.id })
+      : link(base, { consumer: c.id });
   const tokenHref = (t: MapToken) => link(base, { token: t.id });
   const matrixHref = link(base, { view: 'matrix' });
   const usedBy = (t: MapToken) => {
@@ -257,20 +299,26 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
     truncated[0] && truncated[1]
       ? `the ${maxRows - 1} busiest on each side`
       : `the ${maxRows - 1} busiest ${truncated[0] || truncated[1]}`;
-  const listed = focused ? accesses.filter((a) => a.consumer === focused.id) : accesses;
+  const listed = focused
+    ? accesses.filter((a) => a.consumer === focused.id)
+    : focusedToken
+      ? accesses.filter((a) => a.token === focusedToken.id)
+      : accesses;
+  const toToken = (id: string) =>
+    accesses.filter((a) => a.consumer === id && a.token === focusedToken?.id).length;
 
   return (
     <>
-      {focusLinks > 0 ? (
+      {focusLinks > 0 && !focusedToken ? (
         <div class="cmap-bar">
           <nav class="qlinks" aria-label={props.focusLabel ?? 'Focus on a consumer'}>
-            <a class="ql" href={base} aria-current={focused ? undefined : 'true'}>
+            <a class="ql" href={focusBase} aria-current={focused ? undefined : 'true'}>
               All consumers
             </a>
             {barConsumers.map((c) => (
               <a
                 class="ql"
-                href={link(base, { focus: c.id })}
+                href={link(focusBase, { focus: c.id })}
                 aria-current={focused?.id === c.id ? 'true' : undefined}
               >
                 {c.name} <span class="n">{fmt(accessCount('consumer', c.id))}</span>
@@ -283,7 +331,7 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
             ) : null}
           </nav>
           {focused ? (
-            <a class="sm" href={base}>
+            <a class="sm" href={focusBase}>
               Clear focus
             </a>
           ) : null}
@@ -306,7 +354,9 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
         aria-label={
           focused
             ? `Connections map focused on ${focused.name}. Its accesses are also listed as text below.`
-            : 'Connections map. Every line is also listed as text below.'
+            : focusedToken
+              ? `Connections map focused on ${focusedToken.name}. Its accesses are also listed as text below.`
+              : 'Connections map. Every line is also listed as text below.'
         }
       >
         <div class="cmap-col">
@@ -332,7 +382,12 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
                 );
               }
               const isFocus = focused?.id === node.id;
-              const count = accessCount('consumer', node.id);
+              const count = focusedToken ? toToken(node.id) : accessCount('consumer', node.id);
+              const tokenLine = focusedToken
+                ? count === 0
+                  ? `No access to ${focusedToken.name}`
+                  : `${plural(count, 'access', 'accesses')} to ${focusedToken.name}`
+                : undefined;
               return (
                 <li
                   class={cx(
@@ -340,6 +395,7 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
                     spanCls,
                     node.idle && 'idle',
                     focused && (isFocus ? 'is-on' : 'dim'),
+                    focusedToken && (tokenConsumers.has(node.id) ? 'is-on' : 'dim'),
                   )}
                 >
                   <LogoTile logo={node.logo} disabled={node.idle} />
@@ -349,7 +405,9 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
                     aria-current={isFocus ? 'true' : undefined}
                   >
                     <span class="nm">{node.name}</span>
-                    {isFocus || node.line !== undefined ? (
+                    {tokenLine !== undefined ? (
+                      <span class="nl">{tokenLine}</span>
+                    ) : isFocus || node.line !== undefined ? (
                       <span class="nl">
                         {isFocus ? 'Focused' : null}
                         {isFocus && node.line !== undefined ? ' · ' : null}
@@ -388,7 +446,7 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
                   'wire',
                   wire.rank === 2 && 'warn',
                   wire.rank === 0 && 'off',
-                  focused && (wire.on ? 'on' : 'dim'),
+                  lit && (wire.on ? 'on' : 'dim'),
                 )}
                 d={`M0 ${wire.y1} C50 ${wire.y1} 50 ${wire.y2} 100 ${wire.y2}`}
               />
@@ -401,7 +459,7 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
               Service tokens <span class="n">{fmt(tokens.length)}</span>
             </span>
             <span />
-            <span class="keep">Req 24 h</span>
+            <span class="keep">{range.short}</span>
             <span>Denied</span>
             <span class="x">Errors</span>
             <span class="x">Last used</span>
@@ -433,6 +491,7 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
                     spanCls,
                     node.idle && 'idle',
                     focused && (focusTokens.has(node.id) ? 'is-on' : 'dim'),
+                    focusedToken && (node.id === focusedToken.id ? 'is-on' : 'dim'),
                   )}
                 >
                   {node.tag ? <span class="tag">{node.tag}</span> : null}
@@ -464,20 +523,33 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
                     </a>
                   </span>
                   <span class={cx('m keep', node.requests === 0 && 'zero')}>
-                    {fmt(node.requests)}
-                    <span class="u" aria-hidden="true">
-                      {' '}
-                      req
-                    </span>
-                    <span class="vh"> requests in 24 hours</span>
+                    {node.hrefs?.requests ? (
+                      <>
+                        <a href={node.hrefs.requests}>
+                          {fmt(node.requests)}
+                          <span class="vh">{` ${range.long}`}</span>
+                        </a>
+                        {unit}
+                      </>
+                    ) : (
+                      <>
+                        {fmt(node.requests)}
+                        {unit}
+                        <span class="vh">{` ${range.long}`}</span>
+                      </>
+                    )}
                   </span>
                   <span class={cx('m', node.denied > 0 ? 'bad' : 'z')}>
-                    {fmt(node.denied)}
-                    <span class="vh"> denied</span>
+                    <Num href={node.hrefs?.denied}>
+                      {fmt(node.denied)}
+                      <span class="vh"> denied</span>
+                    </Num>
                   </span>
                   <span class={cx('m', node.errors > 0 ? 'warn' : 'z', 'x')}>
-                    {fmt(node.errors)}
-                    <span class="vh">{node.errors === 1 ? ' error' : ' errors'}</span>
+                    <Num href={node.hrefs?.errors}>
+                      {fmt(node.errors)}
+                      <span class="vh">{node.errors === 1 ? ' error' : ' errors'}</span>
+                    </Num>
                   </span>
                   <span class="m x">
                     <span class="vh">last used </span>
@@ -492,7 +564,14 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
       </div>
       <div class="tray-f">
         {props.footer !== undefined ? <span>{props.footer}</span> : null}
-        {focused ? (
+        {focusedToken ? (
+          <Legend
+            items={[
+              { mark: 'wire-on', label: `Lines to ${focusedToken.name}` },
+              { mark: 'wire-dim', label: 'Other lines' },
+            ]}
+          />
+        ) : focused ? (
           <>
             <Legend
               items={[

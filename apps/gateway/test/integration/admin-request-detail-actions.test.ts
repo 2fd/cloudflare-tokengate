@@ -67,7 +67,7 @@ async function detail(r: RequestRecord, role: Role): Promise<string> {
 }
 
 function whatToDo(html: string): string {
-  return /<section class="next"[\s\S]*?<\/section>/.exec(html)?.[0] ?? '';
+  return /<section class="tray" id="next"[\s\S]*?<\/section>/.exec(html)?.[0] ?? '';
 }
 
 describe('NEXT_ACTIONS', () => {
@@ -109,7 +109,7 @@ describe('Request detail actions', () => {
         expect(box, role).toContain(fix);
       } else {
         expect(box, role).not.toContain(fix);
-        expect(box, role).toContain('Ask a token manager to set the secret again');
+        expect(box, role).toContain('Only token managers can set the secret again');
       }
       expect(box, role).toContain('out-of-band source');
     }
@@ -151,7 +151,7 @@ describe('Request detail actions', () => {
       'href="/admin/consumers/new?type=github-actions">Add a service consumer</a>',
     );
     expect(whatToDo(await detail(github, 'token_manager'))).toContain(
-      'Ask an access manager to add a service consumer',
+      'Only access managers can add a service consumer',
     );
   });
 
@@ -166,8 +166,15 @@ describe('Request detail actions', () => {
     await env.TELEMETRY_DB.batch(insertRequestRecordsStatements(env.TELEMETRY_DB, [r]));
     const html = await detail(r, 'viewer');
     expect(html).toContain('<title>Error: POST /chat.postMessage – Monitoring – tokengate</title>');
-    expect(html).toContain('<nav aria-label="Breadcrumb" class="breadcrumb">');
-    expect(html).toContain(`aria-current="page">${r.id}</a>`);
+    expect(html).toContain('<nav class="crumbs" aria-label="Breadcrumb">');
+    // The crumb starts at the Requests list and shows the short ID; the identity row has it whole.
+    expect(html).toContain('<li><a href="/admin/requests">Requests</a></li>');
+    expect(html).toContain(`<li aria-current="page">${r.id.slice(0, 12)}…</li>`);
+    expect(html).toContain(`<span class="idchip" title="Request ID">${r.id}</span>`);
+    // One h1: the method and path, with the outcome for screen readers and as a badge.
+    expect(html).toMatch(
+      /<h1><span class="vh">Error: <\/span><span class="mono">POST \/chat\.postMessage<\/span> <span class="badge warn">/,
+    );
   });
 });
 

@@ -687,6 +687,8 @@ describe('I-CRED-1 / I-LOG-1 / I-TOK-1: no credential or caller token reaches an
     expect(findCanaries([canary], 'none', 'nothing here')).toEqual([]);
   });
 
+  // It drives the proxy and renders every admin page, each with the shell's own reads: a few
+  // seconds alone, more on a loaded runner, so the 5 s default is too short.
   it('responses, console, both databases and telemetry payloads never contain one', async () => {
     await driveProxy();
     await driveAdmin();
@@ -726,7 +728,7 @@ describe('I-CRED-1 / I-LOG-1 / I-TOK-1: no credential or caller token reaches an
     const echoes = responses.filter((r) => r.what === 'proxy /echo-headers');
     expect(echoes).toHaveLength(SERVICE_SPECS.length - 1);
     for (const echo of echoes) expect(echo.text).toMatch(/^x-tokengate-redacted: .*x-echo-0/m);
-  });
+  }, 30_000);
 });
 
 /** Proxies `path` once per credential-carrying service and returns the canaries in responses. */

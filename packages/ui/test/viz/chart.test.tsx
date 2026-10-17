@@ -57,10 +57,10 @@ describe('Chart', () => {
     expect(html).toContain('text-anchor="end">200</text>');
   });
 
-  it('has the numbers table in a disclosure, as a focusable named region', () => {
+  it('has the numbers table in a disclosure, as a focusable named region with a caption', () => {
     expect(html).toContain('<details class="numbers"><summary>Show the numbers</summary>');
     expect(html).toContain(
-      '<div class="scroll" role="region" aria-label="Requests per hour, last 24 hours, numbers" tabindex="0"><table class="tbl dense">',
+      '<div class="scroll" role="region" aria-label="Requests per hour, last 24 hours, numbers" tabindex="0"><table class="tbl dense"><caption class="vh">Requests per hour, last 24 hours, numbers</caption><thead>',
     );
     expect(html).toContain('<th scope="col">Hour (UTC)</th>');
     expect(html).toContain('<tr><th scope="row">00:00</th><td class="num">102</td>');

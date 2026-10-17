@@ -195,6 +195,38 @@ export const base: readonly ComponentDoc[] = [
 </ButtonRow>`,
       },
       {
+        title: 'Submit without validation',
+        description:
+          'formnovalidate skips the browser’s constraint validation for a secondary submit (add a row, refresh a preview) or a confirm that submits another form, so a half-filled form does not block it. Ignored with href.',
+        render: () => (
+          <form method="get" action="#">
+            <ButtonRow>
+              <Button type="submit" variant="primary">
+                Give access
+              </Button>
+              <Button
+                type="submit"
+                variant="ghost"
+                name="_action"
+                value="add:cond"
+                formnovalidate
+                plus
+              >
+                Add condition
+              </Button>
+            </ButtonRow>
+          </form>
+        ),
+        code: `<form method="post" action="/admin/access/new">
+  <ButtonRow>
+    <Button type="submit" variant="primary">Give access</Button>
+    <Button type="submit" variant="ghost" name="_action" value="add:cond" formnovalidate plus>
+      Add condition
+    </Button>
+  </ButtonRow>
+</form>`,
+      },
+      {
         title: 'Block and button row',
         description:
           'Block fills the width (narrow rails, phone layouts). ButtonRow wraps with 8px gaps; primary first.',
@@ -258,6 +290,12 @@ export const base: readonly ComponentDoc[] = [
             description: 'Submit another form, or override its action and method.',
           },
           {
+            name: 'formnovalidate',
+            type: 'boolean',
+            description:
+              'Submit without constraint validation (secondary submits). Ignored with href.',
+          },
+          {
             name: 'command / commandfor',
             type: "'show-modal' | 'close' | … / string",
             description: 'Invoker commands: open or close a dialog without JavaScript.',
@@ -289,6 +327,11 @@ export const base: readonly ComponentDoc[] = [
       {
         component: 'ButtonRow',
         props: [
+          {
+            name: 'id',
+            type: 'string',
+            description: 'Element id, for aria-describedby or a link to the row.',
+          },
           CLASS_PROP,
           {
             name: 'children',
@@ -315,6 +358,7 @@ export const base: readonly ComponentDoc[] = [
     ],
     accessibility: [
       'A button defaults to type="button", so it never submits a form by accident.',
+      'formnovalidate lets a secondary submit through an incomplete form; the primary submit keeps the browser’s validation and the server validates every submit.',
       'Focus shows a 3px accent ring with a 2px offset on every variant.',
       'The plus sign and icons are aria-hidden; the label is the accessible name, and srSuffix adds the object for screen readers.',
       'A disabled link has no href, so it is not focusable; a disabled button keeps its label. Tell the reader why with AskSomeone or a hint.',
@@ -616,7 +660,7 @@ export const base: readonly ComponentDoc[] = [
         description:
           'Active, expiring (glyph only), expired (warn chip) and inactive (dashed, dimmed logo). The hidden srSuffix says the status in words.',
         render: () => (
-          <Chips more={{ href: '#', label: '+1 more' }}>
+          <Chips label="Can use" more={{ href: '#', label: '+1 more' }}>
             <Chip href="#" logo="slack" count={2} srSuffix=": 2 accesses, active. Open.">
               Slack
             </Chip>
@@ -652,7 +696,7 @@ export const base: readonly ComponentDoc[] = [
             </Chip>
           </Chips>
         ),
-        code: `<Chips more={{ href: '/admin/access?consumer=gha-acme', label: '+1 more' }}>
+        code: `<Chips label="Can use" more={{ href: '/admin/access?consumer=gha-acme', label: '+1 more' }}>
   <Chip href="/admin/access?…" logo="slack" count={2} srSuffix=": 2 accesses, active. Open.">Slack</Chip>
   <Chip href="…" logo="openai" count={1} glyph="⌛" glyphTone="warn" srSuffix=": secret expires in 6 days. Open.">OpenAI</Chip>
   <Chip href="…" logo="anthropic" tone="warn" count={2} glyph="✕" srSuffix=": 1 expired. Open.">Anthropic</Chip>
@@ -721,6 +765,11 @@ export const base: readonly ComponentDoc[] = [
         component: 'Chips',
         props: [
           {
+            name: 'label',
+            type: 'string',
+            description: 'Accessible name of the group (“Can use”): role="group" and aria-label.',
+          },
+          {
             name: 'more',
             type: '{ href: string; label: string }',
             description: 'Trailing “+N more” link to the full list.',
@@ -732,6 +781,7 @@ export const base: readonly ComponentDoc[] = [
     ],
     accessibility: [
       'The logo and the glyph are aria-hidden; give an srSuffix whenever a glyph or tone shows a status, so the link reads as a sentence.',
+      'Give Chips a label when the row has no visible heading: it becomes a named group (“Can use”), so screen readers say what the chips are.',
       'The inactive chip differs by its dashed border, not only by color.',
       'Chips are at least 28px tall with 6px gaps.',
     ],
@@ -826,6 +876,37 @@ export const base: readonly ComponentDoc[] = [
         code: `<LogoStack brands={['github', 'gitlab']}>2 consumers</LogoStack>
 <LogoStack brands={['slack', 'openai', 'anthropic', 'github']}>4 tokens</LogoStack>`,
       },
+      {
+        title: 'Logo stack: a disabled consumer’s tile',
+        description:
+          'Each entry is a LogoSpec, so a disabled object gets a dimmed tile and a custom upstream its own letters.',
+        render: () => (
+          <LogoStack
+            brands={[
+              'github',
+              { brand: 'buildkite', disabled: true },
+              { brand: 'custom', text: 'AC' },
+            ]}
+          >
+            3 consumers, 1 disabled
+          </LogoStack>
+        ),
+        code: `<LogoStack brands={['github', { brand: 'buildkite', disabled: true }, { brand: 'custom', text: 'AC' }]}>
+  3 consumers, 1 disabled
+</LogoStack>`,
+      },
+      {
+        title: 'Logo stack: tiles only',
+        description:
+          'Without a count the whole stack is aria-hidden: a decorative logo next to a name, such as the logoSlot of an Entity (data group).',
+        render: () => (
+          <span class="dx-row">
+            <LogoStack brands={['slack', 'openai']} />
+            Slack and OpenAI
+          </span>
+        ),
+        code: `<Entity logoSlot={<LogoStack brands={['slack', 'openai']} />} name="Slack and OpenAI" />`,
+      },
     ],
     props: [
       {
@@ -858,22 +939,23 @@ export const base: readonly ComponentDoc[] = [
         props: [
           {
             name: 'brands',
-            type: 'readonly LogoBrand[]',
+            type: 'readonly LogoSpec[]',
             required: true,
-            description: 'The overlapping 24px tiles, in order.',
+            description: 'The overlapping 24px tiles, in order; a disabled spec dims its tile.',
           },
           CLASS_PROP,
           {
             name: 'children',
             type: 'Child',
-            required: true,
-            description: 'The count in words.',
+            description:
+              'The count in words. Required unless the stack is decorative next to a name; without it the stack is aria-hidden.',
           },
         ],
       },
     ],
     accessibility: [
       'Tiles are aria-hidden by default: the service name next to them is the text. label makes a standalone tile a named image.',
+      'A LogoStack without a count is aria-hidden as a whole: put it only next to a name that says the same.',
       'The tile letters are part of a logotype, so they are outside the text contrast rule; the name next to them meets 4.5:1.',
       'Disabled is said in words; the dimmed tile only adds to it.',
     ],
@@ -1146,6 +1228,19 @@ export const base: readonly ComponentDoc[] = [
         code: `<Mask last4={token.secretLast4} />
 <Mask last4="r2Xw" srPrefix="Old secret ending in" />`,
       },
+      {
+        title: 'Short secret',
+        description:
+          'tokengate keeps no last characters of a secret under 20 characters. Without last4 the mask shows only the dots and screen readers hear “Secret, last characters not stored”. Never pass a placeholder such as ????.',
+        render: () => (
+          <>
+            <Mask />
+            <Mask size="lg" />
+          </>
+        ),
+        code: `<Mask last4={token.secretLast4} /> {/* undefined for a short secret */}
+<Mask size="lg" />`,
+      },
     ],
     props: [
       {
@@ -1154,8 +1249,8 @@ export const base: readonly ComponentDoc[] = [
           {
             name: 'last4',
             type: 'string',
-            required: true,
-            description: 'The stored last characters; only the last 4 render.',
+            description:
+              'The stored last characters; only the last 4 render. Missing or empty: “not stored”, dots only.',
           },
           {
             name: 'size',
@@ -1167,14 +1262,15 @@ export const base: readonly ComponentDoc[] = [
             name: 'srPrefix',
             type: 'string',
             default: "'Secret ending in'",
-            description: 'Screen-reader text before the characters. The space is added.',
+            description:
+              'Screen-reader text before the characters. The space is added. Not used without last4.',
           },
           CLASS_PROP,
         ],
       },
     ],
     accessibility: [
-      'The dots are aria-hidden; screen readers hear “Secret ending in 9fQa”.',
+      'The dots are aria-hidden; screen readers hear “Secret ending in 9fQa”, or “Secret, last characters not stored” without last4.',
       'Mono type and a border tell it apart from an ID chip.',
     ],
     do: ['Pair it with the facts (added, expires) and the Replace secret and Test actions.'],
@@ -1410,6 +1506,20 @@ export const base: readonly ComponentDoc[] = [
   <Button size="sm" variant="ghost" href="…">Undo</Button>
 </>}>Slack is ready. Give a consumer access next.</Notice>`,
       },
+      {
+        title: 'Notice focused after a redirect',
+        description:
+          'With autofocus the notice gets tabindex="-1" and autofocus, so focus lands on the result of the action after the redirect and shows the focus ring. On this docs page autofocus is off so the page does not jump.',
+        layout: 'stack',
+        render: () => (
+          <Notice title="Secret replaced.">
+            Slack uses the new secret now. The old one stopped working.
+          </Notice>
+        ),
+        code: `<Notice autofocus={errors.length === 0} title="Secret replaced.">
+  Slack uses the new secret now. The old one stopped working.
+</Notice>`,
+      },
     ],
     props: [
       {
@@ -1439,6 +1549,12 @@ export const base: readonly ComponentDoc[] = [
             type: "'status'",
             description: 'For messages that appear after an action.',
           },
+          {
+            name: 'autofocus',
+            type: 'boolean',
+            default: 'false',
+            description: 'Focus it on load (tabindex="-1" autofocus).',
+          },
           CLASS_PROP,
           { name: 'children', type: 'Child', description: 'The rest of the first paragraph.' },
         ],
@@ -1465,6 +1581,12 @@ export const base: readonly ComponentDoc[] = [
             type: 'Child',
             description: 'The next step, usually one small button.',
           },
+          {
+            name: 'autofocus',
+            type: 'boolean',
+            default: 'false',
+            description: 'Focus it on load, after the redirect. Only one autofocus per page.',
+          },
           CLASS_PROP,
           { name: 'children', type: 'Child', description: 'The rest of the first paragraph.' },
         ],
@@ -1473,6 +1595,7 @@ export const base: readonly ComponentDoc[] = [
     accessibility: [
       'Callouts are not role="alert": they describe the page and are read in order.',
       'Notice has role="status", so the result of an action is announced after the redirect.',
+      'autofocus moves focus to the notice on load (tabindex="-1", no JS) and shows the 3px focus ring. Only one autofocus per page: when the page has an ErrorSummary, it takes focus instead.',
       'The glyph is aria-hidden; the bold first sentence says the state in words. Forced colors add a border.',
     ],
     do: [
@@ -1530,6 +1653,28 @@ export const base: readonly ComponentDoc[] = [
         ),
         code: `<AskSomeone people={['Maya Chen']}>Only owners can export the configuration.</AskSomeone>`,
       },
+      {
+        title: 'More people than named',
+        description:
+          'Name the first few and count the rest with more: “and 2 more”. One link reaches all of them.',
+        layout: 'stack',
+        render: () => (
+          <AskSomeone
+            people={['Maya Chen', 'Priya Natarajan', 'Diego Ruiz']}
+            more={2}
+            link={{ href: '#', label: 'Email them this page' }}
+          >
+            Only token managers can replace secrets.
+          </AskSomeone>
+        ),
+        code: `<AskSomeone
+  people={['Maya Chen', 'Priya Natarajan', 'Diego Ruiz']}
+  more={2}
+  link={{ href: 'mailto:…?body=…', label: 'Email them this page' }}
+>
+  Only token managers can replace secrets.
+</AskSomeone>`,
+      },
     ],
     props: [
       {
@@ -1540,6 +1685,13 @@ export const base: readonly ComponentDoc[] = [
             type: 'readonly string[]',
             required: true,
             description: 'Who can do it; joined as “A, B or C”.',
+          },
+          {
+            name: 'more',
+            type: 'number',
+            default: '0',
+            description:
+              'How many more can do it, not named: “and 2 more”. Ignored without people.',
           },
           {
             name: 'link',

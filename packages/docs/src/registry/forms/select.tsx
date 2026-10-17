@@ -67,6 +67,56 @@ export const select: ComponentDoc = {
 </Field>`,
     },
     {
+      title: 'Grouped options',
+      description:
+        'Option groups (optgroup) mix with plain options, in the order given: the audit target filter.',
+      layout: 'stack',
+      render: () => (
+        <div class="fields">
+          <Field id="se-target" label="Target">
+            <Select
+              name="target"
+              value="token"
+              options={[
+                { value: '', label: 'All targets' },
+                {
+                  group: 'Settings',
+                  options: [
+                    { value: 'admin_hosts', label: 'Admin hosts' },
+                    { value: 'upstream_hosts', label: 'Upstream hosts' },
+                    { value: 'login', label: 'Login' },
+                  ],
+                },
+                {
+                  group: 'Access',
+                  options: [
+                    { value: 'token', label: 'Service tokens' },
+                    { value: 'consumer', label: 'Service consumers' },
+                    { value: 'user', label: 'Users' },
+                  ],
+                },
+              ]}
+            />
+          </Field>
+        </div>
+      ),
+      code: `<Field id="target" label="Target">
+  <Select name="target" value="token" options={[
+    { value: '', label: 'All targets' },
+    { group: 'Settings', options: [
+      { value: 'admin_hosts', label: 'Admin hosts' },
+      { value: 'upstream_hosts', label: 'Upstream hosts' },
+      { value: 'login', label: 'Login' },
+    ] },
+    { group: 'Access', options: [
+      { value: 'token', label: 'Service tokens' },
+      { value: 'consumer', label: 'Service consumers' },
+      { value: 'user', label: 'Users' },
+    ] },
+  ]} />
+</Field>`,
+    },
+    {
       title: 'Disabled',
       layout: 'stack',
       render: () => (
@@ -89,9 +139,10 @@ export const select: ComponentDoc = {
         { name: 'name', type: 'string', description: 'Form field name.' },
         {
           name: 'options',
-          type: 'readonly { value: string; label: string; disabled?: boolean }[]',
+          type: 'readonly (SelectOption | SelectOptionGroup)[]',
           required: true,
-          description: 'Seven or more, in a useful order (alphabetical, or most used first).',
+          description:
+            'Seven or more, in a useful order (alphabetical, or most used first). SelectOption is { value; label; disabled? }; SelectOptionGroup is { group; options } (an optgroup). Both mix, in the order given.',
         },
         { name: 'value', type: 'string', description: 'The selected value.' },
         {
@@ -102,10 +153,11 @@ export const select: ComponentDoc = {
         { name: 'required', type: 'boolean', description: 'Never inside a Reveal (it throws).' },
         { name: 'disabled', type: 'boolean', description: 'Not editable and not submitted.' },
         { name: 'autocomplete', type: 'string', description: 'Native autocomplete.' },
+        { name: 'invalid', type: 'boolean', description: 'Defaults to the Field’s error state.' },
         {
-          name: 'invalid, describedBy',
-          type: 'boolean, string',
-          description: 'Default to the Field’s.',
+          name: 'describedBy',
+          type: 'string',
+          description: 'Ids added after the Field’s hint, error and note ids (a shared hint).',
         },
         { name: 'class', type: 'string', description: 'Extra classes on the select.' },
       ],
@@ -114,6 +166,7 @@ export const select: ComponentDoc = {
   accessibility: [
     'A native select: keyboard, type-ahead and screen reader support come from the browser.',
     'Inside a Field it is labelled and described like an input, and aria-invalid on error.',
+    'Group labels are native optgroups: screen readers announce the group with its options.',
     'The chevron is a background image; the control border meets 3:1 in both schemes.',
   ],
   do: ['Order options so the likely one is easy to find.', 'Preselect the value from context.'],

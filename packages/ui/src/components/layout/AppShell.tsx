@@ -13,15 +13,21 @@ export interface AppShellBrand {
 
 export interface AppShellProps {
   brand: AppShellBrand;
-  /** Sidebar navigation, usually a `SideNav`. */
-  nav: Child;
+  /**
+   * Sidebar navigation, usually a `SideNav`. Optional: with neither `nav` nor `account` (pre-login
+   * pages), the sidebar holds only the brand and health, and no "Menu" button is rendered.
+   */
+  nav?: Child;
   /** Health line under the brand, a `HealthLine` (`a.health`); hidden below 40rem. */
   health?: Child;
   /** Account block at the bottom of the sidebar, an `AccountMenu` (it renders `.acct`). */
   account?: Child;
   /** Error-level health strip at the top of main, a `HealthStrip` (`p.hstrip[role=alert]`). */
   banner?: Child;
-  /** Id of `<main>`, the skip link target. One main per page. */
+  /**
+   * Id of `<main>`, the skip link target. One main per page. `main` has `tabindex="-1"`, so the skip
+   * link moves focus into it; Tab never stops there.
+   */
   mainId?: string;
   /**
    * `false` renders the main column as a `div` and drops the skip link: for a shell drawn inside
@@ -31,6 +37,11 @@ export interface AppShellProps {
   class?: string;
   /** The main column content, usually a `Page`. */
   children?: Child;
+}
+
+/** True when a slot was passed (`undefined`, `null` and `false` render nothing). */
+function present(node: Child | undefined): boolean {
+  return node !== undefined && node !== null && node !== false;
 }
 
 /** The shield mark of the instance block: the `gate` icon of the set on the accent tile. */
@@ -52,6 +63,7 @@ export function AppShell(props: AppShellProps) {
   const mainId = props.mainId ?? 'main';
   const landmarks = props.landmarks !== false;
   const Main = landmarks ? 'main' : 'div';
+  const hasNav = present(props.nav) || present(props.account);
   return (
     <div class={cx('app', props.class)}>
       {landmarks ? (
@@ -69,23 +81,24 @@ export function AppShell(props: AppShellProps) {
             {props.brand.host ? <span class="inst-host">{props.brand.host}</span> : null}
           </div>
           {props.health}
-          <details class="navd">
-            <summary>
-              {/* one label is shown at a time (display:none hides the other from assistive tech too) */}
-              <span class="navd-l">Menu</span>
-              <span class="navd-x">Close</span>
-              <span class="chev" aria-hidden="true">
-                ▾
-              </span>
-            </summary>
-            <div class="navd-in">
-              {props.nav}
-              {props.account}
-            </div>
-          </details>
+          {hasNav ? (
+            <details class="navd">
+              <summary>
+                {/* a stable name: the open state is aria-expanded and the turned chevron */}
+                Menu
+                <span class="chev" aria-hidden="true">
+                  ▾
+                </span>
+              </summary>
+              <div class="navd-in">
+                {props.nav}
+                {props.account}
+              </div>
+            </details>
+          ) : null}
         </div>
       </div>
-      <Main class="main" id={mainId}>
+      <Main class="main" id={mainId} tabindex={landmarks ? -1 : undefined}>
         {props.banner}
         {props.children}
       </Main>

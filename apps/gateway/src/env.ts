@@ -7,7 +7,6 @@ import type { ArchiveRecord, RequestRecord } from './telemetry/types';
 export interface AppEnv {
   DB: D1Database;
   TELEMETRY_DB: D1Database;
-  ASSETS?: Fetcher;
 
   TOKENGATE_KEK?: string;
   TOKENGATE_KEYRING?: string;

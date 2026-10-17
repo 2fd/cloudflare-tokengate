@@ -98,7 +98,26 @@ describe('ArrowRow', () => {
         />,
       ),
     ).toBe(
-      '<span class="arrow"><span class="side-c"><span class="logo xs lg-gitlab" aria-hidden="true">GL</span>GitLab CI (platform) › platform/deploy-tools<span class="ctx">· branch main</span></span><span class="to" aria-hidden="true">→</span><span class="vh"> can use </span><span class="side-t"><span class="logo xs lg-discord" aria-hidden="true">D</span>Discord alerts<span class="ctx">· <code>POST /</code></span></span></span>',
+      '<span class="arrow"><span class="side-c"><span class="logo xs lg-gitlab" aria-hidden="true">GL</span>GitLab CI (platform) › platform/deploy-tools<span class="ctx"><span class="sep" aria-hidden="true">· </span>branch main</span></span><span class="to" aria-hidden="true">→</span><span class="vh"> can use </span><span class="side-t"><span class="logo xs lg-discord" aria-hidden="true">D</span>Discord alerts<span class="ctx"><span class="sep" aria-hidden="true">· </span><code>POST /</code></span></span></span>',
+    );
+  });
+
+  it('renders only the consumer side without a token: no arrow, no verb', () => {
+    const html = render(
+      <ArrowRow
+        consumer={{
+          name: 'Unverified caller',
+          logo: { brand: 'github' },
+          context: 'refused before a token was chosen',
+        }}
+      />,
+    );
+    expect(html).toBe(
+      '<span class="arrow"><span class="side-c"><span class="logo xs lg-github" aria-hidden="true">GH</span>Unverified caller<span class="ctx"><span class="sep" aria-hidden="true">· </span>refused before a token was chosen</span></span></span>',
+    );
+    const linked = render(<ArrowRow href="/r/1" verb="may call" consumer={{ name: 'c' }} />);
+    expect(linked).toBe(
+      '<a class="arrow" href="/r/1"><span class="side-c"><span class="ent-n">c</span></span></a>',
     );
   });
 

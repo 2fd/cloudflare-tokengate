@@ -18,6 +18,11 @@ export interface AttentionRole {
 export interface AttentionApprove {
   /** Form action (POST). */
   action: string;
+  /**
+   * Id of the approve `<form>`, so a control outside it can submit it: the Owner… `ConfirmDialog`
+   * with `form={id}`. Unique on the page.
+   */
+  id?: string;
   /** Who is approved, for the buttons' accessible names: "Approve sam@acme.dev as Viewer". */
   subject: string;
   roles: readonly AttentionRole[];
@@ -63,9 +68,12 @@ export interface AttentionWho {
 interface AttentionBase {
   /** The consequence or the context. `<b>` marks names. */
   body?: Child;
-  /** The inline fix: one or two `.btn.sm.secondary` links or buttons. */
+  /**
+   * The inline fix: one or two `.btn.sm.secondary` links or buttons. With `approve`, it follows
+   * the approve buttons (Dismiss, an inline `FieldError`).
+   */
   actions?: Child;
-  /** Approve-as-role buttons instead of `actions`. */
+  /** Approve-as-role buttons, before `actions`. */
   approve?: AttentionApprove;
 }
 
@@ -162,7 +170,7 @@ function Approve(props: { approve: AttentionApprove }) {
   if (approve.legend !== undefined) {
     return (
       <div class="att-a">
-        <form method="post" action={approve.action}>
+        <form id={approve.id} method="post" action={approve.action}>
           <Hidden fields={approve.hidden} />
           <fieldset>
             <legend>{approve.legend}</legend>
@@ -176,7 +184,7 @@ function Approve(props: { approve: AttentionApprove }) {
   }
   return (
     <>
-      <form class="att-a roles" method="post" action={approve.action}>
+      <form id={approve.id} class="att-a roles" method="post" action={approve.action}>
         <Hidden fields={approve.hidden} />
         {buttons}
         {more}
@@ -235,11 +243,8 @@ export function NeedsAttention({
               </>
             )}
             {item.body !== undefined ? <p class="att-b">{item.body}</p> : null}
-            {item.approve ? (
-              <Approve approve={item.approve} />
-            ) : item.actions !== undefined ? (
-              <div class="att-a">{item.actions}</div>
-            ) : null}
+            {item.approve ? <Approve approve={item.approve} /> : null}
+            {item.actions !== undefined ? <div class="att-a">{item.actions}</div> : null}
           </li>
         );
       })}

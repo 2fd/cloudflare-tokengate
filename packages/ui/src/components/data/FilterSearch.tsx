@@ -13,6 +13,17 @@ export interface FilterSearchProps {
   placeholder?: string;
   /** Known values offered by the browser (`datalist`): repositories, token slugs. */
   suggestions?: readonly string[];
+  /** Format the browser checks before it submits (`pattern`), for example a repository `owner/name`. */
+  pattern?: string;
+  /** Longest query accepted (`maxlength`): 254 for an email search, 256 for a repository filter. */
+  maxlength?: number;
+  /** The query was refused: `aria-invalid="true"`. Say why in the element named by `describedBy`. */
+  invalid?: boolean;
+  /**
+   * Id of the hint or the `FieldError` the page renders in the filter bar (`aria-describedby`).
+   * The component renders no error line of its own.
+   */
+  describedBy?: string;
   class?: string;
 }
 
@@ -38,6 +49,10 @@ export function FilterSearch(props: FilterSearchProps) {
           value={props.value}
           placeholder={props.placeholder}
           list={listId}
+          pattern={props.pattern}
+          maxlength={props.maxlength}
+          aria-invalid={props.invalid ? 'true' : undefined}
+          aria-describedby={props.describedBy}
           autocomplete="off"
           spellcheck={false}
           autocapitalize="none"

@@ -1,10 +1,11 @@
-// Configuration export download (POST /admin/export, from the shell footer). A CSRF-checked POST
+// Configuration export download (POST /admin/export, from the account menu). A CSRF-checked POST
 // (I-CSRF-1) because the export writes an audit row (I-AUDIT-1). It has no page of its own: a GET
 // is unlisted and gets the 404 page.
+import { ActionForm, PageHeader } from '@tokengate/ui';
 import type { App } from '../../app';
 import { exportConfiguration } from '../ops/export';
+import { paths } from '../paths';
 import { adminActor, renderPage } from '../render';
-import { PostForm } from '../views/components';
 
 export function registerExportRoutes(app: App): void {
   app.post('/admin/export', async (c) => {
@@ -19,12 +20,19 @@ export function registerExportRoutes(app: App): void {
           subsection: '',
           errors: result.errors.map((message) => ({ field: null, message })),
           status: 409,
+          // The retry is the page's one primary, top right.
+          header: (view) => (
+            <PageHeader
+              title="Export failed"
+              actions={
+                <ActionForm action={paths.export()} variant="primary" hidden={view.hidden()}>
+                  Try the export again
+                </ActionForm>
+              }
+            />
+          ),
         },
-        (view) => (
-          <PostForm action="/admin/export" csrf={view.csrf}>
-            <button type="submit">Try the export again</button>
-          </PostForm>
-        ),
+        () => null,
       );
     }
     const date = new Date(deps.now()).toISOString().slice(0, 10);

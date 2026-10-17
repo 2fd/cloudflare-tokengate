@@ -87,18 +87,22 @@ describe('GET /admin/audit', () => {
     expect(eventIds(html)).toEqual([system, updated, created]);
     expect(html).toContain('System (hourly job)');
     expect(html).toContain('<th scope="col">Before</th>');
-    // Each diff region has its own name: the object and the time.
-    const captions = [...html.matchAll(/<caption id="diff-aud_[^"]+" class="vh">([^<]*)</g)].map(
+    // Each diff table has its own name: the object and the time.
+    const captions = [...html.matchAll(/<table class="diff"><caption class="vh">([^<]*)</g)].map(
       (m) => m[1],
     );
     expect(captions.length).toBeGreaterThan(1);
     expect(new Set(captions).size).toBe(captions.length);
     expect(captions.every((c) => c?.startsWith('Changed fields of '))).toBe(true);
-    // Changed keys only: `rules` did not change.
+    // Changed keys only: `rules` did not change. Old value struck, new value inserted.
     expect(html).toContain('Changes: name<span class="vh">');
-    expect(html).toContain('<td><code>old</code></td><td><code>new</code></td>');
+    expect(html).toContain(
+      '<td><del><code>old</code></del></td><td><ins><code>new</code></ins></td>',
+    );
+    // The feed groups events by UTC day.
+    expect(html).toContain('<h3 class="day">Today, ');
     expect(html).toContain('&quot;warnings&quot;');
-    expect(html).toContain('Secret expires soon');
+    expect(html).toContain('secret expires soon');
     // Deleted (unknown) entities are named as such, with a History link.
     expect(html).toContain(`deleted token <code>${SVC_A}</code>`);
     expect(html).toContain(`href="/admin/audit?target=${SVC_A}"`);
@@ -123,10 +127,13 @@ describe('GET /admin/audit', () => {
     // One event and no filter: the filter form stays hidden (A7.1).
     const plain = await (await adminGet(app, session, '/admin/audit')).text();
     expect(plain).not.toContain('aria-label="Filter audit log"');
-    // Any active filter shows it, with every target as an option.
+    // Any active filter shows it, with every target in the "+ Target" menu, keeping the range.
     const html = await (await adminGet(app, session, '/admin/audit?range=24h')).text();
+    expect(html).toContain('aria-label="Filter audit log"');
     expect(html).toContain(`<a href="/admin/tokens/${SVC_A}">Slack bot</a>`);
-    expect(html).toContain(`<option value="${SVC_A}">Slack bot</option>`);
+    expect(html).toContain(
+      `<a href="/admin/audit?range=24h&amp;target=${SVC_A}">Slack bot <span class="slug">token</span></a>`,
+    );
   });
 
   it('filters by target and actor', async () => {
@@ -215,7 +222,8 @@ describe('GET /admin/audit', () => {
       await adminGet(app, session, (older ?? '').replaceAll('&amp;', '&'))
     ).text();
     expect(eventIds(second)).toEqual(newest.slice(50));
-    expect(second).not.toContain('Older entries');
+    // The last page has no Older link (the pager shows the word as plain faint text).
+    expect(second).not.toMatch(/<a [^>]*rel="next"/);
     const newer = second.match(/href="(\/admin\/audit\?[^"]*after=[^"]*)"/)?.[1];
     const back = await (
       await adminGet(app, session, (newer ?? '').replaceAll('&amp;', '&'))
@@ -239,13 +247,15 @@ describe('GET /admin/audit', () => {
       const res = await adminGet(app, session, `/admin/audit?${query}`);
       expect(res.status, query).toBe(400);
       const html = await res.text();
-      expect(html).toContain('class="error-summary"');
+      expect(html).toContain('class="callout bad errsum"');
       expect(eventIds(html)).toEqual([id]);
       expect(html).not.toContain('<script>');
     }
     const html = await (await adminGet(app, session, '/admin/audit?actor=nobody')).text();
+    // The summary links the "+ Who" menu, rendered open, with the error after the menus.
     expect(html).toContain('<a href="#f-actor">Choose a person from the list.</a>');
-    expect(html).toContain('aria-invalid="true"');
+    expect(html).toContain('<details class="fadd" id="f-actor" open="">');
+    expect(html).toContain('<p class="field-error" id="f-actor-error">');
   });
 
   it('shows a helpful empty state', async () => {
@@ -268,7 +278,9 @@ describe('GET /admin/audit', () => {
       summary: 'x',
     });
     const html = await (await adminGet(app, session, '/admin/audit?range=24h')).text();
-    expect(html).toContain(`<option value="${gone.id}">gone@example.com (suspended)</option>`);
+    expect(html).toContain(
+      `<a href="/admin/audit?range=24h&amp;actor=${gone.id}"><span class="avatar" aria-hidden="true">G</span>gone@example.com (suspended)</a>`,
+    );
     expect(html).toContain('gone@example.com (suspended)<span class="vh">');
   });
 
@@ -316,9 +328,11 @@ describe('GET /admin/audit filter handling', () => {
     expect(await res.text()).not.toContain(`>${spoof}<`);
   });
 
-  it('gives a well-formed id of a deleted object its own option, and nothing else', async () => {
+  it('gives a well-formed id of a deleted object its own chip label, and nothing else', async () => {
     const html = await (await adminGet(app, session, `/admin/audit?target=${SVC_B}`)).text();
-    expect(html).toContain(`<option value="${SVC_B}" selected="">Deleted token ${SVC_B}</option>`);
+    expect(html).toContain(
+      `<a class="achip" href="/admin/audit"><span class="vh">Remove filter </span>Target: Deleted token ${SVC_B}<span class="x" aria-hidden="true">✕</span></a>`,
+    );
   });
 });
 

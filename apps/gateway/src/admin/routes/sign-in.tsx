@@ -3,7 +3,33 @@
 // admin hosts the console answers on (settings:write, one host added or removed per submit;
 // I-DEPLOY-1) and the login provider status. Shows names and states only, never configured
 // values that could be secret (I-CFG-1).
-import type { Child } from 'hono/jsx';
+import {
+  type ActionCard,
+  ActionCards,
+  ActionForm,
+  Badge,
+  Button,
+  ButtonRow,
+  Chip,
+  CodeBlock,
+  ConfirmDialog,
+  Dialog,
+  DialogClose,
+  DialogTrigger,
+  Field,
+  FieldSet,
+  Grid,
+  Inherit,
+  Input,
+  KeyValue,
+  type KeyValueItem,
+  Mono,
+  PageHeader,
+  Panel,
+  Trace,
+  type TraceStep,
+  Tray,
+} from '@tokengate/ui';
 import type { App } from '../../app';
 import { type Config, hostListed, isAdminHostEntry, parseConfig } from '../../config';
 import {
@@ -13,11 +39,12 @@ import {
   JOIN_STATUSES,
   type JoinDefaults,
 } from '../../db/settings';
+import type { User } from '../../db/types';
+import { listPendingUsers } from '../../db/users';
 import { type NoticeTable, loadDone, resolveNotice } from '../notice';
 import { updateAdminHosts } from '../ops/admin-hosts';
 import { type FieldError, fieldError } from '../ops/shared';
 import {
-  JOIN_POLICIES,
   JOIN_POLICY_LABELS,
   type JoinPolicy,
   joinPolicyOf,
@@ -34,16 +61,9 @@ import {
   renderPage,
   type ViewContext,
 } from '../render';
-import {
-  ActionButton,
-  AskSomeone,
-  ConfirmBox,
-  ConfirmDialog,
-  type ConfirmDialogProps,
-  Details,
-  Field,
-  PostForm,
-} from '../views/components';
+import { AskSomeone } from '../views/components';
+import { LearnMore } from '../views/header';
+import { ROLE_INFO } from '../views/roles';
 
 const PAGE = paths.signIn();
 
@@ -62,6 +82,16 @@ const POLICY_HINTS: Readonly<Record<JoinPolicy, string>> = {
     'Anyone else is recorded as suspended and refused. Their rows appear under People with the status Suspended, and you can reactivate them.',
 };
 
+/** The policy cards, least open first. */
+const POLICY_ORDER: readonly JoinPolicy[] = [
+  'closed',
+  'pending',
+  'active:viewer',
+  'active:token_manager',
+  'active:access_manager',
+  'active:admin',
+];
+
 /** Policies that let everyone Access admits change something: confirmed in a dialog. */
 const ELEVATED: ReadonlySet<JoinPolicy> = new Set([
   'active:token_manager',
@@ -70,6 +100,9 @@ const ELEVATED: ReadonlySet<JoinPolicy> = new Set([
 ]);
 
 const POLICY_MESSAGE = 'Choose one of the listed options.';
+
+/** How many pending people the explainer counts (and names the first of). */
+const WAITING_MAX = 50;
 
 const NOTICES: NoticeTable = {
   policy_saved: (ctx) => {
@@ -98,7 +131,7 @@ export function registerSignInRoutes(app: App): void {
   app.get('/admin/users/sign-in', (c) => signInPage(c, {}));
 
   // An elevated policy is accepted only from its dialog's confirm button, which submits it as
-  // `confirmed_join_policy`; the plain buttons submit `join_policy`.
+  // `confirmed_join_policy`; the plain cards submit `join_policy`.
   app.post('/admin/users/sign-in/policy', async (c) => {
     const form = await formData(c);
     const confirmed = text(form, 'confirmed_join_policy');
@@ -188,14 +221,16 @@ async function signInPage(
   const deps = c.get('deps');
   const viewer = c.get('viewer');
   const url = new URL(c.req.url);
-  const [adminHosts, defaults, done] = await Promise.all([
+  const [adminHosts, defaults, waiting, done] = await Promise.all([
     getAdminHosts(deps.env.DB),
     getJoinDefaults(deps.env.DB),
+    listPendingUsers(deps.env.DB, WAITING_MAX),
     options.status
       ? Promise.resolve(null)
       : loadDone(deps, { userId: viewer.user.id }, c.req.query('done')),
   ]);
   const notice = options.status ? null : resolveNotice(NOTICES, c.req.query('notice'), done);
+  const policy = joinPolicyOf(defaults);
   return renderPage(
     c,
     {
@@ -205,138 +240,239 @@ async function signInPage(
       errors: options.errors,
       notice,
       status: options.status,
-    },
-    (ctx) => (
-      <>
-        <section aria-labelledby="address-h">
-          <h2 id="address-h">Console address</h2>
-          <p>
-            <code>https://{url.hostname}/admin</code>
-          </p>
-          <p class="hint">Send people this address. tokengate emails nothing.</p>
-        </section>
-        <PolicySection ctx={ctx} policy={joinPolicyOf(defaults)} error={options.policyError} />
-        <HostsSection
-          ctx={ctx}
-          hosts={adminHosts}
-          currentHost={url.hostname}
-          add={options.add}
-          addError={options.addError}
+      header: (
+        <PageHeader
+          title="Sign-in"
+          description={
+            <>
+              Who gets in the first time, and where the console answers.
+              <LearnMore path="concepts.md#user" about="sign-in" />
+            </>
+          }
         />
-        <LoginSection config={parseConfig(deps.env)} />
-      </>
-    ),
-  );
-}
-
-function PolicySection(props: { ctx: ViewContext; policy: JoinPolicy; error?: string | null }) {
-  const { ctx, policy } = props;
-  const formId = 'policy-form';
-  const dialogs: ConfirmDialogProps[] = [];
-  return (
-    <section id="policy" aria-labelledby="policy-h">
-      <h2 id="policy-h">When someone new signs in</h2>
-      <p>
-        Now: <strong>{JOIN_POLICY_LABELS[policy]}</strong>. Invited people always get the role of
-        their invitation.
-      </p>
-      {ctx.can('users:write') ? (
+      ),
+    },
+    (ctx) => {
+      const canPolicy = ctx.can('users:write');
+      return (
         <>
-          <PostForm action={`${PAGE}/policy`} csrf={ctx.csrf} id={formId}>
-            <fieldset
-              class="submits"
-              id="f-join_policy"
-              data-invalid={props.error ? 'true' : undefined}
+          <Grid>
+            <PolicyTray
+              ctx={ctx}
+              policy={policy}
+              waiting={waiting}
+              error={options.policyError ?? null}
+            />
+            <Tray
+              id="address"
+              class="span-5"
+              title="Console address"
+              description="Send people this address. tokengate emails nothing."
             >
-              <legend>New people who sign in</legend>
-              {props.error ? (
-                <p class="field-error">
-                  <span class="vh">Error:</span> {props.error}
-                </p>
-              ) : null}
-              <div class="actions policy-cards">
-                {JOIN_POLICIES.map((option) => {
-                  const current = option === policy;
-                  const label = JOIN_POLICY_LABELS[option];
-                  const descId = `policy-${option.replace(':', '-')}-desc`;
-                  const marker = current ? (
-                    <>
-                      {' '}
-                      <span class="badge">Current</span>
-                    </>
-                  ) : null;
-                  if (ELEVATED.has(option)) {
-                    const id = `policy-${option.replace(':', '-')}`;
-                    dialogs.push({
-                      id,
-                      trigger: `${label}…`,
-                      title: `${label}?`,
-                      body: POLICY_HINTS[option],
-                      confirmLabel: label,
-                      variant: 'submits',
-                      formId,
-                      name: 'confirmed_join_policy',
-                      value: option,
-                    });
-                    return (
-                      <span class="submit-option">
-                        <button
-                          type="button"
-                          class="confirm-trigger secondary"
-                          commandfor={`dlg-${id}`}
-                          command="show-modal"
-                          popovertarget={`dlg-${id}`}
-                          aria-describedby={descId}
-                        >
-                          {label}
-                          <span aria-hidden="true">…</span>
-                          {marker}
-                        </button>
-                        <span class="hint" id={descId}>
-                          {POLICY_HINTS[option]}
-                        </span>
-                      </span>
-                    );
-                  }
-                  return (
-                    <span class="submit-option">
-                      <button
-                        type="submit"
-                        name="join_policy"
-                        value={option}
-                        class={current ? 'secondary current' : 'secondary'}
-                        aria-describedby={descId}
-                      >
-                        {label}
-                        {marker}
-                      </button>
-                      <span class="hint" id={descId}>
-                        {POLICY_HINTS[option]}
-                      </span>
-                    </span>
-                  );
-                })}
-              </div>
-            </fieldset>
-          </PostForm>
-          {dialogs.map((dialog) => (
-            <ConfirmBox {...dialog} />
-          ))}
+              <Panel variant="pad">
+                <CodeBlock label="Console address" caption="Select to copy">
+                  {`https://${url.hostname}/admin`}
+                </CodeBlock>
+              </Panel>
+            </Tray>
+            <HostsTray
+              ctx={ctx}
+              hosts={adminHosts}
+              currentHost={url.hostname}
+              add={options.add}
+              addError={options.addError}
+            />
+            <LoginTray config={parseConfig(deps.env)} />
+          </Grid>
+          {canPolicy && !options.policyError ? <PolicyDialog ctx={ctx} policy={policy} /> : null}
+          {canPolicy ? <ElevatedDialogs ctx={ctx} policy={policy} /> : null}
         </>
-      ) : (
-        <AskSomeone permission="users:write" ctx={ctx} verb="change this" />
-      )}
-    </section>
+      );
+    },
   );
 }
 
-/** `admin.<current host minus its first label>` when two or more labels remain. */
+/** The 3-step explainer of a policy: what happens to someone new, the current stage marked. */
+function explainer(policy: JoinPolicy, waiting: readonly User[]): TraceStep[] {
+  const signs: TraceStep = {
+    state: 'notrun',
+    glyph: '',
+    status: '1 · Signs in',
+    title: 'Through Cloudflare Access',
+    detail: 'tokengate records the email',
+  };
+  if (policy === 'pending') {
+    const [first] = waiting;
+    const n = waiting.length;
+    return [
+      signs,
+      {
+        state: 'on',
+        status: '2 · Waits',
+        title: 'In “Needs your decision”',
+        detail:
+          n > 0 ? (
+            <a href={paths.users({ hash: 'decide' })}>
+              {n >= WAITING_MAX ? `${n}+` : n} {n === 1 ? 'person' : 'people'} waiting
+              {first ? `: ${first.email}` : ''}
+            </a>
+          ) : (
+            'Nobody is waiting'
+          ),
+      },
+      {
+        state: 'notrun',
+        glyph: '',
+        status: '3 · An owner decides',
+        title: 'Approve with a role, or reject',
+        detail: 'One click on People or Overview',
+      },
+    ];
+  }
+  if (policy === 'closed') {
+    return [
+      signs,
+      { state: 'on', status: '2 · Is refused', title: 'Recorded as suspended' },
+      {
+        state: 'notrun',
+        glyph: '',
+        status: '3 · An owner can reactivate',
+        title: 'Their row appears under People',
+      },
+    ];
+  }
+  const role = policy.slice('active:'.length) as keyof typeof ROLE_INFO;
+  return [
+    signs,
+    {
+      state: 'on',
+      status: '2 · Gets in',
+      title: `As ${ROLE_INFO[role].label}, at once`,
+      detail: ROLE_INFO[role].short,
+    },
+    {
+      state: 'notrun',
+      glyph: '',
+      status: '3 · Owners can change it',
+      title: 'Change the role on People',
+    },
+  ];
+}
+
+function PolicyTray(props: {
+  ctx: ViewContext;
+  policy: JoinPolicy;
+  waiting: readonly User[];
+  error: string | null;
+}) {
+  const { ctx, policy } = props;
+  const canPolicy = ctx.can('users:write');
+  return (
+    <Tray
+      id="policy"
+      class="span-12"
+      title="When someone new signs in"
+      description="Applies to people Cloudflare Access lets through who have no invitation. Invited people always get the role of their invitation."
+      actions={
+        canPolicy ? (
+          <DialogTrigger size="sm" dialog="dlg-policy" srSuffix="who can join">
+            Change…
+          </DialogTrigger>
+        ) : undefined
+      }
+    >
+      <Panel variant="pad">
+        <p class="u-now">
+          <span class="muted">Now</span>
+          <span class="big">{JOIN_POLICY_LABELS[policy]}</span>
+          {policy === 'pending' ? <Badge tone="accent">Recommended</Badge> : null}
+        </p>
+        <Trace class="u-c3" label="What happens now" steps={explainer(policy, props.waiting)} />
+        {canPolicy ? null : <AskSomeone permission="users:write" ctx={ctx} verb="change this" />}
+        {/* After a refused submit the options sit open here, next to the error. */}
+        {canPolicy && props.error ? (
+          <PolicyDialog ctx={ctx} policy={policy} error={props.error} />
+        ) : null}
+      </Panel>
+    </Tray>
+  );
+}
+
+/**
+ * "When someone new signs in": the six options as cards, one click saves. The three that let
+ * people in with write access open their own confirm dialog (siblings, never nested forms).
+ */
+function PolicyDialog(props: { ctx: ViewContext; policy: JoinPolicy; error?: string }) {
+  const { ctx, policy } = props;
+  const cards: ActionCard[] = POLICY_ORDER.map((option) => {
+    const current = option === policy;
+    const elevated = ELEVATED.has(option) && !current;
+    const label = JOIN_POLICY_LABELS[option];
+    return {
+      value: option,
+      title: elevated ? `${label}…` : label,
+      description: POLICY_HINTS[option],
+      current,
+      risk: ELEVATED.has(option),
+      dialog: elevated ? `dlg-policy-${option.replace(':', '-')}` : undefined,
+      go: elevated ? 'Confirm next →' : undefined,
+    };
+  });
+  return (
+    <Dialog
+      id="dlg-policy"
+      wide
+      open={props.error !== undefined}
+      headingLevel={props.error !== undefined ? 3 : undefined}
+      title="When someone new signs in"
+      description="Click an option to save it. Options that let people in with write access ask you to confirm first."
+      action={`${PAGE}/policy`}
+      hidden={ctx.hidden()}
+      footer={<DialogClose dialog="dlg-policy" />}
+    >
+      <FieldSet
+        id="f-join_policy"
+        legend={<span class="vh">New people who sign in</span>}
+        error={props.error}
+      >
+        <ActionCards name="join_policy" go="Save →" columns={1} cards={cards} />
+      </FieldSet>
+    </Dialog>
+  );
+}
+
+/** The confirm of each elevated policy: it alone submits `confirmed_join_policy`. */
+function ElevatedDialogs(props: { ctx: ViewContext; policy: JoinPolicy }) {
+  return (
+    <>
+      {POLICY_ORDER.filter((option) => ELEVATED.has(option) && option !== props.policy).map(
+        (option) => {
+          const role = option.slice('active:'.length) as keyof typeof ROLE_INFO;
+          return (
+            <ConfirmDialog
+              id={`dlg-policy-${option.replace(':', '-')}`}
+              confirmVariant="primary"
+              action={`${PAGE}/policy`}
+              hidden={props.ctx.hidden({ confirmed_join_policy: option })}
+              title={`Let everyone Access admits in as ${ROLE_INFO[role].label}?`}
+              description={POLICY_HINTS[option]}
+              confirmLabel={JOIN_POLICY_LABELS[option]}
+            />
+          );
+        },
+      )}
+    </>
+  );
+}
+
+/** `admin.<current host minus its first label>` when two or more labels remain (not for an IP). */
 function hostExample(currentHost: string): string {
   const labels = currentHost.split('.');
-  return labels.length >= 3 ? `admin.${labels.slice(1).join('.')}` : 'admin.example.com';
+  const ip = /^[\d.]+$/.test(currentHost) || currentHost.includes(':');
+  return labels.length >= 3 && !ip ? `admin.${labels.slice(1).join('.')}` : 'admin.example.com';
 }
 
-function HostsSection(props: {
+function HostsTray(props: {
   ctx: ViewContext;
   hosts: string[] | null;
   currentHost: string;
@@ -345,135 +481,182 @@ function HostsSection(props: {
 }) {
   const { ctx, hosts, currentHost } = props;
   const canWrite = ctx.can('settings:write');
+  const list =
+    hosts === null
+      ? null
+      : hosts.map((host, index) => {
+          const rest = hosts.filter((entry) => entry !== host);
+          const removable = rest.length > 0 && hostListed(currentHost, rest);
+          const here = hostListed(currentHost, [host]);
+          const dialog = `dlg-host-${index}`;
+          return (
+            <li>
+              <Chip>
+                <Mono>{host}</Mono>
+                {here ? (
+                  <>
+                    {' '}
+                    <Badge tone="accent">you are here</Badge>
+                  </>
+                ) : null}
+              </Chip>
+              {canWrite && here && !removable ? (
+                <span class="hint">Covers this host, so it cannot be removed.</span>
+              ) : null}
+              {canWrite && removable ? (
+                <>
+                  <DialogTrigger size="sm" variant="danger" dialog={dialog} srSuffix={host}>
+                    Remove…
+                  </DialogTrigger>
+                  <ConfirmDialog
+                    id={dialog}
+                    action={`${PAGE}/hosts`}
+                    hidden={ctx.hidden({ remove: host, confirm: '1' })}
+                    title={`Remove ${host}?`}
+                    description={`People who use ${host} lose the console at once. Keep it behind Access until they have moved.`}
+                    confirmLabel={`Remove ${host}`}
+                  />
+                </>
+              ) : null}
+            </li>
+          );
+        });
+  const hint = hosts !== null && hosts.length === 1 ? 'Only this hostname is listed.' : null;
   return (
-    <section id="hosts" aria-labelledby="hosts-h">
-      <h2 id="hosts-h">Admin hosts</h2>
-      <p>
-        The console answers only on these hostnames. Any other hostname gets 404. Put each one
-        behind your Cloudflare Access application first. Never workers.dev.
-      </p>
-      {hosts === null ? (
-        <>
-          <p>
-            Not pinned: the console answers on every hostname routed to this Worker, except
-            workers.dev.
-          </p>
-          {canWrite && isAdminHostEntry(currentHost) ? (
-            <div class="actions">
-              <ActionButton
-                action={`${PAGE}/hosts`}
-                csrf={ctx.csrf}
-                label={`Answer only on ${currentHost}`}
-                tone="primary"
-                fields={{ add: currentHost }}
-              />
-            </div>
-          ) : null}
-        </>
-      ) : (
-        <>
-          <ul class="chips host-chips" aria-label="Admin hosts">
-            {hosts.map((host, index) => {
-              const rest = hosts.filter((entry) => entry !== host);
-              const removable = rest.length > 0 && hostListed(currentHost, rest);
-              const here = hostListed(currentHost, [host]);
-              return (
-                <li>
-                  <span class="chip">
-                    <code>{host}</code>
-                    {here ? <span> · you are here</span> : null}
-                  </span>
-                  {canWrite ? (
-                    removable ? (
-                      <ConfirmDialog
-                        id={`host-${index}`}
-                        trigger="Remove…"
-                        triggerContext={host}
-                        title={`Remove ${host}?`}
-                        body={`People who use ${host} lose the console at once. Keep it behind Access until they have moved.`}
-                        confirmLabel={`Remove ${host}`}
-                        danger
-                        variant="standalone"
-                        action={`${PAGE}/hosts`}
-                        csrf={ctx.csrf}
-                        fields={{ remove: host }}
-                      />
-                    ) : (
-                      <span class="muted"> (covers this host, cannot be removed)</span>
-                    )
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-          {hosts.length === 1 ? <p class="hint">Only this hostname is listed.</p> : null}
-        </>
-      )}
-      {canWrite ? (
-        <PostForm action={`${PAGE}/hosts`} csrf={ctx.csrf} class="stack">
-          <Field
-            name="add"
-            label="Add an admin host"
-            value={props.add}
-            required
-            maxlength={300}
-            inputmode="url"
-            autocomplete="off"
-            spellcheck={false}
-            autocapitalize="none"
-            pattern={ADMIN_HOST_PATTERN}
-            example={hostExample(currentHost)}
-            hint="A hostname, or *.domain for every host below it. A pasted URL is reduced to its hostname. Not workers.dev."
-            error={props.addError}
-          />
-          <div class="actions">
-            <button type="submit">Add host</button>
+    <Tray
+      id="hosts"
+      class="span-7"
+      title="Admin hosts"
+      count={hosts?.length}
+      description="The console answers only on these hostnames. Any other hostname gets 404. Put each one behind your Cloudflare Access application first. Never workers.dev."
+    >
+      <Panel variant="pad">
+        {list === null ? (
+          <>
+            <p>
+              Not pinned: the console answers on every hostname routed to this Worker, except
+              workers.dev.
+            </p>
+            {canWrite && isAdminHostEntry(currentHost) ? (
+              <div>
+                <ActionForm action={`${PAGE}/hosts`} hidden={ctx.hidden({ add: currentHost })}>
+                  {`Answer only on ${currentHost}`}
+                </ActionForm>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <div>
+            <ul class="u-hosts" aria-label="Admin hosts">
+              {list}
+            </ul>
+            {hint ? <p class="hint">{hint}</p> : null}
           </div>
-        </PostForm>
-      ) : (
-        <AskSomeone permission="settings:write" ctx={ctx} verb="change the admin hosts" />
-      )}
-    </section>
+        )}
+        {canWrite ? (
+          <form method="post" action={`${PAGE}/hosts`}>
+            {Object.entries(ctx.hidden()).map(([name, value]) => (
+              <input type="hidden" name={name} value={value} />
+            ))}
+            <Field
+              id="f-add"
+              label="Add a hostname"
+              hint="A hostname, or *.domain for every host below it. A pasted URL is reduced to its hostname. Not workers.dev."
+              error={props.addError || undefined}
+            >
+              <ButtonRow>
+                <Input
+                  name="add"
+                  mono
+                  value={props.add}
+                  required
+                  maxlength={300}
+                  inputmode="url"
+                  pattern={ADMIN_HOST_PATTERN}
+                  placeholder={hostExample(currentHost)}
+                />
+                <Button variant="primary" type="submit">
+                  Add host
+                </Button>
+              </ButtonRow>
+            </Field>
+          </form>
+        ) : (
+          <AskSomeone permission="settings:write" ctx={ctx} verb="change the admin hosts" />
+        )}
+      </Panel>
+    </Tray>
   );
 }
 
-function LoginSection(props: { config: Config }) {
+function LoginTray(props: { config: Config }) {
   const { config } = props;
   const loginErrors = config.errors.filter((error) => error.feature.startsWith('login.'));
-  const accessState = config.login.access
-    ? 'in use (you signed in with it)'
-    : loginErrors.some((error) => error.feature === 'login.access')
-      ? 'misconfigured'
-      : 'not configured';
-  const rows: Array<[string, Child]> = [['Cloudflare Access', accessState]];
-  if (config.login.dev) {
-    rows.push([
-      'Local development login (AUTH_ACCESS_DEVELOPMENT)',
-      'set. It signs in only requests to localhost.',
-    ]);
-  }
-  for (const error of loginErrors) {
-    rows.push([
-      error.variable,
-      <>
-        <code>{error.variable}</code>: {error.message}
-      </>,
-    ]);
-  }
+  const items: KeyValueItem[] = [
+    {
+      label: 'Cloudflare Access',
+      line: true,
+      value: config.login.access ? (
+        <>
+          <Badge status="active">In use</Badge>
+          <span class="muted">You signed in with it.</span>
+        </>
+      ) : loginErrors.some((error) => error.feature === 'login.access') ? (
+        <Badge tone="bad" glyph="✕">
+          Misconfigured
+        </Badge>
+      ) : (
+        <Badge tone="off" glyph="⏸">
+          Not configured
+        </Badge>
+      ),
+    },
+    {
+      label: 'Local development login',
+      line: true,
+      value: config.login.dev ? (
+        <>
+          <Badge tone="warn" glyph="⚠">
+            On
+          </Badge>
+          <span class="muted">
+            <code>AUTH_ACCESS_DEVELOPMENT</code> is set. It signs in only requests to localhost.
+          </span>
+        </>
+      ) : (
+        <Badge tone="off" glyph="⏸">
+          Off
+        </Badge>
+      ),
+    },
+    ...loginErrors.map((error) => ({
+      label: <code>{error.variable}</code>,
+      value: error.message,
+    })),
+  ];
   return (
-    <section id="login" aria-labelledby="login-h">
-      <h2 id="login-h">Login provider</h2>
-      <Details rows={rows} />
-      <p>
-        If you change AUTH_ACCESS_TEAM_DOMAIN, AUTH_ACCESS_AUD or AUTH_ACCESS_DEVELOPMENT, tokengate
-        cannot decrypt any stored secret, and every person needs Reset sign-in before they can sign
-        in again.
-      </p>
-      <p>
-        <a href="https://one.dash.cloudflare.com/">Revoke a person's Access session</a> (Cloudflare
-        Zero Trust).
-      </p>
-    </section>
+    <Tray
+      id="login"
+      class="span-12"
+      title="Login provider"
+      description="Set in the Worker's configuration, not here."
+    >
+      <Panel variant="pad">
+        <KeyValue items={items} />
+        <Inherit>
+          <span aria-hidden="true">⚠ </span>If you change <code>AUTH_ACCESS_TEAM_DOMAIN</code>,{' '}
+          <code>AUTH_ACCESS_AUD</code> or <code>AUTH_ACCESS_DEVELOPMENT</code>, tokengate cannot
+          decrypt any stored secret, and every person needs Reset sign-in before they can sign in
+          again.
+        </Inherit>
+        <p>
+          <a href="https://one.dash.cloudflare.com/">
+            Revoke a person's Access session in Cloudflare Zero Trust
+          </a>{' '}
+          <span class="hint">(one.dash.cloudflare.com, opens outside tokengate)</span>
+        </p>
+      </Panel>
+    </Tray>
   );
 }
 

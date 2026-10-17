@@ -83,7 +83,6 @@ apps/
     test/                  Vitest suites (unit, integration, security), vectors, helpers.
     migrations/            DB (control plane) migrations.
     migrations-telemetry/  TELEMETRY_DB migrations.
-    public/                Static assets (/static/*).
     scripts/               Worker scripts: keyring, config guardrails, archive setup.
     wrangler.jsonc         Worker configuration.
     .dev.vars.example      Local variables; `pnpm run setup` copies it to .dev.vars.
@@ -241,12 +240,12 @@ A Profile is code-reviewed knowledge about one issuer type. Open an issue first.
 
 ### An admin page or route
 
-1. Create `apps/gateway/src/admin/routes/<page>.tsx` with a `register…Routes(app)` function. Render with `renderPage` from `apps/gateway/src/admin/render.tsx` and the components in `apps/gateway/src/admin/views/components.tsx`. No client-side JavaScript.
+1. Create `apps/gateway/src/admin/routes/<page>.tsx` with a `register…Routes(app)` function. Render with `renderPage` from `apps/gateway/src/admin/render.tsx`: pass the page's own `header` (a `PageHeader` of `@tokengate/ui`) and build the body from `@tokengate/ui` and the admin adapters in `apps/gateway/src/admin/views/components.tsx` ([ADR 0022](docs/adr/0022-admin-ui-on-design-system-d.md)). Page-local styles go in the section's block of `apps/gateway/src/admin/pages.css`. No client-side JavaScript.
 2. Register it in `apps/gateway/src/admin/routes/index.ts`.
 3. Add every `METHOD /path` to `ROUTE_PERMISSIONS` in `apps/gateway/src/admin/auth/rbac.ts`. The middleware denies any `/admin` route that is not in the table ([I-RBAC-1](docs/threat-model.md#i-rbac-1)). Put it in the block of its section (`// == monitoring ==`, `// == users ==`, `// == tokens ==`, `// == consumers ==` or `// == global ==`), and add a field permission when a form field needs more than the route permission. Update the pinned table in `apps/gateway/test/unit/admin/auth/rbac.test.ts`.
 4. A route that changes state is a `POST` with `mutates: true`. Its form includes `<Csrf token=… />` ([I-CSRF-1](docs/threat-model.md#i-csrf-1)). It calls an op in `apps/gateway/src/admin/ops/` that commits through `commitAudited` (`apps/gateway/src/admin/ops/shared.ts`): the change and exactly one audit row in one `db.batch` ([I-AUDIT-1](docs/threat-model.md#i-audit-1)).
 5. Add a submission for each new mutating route to `MUTATION_FIXTURES` in `apps/gateway/test/fixtures/admin-forms.ts`. Add an id to the section map of `readPath` in the same file for a new `GET` route with a parameter.
-6. If the page needs a navigation entry, add a tab to its section in `SECTIONS` in `apps/gateway/src/admin/views/layout.tsx`, and a path to `apps/gateway/src/admin/paths.ts`.
+6. If the page needs a navigation entry, add an item (a `tabs` entry, shown in the sidebar) to its section in `SECTIONS` in `apps/gateway/src/admin/views/layout.tsx`, and a path to `apps/gateway/src/admin/paths.ts`.
 7. Never show secret material on any page: Viewers can read every page.
 
 ### A gateway error code

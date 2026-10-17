@@ -22,14 +22,6 @@ export function formatPercent(ratio: number): string {
   return `${(ratio * 100).toFixed(ratio < 0.01 && ratio > 0 ? 2 : 1)}%`;
 }
 
-/** Builds a URL with query parameters, skipping empty values. */
-export function withQuery(path: string, params: Record<string, string | null | undefined>): string {
-  const search = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) if (value) search.set(key, value);
-  const text = search.toString();
-  return text ? `${path}?${text}` : path;
-}
-
 /** Display names of the login providers that are configured without errors. */
 export function loginProviderNames(config: Config): string[] {
   return [
@@ -52,9 +44,15 @@ export function relativeTime(ms: number, now: number): string {
   return diff >= 0 ? `${amount} ${unit} ago` : `in ${amount} ${unit}`;
 }
 
-/** relativeTime under the name the Monitoring views use. */
-export function formatRelative(ms: number, now: number): string {
-  return relativeTime(ms, now);
+const HOUR_MS = 3_600_000;
+
+/**
+ * "22 min ago" for usage counted per hour (`hour` = the start of the newest hour with a call): the
+ * middle of the part of that hour that has passed, so the current hour never reads "in 23 min".
+ */
+export function lastUsedTime(hour: number, now: number): string {
+  const end = Math.min(hour + HOUR_MS, Math.max(now, hour));
+  return relativeTime(hour + (end - hour) / 2, now);
 }
 
 /** "13 Oct 15:00 UTC": a short UTC time for "since …" lines. */
@@ -66,7 +64,9 @@ export function formatShortTime(ms: number): string {
   return `${date.getUTCDate()} ${month} ${hh}:${mm} UTC`;
 }
 
-/** "2026-10-20": the UTC date of `ms`. */
+/** "20 Oct 2026": the UTC date of `ms`, as the ui Time component writes a date. */
 export function formatDate(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
+  const date = new Date(ms);
+  const month = date.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' });
+  return `${date.getUTCDate()} ${month} ${date.getUTCFullYear()}`;
 }

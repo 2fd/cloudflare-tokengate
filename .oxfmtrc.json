@@ -12,7 +12,6 @@
   "sortPackageJson": false,
   "ignorePatterns": [
     "**/worker-configuration.d.ts",
-    "apps/*/public/static/**",
     "**/src/styles/*.css",
     "docs/diagrams/*.svg",
     "**/*.md",

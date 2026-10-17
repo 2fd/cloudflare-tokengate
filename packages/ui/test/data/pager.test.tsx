@@ -42,6 +42,22 @@ describe('Pager', () => {
     );
   });
 
+  it('links the newest page first, only when set, without rel', () => {
+    expect(
+      render(<Pager summary="s" newest="/admin/requests" newer="?after=r1" older="?before=r9" />),
+    ).toContain(
+      '<span class="end"><a href="/admin/requests">Newest</a><a href="?after=r1" rel="prev">Newer</a>',
+    );
+    const buttons = render(
+      <Pager summary="s" buttons newest="/admin/audit" newestLabel="Newest entries" newer="?a=1" />,
+    );
+    expect(buttons).toContain(
+      '<span class="end"><a class="btn sm secondary" href="/admin/audit">Newest entries</a><a class="btn sm secondary" href="?a=1" rel="prev">',
+    );
+    // no faint placeholder when there is no newest link
+    expect(render(<Pager summary="s" older="?b=1" />)).not.toContain('Newest');
+  });
+
   it('escapes the cursor in the href', () => {
     expect(render(<Pager summary="s" older={'?before="x"&a=1'} />)).toContain(
       'href="?before=&quot;x&quot;&amp;a=1"',

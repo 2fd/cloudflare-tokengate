@@ -8,7 +8,7 @@
     "typeAware": true,
     "reportUnusedDisableDirectives": "error"
   },
-  "ignorePatterns": ["**/worker-configuration.d.ts", "apps/*/public/static/**"],
+  "ignorePatterns": ["**/worker-configuration.d.ts"],
   "rules": {
     "typescript/no-floating-promises": "error",
     "react/no-danger": "error",

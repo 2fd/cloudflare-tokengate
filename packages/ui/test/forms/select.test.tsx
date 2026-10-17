@@ -32,6 +32,36 @@ describe('Select', () => {
     );
   });
 
+  it('renders option groups mixed with options, in order, selecting inside groups', () => {
+    expect(
+      render(
+        <Select
+          id="t"
+          value="token"
+          options={[
+            { value: 'all', label: 'All targets' },
+            {
+              group: 'Settings',
+              options: [
+                { value: 'hosts', label: 'Admin hosts' },
+                { value: 'upstreams', label: 'Upstream hosts', disabled: true },
+              ],
+            },
+            { group: 'Tokens', options: [{ value: 'token', label: 'Service token' }] },
+          ]}
+        />,
+      ),
+    ).toBe(
+      '<select class="select" id="t"><option value="all">All targets</option><optgroup label="Settings"><option value="hosts">Admin hosts</option><option value="upstreams" disabled="">Upstream hosts</option></optgroup><optgroup label="Tokens"><option value="token" selected="">Service token</option></optgroup></select>',
+    );
+  });
+
+  it('escapes group labels', () => {
+    expect(render(<Select id="g" options={[{ group: '"<x>', options: [] }]} />)).toContain(
+      '<optgroup label="&quot;&lt;x&gt;"></optgroup>',
+    );
+  });
+
   it('escapes option labels', () => {
     expect(render(<Select id="d" options={[{ value: '"', label: '<b>' }]} />)).toContain(
       '<option value="&quot;">&lt;b&gt;</option>',

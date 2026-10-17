@@ -48,6 +48,8 @@ ol.dx-list>li::marker{font-variant-numeric:tabular-nums}
 /* frame: a page-background box for shells and page-level components */
 .dx-canvas.frame{display:block;padding:0;overflow:clip;background:var(--page-bg)}
 .dx-canvas.frame>.app{min-height:26rem}
+/* a shell in a frame is not the window: its sidebar is not sticky to the viewport height */
+@media (min-width:40rem){ .dx-canvas.frame .side-in{position:static;height:auto;min-height:100%} }
 .dx-canvas.frame>.page,.dx-canvas.frame>.ph{padding:var(--sp-6)}
 .dx-canvas.frame>.ph{max-width:none}
 

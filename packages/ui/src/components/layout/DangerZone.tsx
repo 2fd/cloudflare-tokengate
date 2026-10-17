@@ -9,6 +9,8 @@ export interface DangerZoneProps {
   id: string;
   /** Tray title, in the bad color. Default "Danger zone". */
   title?: Child;
+  /** One line under the title, the tray's `description` ("Stop Tom from using the console."). */
+  description?: Child;
   /** Level of the tray title: 2 (default), 3 under another h2. The rows follow one level deeper. */
   headingLevel?: HeadingLevel;
   class?: string;
@@ -23,12 +25,19 @@ export interface DangerZoneProps {
 export function DangerZone({
   id,
   title = 'Danger zone',
+  description,
   headingLevel,
   class: className,
   children,
 }: DangerZoneProps) {
   return (
-    <Tray id={id} title={title} headingLevel={headingLevel} class={cx('danger-zone', className)}>
+    <Tray
+      id={id}
+      title={title}
+      description={description}
+      headingLevel={headingLevel}
+      class={cx('danger-zone', className)}
+    >
       <Panel variant="flush">{children}</Panel>
     </Tray>
   );

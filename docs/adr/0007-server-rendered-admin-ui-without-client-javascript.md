@@ -29,3 +29,7 @@ The UI is a set of lists and forms used by a few people. It does not need client
 - The UI has no live updates, client-side validation or dynamic form rows. Complex inputs use text formats, for example conditions and rules one per line (`apps/gateway/src/admin/grant-text.ts`).
 - Pages are tested through plain HTTP requests in integration tests, without a browser.
 - There is no JSON admin API. Configuration as code is future work ([roadmap.md](../roadmap.md)).
+
+## Note (2026-10-17)
+
+The admin stylesheets are now `ui.css` of the design system package (`@tokengate/ui`) and the admin's `apps/gateway/src/admin/pages.css`. The Worker serves both at hashed `/static/` URLs; Workers Assets and `app.css` are gone ([ADR 0022](0022-admin-ui-on-design-system-d.md)). The rest of this decision is unchanged.

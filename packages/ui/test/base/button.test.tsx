@@ -101,7 +101,54 @@ describe('Button', () => {
   });
 });
 
+describe('Button formnovalidate', () => {
+  it('skips constraint validation on a secondary submit', () => {
+    expect(
+      render(
+        <Button type="submit" name="_action" value="add:cond" formnovalidate>
+          Add condition
+        </Button>,
+      ),
+    ).toBe(
+      '<button class="btn secondary" type="submit" name="_action" value="add:cond" formnovalidate="">Add condition</button>',
+    );
+  });
+
+  it('is absent by default and when false', () => {
+    expect(render(<Button type="submit">Save</Button>)).not.toContain('formnovalidate');
+    expect(
+      render(
+        <Button type="submit" formnovalidate={false}>
+          Save
+        </Button>,
+      ),
+    ).not.toContain('formnovalidate');
+  });
+
+  it('is ignored on a link', () => {
+    expect(
+      render(
+        <Button href="/x" formnovalidate>
+          Open
+        </Button>,
+      ),
+    ).toBe('<a class="btn secondary" href="/x">Open</a>');
+  });
+});
+
 describe('ButtonRow', () => {
+  it('takes an id', () => {
+    expect(
+      render(
+        <ButtonRow id="invite-existing">
+          <Button>Invite</Button>
+        </ButtonRow>,
+      ),
+    ).toBe(
+      '<div class="btn-row" id="invite-existing"><button class="btn secondary" type="button">Invite</button></div>',
+    );
+  });
+
   it('wraps buttons in .btn-row', () => {
     expect(
       render(

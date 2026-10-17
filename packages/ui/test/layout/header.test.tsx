@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { Identity, PageHeader, RelationLine, Segmented, TabRow, Tabs } from '../../src';
+import {
+  FieldInline,
+  Identity,
+  PageHeader,
+  RelationLine,
+  Segmented,
+  TabRow,
+  Tabs,
+} from '../../src';
+import { uiCss } from '../../src/css';
 import { render } from '../render';
 
 describe('PageHeader (detail)', () => {
@@ -27,9 +36,34 @@ describe('PageHeader (detail)', () => {
     );
   });
 
+  it('lets the identity take the rest of the row, so a long meta line wraps under the actions', () => {
+    expect(uiCss.text).toContain('.ph-row>.ident{flex:1 1 20rem}');
+  });
+
   it('passes classes through and escapes the title', () => {
     expect(render(<PageHeader title="<x>" class="k" />)).toBe(
       '<header class="ph k"><div class="ph-row"><div class="ph-title"><h1>&lt;x&gt;</h1></div></div></header>',
+    );
+  });
+
+  it('puts a component form (FieldInline) in the actions as is', () => {
+    const html = render(
+      <PageHeader
+        title="Requests"
+        actions={
+          <FieldInline
+            id="find"
+            label="Request ID"
+            name="id"
+            submit="Find"
+            formLabel="Find a request"
+            action="/r"
+          />
+        }
+      />,
+    );
+    expect(html).toContain(
+      '<div class="ph-actions"><form class="field-inline" role="search" method="get" action="/r" aria-label="Find a request">',
     );
   });
 
@@ -98,6 +132,23 @@ describe('Tabs', () => {
     expect(html).toMatch(/^<nav class="tabs x" aria-label="Token views">/);
     expect(html).toContain('<a href="/o" aria-current="page">Overview</a>');
     expect(html.match(/aria-current/g)).toHaveLength(1);
+  });
+
+  it('marks the view of a deeper page with aria-current="true", and "page" like true', () => {
+    const deeper = render(
+      <Tabs
+        label="Outcome"
+        items={[
+          { label: 'All', href: '/r', current: 'true' },
+          { label: 'Denied', href: '/r?o=d', current: false },
+        ]}
+      />,
+    );
+    expect(deeper).toContain('<a href="/r" aria-current="true">All</a>');
+    expect(deeper).toContain('<a href="/r?o=d">Denied</a>');
+    expect(
+      render(<Tabs label="T" items={[{ label: 'A', href: '/a', current: 'page' }]} />),
+    ).toContain('<a href="/a" aria-current="page">A</a>');
   });
 
   it('renders counts, including 0', () => {

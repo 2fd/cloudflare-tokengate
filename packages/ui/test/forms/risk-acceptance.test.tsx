@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RiskAcceptance } from '../../src';
+import { Reveal, RiskAcceptance } from '../../src';
 import { render } from '../render';
 
 const risks = [{ label: 'Pull request into', text: 'pull_request jobs run the proposed code.' }];
@@ -24,6 +24,33 @@ describe('RiskAcceptance', () => {
     expect(render(<RiskAcceptance id="r" title="T" risks={risks} confirm="C" />)).not.toContain(
       'required',
     );
+  });
+
+  it('always shows without a risky option and can require the box', () => {
+    const html = render(
+      <RiskAcceptance id="srv" title="T" risks={risks} confirm="C" always required />,
+    );
+    expect(html).toMatch(/^<div class="riskacc always" id="srv" role="group"/);
+    expect(html).toContain(
+      '<input type="checkbox" id="srv-ack" name="acknowledge_warnings" value="1" required=""/>',
+    );
+    expect(html).not.toContain('class="hint"');
+    const optional = render(<RiskAcceptance id="o" title="T" risks={risks} confirm="C" always />);
+    expect(optional).toMatch(/^<div class="riskacc always"/);
+    expect(optional).not.toContain('required');
+    expect(
+      render(<RiskAcceptance id="h" title="T" risks={risks} confirm="C" always hint="H" />),
+    ).toContain('<p class="hint">H</p>');
+  });
+
+  it('refuses a required box inside a Reveal', () => {
+    expect(() =>
+      render(
+        <Reveal field={1} option={1}>
+          <RiskAcceptance id="r" title="T" risks={risks} confirm="C" always required />
+        </Reveal>,
+      ),
+    ).toThrow(/RiskAcceptance: no required/);
   });
 
   it('wires the error to the box and keeps it checked', () => {

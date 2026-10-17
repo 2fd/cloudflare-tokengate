@@ -1,8 +1,50 @@
-// Monitoring › Overview (`GET /admin`): health (every alert, and every check), the getting-started
-// steps, traffic for a range (KPIs and a chart), which consumers use which token, the top denials
-// and the latest changes. Read-only. Only names, counts and states are shown, never configured
-// values that could be secret (I-CFG-1, I-CRED-1). Denials from unverified tokens never prefill a
-// form (I-LOG-2).
+// Monitoring › Overview (`GET /admin`): what needs attention (every alert, with its fix), where
+// calls went (the request pipeline), the top denied callers, which consumers use which token (the
+// connections map), traffic per hour and the latest changes, then every health check, collapsed.
+// An empty install shows the getting-started steps instead. Read-only. Only names, counts and
+// states are shown, never configured values that could be secret (I-CFG-1, I-CRED-1). Denials
+// from unverified tokens never prefill a form (I-LOG-2).
+import {
+  Badge,
+  Callout,
+  Chart,
+  type ChartBar,
+  Checklist,
+  ChecklistProgress,
+  type ChecklistStep,
+  Chip,
+  Chips,
+  CodeBlock,
+  Column,
+  ConnectionsMap,
+  Disclosure,
+  Dot,
+  EmptyState,
+  Feed,
+  FeedDay,
+  FeedItem,
+  Grid,
+  Legend,
+  LinkAction,
+  LiveSummary,
+  type MapAccess,
+  type MapConsumer,
+  type MapToken,
+  PageHeader,
+  Panel,
+  Pipeline,
+  Segmented,
+  SummaryRow,
+  SummaryWire,
+  Button,
+  Cell,
+  Row,
+  RowHeader,
+  Table,
+  Time as UiTime,
+  Tray,
+  ZeroState,
+} from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
 import type { App } from '../../app';
 import { parseConfig } from '../../config';
@@ -10,6 +52,7 @@ import { getAdminHosts } from '../../db/settings';
 import type { Service } from '../../db/types';
 import type { AppEnv } from '../../env';
 import { SCHEMA_HEAD } from '../../generated/schema-head';
+import { PROFILES } from '../../identity/profiles';
 import {
   type AlertData,
   alertsFor,
@@ -18,7 +61,7 @@ import {
   type OverviewData,
   outsideAllowedHosts,
   overviewAlerts,
-  type TokenTraffic,
+  type SeriesBucket,
 } from '../../telemetry/dashboard';
 import {
   OVERVIEW_RANGES,
@@ -31,29 +74,32 @@ import { type AccessEdge, type Connections, loadConnections } from '../connectio
 import { loadDone, type NoticeTable, resolveNotice } from '../notice';
 import { paths } from '../paths';
 import { renderPage, type ViewContext } from '../render';
-import { TrafficChart } from '../views/chart';
+import type { Alert } from '../views/alerts';
+import { AskSomeone } from '../views/components';
 import {
-  AlertList,
-  AskSomeone,
-  type ChipProps,
-  ChipList,
-  DataTable,
-  EmptyState,
-  StatusBadge,
-  Tabs,
-  Time,
-} from '../views/components';
-import { formatCount, formatPercent, formatShortTime, loginProviderNames } from '../views/format';
+  formatCount,
+  formatPercent,
+  formatShortTime,
+  loginProviderNames,
+  relativeTime,
+} from '../views/format';
 import {
+  ActorAvatar,
+  ApproveOwnerDialogs,
+  AttentionCards,
   actionText,
   AuditTarget,
   auditActorText,
-  DenialTable,
-  FindRequestForm,
-  KpiList,
-  percentileText,
+  byUtcDay,
+  consumerLogo,
+  dayLabel,
+  FindRequest,
+  pipelineStages,
+  TopDenied,
+  toAttentionItems,
+  tokenLogo,
 } from '../views/monitoring';
-import { type StatusKey, statusLabel } from '../views/status';
+import { type StatusKey, STATUS, statusLabel, uiTone } from '../views/status';
 import { auditTargetNames, loadAuditPeople } from './audit';
 
 export { percentileText } from '../views/monitoring';
@@ -78,6 +124,13 @@ const NOTICES: NoticeTable = {
   rejected: () => ({ text: 'Person rejected and suspended.' }),
 };
 
+/** Bar unit and label column of the chart, per range. */
+const CHART = {
+  '24h': { unit: 'hour', tickEvery: 3, column: 'Hour (UTC)' },
+  '7d': { unit: '6 hours', tickEvery: 4, column: 'From (UTC)' },
+  '30d': { unit: 'day', tickEvery: 5, column: 'Day (UTC)' },
+} as const;
+
 export function registerOverviewRoutes(app: App): void {
   app.get('/admin', async (c) => {
     const deps = c.get('deps');
@@ -95,6 +148,21 @@ export function registerOverviewRoutes(app: App): void {
       loadAuditPeople(deps.env.DB),
       loadDone(deps, { userId: c.get('viewer').user.id }, c.req.query('done')),
     ]);
+    // `?focus=` is a consumer id of the map; anything else is ignored, never echoed.
+    const rawFocus = c.req.query('focus');
+    const focus = connections.consumers.some((consumer) => consumer.id === rawFocus)
+      ? rawFocus
+      : undefined;
+    const steps = setupSteps(connections, overview.alertData, verifiedCall);
+    const doneCount = Object.values(steps).filter(Boolean).length;
+    // Fresh: nothing set up and nothing to show. Refused calls on a new install are worth showing
+    // (Top denied offers "Add consumer"), so any traffic or denial means the setup layout.
+    const fresh =
+      doneCount === 0 &&
+      overview.telemetryAvailable &&
+      overview.totals.requests === 0 &&
+      overview.denials.groups.length === 0;
+    const rangeQuery = range === '24h' ? undefined : { range };
     return renderPage(
       c,
       {
@@ -102,165 +170,672 @@ export function registerOverviewRoutes(app: App): void {
         section: 'monitoring',
         subsection: 'overview',
         notice: resolveNotice(NOTICES, c.req.query('notice'), done),
-        subnavExtra: <FindRequestForm />,
+        alertData: overview.alertData,
+        header: (ctx) =>
+          fresh ? (
+            <PageHeader
+              title="Overview"
+              description={`Nothing calls through ${ctx.host} yet. Four steps connect a CI job to an upstream API without putting the API key in the job.`}
+            />
+          ) : (
+            <PageHeader
+              title="Overview"
+              description={
+                <>
+                  Since <UiTime datetime={new Date(overview.window.from)} format="datetime" /> UTC:
+                  what needs you, where calls went, and who uses which token.
+                </>
+              }
+              actions={
+                <>
+                  <span class="meta">
+                    Updated <UiTime datetime={new Date(overview.generatedAt)} format="clock" />{' '}
+                    <span class="sep" aria-hidden="true">
+                      ·
+                    </span>{' '}
+                    <a href={paths.overview(rangeQuery)}>Refresh</a>
+                  </span>
+                  <Segmented
+                    label="Time range"
+                    size="sm"
+                    items={OVERVIEW_RANGES.map((key) => ({
+                      label: RANGE_LABEL[key],
+                      href: paths.overview(key === '24h' ? undefined : { range: key }),
+                      current: key === range,
+                    }))}
+                  />
+                </>
+              }
+            />
+          ),
       },
-      (ctx) => (
-        <OverviewPage
-          ctx={ctx}
-          data={overview}
-          connections={connections}
-          verifiedCall={verifiedCall}
-          adminHosts={adminHosts}
-          env={deps.env}
-          rangeNote={rawRange !== undefined && parsed === null}
-          names={auditTargetNames(connections, people)}
-          suspended={new Set(people.filter((p) => p.status === 'suspended').map((p) => p.id))}
-        />
-      ),
+      (ctx) => {
+        const page = {
+          ctx,
+          data: overview,
+          connections,
+          adminHosts,
+          env: deps.env,
+          rangeNote: rawRange !== undefined && parsed === null,
+          names: auditTargetNames(connections, people),
+          suspended: new Set(people.filter((p) => p.status === 'suspended').map((p) => p.id)),
+          steps,
+          doneCount,
+          focus,
+        };
+        return fresh ? <FreshOverview {...page} /> : <OverviewPage {...page} />;
+      },
     );
   });
 }
 
-function OverviewPage(props: {
+interface PageData {
   ctx: ViewContext;
   data: OverviewData;
   connections: Connections;
-  verifiedCall: boolean;
   adminHosts: string[] | null;
   env: AppEnv;
   rangeNote: boolean;
   names: ReadonlyMap<string, string>;
   suspended: ReadonlySet<string>;
-}) {
+  steps: SetupSteps;
+  doneCount: number;
+  focus: string | undefined;
+}
+
+function RangeNote(props: { show: boolean }) {
+  return props.show ? (
+    <Callout title="That time range is not available; showing the last 24 hours." />
+  ) : null;
+}
+
+/** The sampling note: counts are estimates below 100 %, and unknown at 0 %. */
+function SamplingNote(props: { rate: number }) {
+  const { rate } = props;
+  if (rate >= 1) return null;
+  return (
+    <Callout
+      tone={rate <= 0 ? 'warn' : 'info'}
+      title={
+        rate <= 0
+          ? 'Allowed requests are not recorded (sample rate 0). Allowed counts and "last used" are not available.'
+          : `Allowed requests are sampled at ${formatPercent(rate)}, so counts are estimates.`
+      }
+      actions={<LinkAction href={paths.retention()}>Change in Data retention</LinkAction>}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Populated and setup layouts
+
+function OverviewPage(props: PageData) {
   const { ctx, data, connections } = props;
   const { range } = data;
-  const sampleRate = data.alertData.sampleRate;
   const alerts = overviewAlerts(data.alertData);
+  const items = toAttentionItems(alerts, ctx);
+  const checks = healthChecks(data.alertData, props.adminHosts, props.env);
+  const problems = checks.filter((check) => !check.ok).length;
+  const warnings = alerts.filter((alert) => alert.level === 'warning').length;
+  const notes = alerts.filter((alert) => alert.level === 'info').length;
+  const errors = alerts.filter((alert) => alert.level === 'error').length;
+  const tokenNames = new Map(connections.tokens.map((t) => [t.id, t.name]));
+  const { totals } = data;
   return (
     <>
-      <p class="meta">
-        Updated <Time ms={data.generatedAt} /> ·{' '}
-        <a href={paths.overview({ range: range === '24h' ? undefined : range })}>Refresh</a>
-      </p>
-      <div class="range">
-        <Tabs
-          label="Time range"
-          current={range}
-          items={OVERVIEW_RANGES.map((key) => ({
-            key,
-            href: paths.overview(key === '24h' ? undefined : { range: key }),
-            label: RANGE_LABEL[key],
-          }))}
+      <RangeNote show={props.rangeNote} />
+      {props.doneCount < 4 ? (
+        <GetStarted
+          ctx={ctx}
+          connections={connections}
+          steps={props.steps}
+          doneCount={props.doneCount}
         />
-        <p class="since">
-          since <Time ms={data.window.from} />
-        </p>
-      </div>
-      {props.rangeNote ? (
-        <p class="muted">That time range is not available; showing the last 24 hours.</p>
       ) : null}
-      {sampleRate <= 0 ? (
-        <p class="note">
-          Allowed requests are not recorded (sample rate 0). Allowed counts and "last used" are not
-          available. <a href={paths.retention()}>Change in Data retention</a>
-        </p>
-      ) : sampleRate < 1 ? (
-        <p class="note">
-          Allowed requests are sampled at {formatPercent(sampleRate)}, so counts are estimates.{' '}
-          <a href={paths.retention()}>Change in Data retention</a>
-        </p>
-      ) : null}
-
-      <HealthSection
-        ctx={ctx}
-        alerts={alerts}
-        alertData={data.alertData}
-        adminHosts={props.adminHosts}
-        env={props.env}
-      />
-      <GetStarted
-        ctx={ctx}
-        connections={connections}
-        alertData={data.alertData}
-        verifiedCall={props.verifiedCall}
-      />
-
-      <section aria-labelledby="traffic-h">
-        <h2 id="traffic-h">Traffic</h2>
-        {!data.telemetryAvailable ? (
-          <p class="note">The request log could not be read, so traffic is not shown.</p>
+      <Tray
+        id="attention"
+        title="Needs attention"
+        count={items.length}
+        actions={
+          <span class="meta">
+            {[
+              errors > 0 ? `${errors} ${errors === 1 ? 'error' : 'errors'}` : null,
+              `${warnings} ${warnings === 1 ? 'warning' : 'warnings'}`,
+              `${notes} ${notes === 1 ? 'note' : 'notes'}`,
+            ]
+              .filter(Boolean)
+              .join(' · ')}{' '}
+            ·{' '}
+            <a href={paths.overview({ hash: 'health' })}>
+              health checks{' '}
+              {problems > 0 ? `${problems} ${problems === 1 ? 'problem' : 'problems'}` : 'all OK'}
+            </a>
+          </span>
+        }
+      >
+        <Panel>
+          {items.length === 0 ? (
+            <ZeroState>No problems found.</ZeroState>
+          ) : (
+            <AttentionCards items={items} layout="cols" />
+          )}
+          <ApproveOwnerDialogs alerts={alerts} ctx={ctx} />
+        </Panel>
+      </Tray>
+      <Tray
+        id="flow"
+        title="Where calls went"
+        description={
+          !data.telemetryAvailable ? undefined : (
+            <>
+              {formatCount(totals.requests)} {totals.requests === 1 ? 'call' : 'calls'} in the last{' '}
+              {RANGE_LABEL[range]}.{' '}
+              {totals.denied > 0 ? (
+                <b class="t-bad">
+                  {formatCount(totals.denied)} {totals.denied === 1 ? 'was' : 'were'} denied (
+                  {formatPercent(totals.requests > 0 ? totals.denied / totals.requests : 0)}).
+                </b>
+              ) : (
+                'None were denied.'
+              )}{' '}
+              Select a stage to see its requests.
+            </>
+          )
+        }
+        bar={<FindRequest placement="tray" />}
+      >
+        {data.alertData.sampleRate < 1 ? (
+          <Panel variant="pad">
+            <SamplingNote rate={data.alertData.sampleRate} />
+          </Panel>
         ) : null}
-        <KpiList totals={data.totals} range={range} />
-        {data.totals.requests === 0 ? (
-          <EmptyState>
-            No requests in the selected range. Requests appear once a consumer calls{' '}
-            <code>/proxy/&lt;token slug&gt;/…</code>.
-          </EmptyState>
-        ) : null}
-        <TrafficChart
-          id="traffic-chart"
-          title={`Requests per ${range === '24h' ? 'hour' : range === '7d' ? '6 hours' : 'day'}, last ${RANGE_LABEL[range]}`}
-          buckets={data.series}
-        />
-      </section>
+        <Panel variant={data.telemetryAvailable ? undefined : 'pad'}>
+          {data.telemetryAvailable ? (
+            <Pipeline stages={pipelineStages(totals, data.tokens, range, tokenNames)} />
+          ) : (
+            <Callout
+              tone="warn"
+              title="The request log could not be read, so traffic is not shown."
+            />
+          )}
+        </Panel>
+      </Tray>
+      {data.telemetryAvailable ? <TopDeniedTray {...props} /> : null}
+      <TokensInUse {...props} />
+      <Grid>
+        <Column span={8}>
+          {data.telemetryAvailable ? (
+            <TrafficTray data={data} />
+          ) : (
+            <Tray id="traffic" title={`Requests per ${CHART[range].unit}`}>
+              <Panel variant="pad">
+                <ZeroState>The request log could not be read, so traffic is not shown.</ZeroState>
+              </Panel>
+            </Tray>
+          )}
+        </Column>
+        <Column span={4}>
+          <RecentChanges data={data} names={props.names} suspended={props.suspended} />
+        </Column>
+      </Grid>
+      <HealthTray checks={checks} alerts={alerts} />
+    </>
+  );
+}
 
-      <TokensInUse ctx={ctx} data={data} connections={connections} />
-
-      <section aria-labelledby="denials-h">
-        <h2 id="denials-h">Top denials</h2>
-        {data.denials.groups.length === 0 ? (
-          <EmptyState>No denied requests in the selected range.</EmptyState>
-        ) : (
-          <DenialTable
-            groups={data.denials.groups}
+function TopDeniedTray(props: PageData) {
+  const { data, connections, ctx } = props;
+  const { range, denials } = data;
+  const since = formatShortTime(data.window.from);
+  return (
+    <Tray
+      id="denials"
+      title="Top denied callers"
+      description={
+        denials.groups.length > 0
+          ? `The ${denials.groups.length} ${denials.groups.length === 1 ? 'group' : 'groups'} behind the newest denials since ${since}. Fix them from here.`
+          : undefined
+      }
+      actions={
+        <LinkAction href={paths.requests({ range, outcome: 'denied' })} arrow>
+          All {formatCount(data.totals.denied)} denied
+        </LinkAction>
+      }
+      footer={denials.bounded ? 'Grouped from the newest 2,000 denials.' : undefined}
+    >
+      {denials.groups.length === 0 ? (
+        <Panel variant="pad">
+          <ZeroState>No denied requests in the selected range.</ZeroState>
+        </Panel>
+      ) : (
+        <Panel variant="flush">
+          <TopDenied
+            groups={denials.groups}
             range={range}
-            since={data.window.from}
+            caption={`Top denied callers since ${since}`}
+            now={data.generatedAt}
             consumers={new Map(connections.consumers.map((c) => [c.id, c]))}
             tokens={new Map(connections.tokens.map((t) => [t.id, t]))}
             ctx={ctx}
           />
-        )}
-        <p>
-          <a href={paths.requests({ range, outcome: 'denied' })}>See all denied requests</a>
-          {data.denials.bounded ? (
-            <span class="muted"> Grouped from the newest 2,000 denials.</span>
-          ) : null}
-        </p>
-      </section>
+        </Panel>
+      )}
+    </Tray>
+  );
+}
 
-      <section aria-labelledby="changes-h">
-        <h2 id="changes-h">Recent changes</h2>
-        <DataTable
-          id="recent-changes"
-          caption="The last 5 changes"
-          captionHidden
-          rowHeader="what"
-          rows={data.recentChanges}
-          empty={<EmptyState>No changes yet.</EmptyState>}
-          columns={[
-            { key: 'when', header: 'When', render: (e) => <Time ms={e.ts} /> },
-            { key: 'who', header: 'Who', render: (e) => auditActorText(e, props.suspended) },
-            {
-              key: 'what',
-              header: 'What',
-              render: (e) => (
+/** The numbers of the chart bars: label, tooltip range and the "so far" bar. */
+function chartBars(series: readonly SeriesBucket[], range: OverviewRange): ChartBar[] {
+  const two = (n: number) => String(n).padStart(2, '0');
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  const clock = (ms: number) => {
+    const d = new Date(ms);
+    return `${two(d.getUTCHours())}:${two(d.getUTCMinutes())}`;
+  };
+  const day = (ms: number) => {
+    const d = new Date(ms);
+    return `${d.getUTCDate()} ${months[d.getUTCMonth()]}`;
+  };
+  return series.map((bucket) => {
+    const label =
+      range === '24h'
+        ? clock(bucket.start)
+        : range === '7d'
+          ? `${day(bucket.start)} ${clock(bucket.start)}`
+          : day(bucket.start);
+    const end = bucket.start + (range === '24h' ? 3_600_000 : range === '7d' ? 21_600_000 : 0);
+    return {
+      label,
+      range: range === '30d' ? label : `${label}–${clock(end)}`,
+      allowed: bucket.allowed,
+      denied: bucket.denied,
+      errors: bucket.errors,
+      partial: bucket.partial,
+    };
+  });
+}
+
+function TrafficTray(props: { data: OverviewData }) {
+  const { data } = props;
+  const { range } = data;
+  const bars = chartBars(data.series, range);
+  const total = (bar: ChartBar) => bar.allowed + bar.denied + bar.errors;
+  const peak = bars.reduce<ChartBar | null>(
+    (best, bar) => (best === null || total(bar) > total(best) ? bar : best),
+    null,
+  );
+  const sum = (key: 'allowed' | 'denied' | 'errors') => bars.reduce((n, bar) => n + bar[key], 0);
+  const all = sum('allowed') + sum('denied') + sum('errors');
+  const title = `Requests per ${CHART[range].unit}, last ${RANGE_LABEL[range]}`;
+  if (all === 0 || peak === null) {
+    return (
+      <Tray id="traffic" title={`Requests per ${CHART[range].unit}`}>
+        <Panel variant="pad">
+          <ZeroState>
+            No requests in the selected range. Requests appear once a consumer calls{' '}
+            <code>/proxy/&lt;token slug&gt;/…</code>.
+          </ZeroState>
+        </Panel>
+      </Tray>
+    );
+  }
+  return (
+    <Tray
+      id="traffic"
+      title={`Requests per ${CHART[range].unit}`}
+      description={`Peak ${formatCount(total(peak))} at ${peak.label}. ${formatCount(sum('denied'))} denied, ${formatCount(sum('errors'))} ${sum('errors') === 1 ? 'error' : 'errors'}. UTC; the last bar is so far.`}
+      actions={
+        <Legend
+          decorative
+          items={[
+            { mark: 'allowed', label: 'Allowed' },
+            { mark: 'denied', label: 'Denied' },
+            { mark: 'error', label: 'Errors' },
+          ]}
+        />
+      }
+    >
+      <Chart
+        id="traffic-chart"
+        title={title}
+        description={`Peak: ${formatCount(total(peak))} requests at ${peak.label}${peak.partial ? ' (so far)' : ''}. Total: ${formatCount(all)} requests, ${formatCount(sum('allowed'))} allowed, ${formatCount(sum('denied'))} denied, ${formatCount(sum('errors'))} errors.`}
+        bars={bars}
+        tickEvery={CHART[range].tickEvery}
+        columnLabel={CHART[range].column}
+      />
+    </Tray>
+  );
+}
+
+function RecentChanges(props: {
+  data: OverviewData;
+  names: ReadonlyMap<string, string>;
+  suspended: ReadonlySet<string>;
+}) {
+  const { data } = props;
+  return (
+    <Tray
+      id="changes"
+      title="Recent changes"
+      actions={
+        <LinkAction href={paths.audit()} arrow>
+          Audit log
+        </LinkAction>
+      }
+    >
+      {data.recentChanges.length === 0 ? (
+        <Panel variant="pad">
+          <ZeroState>No changes yet.</ZeroState>
+        </Panel>
+      ) : (
+        <Panel variant="flush">
+          {byUtcDay(data.recentChanges).map((events) => (
+            <>
+              <FeedDay>{dayLabel(events[0]?.ts ?? 0, data.generatedAt)}</FeedDay>
+              <Feed compact>
+                {events.map((e) => (
+                  <FeedItem
+                    avatar={<ActorAvatar event={e} />}
+                    time={<UiTime datetime={new Date(e.ts)} format="clock" />}
+                  >
+                    <b>{auditActorText(e, props.suspended)}</b> {actionText(e.action) ?? e.action}
+                    {e.target_type ? (
+                      <>
+                        : <AuditTarget event={e} names={props.names} />
+                      </>
+                    ) : null}
+                    .
+                  </FeedItem>
+                ))}
+              </Feed>
+            </>
+          ))}
+        </Panel>
+      )}
+    </Tray>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Empty install
+
+function FreshOverview(props: PageData) {
+  const { ctx, data } = props;
+  const alerts = overviewAlerts(data.alertData);
+  const urgent = alerts.filter((alert) => alert.level !== 'info');
+  const notes = alerts.filter((alert) => alert.level === 'info');
+  const checks = healthChecks(data.alertData, props.adminHosts, props.env);
+  return (
+    <>
+      <RangeNote show={props.rangeNote} />
+      <Grid>
+        <Column span={8}>
+          <GetStarted
+            ctx={ctx}
+            connections={props.connections}
+            steps={props.steps}
+            doneCount={props.doneCount}
+          />
+        </Column>
+        <Column span={4} rail>
+          <LiveSummary
+            id="plan"
+            variant="plan"
+            title="What you are building"
+            description="The map on this page fills in as you finish each step."
+          >
+            <SummaryRow
+              logo="github"
+              title={
                 <>
-                  {actionText(e.action) ?? e.action} <code>{e.action}</code>
+                  Service consumer <Badge>Step 2</Badge>
+                </>
+              }
+              meta="for example GitHub Actions"
+            />
+            <SummaryWire />
+            <SummaryRow
+              icon="gate"
+              title="tokengate"
+              meta="Checks every call against a consumer access (step 3)"
+            />
+            <SummaryWire />
+            <SummaryRow
+              logo="slack"
+              title={
+                <>
+                  Service token <Badge>Step 1</Badge>
+                </>
+              }
+              meta="for example Slack or OpenAI. The upstream secret stays here."
+            />
+          </LiveSummary>
+          <Tray id="traffic" title="Traffic">
+            <Panel variant="pad">
+              <p class="muted">
+                No requests yet. They appear here once a consumer calls{' '}
+                <code>/proxy/&lt;token slug&gt;/…</code>.
+              </p>
+              <Chips label="Where calls went, all zero">
+                <Chip tone="off">
+                  Received <b>0</b>
+                </Chip>
+                <Chip tone="off">
+                  Verified <b>0</b>
+                </Chip>
+                <Chip tone="off">
+                  Matched <b>0</b>
+                </Chip>
+                <Chip tone="off">
+                  Upstream OK <b>0</b>
+                </Chip>
+              </Chips>
+              <SamplingNote rate={data.alertData.sampleRate} />
+              <FindRequest placement="panel" />
+            </Panel>
+          </Tray>
+        </Column>
+      </Grid>
+      {urgent.length > 0 ? (
+        <Tray id="attention" title="Needs attention" count={urgent.length}>
+          <Panel>
+            <AttentionCards items={toAttentionItems(urgent, ctx)} layout="list" />
+            <ApproveOwnerDialogs alerts={urgent} ctx={ctx} />
+          </Panel>
+        </Tray>
+      ) : null}
+      {notes.length > 0 ? (
+        <div class="notes" id="notes">
+          {notes.map((alert) => (
+            <p class="hint">
+              <Dot tone="info" /> <span class="vh">Note: </span>
+              {alert.title}
+              {alert.detail ? ` ${alert.detail}` : null}
+              {alert.objects.map((object) => (
+                <>
+                  {' '}
+                  <a href={object.href}>{object.label}</a>
+                </>
+              ))}
+              {alert.fix && ctx.can(alert.fix.permission) ? (
+                <>
+                  {' '}
+                  <a href={alert.fix.href}>{alert.fix.label}</a>
+                </>
+              ) : null}
+            </p>
+          ))}
+        </div>
+      ) : null}
+      <HealthTray checks={checks} alerts={alerts} />
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Get started
+
+interface SetupSteps {
+  token: boolean;
+  consumer: boolean;
+  access: boolean;
+  call: boolean;
+}
+
+function setupSteps(
+  connections: Connections,
+  alertData: AlertData,
+  verifiedCall: boolean,
+): SetupSteps {
+  return {
+    token: alertData.services.some((s) => s.has_credential),
+    consumer: connections.consumers.length > 0,
+    access: connections.accesses.some((edge) => edge.grant.enabled),
+    call: verifiedCall,
+  };
+}
+
+function GetStarted(props: {
+  ctx: ViewContext;
+  connections: Connections;
+  steps: SetupSteps;
+  doneCount: number;
+}) {
+  const { ctx, connections, steps } = props;
+  const [newest] = connections.accesses
+    .filter((edge) => edge.grant.enabled)
+    .sort(
+      (a, b) => b.grant.created_at - a.grant.created_at || b.grant.id.localeCompare(a.grant.id),
+    );
+  const guide = paths.docs('callers/github-actions.md');
+  const draft: Array<Omit<ChecklistStep, 'state'> & { done: boolean; usable: boolean }> = [
+    {
+      done: steps.token,
+      usable: ctx.can('tokens:write'),
+      title: 'Add a service token',
+      why: 'Load one upstream API key, for example a Slack bot token or an OpenAI key. You paste it once; nobody can read it again.',
+      ...(ctx.can('tokens:write')
+        ? {
+            action: {
+              href: paths.tokenNew(),
+              label: (
+                <>
+                  <span class="plus" aria-hidden="true">
+                    +
+                  </span>
+                  Add a service token
                 </>
               ),
             },
-            {
-              key: 'target',
-              header: 'Target',
-              render: (e) => <AuditTarget event={e} names={props.names} />,
+          }
+        : {
+            ask: <AskSomeone permission="tokens:write" ctx={ctx} verb="add a service token" />,
+          }),
+    },
+    {
+      done: steps.consumer,
+      usable: ctx.can('access:write'),
+      title: 'Add a service consumer',
+      why: (
+        <>
+          Trust the CI system that will call, for example GitHub Actions for your organization.{' '}
+          <b>Can be a different person</b>, such as an access manager.
+        </>
+      ),
+      ...(ctx.can('access:write')
+        ? {
+            action: {
+              href:
+                connections.tokens.length > 0
+                  ? paths.accessNew({ consumer: 'new' })
+                  : paths.consumerNew({ type: 'github-actions' }),
+              label: 'Add a service consumer',
             },
-          ]}
-        />
-        <p>
-          <a href={paths.audit()}>Open the audit log</a>
-        </p>
-      </section>
-    </>
+          }
+        : {
+            ask: <AskSomeone permission="access:write" ctx={ctx} verb="add a service consumer" />,
+          }),
+    },
+    {
+      done: steps.access,
+      usable: ctx.can('access:write'),
+      title: 'Give a consumer access',
+      why: 'Say which repository and environment may use which token, and for which operations. Best after steps 1 and 2.',
+      ...(ctx.can('access:write')
+        ? { action: { href: paths.accessNew(), label: 'Give access' } }
+        : {
+            ask: <AskSomeone permission="access:write" ctx={ctx} verb="give a consumer access" />,
+          }),
+    },
+    {
+      done: steps.call,
+      usable: true,
+      title: 'Make the first call',
+      why: (
+        <>
+          Add the tokengate step to a workflow. The job gets a short-lived token and calls the API
+          through <code>/proxy/&lt;token slug&gt;/…</code>; the call shows up here.
+        </>
+      ),
+      action: newest
+        ? {
+            href: paths.accessItem(newest.grant.id, { hash: 'use' }),
+            label: (
+              <>
+                Copy the workflow step<span class="vh"> for {newest.grant.name}</span>
+              </>
+            ),
+          }
+        : { href: guide, label: 'Read the GitHub Actions guide' },
+      detail: newest ? (
+        <a href={guide}>
+          How to call the gateway from GitHub Actions<span class="vh"> (GitHub docs)</span>
+        </a>
+      ) : (
+        <CodeBlock
+          label="Workflow snippet preview"
+          caption="Preview of the workflow step. The exact snippet, with your audience, appears on the access page after step 3."
+        >
+          {`- id: tokengate
+  uses: 2fd/cloudflare-tokengate/actions/get-token@main
+  with:
+    url: https://${ctx.host}
+- run: curl "\${{ steps.tokengate.outputs.proxy-base }}/<token slug>/…" \\
+    -H "x-tokengate-token: \${{ steps.tokengate.outputs.token }}"`}
+        </CodeBlock>
+      ),
+    },
+  ];
+  // The one primary: the first step to do whose action the viewer can take.
+  const next = draft.findIndex((step) => !step.done && step.usable && step.action);
+  const checklist: ChecklistStep[] = draft.map(({ done, usable: _usable, ...step }, index) => ({
+    ...step,
+    state: done ? 'done' : index === next ? 'next' : 'todo',
+  }));
+  return (
+    <Tray
+      id="get-started"
+      title="Get started: your first connection"
+      description="Steps 1 and 2 can be done in any order, and by different people."
+      actions={<ChecklistProgress done={props.doneCount} total={4} />}
+    >
+      <Panel>
+        <Checklist steps={checklist} />
+      </Panel>
+    </Tray>
   );
 }
 
@@ -281,60 +856,65 @@ interface Check {
   detail: Child;
 }
 
-function HealthSection(props: {
-  ctx: ViewContext;
-  alerts: ReturnType<typeof overviewAlerts>;
-  alertData: AlertData;
-  adminHosts: string[] | null;
-  env: AppEnv;
-}) {
-  const checks = healthChecks(props.alertData, props.adminHosts, props.env);
+/** Every check, collapsed under one line: open while a check fails or an alert links to a row. */
+function HealthTray(props: { checks: Check[]; alerts: readonly Alert[] }) {
+  const { checks } = props;
   const problems = checks.filter((check) => !check.ok).length;
+  const ok = checks.length - problems;
   // An alert can link to a row that passes (cron_never: the job has not run yet, which is ok).
   const linksToCheck = props.alerts.some((alert) =>
     alert.objects.some((object) => object.href.includes('#check-')),
   );
   return (
-    <section id="health" aria-labelledby="health-h">
-      <h2 id="health-h">Health</h2>
-      {props.alerts.length === 0 ? (
-        <p>No problems found.</p>
-      ) : (
-        <AlertList alerts={props.alerts} ctx={props.ctx} />
-      )}
-      {/* Open while a check fails or an alert links to a row (#check-…), so the link lands on it. */}
-      <details open={problems > 0 || linksToCheck}>
-        <summary>
-          All checks ({checks.length - problems} ok, {problems}{' '}
-          {problems === 1 ? 'problem' : 'problems'})
-        </summary>
-        <DataTable
+    <Tray
+      id="health"
+      title="Health"
+      hideTitle
+      bar={
+        <Disclosure
           id="checks"
-          caption="All checks"
-          captionHidden
-          rowHeader="name"
-          rows={checks}
-          columns={[
-            {
-              key: 'name',
-              header: 'Check',
-              render: (check) => <span id={`check-${check.id}`}>{check.name}</span>,
-            },
-            {
-              key: 'state',
-              header: 'State',
-              render: (check) =>
-                check.ok ? (
-                  <span class="badge ok">OK</span>
-                ) : (
-                  <span class="badge bad">Problem</span>
-                ),
-            },
-            { key: 'detail', header: 'Detail', render: (check) => check.detail },
-          ]}
-        />
-      </details>
-    </section>
+          summary={`All checks (${ok} ok, ${problems} ${problems === 1 ? 'problem' : 'problems'})`}
+          hint={
+            problems > 0 ? (
+              <Badge tone="bad" glyph="✕">
+                {problems} {problems === 1 ? 'problem' : 'problems'}
+              </Badge>
+            ) : (
+              <Badge tone="ok" glyph="✓">
+                {ok} OK
+              </Badge>
+            )
+          }
+          open={problems > 0 || linksToCheck}
+        >
+          <Table
+            label="All checks"
+            caption="All checks"
+            columns={[{ label: 'Check' }, { label: 'State' }, { label: 'Detail' }]}
+          >
+            {checks.map((check) => (
+              <Row>
+                <RowHeader>
+                  <span id={`check-${check.id}`}>{check.name}</span>
+                </RowHeader>
+                <Cell label="State">
+                  {check.ok ? (
+                    <Badge tone="ok" glyph="✓">
+                      OK
+                    </Badge>
+                  ) : (
+                    <Badge tone="bad" glyph="✕">
+                      Problem
+                    </Badge>
+                  )}
+                </Cell>
+                <Cell label="Detail">{check.detail}</Cell>
+              </Row>
+            ))}
+          </Table>
+        </Disclosure>
+      }
+    />
   );
 }
 
@@ -381,7 +961,13 @@ function healthChecks(data: AlertData, adminHosts: string[] | null, env: AppEnv)
       ok: !cron.failing && !(cron.stale && cron.lastSuccessAt !== null),
       detail: (
         <>
-          Last success: {cron.lastSuccessAt === null ? 'never' : <Time ms={cron.lastSuccessAt} />}.
+          Last success:{' '}
+          {cron.lastSuccessAt === null ? (
+            'never'
+          ) : (
+            <UiTime datetime={new Date(cron.lastSuccessAt)} />
+          )}
+          .
           {cron.failing ? (
             <>
               {' '}
@@ -391,7 +977,7 @@ function healthChecks(data: AlertData, adminHosts: string[] | null, env: AppEnv)
               ) : (
                 <>
                   {' '}
-                  at <Time ms={cron.lastErrorAt} />
+                  at <UiTime datetime={new Date(cron.lastErrorAt)} />
                 </>
               )}
               : <code>{cron.lastError ?? 'unknown'}</code>.
@@ -498,124 +1084,219 @@ function SchemaDetail(props: { database: 'DB' | 'TELEMETRY_DB'; state: keyof typ
 }
 
 // ---------------------------------------------------------------------------------------------
-// Get started
+// Tokens in use (the connections map)
 
-function GetStarted(props: {
-  ctx: ViewContext;
-  connections: Connections;
-  alertData: AlertData;
-  verifiedCall: boolean;
-}) {
-  const { ctx, connections, alertData } = props;
-  const tokenDone = alertData.services.some((s) => s.has_credential);
-  const consumerDone = connections.consumers.length > 0;
-  const enabled = connections.accesses
-    .filter((edge) => edge.grant.enabled)
-    .sort(
-      (a, b) => b.grant.created_at - a.grant.created_at || b.grant.id.localeCompare(a.grant.id),
-    );
-  const accessDone = enabled.length > 0;
-  if (tokenDone && consumerDone && accessDone && props.verifiedCall) return null;
-  const [newest] = enabled;
-  const steps: Array<{
-    done: boolean;
-    title: string;
-    why: string;
-    action: Child;
-  }> = [
-    {
-      done: tokenDone,
-      title: 'Add a service token',
-      why: 'The upstream API (Slack, OpenAI, GitHub, …) and the secret the gateway attaches for callers.',
-      action: ctx.can('tokens:write') ? (
-        <a class="button" href={paths.tokenNew()}>
-          Add a service token
-        </a>
-      ) : (
-        <AskSomeone permission="tokens:write" ctx={ctx} verb="add a service token" />
-      ),
-    },
-    {
-      done: consumerDone,
-      title: 'Add a service consumer',
-      why: 'Tells the gateway which CI tokens to trust, for example GitHub Actions in your organization.',
-      action: ctx.can('access:write') ? (
-        <a
-          class="button"
-          href={
-            connections.tokens.length > 0
-              ? paths.accessNew({ consumer: 'new' })
-              : paths.consumerNew({ type: 'github-actions' })
-          }
-        >
-          Add a service consumer
-        </a>
-      ) : (
-        <AskSomeone permission="access:write" ctx={ctx} verb="add a service consumer" />
-      ),
-    },
-    {
-      done: accessDone,
-      title: 'Give a consumer access',
-      why: 'Decides which workloads (for example, which repositories and branches) may call which token.',
-      action: ctx.can('access:write') ? (
-        <a class="button" href={paths.accessNew()}>
-          Give access
-        </a>
-      ) : (
-        <AskSomeone permission="access:write" ctx={ctx} verb="give a consumer access" />
-      ),
-    },
-    {
-      done: props.verifiedCall,
-      title: 'Make the first call',
-      why: 'Call the gateway from a workflow. The request then shows up under Requests, with the reason when it is denied.',
-      action: (
-        <>
-          {newest ? (
-            <a class="button" href={paths.accessItem(newest.grant.id, { hash: 'use' })}>
-              Copy the workflow step
-              <span class="vh"> for {newest.grant.name}</span>
-            </a>
-          ) : null}{' '}
-          <a href={paths.docs('callers/github-actions.md')}>
-            How to call the gateway from GitHub Actions<span class="vh"> (GitHub docs)</span>
-          </a>
-        </>
-      ),
-    },
-  ];
-  return (
-    <section id="get-started" aria-labelledby="gs-h">
-      <h2 id="gs-h">Get started</h2>
-      <p class="muted">Steps 1 and 2 can be done in any order, and by different people.</p>
-      <ol class="steps">
-        {steps.map((step) => (
-          <li class={step.done ? 'done' : undefined}>
-            <p class="step-title">
-              <StatusBadge status={step.done ? 'done' : 'todo'} /> <strong>{step.title}</strong>
-            </p>
-            <p class="hint">{step.why}</p>
-            {step.done ? null : <div class="actions">{step.action}</div>}
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
+/** The map wire tone of an access: active, needs attention, broken, or not in use. */
+function accessTone(edge: AccessEdge): MapAccess['tone'] {
+  if (edge.status === 'disabled' || edge.status === 'inactive') return 'off';
+  if (edge.status === 'expired') return 'bad';
+  if (edge.status === 'expiring' || edge.flags.some((flag) => flag.status !== 'unused')) {
+    return 'warn';
+  }
+  return 'ok';
 }
 
-// ---------------------------------------------------------------------------------------------
-// Tokens in use
-
-interface TokenRow {
-  id: string;
-  token: Service | null;
-  traffic: TokenTraffic | null;
-  status: StatusKey;
-  statusDetail?: string;
-  accesses: AccessEdge[];
-  lastUsedHour: number | null;
-  problem: boolean;
+function TokensInUse(props: PageData) {
+  const { ctx, data, connections } = props;
+  const { range } = data;
+  const traffic = new Map(data.tokens.map((t) => [t.serviceId, t]));
+  const currentHour = hourStart(data.generatedAt);
+  const consumers: MapConsumer[] = connections.consumers.map((consumer) => {
+    const grants = connections.accesses.filter(
+      (edge) => edge.grant.caller_provider_id === consumer.id,
+    );
+    const requests = grants.reduce(
+      (sum, edge) => sum + (data.accessRequests.get(edge.grant.id) ?? 0),
+      0,
+    );
+    return {
+      id: consumer.id,
+      name: consumer.name,
+      logo: consumerLogo(consumer),
+      line: consumer.enabled
+        ? (PROFILES[consumer.profile]?.label ?? consumer.profile)
+        : `${PROFILES[consumer.profile]?.label ?? consumer.profile} · Disabled`,
+      idle: !consumer.enabled || requests === 0,
+      weight: grants.length,
+    };
+  });
+  const rows = connections.tokens.map((token) => {
+    const accesses = connections.accesses.filter((edge) => edge.grant.service_id === token.id);
+    const { status, detail } = tokenStatus(token, data, connections);
+    const problem =
+      PROBLEM_STATUSES.has(status) || alertsFor(data.alertData, { tokenId: token.id }).length > 0;
+    return { token, accesses, status, detail, problem, traffic: traffic.get(token.id) };
+  });
+  // Problems first, then the busiest: the map keeps this order between tokens of equal traffic.
+  rows.sort(
+    (a, b) =>
+      Number(b.problem) - Number(a.problem) ||
+      (b.traffic?.requests ?? 0) - (a.traffic?.requests ?? 0) ||
+      a.token.name.localeCompare(b.token.name),
+  );
+  const idleRows = rows.filter((row) => !row.problem && (row.traffic?.requests ?? 0) === 0);
+  const tokens: MapToken[] = rows.map((row) => {
+    const { token, accesses } = row;
+    const lastUsedHour = accesses.reduce<number | null>(
+      (max, edge) =>
+        edge.lastUsedHour !== null && (max === null || edge.lastUsedHour > max)
+          ? edge.lastUsedHour
+          : max,
+      null,
+    );
+    const consumerCount = new Set(accesses.map((edge) => edge.grant.caller_provider_id)).size;
+    const tone = uiTone(STATUS[row.status].tone);
+    const idle = idleRows.includes(row);
+    return {
+      id: token.id,
+      name: token.name,
+      slug: token.slug,
+      logo: tokenLogo(token),
+      requests: row.traffic?.requests ?? 0,
+      denied: row.traffic?.denied ?? 0,
+      errors: row.traffic?.errors ?? 0,
+      hrefs: {
+        requests: paths.requests({ token: token.id, range }),
+        denied: paths.requests({ token: token.id, range, outcome: 'denied' }),
+        errors: paths.requests({ token: token.id, range, outcome: 'error' }),
+      },
+      lastUsed:
+        connections.sampleRate <= 0
+          ? 'use not recorded'
+          : lastUsedHour === null
+            ? '—'
+            : lastUsedHour >= currentHour
+              ? 'this hour'
+              : relativeTime(lastUsedHour, data.generatedAt),
+      line:
+        row.status !== 'active' ? (
+          statusLabel(row.status, row.detail)
+        ) : accesses.length === 0 ? (
+          <>
+            No access yet<span class="vh">: no consumer can use this token yet.</span>
+          </>
+        ) : (
+          `${consumerCount} ${consumerCount === 1 ? 'consumer' : 'consumers'}`
+        ),
+      ...(row.status !== 'active' && (tone === 'warn' || tone === 'bad') ? { lineTone: tone } : {}),
+      idle: idle || !token.enabled,
+      ...(idle && idleRows[0] === row
+        ? { tag: `${idleRows.length} idle ${idleRows.length === 1 ? 'token' : 'tokens'}` }
+        : {}),
+    };
+  });
+  const accesses: MapAccess[] = connections.accesses.map((edge) => {
+    const flag = edge.flags[0];
+    return {
+      consumer: edge.grant.caller_provider_id,
+      token: edge.grant.service_id,
+      tone: accessTone(edge),
+      status: `${statusLabel(edge.status, edge.statusDetail)}${flag ? `, ${statusLabel(flag.status, flag.detail)}` : ''}`,
+      consumerLabel: `${edge.consumer?.name ?? 'Deleted consumer'} › ${edge.subject}`,
+      context: edge.context,
+      operation: edge.operations.join(', ') || undefined,
+      href: paths.accessItem(edge.grant.id),
+    };
+  });
+  const refused = traffic.get('')?.requests ?? 0;
+  const deleted = data.tokens
+    .filter(
+      (t) => t.serviceId !== '' && !connections.tokens.some((token) => token.id === t.serviceId),
+    )
+    .reduce((sum, t) => sum + t.requests, 0);
+  const lonely = rows.filter((row) => row.accesses.length === 0);
+  const footer: Child[] = [];
+  if (refused > 0) {
+    footer.push(
+      <>
+        Refused before a token was chosen: <b class="t-bad">{formatCount(refused)}</b> ·{' '}
+        <a href={paths.requests({ token: 'none', range })}>
+          See them<span class="vh"> (requests refused before a token was chosen)</span>
+        </a>
+      </>,
+    );
+  }
+  if (deleted > 0) footer.push(<>Traffic of deleted tokens: {formatCount(deleted)} requests</>);
+  if (ctx.can('access:write')) {
+    for (const row of lonely) {
+      footer.push(
+        <a href={paths.accessNew({ token: row.token.id })}>
+          Give a consumer access<span class="vh"> to {row.token.name}</span>
+        </a>,
+      );
+    }
+  }
+  return (
+    <Tray
+      id="tokens"
+      title="Tokens in use"
+      description={`Who calls which token through tokengate, with the traffic in the last ${RANGE_LABEL[range]}. Each line is a consumer access.`}
+      actions={
+        <>
+          <LinkAction href={paths.access()} arrow>
+            Open consumer access ({formatCount(connections.accesses.length)})
+          </LinkAction>
+          <Segmented
+            label="View"
+            size="sm"
+            items={[
+              {
+                label: 'Map',
+                href: `${paths.overview(range === '24h' ? undefined : { range })}#tokens`,
+                current: true,
+              },
+              { label: 'Matrix', href: paths.access({ view: 'matrix' }) },
+            ]}
+          />
+        </>
+      }
+    >
+      {tokens.length === 0 ? (
+        <Panel>
+          <EmptyState
+            title="No service tokens yet"
+            icon="token"
+            description="A service token holds one upstream API key. Consumers get access to it."
+            actions={
+              ctx.can('tokens:write') ? (
+                <Button variant="primary" plus href={paths.tokenNew()}>
+                  Add token
+                </Button>
+              ) : (
+                <AskSomeone permission="tokens:write" ctx={ctx} verb="add a service token" />
+              )
+            }
+          />
+        </Panel>
+      ) : (
+        <ConnectionsMap
+          id="ov-map"
+          baseHref={paths.access()}
+          focusHref={paths.overview(range === '24h' ? undefined : { range })}
+          focus={props.focus}
+          consumers={consumers}
+          tokens={tokens}
+          accesses={accesses}
+          rangeLabel={{
+            short: `Req ${range === '24h' ? '24 h' : range === '7d' ? '7 d' : '30 d'}`,
+            long: `requests in ${RANGE_LABEL[range]}`,
+          }}
+          footer={
+            footer.length > 0 ? (
+              <>
+                {footer.map((fact, index) => (
+                  <>
+                    {index > 0 ? ' · ' : null}
+                    {fact}
+                  </>
+                ))}
+              </>
+            ) : undefined
+          }
+        />
+      )}
+    </Tray>
+  );
 }
 
 const DAY_MS = 86_400_000;
@@ -649,219 +1330,4 @@ function tokenStatus(
     return { status: 'expiring', detail: String(Math.ceil((expires - now) / DAY_MS)) };
   }
   return { status: 'active' };
-}
-
-function TokensInUse(props: { ctx: ViewContext; data: OverviewData; connections: Connections }) {
-  const { ctx, data, connections } = props;
-  const traffic = new Map(data.tokens.map((t) => [t.serviceId, t]));
-  const rows: TokenRow[] = connections.tokens.map((token) => {
-    const accesses = connections.accesses.filter((edge) => edge.grant.service_id === token.id);
-    const { status, detail } = tokenStatus(token, data, connections);
-    const lastUsedHour = accesses.reduce<number | null>(
-      (max, edge) =>
-        edge.lastUsedHour !== null && (max === null || edge.lastUsedHour > max)
-          ? edge.lastUsedHour
-          : max,
-      null,
-    );
-    return {
-      id: token.id,
-      token,
-      traffic: traffic.get(token.id) ?? null,
-      status,
-      ...(detail === undefined ? {} : { statusDetail: detail }),
-      accesses,
-      lastUsedHour,
-      problem:
-        PROBLEM_STATUSES.has(status) || alertsFor(data.alertData, { tokenId: token.id }).length > 0,
-    };
-  });
-  // Traffic of tokens deleted since.
-  for (const t of data.tokens) {
-    if (t.serviceId !== '' && !connections.tokens.some((token) => token.id === t.serviceId)) {
-      rows.push({
-        id: t.serviceId,
-        token: null,
-        traffic: t,
-        status: 'disabled',
-        accesses: [],
-        lastUsedHour: null,
-        problem: false,
-      });
-    }
-  }
-  rows.sort(
-    (a, b) =>
-      Number(b.problem) - Number(a.problem) ||
-      (b.traffic?.requests ?? 0) - (a.traffic?.requests ?? 0) ||
-      (a.token?.name ?? a.id).localeCompare(b.token?.name ?? b.id),
-  );
-  const busy = rows.filter((row) => row.problem || (row.traffic?.requests ?? 0) > 0);
-  const idle = rows.filter((row) => !busy.includes(row));
-  const refused = traffic.get('')?.requests ?? 0;
-  const columns = tokenColumns(ctx, data, connections);
-  return (
-    <section aria-labelledby="tokens-h">
-      <h2 id="tokens-h">Tokens in use</h2>
-      <p class="muted">
-        Which service consumers can use which token, and the traffic in the selected range.
-      </p>
-      {rows.length === 0 ? (
-        <EmptyState>No service tokens yet.</EmptyState>
-      ) : (
-        <>
-          {busy.length > 0 ? (
-            <DataTable
-              id="tokens-in-use"
-              caption="Tokens with traffic or problems"
-              rowHeader="token"
-              rows={busy}
-              columns={columns}
-            />
-          ) : null}
-          {idle.length > 0 ? (
-            <details>
-              <summary>
-                {idle.length} idle {idle.length === 1 ? 'token' : 'tokens'}
-              </summary>
-              <DataTable
-                id="idle-tokens"
-                caption="Idle tokens: no traffic in the selected range"
-                rowHeader="token"
-                rows={idle}
-                columns={columns}
-              />
-            </details>
-          ) : null}
-        </>
-      )}
-      {refused > 0 ? (
-        <p>
-          Refused before a token was chosen: {formatCount(refused)}{' '}
-          <a href={paths.requests({ token: 'none', range: data.range })}>
-            See them<span class="vh"> (requests refused before a token was chosen)</span>
-          </a>
-        </p>
-      ) : null}
-      <p>
-        <a href={paths.access()}>Open the access matrix</a>
-      </p>
-    </section>
-  );
-}
-
-/** Consumers named in a "Used by" cell; the rest is one link naming the token (2.4.4). */
-const USED_BY_CHIPS = 3;
-
-function tokenColumns(ctx: ViewContext, data: OverviewData, connections: Connections) {
-  const range = data.range;
-  const currentHour = hourStart(data.generatedAt);
-  const count = (row: TokenRow, n: number, outcome?: 'denied' | 'error') =>
-    row.token || row.traffic ? (
-      <a href={paths.requests({ token: row.id, range, outcome })}>
-        {formatCount(n)}
-        <span class="vh">
-          {' '}
-          {outcome === undefined ? 'requests' : outcome === 'denied' ? 'denied' : 'errors'} on{' '}
-          {row.token?.name ?? row.id}
-        </span>
-      </a>
-    ) : (
-      formatCount(n)
-    );
-  return [
-    {
-      key: 'token',
-      header: 'Token',
-      render: (row: TokenRow) =>
-        row.token ? (
-          <>
-            <a href={paths.token(row.id)}>{row.token.name}</a> <code>{row.token.slug}</code>{' '}
-            <StatusBadge status={row.status} detail={row.statusDetail} />
-          </>
-        ) : (
-          <>
-            Deleted token <code>{row.id}</code>
-          </>
-        ),
-    },
-    {
-      key: 'used',
-      header: 'Used by',
-      render: (row: TokenRow) =>
-        !row.token ? (
-          '—'
-        ) : row.accesses.length === 0 ? (
-          <>
-            No consumer can use this token yet.
-            {ctx.can('access:write') ? (
-              <>
-                {' '}
-                <a href={paths.accessNew({ token: row.id })}>
-                  Give a consumer access<span class="vh"> to {row.token.name}</span>
-                </a>
-              </>
-            ) : null}
-          </>
-        ) : (
-          <ChipList
-            label={`Consumers that can use ${row.token.name}`}
-            max={USED_BY_CHIPS}
-            moreHref={paths.access({ token: row.id })}
-            moreText={`and ${row.accesses.length - USED_BY_CHIPS} more for ${row.token.name}`}
-            items={row.accesses.map((edge) => accessChip(edge, row.token as Service))}
-          />
-        ),
-    },
-    {
-      key: 'requests',
-      header: 'Requests',
-      numeric: true,
-      render: (row: TokenRow) => count(row, row.traffic?.requests ?? 0),
-    },
-    {
-      key: 'denied',
-      header: 'Denied',
-      numeric: true,
-      render: (row: TokenRow) => count(row, row.traffic?.denied ?? 0, 'denied'),
-    },
-    {
-      key: 'errors',
-      header: 'Errors',
-      numeric: true,
-      render: (row: TokenRow) => count(row, row.traffic?.errors ?? 0, 'error'),
-    },
-    {
-      key: 'p95',
-      header: 'p95',
-      numeric: true,
-      render: (row: TokenRow) => percentileText(row.traffic?.p95 ?? null),
-    },
-    {
-      key: 'last',
-      header: 'Last used',
-      render: (row: TokenRow) =>
-        connections.sampleRate <= 0 ? (
-          'use not recorded'
-        ) : row.lastUsedHour === null ? (
-          '—'
-        ) : row.lastUsedHour >= currentHour ? (
-          'this hour'
-        ) : (
-          <Time ms={row.lastUsedHour} relative now={data.generatedAt} />
-        ),
-    },
-  ];
-}
-
-function accessChip(edge: AccessEdge, token: Service): ChipProps {
-  const consumer = edge.consumer?.name ?? 'deleted consumer';
-  const flag = edge.flags[0];
-  return {
-    href: paths.accessItem(edge.grant.id),
-    text: `${consumer} · ${edge.subject} · ${edge.context}`,
-    status: edge.status,
-    ...(edge.statusDetail === undefined ? {} : { statusDetail: edge.statusDetail }),
-    srText: `${edge.subject} (${edge.context}) through ${consumer} can use ${token.name}: ${statusLabel(edge.status, edge.statusDetail)}${flag ? `, ${statusLabel(flag.status, flag.detail)}` : ''}.`,
-  };
 }

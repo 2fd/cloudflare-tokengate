@@ -4,7 +4,7 @@
 // Read-only. Counts are weighted estimates when sampling is enabled. Only non-secret values reach
 // an alert: names, slugs, key ids, counts and variable names (I-CRED-1, I-CFG-1).
 import { paths } from '../admin/paths';
-import type { Alert, PendingUser } from '../admin/views/components';
+import type { Alert, PendingUser } from '../admin/views/alerts';
 import { formatDate, formatTime, relativeTime } from '../admin/views/format';
 import { parseConfig, upstreamHostAllowed } from '../config';
 import { loadKeyring } from '../crypto/keyring';
@@ -279,6 +279,7 @@ export async function loadAlertData(deps: Pick<Deps, 'env' | 'now'>): Promise<Al
     pendingUsers: pending.map((user) => ({
       id: user.id,
       email: user.email,
+      name: user.name,
       updated_at: user.updated_at,
     })),
     upstreamAuthFailures: authRows,
@@ -392,6 +393,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       fix: {
         href: paths.token(firstMalformed.id, { open: 'destination', hash: 'destination' }),
         label: `Set the secret of ${firstMalformed.name} again`,
+        short: { label: 'Set secret again', srSuffix: `for ${firstMalformed.name}` },
         permission: 'tokens:write',
       },
     });
@@ -432,6 +434,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       fix: {
         href: paths.token(firstExpired.id, { hash: 'secret' }),
         label: `Replace the secret of ${firstExpired.name}`,
+        short: { label: 'Replace secret', srSuffix: `of ${firstExpired.name}` },
         permission: 'tokens:write',
       },
     });
@@ -452,6 +455,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       fix: {
         href: paths.token(firstExpiring.id, { hash: 'secret' }),
         label: `Replace the secret of ${firstExpiring.name}`,
+        short: { label: 'Replace secret', srSuffix: `of ${firstExpiring.name}` },
         permission: 'tokens:write',
       },
     });
@@ -479,6 +483,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       fix: {
         href: paths.token(firstMissing.id, { open: 'destination', hash: 'destination' }),
         label: `Add the secret of ${firstMissing.name}`,
+        short: { label: 'Add secret', srSuffix: `of ${firstMissing.name}` },
         permission: 'tokens:write',
       },
     });
@@ -509,6 +514,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       fix: {
         href: paths.token(firstRejected.service_id, { hash: 'secret' }),
         label: `Replace the secret of ${label(firstRejected)}`,
+        short: { label: 'Replace secret', srSuffix: `of ${label(firstRejected)}` },
         permission: 'tokens:write',
       },
     });
@@ -638,6 +644,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       fix: {
         href: paths.accessItem(firstAccess.id, { open: 'edit', hash: 'edit' }),
         label: `Extend "${firstAccess.name}"`,
+        short: { label: 'Extend', srSuffix: `"${firstAccess.name}"` },
         permission: 'access:write',
       },
     });
@@ -664,6 +671,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       fix: {
         href: paths.users({ hash: 'invite' }),
         label: 'Invite a second owner',
+        short: { label: 'Invite', srSuffix: 'a second owner' },
         permission: 'users:write',
       },
     });

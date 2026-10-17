@@ -43,4 +43,57 @@ describe('FieldInline', () => {
     expect(html).not.toContain('role="search"');
     expect(html).toContain('value="&quot;x"');
   });
+
+  it('passes the input constraints; type text renders no attribute', () => {
+    const html = render(
+      <FieldInline
+        id="host"
+        label="Host"
+        name="host"
+        submit="Add"
+        formLabel="Add a host"
+        method="post"
+        type="url"
+        required
+        pattern="[a-z0-9.-]+"
+        minlength={3}
+        maxlength={253}
+        inputmode="url"
+        enterkeyhint="done"
+      />,
+    );
+    expect(html).toContain(
+      '<input id="host" type="url" name="host" pattern="[a-z0-9.-]+" minlength="3" maxlength="253" required="" inputmode="url" enterkeyhint="done" autocomplete="off"',
+    );
+    const text = render(
+      <FieldInline id="t" label="T" name="t" submit="Go" type="text" invalid enterkeyhint="go" />,
+    );
+    expect(text).toContain(
+      '<input id="t" name="t" enterkeyhint="go" aria-invalid="true" autocomplete',
+    );
+    expect(render(<FieldInline id="s" label="S" name="s" submit="Go" type="search" />)).toContain(
+      'type="search"',
+    );
+  });
+
+  it('renders the error line before the form, wired to the input, and keeps the value', () => {
+    const html = render(
+      <FieldInline
+        id="req"
+        label="Request ID"
+        name="q"
+        submit="Find"
+        formLabel="Find a request"
+        value="req_nope"
+        describedBy="req-hint"
+        error="Enter a request ID that starts with req_"
+      />,
+    );
+    expect(html).toMatch(
+      /^<p class="field-error" id="req-error"><span aria-hidden="true">✕<\/span><span class="vh">Error:<\/span> Enter a request ID that starts with req_<\/p><form class="field-inline" role="search"/,
+    );
+    expect(html).toContain(
+      'value="req_nope" aria-invalid="true" aria-describedby="req-error req-hint"',
+    );
+  });
 });

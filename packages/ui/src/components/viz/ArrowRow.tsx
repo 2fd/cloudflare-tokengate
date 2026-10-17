@@ -13,8 +13,11 @@ export interface ArrowEnd {
 export interface ArrowRowProps {
   /** Left side: the consumer (and repository). */
   consumer: ArrowEnd;
-  /** Right side: the token (and operation). */
-  token: ArrowEnd;
+  /**
+   * Right side: the token (and operation). Leave out for a consumer-only row ("refused before a
+   * token was chosen", an unverified caller): no arrow and no verb.
+   */
+  token?: ArrowEnd;
   /** Makes the whole row one link (the access). */
   href?: string;
   /** What the arrow means, read by screen readers instead of "→". Default "can use". */
@@ -28,7 +31,14 @@ function Side(props: { end: ArrowEnd; cls: string; linked: boolean }) {
     <span class={props.cls}>
       {end.logo ? <LogoTile logo={end.logo} size="xs" /> : null}
       {props.linked ? <span class="ent-n">{end.name}</span> : end.name}
-      {end.context !== undefined ? <span class="ctx">· {end.context}</span> : null}
+      {end.context !== undefined ? (
+        <span class="ctx">
+          <span class="sep" aria-hidden="true">
+            ·{' '}
+          </span>
+          {end.context}
+        </span>
+      ) : null}
     </span>
   );
 }
@@ -42,11 +52,15 @@ export function ArrowRow(props: ArrowRowProps) {
   const body = (
     <>
       <Side end={props.consumer} cls="side-c" linked={linked} />
-      <span class="to" aria-hidden="true">
-        →
-      </span>
-      <span class="vh">{` ${props.verb ?? 'can use'} `}</span>
-      <Side end={props.token} cls="side-t" linked={false} />
+      {props.token ? (
+        <>
+          <span class="to" aria-hidden="true">
+            →
+          </span>
+          <span class="vh">{` ${props.verb ?? 'can use'} `}</span>
+          <Side end={props.token} cls="side-t" linked={false} />
+        </>
+      ) : null}
     </>
   );
   return linked ? (

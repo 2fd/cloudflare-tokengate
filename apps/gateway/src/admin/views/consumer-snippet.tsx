@@ -1,6 +1,7 @@
 // "Connect your jobs": the copy-ready CI configuration of a consumer, with its audience, this
 // gateway's origin and the real token slugs of its accesses (A14.2, A14.5). The snippet is plain
-// text in a focusable <pre> that selects as a whole (user-select: all), so no script is needed.
+// text in a focusable ui CodeBlock that selects as a whole (user-select: all), so no script is needed.
+import { CodeBlock } from '@tokengate/ui';
 import type { CallerProvider } from '../../db/types';
 import type { Rule } from '../../policy/types';
 
@@ -86,15 +87,15 @@ export function ConsumerSnippet(props: {
 }) {
   return (
     <>
-      <p>
+      <CodeBlock label="Workflow snippet" caption="Workflow snippet (click to select, then copy)">
+        {snippetText(props.consumer, props.origin, props.slugs, props.environment, props.call)}
+      </CodeBlock>
+      <p class="hint">
         Audience <code>{props.consumer.audience}</code>. Gateway <code>{props.origin}</code>.
         {props.slugs.length === 0 ? (
           <> Replace &lt;token-slug&gt; once this consumer can use a token.</>
         ) : null}
       </p>
-      <pre tabindex={0} class="copyable" aria-label="CI snippet">
-        {snippetText(props.consumer, props.origin, props.slugs, props.environment, props.call)}
-      </pre>
     </>
   );
 }

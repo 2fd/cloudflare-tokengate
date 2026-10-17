@@ -64,6 +64,11 @@ export function Chip(props: ChipProps) {
 }
 
 export interface ChipsProps {
+  /**
+   * Accessible name of the group ("Can use", "Where calls went"): `role="group"` and `aria-label`.
+   * Without it the row is a plain `div`.
+   */
+  label?: string;
   /** A trailing "+N more" link (`.more-link`) to the full list. */
   more?: { href: string; label: string };
   class?: string;
@@ -72,9 +77,13 @@ export interface ChipsProps {
 }
 
 /** A wrapping row of chips with 6px gaps (`.chips`), and an optional "+1 more" link. */
-export function Chips({ more, class: className, children }: ChipsProps) {
+export function Chips({ label, more, class: className, children }: ChipsProps) {
   return (
-    <div class={cx('chips', className)}>
+    <div
+      class={cx('chips', className)}
+      role={label ? 'group' : undefined}
+      aria-label={label || undefined}
+    >
       {children}
       {more ? (
         <a class="more-link" href={more.href}>

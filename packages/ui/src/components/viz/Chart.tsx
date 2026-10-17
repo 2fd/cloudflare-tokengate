@@ -167,6 +167,7 @@ export function Chart(props: ChartProps) {
           <summary>{props.numbersLabel ?? 'Show the numbers'}</summary>
           <div class="scroll" role="region" aria-label={`${props.title}, numbers`} tabindex={0}>
             <table class="tbl dense">
+              <caption class="vh">{`${props.title}, numbers`}</caption>
               <thead>
                 <tr>
                   <th scope="col">{props.columnLabel ?? 'Hour (UTC)'}</th>

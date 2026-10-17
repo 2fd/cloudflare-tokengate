@@ -19,10 +19,17 @@ export interface ChecklistStep {
   why: Child;
   /** The step's button. Primary on the `next` step, secondary otherwise; none when done. */
   action?: { href: string; label: Child };
+  /**
+   * Replaces `action` when the reader may not do the step, usually an `AskSomeone`. Renders in a
+   * `.wide` block after `why`; `action` is not rendered. None when done, like the action.
+   */
+  ask?: Child;
   /** Shortcuts under the step (`.quick`), such as the token types to start from. */
   quick?: readonly ChecklistQuickLink[];
   /** Accessible name of the shortcuts. Default "Shortcuts". */
   quickLabel?: string;
+  /** Block content under the step, after `quick`: a second link, a `CodeBlock` preview. */
+  detail?: Child;
 }
 
 export interface ChecklistProps {
@@ -82,7 +89,9 @@ export function Checklist({ steps, headingLevel, class: className }: ChecklistPr
             )}
           </H>
           <p class="why">{step.why}</p>
-          {step.action && step.state !== 'done' ? (
+          {step.state === 'done' ? null : step.ask !== undefined ? (
+            <div class="wide">{step.ask}</div>
+          ) : step.action ? (
             <div class="acts">
               <a
                 class={cx('btn', step.state === 'next' ? 'primary' : 'secondary')}
@@ -104,6 +113,7 @@ export function Checklist({ steps, headingLevel, class: className }: ChecklistPr
               </nav>
             </div>
           ) : null}
+          {step.detail !== undefined ? <div class="wide">{step.detail}</div> : null}
         </li>
       ))}
     </ol>

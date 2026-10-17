@@ -1,0 +1,668 @@
+/*
+ * Page-local patterns of the admin pages (packages/ui README, "Page-local patterns"). Linked
+ * after ui.css. Rules for every block:
+ * - tokens only: colors are var(--…) of ui.css, never a hex literal or a new light-dark();
+ * - never restyle a ui class outside the page's own markup;
+ * - keep forced-colors behavior (outlines, not color alone).
+ * One delimited block per section. A section edits only its own block.
+ */
+
+/* == section: shell == */
+/* Not found: the four sections as a 2 × 2 grid, never three cards and an orphan. */
+@media (min-width: 40rem) {
+  #nf-sections .tcards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* == section: monitoring == */
+/* A value in a table cell that is also a filter link (request log): reads as data, acts as a
+   filter. Dotted underline at rest, accent and solid on hover. */
+.flink {
+  color: var(--text);
+  text-decoration: underline dotted var(--control-border);
+  text-underline-offset: 3px;
+}
+.flink:hover {
+  color: var(--accent-text);
+  text-decoration-style: solid;
+  text-decoration-color: currentColor;
+}
+/* Find a request: the one-line form with its hint under it, in a page header or a tray. */
+.find {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  min-width: 0;
+  max-width: 100%;
+}
+.tray-h > .find {
+  margin-left: auto;
+  flex: 0 1 auto;
+}
+/* in the header row it shares the line with the title: a shorter box, the hint wraps under it */
+.ph-actions > .find {
+  max-width: 26rem;
+}
+.ph-actions > .find .field-inline > input {
+  width: 13rem;
+}
+/* as a header row under the description (Requests): a full request ID fits the box */
+.ph > .find .field-inline > input {
+  width: 22rem;
+}
+@media (max-width: 39.99rem) {
+  .ph > .find {
+    width: 100%;
+  }
+  .ph > .find .field-inline > input {
+    width: 100%;
+  }
+}
+/* beside a tray title, the title text takes the rest of the row */
+.tray-h:has(> .find) > .t {
+  flex: 1 1 22rem;
+}
+/* in a narrow panel (the fresh Overview traffic tray): the full width of the panel, the label as
+   the box's first row and the input with Find under it, so a whole request ID stays readable */
+.panel .find,
+.panel .find .field-inline {
+  width: 100%;
+}
+.panel .find .field-inline {
+  flex-wrap: wrap;
+  height: auto;
+}
+.panel .find .field-inline > label {
+  flex: 1 1 100%;
+  min-height: var(--h-control-sm);
+  border-right: 0;
+  border-bottom: 1px solid var(--line-strong);
+}
+.panel .find .field-inline > input {
+  flex: 1 1 8rem;
+  width: auto;
+  height: calc(var(--h-control) - 2px);
+}
+.panel .find .field-inline > .btn {
+  height: calc(var(--h-control) - 2px);
+}
+/* A disclosure as the whole tray header (Health, Technical details): open, it takes the row. */
+.tray-h > details.disc {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+/* its table scrolls in its own region instead of widening the page on phones */
+.tray-h > details.disc > .disc-b {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: stretch;
+}
+/* Request log: one line per row at desktop widths; the request cell truncates. */
+@media (min-width: 48rem) {
+  .tbl.log :is(td, th) {
+    white-space: nowrap;
+  }
+  .tbl.log .arrow,
+  .tbl.log .arrow > * {
+    flex-wrap: nowrap;
+  }
+}
+/* Top denied callers: the caller side keeps its logo beside the name (repository, then its
+   context on a second line), like the token side; an unverified caller has no token side and
+   takes the whole cell. */
+@media (min-width: 48rem) {
+  #denials .tbl td:nth-child(3) {
+    white-space: nowrap;
+  }
+}
+#denials .tbl th .arrow:not(:has(> .side-t)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+#denials .tbl th .arrow .side-c:has(> .logo) {
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--sp-2);
+  align-items: center;
+}
+#denials .tbl th .arrow .side-c > .logo {
+  grid-row: 1 / 3;
+}
+#denials .tbl th .arrow .side-c:has(> .logo) > :not(.logo) {
+  grid-column: 2;
+}
+/* a filtered log titles its tray ("Denied requests to slack"): the title takes its own row and
+   the filter bar follows under it at full width */
+#requests > .tray-h:has(> .filters) > .t {
+  flex: 1 1 100%;
+}
+/* the caller's ref ("branch feature/login-redesign") is a muted second line under the repository,
+   so the log keeps its five data columns in the content column instead of scrolling sideways */
+@media (min-width: 48rem) {
+  .tbl.log td .arrow .side-c:has(> .ctx) {
+    display: grid;
+    flex: none;
+    grid-template-columns: auto auto;
+    column-gap: var(--sp-2);
+    row-gap: 0;
+    align-items: center;
+  }
+  .tbl.log td .arrow .side-c:has(> .ctx) > .logo {
+    grid-row: 1 / 3;
+  }
+  .tbl.log td .arrow .side-c:has(> .ctx) > :not(.logo) {
+    grid-column: 2;
+  }
+  .tbl.log td .arrow .ctx {
+    font-size: var(--fs-xs);
+    line-height: var(--lh-xs);
+  }
+  .tbl.log td .arrow .ctx .sep {
+    display: none;
+  }
+}
+.tbl.log th a.ent-n {
+  display: inline-block;
+  max-width: 13rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  font-size: var(--fs-sm);
+}
+/* the reason column stays one line like the rest of the row: a long reason or access name ends
+   in an ellipsis (the link keeps its full name; the request page has the whole sentence) */
+.tbl.log td:nth-child(5) {
+  font-size: var(--fs-sm);
+}
+@media (min-width: 48rem) {
+  .tbl.log td:nth-child(5) > a {
+    display: inline-block;
+    max-width: 16rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: bottom;
+  }
+}
+/* Data retention: the edit dialog re-rendered open in the flow after a failed save keeps its
+   distance from the last card. */
+dialog#retention-edit[open] {
+  margin-block-start: var(--sp-2);
+}
+/* The notes of the empty install, one quiet line each under Get started. */
+.notes {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+/* == section: tokens == */
+/* Replace-secret row of a token page (views/token-page.tsx RotateForm): the secret on its own
+   row, then the expiry and the submit side by side, bottoms aligned. One column on phones. */
+.rot-row {
+  display: grid;
+  grid-template-columns: fit-content(18rem) max-content minmax(0, 1fr);
+  gap: var(--sp-4) var(--sp-3);
+  align-items: end;
+}
+.rot-row > .field:first-child {
+  grid-column: 1 / -1;
+}
+.rot-row > .btn {
+  justify-self: start;
+}
+/* Tokens list: the status chips and the search share the first row of the tray header; the
+   connections-map link wraps under them at the right. */
+#tokens > .tray-h > .filters {
+  flex-basis: 16rem;
+}
+@media (max-width: 48rem) {
+  .rot-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* == section: consumers == */
+/* A muted fact under a value, on its own line; a name segment that never splits. */
+.d-block {
+  display: block;
+}
+.nw {
+  white-space: nowrap;
+}
+/* Forms inside a panel or a disclosure: fields 24px apart. */
+.con-stack {
+  display: grid;
+  gap: var(--sp-6);
+  min-width: 0;
+}
+/* Add consumer: the chosen type's fields sit flat under the type cards, 24px apart; the presets
+   badge of a narrow card wraps under its description instead of leaving the card. */
+.con-fields {
+  gap: var(--sp-6);
+}
+.con-preset {
+  margin-top: var(--sp-1);
+}
+.con-types .rc-b .badge {
+  height: auto;
+  min-height: var(--h-badge);
+  padding-block: 2px;
+  white-space: normal;
+  line-height: var(--lh-xs);
+}
+.con-pins,
+.con-confirm ul,
+ul.operations {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: var(--sp-1);
+}
+.con-confirm {
+  display: grid;
+  gap: var(--sp-2);
+}
+.con-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.con-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1) var(--sp-3);
+  padding: var(--sp-3) var(--sp-5);
+  border-top: 1px solid var(--line);
+}
+.con-list > li:first-child {
+  border-top: 0;
+}
+/* Tenant rows reuse the neutral danger-row layout; the value is the row's name. */
+.con-tenant .mono {
+  font-weight: var(--fw-medium);
+}
+
+/* Arrow rows in tables: both ends on one two-line grid, so every row wraps the same way. The
+   context drops its "·" and sits on a muted second line. */
+.tbl th .arrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1rem minmax(0, 1fr);
+  column-gap: var(--sp-3);
+  align-items: center;
+}
+.tbl th .arrow .side-c {
+  display: grid;
+  gap: 0;
+  justify-items: start;
+}
+.tbl th .arrow .side-t {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--sp-2);
+  row-gap: 0;
+  align-items: center;
+  justify-items: start;
+}
+.tbl th .arrow .side-t > .logo {
+  grid-row: 1 / 3;
+}
+.tbl th .arrow .side-t > :not(.logo) {
+  grid-column: 2;
+}
+/* In the access tables the jobs column gets the room; a long status word wraps instead. */
+:is(#access, #al) .tbl th .arrow {
+  min-width: 15rem;
+}
+:is(#access, #al) .tbl td .st {
+  white-space: normal;
+}
+/* with room (the 76rem column) a status word stays on one line: "Expires in 9 days" */
+@media (min-width: 80rem) {
+  :is(#access, #al) .tbl td .st {
+    white-space: nowrap;
+  }
+}
+.tbl th .arrow :is(.side-c, .side-t) > * {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.tbl th .arrow .ctx {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-sm);
+  font-weight: var(--fw-regular);
+}
+.tbl th .arrow .ctx .sep {
+  display: none;
+}
+@media (max-width: 39.99rem) {
+  .tbl th .arrow {
+    grid-template-columns: 1rem minmax(0, 1fr);
+    row-gap: var(--sp-1);
+  }
+  .tbl th .arrow .side-c {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Give a consumer access: the fixed consumer bar and its "Add a new consumer". */
+.ga-bar {
+  display: grid;
+  gap: var(--sp-2);
+  justify-items: start;
+}
+.ga-bar > .fixedbar {
+  justify-self: stretch;
+}
+/* Branches of a consumer or token choice, and of the new consumer's type, stack their fields. */
+.ga-form .ga-branch,
+.ga-form .ga-tbranch,
+.ga-form .ga-tok {
+  gap: var(--sp-4);
+}
+/* The type branches of a new consumer follow its type cards (one `.ga-tf` per form). */
+.ga-form .ga-tbranch[data-o] {
+  display: none;
+}
+.ga-form:has(.ga-tf [data-o='1'] input:checked) .ga-tbranch[data-o='1'],
+.ga-form:has(.ga-tf [data-o='2'] input:checked) .ga-tbranch[data-o='2'],
+.ga-form:has(.ga-tf [data-o='3'] input:checked) .ga-tbranch[data-o='3'] {
+  display: grid;
+}
+/* Scoped reveals: in a consumer branch (`.ga-scope`), option K of field `.ga-fN` shows the
+   `.ga-rN[data-o=K]` of the same branch only. The ui live slots are global to the form, so a
+   branch cannot use them without showing the reveals of the other branches. */
+.ga-scope :is(.ga-r3, .ga-r4, .ga-r5)[data-o] {
+  display: none;
+}
+.ga-scope:has(.ga-f3 [data-o='1'] input:checked) .ga-r3[data-o='1'],
+.ga-scope:has(.ga-f3 [data-o='2'] input:checked) .ga-r3[data-o='2'],
+.ga-scope:has(.ga-f3 [data-o='3'] input:checked) .ga-r3[data-o='3'],
+.ga-scope:has(.ga-f3 [data-o='4'] input:checked) .ga-r3[data-o='4'],
+.ga-scope:has(.ga-f3 [data-o='5'] input:checked) .ga-r3[data-o='5'],
+.ga-scope:has(.ga-f3 [data-o='6'] input:checked) .ga-r3[data-o='6'],
+.ga-scope:has(.ga-f3 [data-o='7'] input:checked) .ga-r3[data-o='7'],
+.ga-scope:has(.ga-f3 [data-o='8'] input:checked) .ga-r3[data-o='8'],
+.ga-scope:has(.ga-f4 [data-o='1'] input:checked) .ga-r4[data-o='1'],
+.ga-scope:has(.ga-f4 [data-o='2'] input:checked) .ga-r4[data-o='2'],
+.ga-scope:has(.ga-f4 [data-o='3'] input:checked) .ga-r4[data-o='3'],
+.ga-scope:has(.ga-f4 [data-o='4'] input:checked) .ga-r4[data-o='4'],
+.ga-scope:has(.ga-f4 [data-o='5'] input:checked) .ga-r4[data-o='5'],
+.ga-scope:has(.ga-f4 [data-o='6'] input:checked) .ga-r4[data-o='6'],
+.ga-scope:has(.ga-f4 [data-o='7'] input:checked) .ga-r4[data-o='7'],
+.ga-scope:has(.ga-f5 [data-o='1'] input:checked) .ga-r5[data-o='1'],
+.ga-scope:has(.ga-f5 [data-o='2'] input:checked) .ga-r5[data-o='2'],
+.ga-scope:has(.ga-f5 [data-o='3'] input:checked) .ga-r5[data-o='3'],
+.ga-scope:has(.ga-f5 [data-o='4'] input:checked) .ga-r5[data-o='4'],
+.ga-scope:has(.ga-f5 [data-o='5'] input:checked) .ga-r5[data-o='5'],
+.ga-scope:has(.ga-f5 [data-o='6'] input:checked) .ga-r5[data-o='6'],
+.ga-scope:has(.ga-f5 [data-o='7'] input:checked) .ga-r5[data-o='7'],
+.ga-scope:has(.ga-f5 [data-o='8'] input:checked) .ga-r5[data-o='8'] {
+  display: grid;
+}
+/* The ref-protection choice applies to Environment, Branch, Tag and Release only. */
+.ga-form:has(.sf4 :is([data-o='4'], [data-o='6'], [data-o='7']) input:checked) .sf6.ga-prot,
+.ga-scope:has(.ga-f4 :is([data-o='4'], [data-o='6'], [data-o='7']) input:checked) .ga-f6 {
+  display: none;
+}
+/* The live risk note: shown while a risky choice of the (fixed) consumer's jobs is checked. */
+.ga-form .ga-risknote {
+  display: none;
+}
+.ga-form:has([data-risk] input:checked) .ga-risknote {
+  display: grid;
+}
+/* Give access from a request: the review card titles "consumer → token" with their tiles, and
+   hides while "Change the prefilled values" is open (the fields then are the truth). */
+.ga-review-t {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.ga-reviewing:has(.ga-change[open]) .ga-review {
+  display: none;
+}
+.ga-change > .disc-b {
+  display: grid;
+  justify-items: stretch;
+  gap: var(--sp-6);
+  padding-top: var(--sp-4);
+}
+/* The rows editors (conditions, other operations) of the access forms. */
+:is(.ga-form, #access-edit, .con-stack) fieldset.rows {
+  display: grid;
+  gap: var(--sp-4);
+}
+:is(.ga-form, #access-edit, .con-stack) fieldset.rows > legend {
+  margin-bottom: var(--sp-2);
+  font-weight: var(--fw-medium);
+}
+:is(.ga-form, #access-edit, .con-stack) fieldset.rows .row {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-radius: var(--r-3);
+  background: var(--surface-2);
+}
+.ga-rows {
+  display: grid;
+  gap: var(--sp-4);
+}
+
+/* Copy to another repository: "Another…" shows its input. */
+.ga-copy .ga-copy-other {
+  display: none;
+}
+.ga-copy:has(input[name='repository'][value='']:checked) .ga-copy-other {
+  display: grid;
+}
+
+/* == section: users == */
+/* Role diff words ("+ service tokens · − consumer access"): the sign carries the meaning. */
+.gain {
+  color: var(--ok);
+}
+.lose {
+  color: var(--bad);
+}
+/* Invite tray: shown when it is the fragment target (#invite), holds it (#compare-roles), or
+   after a failed invite (server adds .is-open). Its only required field is the email. */
+#invite:not(:target):not(:has(:target)):not(.is-open) {
+  display: none;
+}
+#invite .w-form {
+  max-inline-size: var(--w-form);
+}
+#invite .btn-row > .hint,
+#hosts .btn-row > .input {
+  flex: 1 1 16rem;
+  inline-size: auto;
+}
+#invite .disc {
+  margin-block-start: var(--sp-5);
+}
+.u-compare .scroll {
+  border: 1px solid var(--line);
+  border-radius: var(--r-3);
+}
+.u-compare td.y {
+  color: var(--ok);
+  font-weight: var(--fw-medium);
+}
+.u-compare td.n {
+  color: var(--text-3);
+}
+/* Accounts: an open row menu may reach below the table; the panel must not clip it. */
+#people > .panel.flush {
+  overflow: visible;
+}
+/* …and the page grows while one is open, so a low row's menu stays on the page instead of
+   hanging past its end. */
+.page:has(#people .rowmenu[open]) {
+  padding-bottom: 32rem;
+}
+/* Accounts: the small duty icon in the role cell. */
+#people .meta .ic {
+  inline-size: 13px;
+  block-size: 13px;
+  vertical-align: -2px;
+  margin-inline-end: 2px;
+}
+#people .tray-f b {
+  color: var(--text);
+  font-weight: var(--fw-medium);
+}
+/* Person header: the identity shrinks (the full user ID chip ends with an ellipsis), so the
+   two actions stay at the top right. */
+.u-person .ident {
+  flex: 1 1 20rem;
+}
+.u-person .ident > div {
+  min-inline-size: 0;
+}
+/* Text in a plain panel (an empty feed). */
+.u-pad {
+  margin: 0;
+  padding: var(--sp-4) var(--sp-5);
+}
+/* What a person can do: a yes / no list in the rail. */
+.u-can {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.u-can > li {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr);
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
+  border-block-start: 1px solid var(--line);
+}
+.u-can > li:first-child {
+  border-block-start: 0;
+}
+.u-can .y {
+  color: var(--ok);
+  font-weight: var(--fw-semibold);
+}
+.u-can .n {
+  color: var(--text-3);
+}
+.u-can > li.no {
+  color: var(--text-2);
+}
+#role .rcs + .btn-row,
+#role form + .btn-row {
+  margin-block-start: var(--sp-4);
+}
+/* Role map: the connections map vocabulary, narrower (node 40px + gap 8px = pitch 48). */
+.cmap.u-rmap {
+  --h-node: 2.5rem;
+  --map-gap: 0.5rem;
+  grid-template-columns: minmax(0, 1.15fr) minmax(2.5rem, 0.45fr) minmax(0, 1fr);
+  padding: var(--sp-4) var(--sp-5) var(--sp-4) var(--sp-4);
+}
+.u-rmap .node {
+  padding: 0 var(--sp-3);
+}
+.u-rmap .node .nm {
+  line-height: var(--lh-sm);
+}
+.u-rmap .cmap-col,
+.u-rmap .nodes > li,
+.u-rmap .node .id {
+  min-inline-size: 0;
+}
+.u-rmap .node .nl {
+  overflow: hidden;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.u-rmap .tcap .nm {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
+}
+.u-rmap a.node .nm {
+  color: var(--text);
+}
+#roles-map .tray-f b {
+  color: var(--text);
+  font-weight: var(--fw-medium);
+}
+.panel:has(> .u-rmap) {
+  display: flow-root;
+}
+@media (min-width: 64.01rem) {
+  .u-rmap-txt {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+@media (max-width: 64rem) {
+  .cmap.u-rmap {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-4);
+  }
+  .u-rmap > .cmap-col:last-child {
+    display: none;
+  }
+  #roles-map .tray-f > .legend {
+    display: flex;
+  }
+  #roles-map .legend svg {
+    display: none;
+  }
+}
+/* Sign-in: the current policy, its 3-step explainer, the host list. */
+.u-now {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-1) var(--sp-3);
+  margin: 0;
+}
+.u-now .big {
+  font-size: var(--fs-lg);
+  line-height: var(--lh-lg);
+  font-weight: var(--fw-medium);
+}
+.trace.u-c3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.trace.u-c3 .tstep:not(.is-on) .s {
+  color: var(--text-2);
+}
+@media (max-width: 64rem) {
+  .trace.u-c3 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .trace.u-c3 .tstep::before {
+    display: none;
+  }
+}
+.u-hosts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.u-hosts > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.u-hosts .chip .badge {
+  margin-inline-start: var(--sp-2);
+}

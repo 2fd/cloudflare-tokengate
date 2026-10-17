@@ -1,7 +1,9 @@
-// The admin shell around every page (ADR 0019): skip link, section nav with the decision badge,
-// subnav, Help, account, health strip and footer; the forbidden page with who to ask; the 404 page
-// for unlisted URLs (with static hints for the URLs that moved); notices that never show query
-// text or another person's change; and `_return`, which sends a row action back to a fixed page.
+// The admin shell around every page (ADR 0019, ADR 0022): skip link, sidebar with the four
+// sections in order, their pages, the counts and the decision pill, the health line, the account
+// menu (docs, version, sign out) and the health strip; the forbidden page with who to ask; the 404
+// page for unlisted URLs (with static hints for the URLs that moved); notices that never show
+// query text or another person's change; and `_return`, which sends a row action back to a fixed
+// page.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { version } from '../../package.json';
@@ -16,6 +18,7 @@ import {
 } from '../fixtures/admin-forms';
 import { type AdminSession, adminGet, adminPost, createUser, loginAs } from '../helpers/admin-auth';
 import { createTestApp } from '../helpers/app';
+import { KEK_1 } from '../unit/admin/ops/helpers';
 
 let world: AdminWorld;
 let ownerUser: User;
@@ -32,13 +35,17 @@ async function page(session: AdminSession, path: string): Promise<string> {
   return (await adminGet(world.app, session, path)).text();
 }
 
-/** The opening tag of the link to `href` inside the element that starts with `container`. */
-function linkIn(html: string, container: string, href: string): string {
-  const start = html.indexOf(container);
-  expect(start, container).toBeGreaterThan(-1);
-  const end = html.indexOf('</nav>', start);
-  const match = new RegExp(`<a href="${href}"[^>]*>`).exec(html.slice(start, end));
-  if (!match) throw new Error(`no link to ${href} in ${container}`);
+/** The sidebar navigation landmark. */
+function sideNav(html: string): string {
+  const start = html.indexOf('<nav class="nav" aria-label="Sections">');
+  expect(start, 'sidebar nav').toBeGreaterThan(-1);
+  return html.slice(start, html.indexOf('</nav>', start));
+}
+
+/** The opening tag of the sidebar link to `href` (a section row or a page item). */
+function navLink(html: string, href: string): string {
+  const match = new RegExp(`<a (?:class="[^"]*" )?href="${href}"[^>]*>`).exec(sideNav(html));
+  if (!match) throw new Error(`no sidebar link to ${href}`);
   return match[0];
 }
 
@@ -46,10 +53,12 @@ describe('the shell on every page', () => {
   it('starts with the skip link and has one h1 inside main#main', async () => {
     const html = await page(owner, '/admin/tokens');
     expect(html.indexOf('<a ')).toBe(html.indexOf('<a class="skip-link" href="#main">'));
-    expect(html).toContain('<main id="main" tabindex="-1">');
+    expect(html.match(/<main\b/g)).toHaveLength(1);
+    expect(html).toContain('<main class="main" id="main" tabindex="-1">');
     expect(html.match(/<h1>/g)).toHaveLength(1);
+    expect(html.indexOf('<h1>')).toBeGreaterThan(html.indexOf('<main'));
     expect(html).toContain('<meta name="color-scheme" content="light dark"/>');
-    expect(html).toContain('<title>Service tokens – Service tokens – tokengate</title>');
+    expect(html).toContain('<title>Service tokens – tokengate</title>');
     expect(html).not.toContain('<script');
     expect(html).not.toContain(' style=');
   });
@@ -61,47 +70,62 @@ describe('the shell on every page', () => {
     }
   });
 
-  it('shows the section nav, the subnav, Help, the role badge and the version', async () => {
-    const html = await page(owner, '/admin/tokens/hosts');
-    expect(html).toContain('<nav class="sections" aria-label="Sections">');
-    expect(html).toContain('<nav aria-label="Service tokens pages" class="subnav">');
-    expect(html).toContain('Help<span class="vh">: Service tokens (GitHub docs)</span>');
-    expect(html).toContain(
-      'href="https://github.com/2fd/cloudflare-tokengate/blob/main/docs/concepts.md#service-token"',
-    );
-    expect(html).toContain('<span>owner@example.com</span> <span class="badge">Owner</span>');
-    expect(html).toContain(`<p>tokengate ${version}</p>`);
+  it('lists the sections in sidebar order and the pages of the open section only', async () => {
+    const nav = sideNav(await page(owner, '/admin/tokens/hosts'));
+    const rows = [...nav.matchAll(/<a class="nav-item[^"]*" href="([^"]+)"/g)].map((m) => m[1]);
+    expect(rows).toEqual(['/admin', '/admin/tokens', '/admin/consumers', '/admin/users']);
+    expect(nav).toContain('<a class="nav-item is-open" href="/admin/tokens">');
+    const items = [...nav.matchAll(/<li><a href="([^"]+)"/g)].map((m) => m[1]);
+    expect(items).toEqual(['/admin/tokens', '/admin/tokens/hosts', '/admin/tokens/keys']);
   });
 
-  it('marks the current section and tab as the page or as an ancestor (aria-current)', async () => {
+  it('shows the account menu: name, role, email, version, docs of the section and Sign out', async () => {
+    const html = await page(owner, '/admin/tokens/hosts');
+    const menu = html.slice(html.indexOf('<div class="acct">'), html.indexOf('</main>'));
+    expect(menu).toContain('<b>owner@example.com</b><small>Owner</small>');
+    expect(menu).toContain('<span class="vh">, account menu</span>');
+    expect(menu).toContain(
+      `<p class="menu-h"><span>owner@example.com</span><span>tokengate ${version}</span></p>`,
+    );
+    expect(menu).toContain(
+      'href="https://github.com/2fd/cloudflare-tokengate/blob/main/docs/concepts.md#service-token">Docs<span class="vh">: Service tokens (GitHub docs)</span></a>',
+    );
+    expect(menu).toContain('<a class="menu-item" href="/cdn-cgi/access/logout">Sign out</a>');
+    // The account block is in the sidebar, never inside main.
+    expect(html.indexOf('<div class="acct">')).toBeLessThan(html.indexOf('<main'));
+  });
+
+  it('marks the current page item as the page or as an ancestor (aria-current)', async () => {
     const list = await page(owner, '/admin/tokens');
-    expect(linkIn(list, '<nav class="sections"', '/admin/tokens')).toContain('aria-current="page"');
-    expect(linkIn(list, '<nav aria-label="Service tokens pages"', '/admin/tokens')).toContain(
-      'aria-current="page"',
+    // The section row is open but is not the current page; its Tokens item is.
+    expect(navLink(list, '/admin/tokens')).toBe(
+      '<a class="nav-item is-open" href="/admin/tokens">',
     );
-    expect(linkIn(list, '<nav class="sections"', '/admin')).not.toContain('aria-current');
+    expect(sideNav(list)).toContain('<li><a href="/admin/tokens" aria-current="page">');
+    expect(navLink(list, '/admin')).not.toContain('aria-current');
 
-    const hosts = await page(owner, '/admin/tokens/hosts');
-    expect(linkIn(hosts, '<nav class="sections"', '/admin/tokens')).toContain(
-      'aria-current="true"',
-    );
-    expect(
-      linkIn(hosts, '<nav aria-label="Service tokens pages"', '/admin/tokens/hosts'),
-    ).toContain('aria-current="page"');
+    const hosts = sideNav(await page(owner, '/admin/tokens/hosts'));
+    expect(hosts).toContain('<li><a href="/admin/tokens/hosts" aria-current="page">');
+    expect(hosts).toContain('<li><a href="/admin/tokens">Tokens</a></li>');
 
-    const detail = await page(owner, `/admin/tokens/${world.serviceId}`);
-    expect(linkIn(detail, '<nav class="sections"', '/admin/tokens')).toContain(
-      'aria-current="true"',
-    );
-    expect(linkIn(detail, '<nav aria-label="Service tokens pages"', '/admin/tokens')).toContain(
-      'aria-current="true"',
-    );
+    const detail = sideNav(await page(owner, `/admin/tokens/${world.serviceId}`));
+    expect(detail).toContain('<li><a href="/admin/tokens" aria-current="true">');
 
-    const audit = await page(owner, '/admin/audit');
-    expect(linkIn(audit, '<nav class="sections"', '/admin')).toContain('aria-current="true"');
-    expect(linkIn(audit, '<nav aria-label="Monitoring pages"', '/admin/audit')).toContain(
-      'aria-current="page"',
-    );
+    const audit = sideNav(await page(owner, '/admin/audit'));
+    expect(audit).toContain('<a class="nav-item is-open" href="/admin">');
+    expect(audit).toContain('<li><a href="/admin/audit" aria-current="page">');
+
+    // Forbidden and not-found pages open the section and mark no item.
+    const missing = sideNav(await page(owner, '/admin/tokens/nope/deeper'));
+    expect(missing).toContain('<a class="nav-item is-open" href="/admin/tokens">');
+    expect(missing).not.toContain('aria-current');
+  });
+
+  it('counts tokens and consumers, and shows none for an empty list', async () => {
+    const nav = sideNav(await page(owner, '/admin/requests'));
+    expect(nav).toContain('Service tokens<span class="nav-count">1</span>');
+    expect(nav).toContain('Service consumers<span class="nav-count">1</span>');
+    expect(nav).not.toMatch(/(Monitoring|Users)<span class="nav-count">/);
   });
 
   it('shows owners how many people need a decision, with a text alternative', async () => {
@@ -111,19 +135,28 @@ describe('the shell on every page', () => {
       status: 'pending',
       identity: { loginProvider: 'access', subject: 'pending-subject' },
     });
-    const badge = '<span class="count">1<span class="vh"> need a decision</span></span>';
-    expect(await page(owner, '/admin/requests')).toContain(badge);
+    const pill =
+      'Users<span class="nav-pill">1 pending<span class="vh">: a person needs your decision</span></span>';
+    expect(await page(owner, '/admin/requests')).toContain(pill);
     const admin = await loginAs(
       world.app,
       await createUser({ email: 'admin@example.com', role: 'admin' }),
     );
     const html = await page(admin, '/admin/requests');
-    expect(html).not.toContain('class="count"');
-    expect(html).toContain('<span class="badge">Admin</span>');
+    expect(html).not.toContain('class="nav-pill"');
+    expect(html).toContain('<small>Admin</small>');
   });
 
-  it('shows no badge when nobody needs a decision', async () => {
-    expect(await page(owner, '/admin/requests')).not.toContain('class="count"');
+  it('shows no pill when nobody needs a decision', async () => {
+    expect(await page(owner, '/admin/requests')).not.toContain('class="nav-pill"');
+  });
+
+  it('has a health line that links to the Overview and says what it found', async () => {
+    const html = await page(owner, '/admin/requests');
+    // One active owner and an hourly job that has not run yet are notes, not warnings.
+    expect(html).toContain(
+      '<a class="health" href="/admin#health"><span class="dot" aria-hidden="true"></span>Healthy · 2 notes<span class="vh">. Open Overview, Health</span></a>',
+    );
   });
 });
 
@@ -132,19 +165,68 @@ describe('health strip', () => {
     const app = createTestApp({ env: { TOKENGATE_KEK: '', TOKENGATE_KEYRING: '' } });
     const session = await loginAs(app, ownerUser);
     const html = await (await adminGet(app, session, '/admin/requests')).text();
-    const strip = /<section class="health-strip" aria-labelledby="hs-h">(.*?)<\/section>/s.exec(
-      html,
-    )?.[1];
-    expect(strip).toContain('<h2 id="hs-h" class="vh">System problems</h2>');
-    expect(strip).toContain('Encryption keys are not loaded (keyring_absent)');
+    const strip = /<p class="hstrip">(.*?)<\/p>/s.exec(html)?.[1] ?? '';
+    // Not announced on every page load, and "Error:" for screen readers.
+    expect(html).not.toContain('role="alert"');
+    expect(strip).toContain('<span aria-hidden="true">✕</span> <span class="vh">Error: </span>');
+    // A short bold title, then the detail in plain text.
+    expect(strip).toContain(
+      '<span class="vh">Error: </span>Encryption keys are not loaded.</b> Token requests fail with 503 and secrets cannot change (keyring_absent).',
+    );
     expect(strip).toContain('<a href="/admin/tokens/keys">Open encryption keys</a>');
     expect(strip).toContain('<a href="/admin#health">Show all problems</a>');
+    // It is the first thing in main, and the health line counts the problem.
+    expect(html.indexOf('<p class="hstrip">')).toBeGreaterThan(html.indexOf('<main'));
+    expect(html).toContain('1 problem to fix<span class="vh">. Open Overview, Health</span>');
     // The Overview lists every problem itself.
-    expect(await (await adminGet(app, session, '/admin')).text()).not.toContain('health-strip');
+    expect(await (await adminGet(app, session, '/admin')).text()).not.toContain('class="hstrip"');
   });
 
   it('is absent when nothing is wrong', async () => {
-    expect(await page(owner, '/admin/requests')).not.toContain('health-strip');
+    expect(await page(owner, '/admin/requests')).not.toContain('class="hstrip"');
+  });
+
+  it('still renders when the alert data does not load, with the checks that need no table', async () => {
+    // A database behind on a migration: one statement of the alert batch names a missing table.
+    const DB = new Proxy(env.DB, {
+      get(target, prop) {
+        if (prop === 'prepare') {
+          return (sql: string) =>
+            target.prepare(
+              sql.includes('FROM grants ORDER BY name, id')
+                ? sql.replace('FROM grants', 'FROM grants_of_a_newer_migration')
+                : sql,
+            );
+        }
+        const value = Reflect.get(target, prop);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (line: string) => warnings.push(line);
+    try {
+      const plain = createTestApp({ env: { DB, TOKENGATE_KEK: KEK_1 } });
+      const res = await adminGet(plain, await loginAs(plain, ownerUser), '/admin/nope');
+      expect(res.status).toBe(404);
+      const html = await res.text();
+      expect(html).toContain('<h1>Page not found</h1>');
+      expect(html).toContain(
+        'Health not checked<span class="vh">. The checks could not read the database. Open Overview, Health</span>',
+      );
+      expect(html).not.toContain('Healthy');
+      expect(html).not.toContain('class="hstrip"');
+      // The keyring check needs no table, so its strip still shows.
+      const noKeys = createTestApp({ env: { DB, TOKENGATE_KEK: '', TOKENGATE_KEYRING: '' } });
+      const strip = await (
+        await adminGet(noKeys, await loginAs(noKeys, ownerUser), '/admin/nope')
+      ).text();
+      expect(strip).toContain('Encryption keys are not loaded.</b>');
+      expect(strip).toContain('1 problem to fix<span class="vh">. Open Overview, Health</span>');
+    } finally {
+      console.warn = original;
+    }
+    expect(warnings.some((line) => line.includes('"type":"admin.shell_health_failed"'))).toBe(true);
   });
 });
 
@@ -160,19 +242,25 @@ describe('forbidden page', () => {
     const res = await adminGet(world.app, viewer, '/admin/tokens/new');
     expect(res.status).toBe(403);
     const html = await res.text();
-    expect(html).toContain('<p>Your role does not allow this action.</p>');
     expect(html).toContain(
-      '<p>Changing service tokens needs the Token manager, Admin or Owner role.</p>',
+      '<h1>Forbidden</h1><p class="desc">Your role does not allow this action.</p>',
+    );
+    expect(html).toContain(
+      '<p><b>Changing service tokens needs the Token manager, Admin or Owner role.</b></p>',
     );
     const ask = /<p class="ask">(.*?)<\/p>/s.exec(html)?.[1] ?? '';
-    expect(ask).toContain('Ask a token manager:');
+    // The callout names the roles, so the ask sentence starts with the people.
+    expect(ask).not.toContain('Only');
     // Owners come last: they can do everything, so they are the fallback.
     expect(ask.indexOf('tm@example.com')).toBeLessThan(ask.indexOf('owner@example.com'));
-    expect(ask).toContain('<a href="mailto:owner@example.com">owner@example.com</a>');
+    expect(ask).toContain('<b>owner@example.com</b>');
+    expect(ask).toContain('<a href="mailto:tm@example.com,owner@example.com">Email them</a>');
     expect(ask).not.toContain('gone-tm@example.com');
     expect(ask).not.toContain('am@example.com');
     expect(ask).not.toContain('viewer@example.com');
-    expect(html).toContain('<p><a href="/admin/tokens">Back</a></p>');
+    expect(html).toContain(
+      '<a class="btn secondary" href="/admin/tokens">Back to Service tokens</a>',
+    );
     expect(html).toContain('<title>Forbidden – Service tokens – tokengate</title>');
   });
 
@@ -186,8 +274,8 @@ describe('forbidden page', () => {
     );
     const html = await page(viewer, '/admin/access/new');
     const ask = /<p class="ask">(.*?)<\/p>/s.exec(html)?.[1] ?? '';
-    expect(ask).toContain('Ask an access manager:');
-    expect(ask.match(/mailto:/g)).toHaveLength(3);
+    expect(ask).toContain('Ask <b>');
+    expect(ask.match(/<b>/g)).toHaveLength(3);
     expect(ask).toContain('and 2 more.');
   });
 });
@@ -201,25 +289,55 @@ describe('404 page for unlisted admin URLs', () => {
       'Caller providers are now <a href="/admin/consumers">Service consumers</a>.',
     ],
     ['/admin/grants?service=x', 'Grants are now <a href="/admin/access">Consumer access</a>.'],
-    ['/admin/settings', '<a href="/admin/retention">Data retention</a>'],
-    ['/admin/settings', '<a href="/admin/tokens/hosts">Allowed hosts</a>'],
-    ['/admin/settings', '<a href="/admin/tokens/keys">Encryption keys</a>'],
-    ['/admin/settings', '<a href="/admin/users/sign-in">Sign-in</a>'],
-    ['/admin/settings', '<a href="/admin#health">the overview</a>'],
-  ])('GET %s shows the moved hint %s', async (path, hint) => {
+  ])('GET %s says where the page moved: %s', async (path, hint) => {
     const res = await adminGet(world.app, owner, path);
     expect(res.status).toBe(404);
     const html = await res.text();
-    expect(html).toContain('<h1>Page not found</h1>');
-    expect(html).toContain(hint);
+    expect(html).toContain('<title>This page moved – tokengate</title>');
+    expect(html).toContain(`<h1>This page moved</h1><p class="desc">${hint}</p>`);
+    expect(html).not.toContain('Page not found');
+    expect(html).not.toContain('There is no page at this address.');
+  });
+
+  it.each([
+    '/admin/retention',
+    '/admin/tokens/hosts',
+    '/admin/tokens/keys',
+    '/admin/users/sign-in',
+    '/admin#health',
+  ])('GET /admin/settings links %s from "Where each setting is now"', async (href) => {
+    const res = await adminGet(world.app, owner, '/admin/settings');
+    expect(res.status).toBe(404);
+    const html = await res.text();
+    expect(html).toContain('<h1>The Settings page was split up</h1>');
+    expect(html).toContain('account menu');
+    const moved = html.slice(html.indexOf('<h2 id="nf-moved-h">Where each setting is now</h2>'));
+    expect(moved.slice(0, moved.indexOf('</section>'))).toContain(
+      `<a class="tcard" href="${href}">`,
+    );
+  });
+
+  it('opens no sidebar section and keeps the section out of the title', async () => {
+    for (const path of ['/admin/nope', '/admin/settings']) {
+      const html = await (await adminGet(world.app, owner, path)).text();
+      expect(html, path).not.toContain('nav-item is-open');
+      expect(html, path).not.toContain('aria-current');
+      expect(html, path).not.toMatch(/<title>[^<]*– Monitoring –/);
+    }
   });
 
   it('links to the four sections and shows no hint for other paths', async () => {
     const html = await (await adminGet(world.app, owner, '/admin/nope')).text();
+    expect(html).toContain('<title>Page not found – tokengate</title>');
+    expect(html).toContain(
+      '<h1>Page not found</h1><p class="desc">There is no page at this address.</p>',
+    );
+    expect(html).toContain('<h2 id="nf-sections-h">Go to a section</h2>');
     for (const href of ['/admin', '/admin/users', '/admin/tokens', '/admin/consumers']) {
-      expect(html).toContain(`<li><a href="${href}">`);
+      expect(html).toContain(`<a class="tcard" href="${href}">`);
     }
     expect(html).not.toContain('are now');
+    expect(html).not.toContain('nf-moved');
   });
 
   it('never echoes the requested path', async () => {
@@ -241,18 +359,20 @@ describe('notices', () => {
         owner,
         `/admin/tokens/${world.serviceId}?notice=${encodeURIComponent(notice)}`,
       );
-      expect(html).not.toContain('class="notice"');
+      expect(html).not.toContain('notice"');
       expect(html).not.toContain('alert(1)');
     }
     expect(resolveNotice({ saved: () => ({ text: 'Saved.' }) }, '__proto__', null)).toBeNull();
     expect(resolveNotice({ saved: () => ({ text: 'Saved.' }) }, 'toString', null)).toBeNull();
   });
 
-  it('render a known key after the h1, focused', async () => {
+  it('render a known key after the header, focused', async () => {
     const html = await page(owner, `/admin/tokens/${world.serviceId}?notice=disabled`);
-    expect(
-      html.indexOf('<div class="notice" role="status" tabindex="-1" autofocus="">'),
-    ).toBeGreaterThan(html.indexOf('<h1>'));
+    const notice = html.indexOf(
+      '<div class="callout ok notice" role="status" tabindex="-1" autofocus="">',
+    );
+    expect(notice).toBeGreaterThan(html.indexOf('</header>'));
+    expect(html.indexOf('</header>')).toBeGreaterThan(html.indexOf('<h1>'));
   });
 
   async function auditRow(actorId: string, ts: number): Promise<string> {

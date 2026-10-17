@@ -7,6 +7,7 @@ import { type Deps, productionDeps } from './deps';
 import { appEnv } from './env';
 import { registerHealthRoutes } from './health';
 import { applySecurityMiddleware } from './http/security';
+import { registerStaticRoutes } from './http/static';
 import { registerProxyRoutes } from './proxy/routes';
 
 export type AppContext = {
@@ -32,6 +33,8 @@ export function createApp(options: AppOptions = {}): App {
   // The proxy is registered before the security middleware: it has its own header policy.
   registerProxyRoutes(app);
   applySecurityMiddleware(app);
+  // Before the admin middleware: the stylesheets need no sign-in.
+  registerStaticRoutes(app);
   registerHealthRoutes(app);
   registerAdminMiddleware(app);
   registerAdminRoutes(app);

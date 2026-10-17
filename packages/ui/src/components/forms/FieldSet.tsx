@@ -6,7 +6,8 @@ import { FieldError, FieldLabelMarker } from './Field';
 export interface FieldSetProps {
   /**
    * Id of the fieldset. Hint and error get `${id}-hint` / `${id}-error`; the choices inside get
-   * input ids `${id}-1`, `${id}-2` … (link an ErrorSummary entry to `${id}-1`).
+   * input ids `${id}-1`, `${id}-2` … (link an ErrorSummary entry to the first enabled one,
+   * `firstChoiceId(id, options)`: a fieldset cannot take focus).
    */
   id: string;
   /** The question (`legend`). Required: it names the group of choices. */

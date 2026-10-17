@@ -27,6 +27,31 @@ describe('SideNav', () => {
     expect(html.match(/<ul class="nav-sub">/g)).toHaveLength(1);
   });
 
+  it('marks an ancestor of a deeper page with aria-current="true"', () => {
+    const deeper = render(
+      <SideNav
+        label="Sections"
+        sections={[
+          { label: 'Monitoring', href: '/admin', current: 'true' },
+          {
+            label: 'Service tokens',
+            href: '/admin/tokens',
+            open: true,
+            items: [
+              { label: 'Tokens', href: '/admin/tokens', current: 'true' },
+              { label: 'Keys', href: '/admin/tokens/keys', current: 'page' },
+              { label: 'Hosts', href: '/admin/tokens/hosts', current: false },
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(deeper).toContain('<a class="nav-item" href="/admin" aria-current="true">');
+    expect(deeper).toContain('<li><a href="/admin/tokens" aria-current="true">Tokens</a></li>');
+    expect(deeper).toContain('<li><a href="/admin/tokens/keys" aria-current="page">Keys</a></li>');
+    expect(deeper).toContain('<li><a href="/admin/tokens/hosts">Hosts</a></li>');
+  });
+
   it('renders counts and the pill with its screen reader text', () => {
     expect(html).toContain('<span class="nav-count">6</span>');
     expect(html).toContain(
@@ -43,9 +68,9 @@ describe('AppShell', () => {
       </AppShell>,
     );
     expect(html).toContain('<a class="skip-link" href="#m">Skip to content</a>');
-    expect(html).toContain('<main class="main" id="m">body</main>');
+    expect(html).toContain('<main class="main" id="m" tabindex="-1">body</main>');
     expect(html).toContain(
-      '<details class="navd"><summary><span class="navd-l">Menu</span><span class="navd-x">Close</span><span class="chev" aria-hidden="true">▾</span></summary>',
+      '<details class="navd"><summary>Menu<span class="chev" aria-hidden="true">▾</span></summary>',
     );
     // the instance mark is the gate icon of the set, not a second drawing of it
     expect(html).toContain(
@@ -61,6 +86,31 @@ describe('AppShell', () => {
     );
     expect(html).not.toContain('<main');
     expect(html).not.toContain('skip-link');
+    expect(html).toContain('<div class="main" id="main">x</div>');
+  });
+
+  it('leaves out the Menu disclosure with neither nav nor account (pre-login)', () => {
+    const html = render(
+      <AppShell brand={{ name: 'tokengate', href: '/admin' }} health={<a class="health">h</a>}>
+        x
+      </AppShell>,
+    );
+    expect(html).not.toContain('navd');
+    expect(html).toContain('<a class="health">h</a></div></div><main class="main" id="main"');
+    expect(html).toContain('<main class="main" id="main" tabindex="-1">x</main>');
+  });
+
+  it.each([
+    ['nav', { nav: 'n' }],
+    ['account', { account: 'a' }],
+  ])('keeps the Menu disclosure with only %s', (_, slots) => {
+    const html = render(<AppShell brand={{ name: 't', href: '/' }} {...slots} />);
+    expect(html).toContain('<details class="navd">');
+  });
+
+  it('treats null and false slots as absent', () => {
+    const html = render(<AppShell brand={{ name: 't', href: '/' }} nav={null} account={false} />);
+    expect(html).not.toContain('navd');
   });
 });
 
@@ -95,7 +145,9 @@ describe('AppShell slots', () => {
     expect(html).toContain('<span class="inst-host">gate.acme.dev</span>');
     expect(html.indexOf('class="health"')).toBeLessThan(html.indexOf('class="navd"'));
     expect(html.indexOf('nav</')).toBeLessThan(html.indexOf('class="acct"'));
-    expect(html).toContain('<main class="main" id="main"><p class="hstrip" role="alert">');
+    expect(html).toContain(
+      '<main class="main" id="main" tabindex="-1"><p class="hstrip" role="alert">',
+    );
     expect(html).toContain('</p>body</main>');
   });
 
@@ -163,6 +215,24 @@ describe('HealthStrip', () => {
     const html = render(<HealthStrip title="T" glyph="⚠" class="z" />);
     expect(html).toBe(
       '<p class="hstrip z" role="alert"><b><span aria-hidden="true">⚠</span> T</b></p>',
+    );
+  });
+
+  it('leaves out the role with role={null} and reads the prefix after the glyph', () => {
+    expect(
+      render(
+        <HealthStrip title="Keyring unavailable." role={null} srPrefix="Error:">
+          Every call fails.
+        </HealthStrip>,
+      ),
+    ).toBe(
+      '<p class="hstrip"><b><span aria-hidden="true">✕</span> <span class="vh">Error: </span>Keyring unavailable.</b> Every call fails.</p>',
+    );
+  });
+
+  it('keeps the alert role when set explicitly and ignores a blank prefix', () => {
+    expect(render(<HealthStrip title="T" role="alert" srPrefix=" " />)).toBe(
+      '<p class="hstrip" role="alert"><b><span aria-hidden="true">✕</span> T</b></p>',
     );
   });
 });

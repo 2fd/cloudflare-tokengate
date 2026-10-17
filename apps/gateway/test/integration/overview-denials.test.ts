@@ -62,7 +62,11 @@ async function insert(records: RequestRecord[]): Promise<void> {
 }
 
 function denials(html: string): string {
-  return /<section aria-labelledby="denials-h">[\s\S]*?<\/section>/.exec(html)?.[0] ?? '';
+  return (
+    /<section class="tray" id="denials" aria-labelledby="denials-h">[\s\S]*?<\/section>/.exec(
+      html,
+    )?.[0] ?? ''
+  );
 }
 
 let owner: User;
@@ -83,12 +87,16 @@ describe('I-LOG-2: Top denials', () => {
     await insert([...web, api, tenant]);
     const app = createTestApp({ now: () => NOW });
     const html = denials(await (await adminGet(app, await loginAs(app, owner), '/admin')).text());
-    const rows = [...html.matchAll(/<tr><th scope="row">([^<]*)</g)].map((m) => m[1]);
+    const rows = [
+      ...html.matchAll(/<tr><th scope="row">[\s\S]*?<span class="ent-n">([^<]*)</g),
+    ].map((m) => m[1]);
     // Two requests first; then the newest of the single ones.
     expect(rows).toEqual(['acme/web', 'acme/web', 'acme/api']);
     expect(html).toContain(`href="/admin/requests/${web[1]?.id}"`);
     expect(html).toContain(`href="/admin/access/new?from_request=${web[1]?.id}"`);
-    expect(html).toContain('Create access<span class="vh"> for acme/web on slack</span>');
+    expect(html).toContain('Give access<span class="vh"> for acme/web on slack</span>');
+    // The count links to exactly that group, and names it for screen readers.
+    expect(html).toContain('>2<span class="vh"> denied requests from acme/web to slack</span></a>');
     // tenant_mismatch is not fixable by an access: the action is the list of exactly this group.
     expect(html).toContain(
       'href="/admin/requests?range=24h&amp;outcome=denied&amp;token=svc_01JAAAAAAAAAAAAAAAAAAAAAAA&amp;consumer=cpr_01JAAAAAAAAAAAAAAAAAAAAAAA&amp;reason=tenant_mismatch&amp;repo=acme%2Fweb"',
@@ -105,10 +113,10 @@ describe('I-LOG-2: Top denials', () => {
     const app = createTestApp({ now: () => NOW });
     const html = denials(await (await adminGet(app, await loginAs(app, owner), '/admin')).text());
     expect(html).toContain(
-      'unverified token from <code>https://evil.example/&quot;&gt;&lt;script&gt;</code>',
+      'Unverified token</span><span class="ctx"><span class="sep" aria-hidden="true">· </span>from <code>https://evil.example/&quot;&gt;&lt;script&gt;</code>',
     );
     expect(html).not.toContain('from_request=');
-    expect(html).toContain('href="/admin/consumers/new">Add a service consumer');
+    expect(html).toContain('href="/admin/consumers/new">Add consumer');
     for (const href of html.matchAll(/href="([^"]*)"/g)) {
       expect(href[1]).not.toContain('evil');
     }
@@ -147,7 +155,7 @@ describe('I-LOG-2: Top denials', () => {
     const app = createTestApp({ now: () => NOW });
     const html = denials(await (await adminGet(app, await loginAs(app, viewer), '/admin')).text());
     expect(html).toContain('Grouped from the newest 2,000 denials.');
-    expect(html).toContain('<td class="num">2,000</td>');
+    expect(html).toContain('>2,000<span class="vh"> denied requests from unverified callers');
   });
 
   it('reads the denials through the partial problems index', async () => {

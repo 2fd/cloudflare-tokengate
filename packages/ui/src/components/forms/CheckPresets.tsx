@@ -1,6 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
-import { type ChoiceBase, choiceAttrs, isChecked } from './choice';
+import { type ChoiceBase, choiceAttrs, firstChoiceId, isChecked } from './choice';
 import { useChoiceIds } from './context';
 
 export interface CheckPreset extends ChoiceBase {
@@ -22,6 +22,11 @@ export interface CheckPresetsProps {
   value?: readonly string[];
   /** Input id prefix; defaults to the FieldSet's id. */
   id?: string;
+  /**
+   * The server rejected the group (the FieldSet or FormStep shows the error): the first preset
+   * that is not disabled gets `aria-invalid`. It is the ErrorSummary link target (`firstChoiceId`).
+   */
+  invalid?: boolean;
   class?: string;
 }
 
@@ -31,6 +36,7 @@ export interface CheckPresetsProps {
  */
 export function CheckPresets(props: CheckPresetsProps) {
   const idPrefix = useChoiceIds('CheckPresets', { id: props.id });
+  const invalidId = props.invalid && idPrefix ? firstChoiceId(idPrefix, props.options) : undefined;
   return (
     <div class={cx('ops', props.class)}>
       {props.options.map((option, index) => {
@@ -44,6 +50,9 @@ export function CheckPresets(props: CheckPresetsProps) {
               value={option.value}
               checked={isChecked(option, props.value)}
               disabled={option.disabled}
+              aria-invalid={
+                invalidId !== undefined && attrs.inputId === invalidId ? 'true' : undefined
+              }
             />
             <span>
               <span class="t">

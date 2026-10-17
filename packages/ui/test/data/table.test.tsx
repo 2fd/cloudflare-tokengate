@@ -54,6 +54,19 @@ describe('Table', () => {
     expect(html).toContain('<tbody><tr><td>1</td></tr></tbody>');
   });
 
+  it('puts the id on the table, not on the scroll region', () => {
+    const html = render(
+      <Table id="requests" label="Requests" caption="Requests" columns={columns} />,
+    );
+    expect(html).toContain(
+      '<div class="scroll" role="region" tabindex="0" aria-label="Requests"><table class="tbl" id="requests"><caption',
+    );
+    expect(
+      render(<Table id="top" scroll={false} dense caption="Top" columns={columns} />),
+    ).toContain('<table class="tbl dense" id="top"><caption class="vh">Top</caption>');
+    expect(render(<Table label="x" columns={columns} />)).not.toContain('id=');
+  });
+
   it('hides the caption by default and shows it on request', () => {
     expect(render(<Table label="x" caption="Top denied callers" columns={columns} />)).toContain(
       '<caption class="vh">Top denied callers</caption>',
@@ -74,6 +87,17 @@ describe('Row, RowHeader, Cell', () => {
       ),
     ).toBe('<tr class="hl x"><th scope="row" class="y">Slack</th></tr>');
     expect(render(<Row>{''}</Row>)).toBe('<tr></tr>');
+  });
+
+  it('gives the row an id, the fragment target of a redirect', () => {
+    expect(
+      render(
+        <Row highlight id="user-usr_1">
+          <RowHeader>Ada</RowHeader>
+        </Row>,
+      ),
+    ).toBe('<tr class="hl" id="user-usr_1"><th scope="row">Ada</th></tr>');
+    expect(render(<Row id={'a"b'}>{''}</Row>)).toBe('<tr id="a&quot;b"></tr>');
   });
 
   it('renders the cell helpers and the stacked label', () => {

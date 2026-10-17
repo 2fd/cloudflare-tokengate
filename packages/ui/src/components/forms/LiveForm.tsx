@@ -12,7 +12,16 @@ export interface LiveFormProps {
   id?: string;
   /** Hidden fields at the top of the form (`_csrf`, ids), one `input type="hidden"` each. */
   hidden?: HiddenFields;
-  /** The summary rail (a LiveSummary), right of the form at >= 80rem, under it otherwise. */
+  /**
+   * `form-layout` (default): the form column and its summary rail (`.form-layout`). `fields`: the
+   * column alone, for a live form inside a detail column or a disclosure; it reserves no rail
+   * column at >= 80rem. Values as `TypeCard.layout`.
+   */
+  layout?: 'form-layout' | 'fields';
+  /**
+   * The summary rail (a LiveSummary), right of the form at >= 80rem, under it otherwise. Not with
+   * `layout="fields"`.
+   */
   rail?: Child;
   class?: string;
   /** The form column: FixedBar, Stepper, RiskAcceptance, SubmitRow, stacked 32px apart. */
@@ -27,9 +36,13 @@ export interface LiveFormProps {
  * first paint is already right.
  */
 export function LiveForm(props: LiveFormProps) {
+  const fields = props.layout === 'fields';
+  if (fields && props.rail !== undefined && props.rail !== null) {
+    throw new Error('LiveForm: a rail needs layout="form-layout"');
+  }
   return (
     <form
-      class={cx('lform', 'form-layout', props.class)}
+      class={cx('lform', !fields && 'form-layout', props.class)}
       method={props.method ?? 'post'}
       action={props.action}
       id={props.id}

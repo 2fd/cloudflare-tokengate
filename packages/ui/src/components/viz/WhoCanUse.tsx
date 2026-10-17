@@ -55,6 +55,11 @@ export interface WhoCanUseProps {
   empty?: { title: Child; children?: Child };
   /** Level of the empty title. Default 3, one under the tray title (a Tray sets it). */
   headingLevel?: HeadingLevel;
+  /**
+   * Scale note inside the panel, under the map (`.cmap-note`): how many consumers and accesses
+   * the map leaves out, with a link to all of them.
+   */
+  note?: Child;
   /** Footer line under the panel (`.wfoot`): what is missing, and one ghost button. */
   footer?: Child;
   /** Action at the right of the footer (“+ Give another consumer access”). */
@@ -164,6 +169,7 @@ export function WhoCanUse(props: WhoCanUseProps) {
           )}
           {hub}
         </div>
+        {props.note !== undefined ? <p class="cmap-note">{props.note}</p> : null}
       </div>
       {props.footer !== undefined || props.footerAction !== undefined ? (
         <div class="wfoot">

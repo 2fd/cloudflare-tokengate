@@ -4,19 +4,13 @@ import { HeadingScope, H, useHeadingLevel, type HeadingLevel } from '../../lib/h
 import { Hidden, type HiddenFields } from '../../lib/hidden';
 import { Button, type ButtonProps } from '../base/Button';
 
-export interface DialogProps {
+interface DialogBase {
   /** Id of the `dialog`; triggers point at it. The heading gets `${id}-h`, the description `${id}-d`. */
   id: string;
   /** The question or task ("Delete Slack and its 3 consumer accesses?"). */
   title: Child;
   /** One or two sentences under the title; the dialog's description for screen readers. */
   description?: Child;
-  /** Where the dialog's form posts. Default: the current URL. */
-  action?: string;
-  /** Form method. Default `post`. */
-  method?: 'post' | 'get';
-  /** Hidden fields at the top of the form (`_csrf`, ids), one `input type="hidden"` each. */
-  hidden?: HiddenFields;
   /**
    * Level of the title. Default 2: a modal dialog is its own context. An `open` dialog drawn in
    * the page flow under an h2 takes 3.
@@ -36,6 +30,33 @@ export interface DialogProps {
   class?: string;
 }
 
+/** The dialog renders its own `<form>` around header, body and footer. */
+interface DialogOwnForm extends DialogBase {
+  /** Where the dialog's form posts. Default: the current URL. */
+  action?: string;
+  /** Form method. Default `post`. */
+  method?: 'post' | 'get';
+  /** Hidden fields at the top of the form (`_csrf`, ids), one `input type="hidden"` each. */
+  hidden?: HiddenFields;
+  form?: never;
+}
+
+/** The footer submits a form outside the dialog: no own `<form>`, so nothing nests. */
+interface DialogOuterForm extends DialogBase {
+  /**
+   * Id of the outer form that the footer buttons submit (each sets `form=` to it). The dialog then
+   * renders no `<form>` (the content goes in `div.dlg-in`) and takes no `action`, `method` or
+   * `hidden`. It can sit inside or after that form; inside, it must come after the form's default
+   * button in tree order.
+   */
+  form: string;
+  action?: never;
+  method?: never;
+  hidden?: never;
+}
+
+export type DialogProps = DialogOwnForm | DialogOuterForm;
+
 /** True when a children value renders something (Hono passes `[undefined]` for `{undefined}`). */
 function rendersSomething(node: Child): boolean {
   if (Array.isArray(node)) return node.some(rendersSomething);
@@ -43,16 +64,33 @@ function rendersSomething(node: Child): boolean {
 }
 
 /**
- * Dialog (`dialog.dlg`): header, scrolling body and footer around one form. Opened with no
- * JavaScript by a `DialogTrigger` (`command="show-modal"`): modal, Esc closes it and focus
- * returns to the trigger. Where invoker commands are missing, the same trigger opens it as a
- * popover (it carries `popover="auto"`), with the same backdrop and Esc to close.
+ * Dialog (`dialog.dlg`): header, scrolling body and footer around one form, its own or (with
+ * `form`) one outside it. Opened with no JavaScript by a `DialogTrigger` (`command="show-modal"`):
+ * modal, Esc closes it and focus returns to the trigger. Where invoker commands are missing, the
+ * same trigger opens it as a popover (it carries `popover="auto"`), with the same backdrop and Esc
+ * to close.
  */
 export function Dialog(props: DialogProps) {
   const headingId = `${props.id}-h`;
   const descriptionId = `${props.id}-d`;
   const nominal = props.headingLevel ?? 2;
   const hLevel = useHeadingLevel(nominal);
+  const content = (
+    <>
+      <div class="dlg-h">
+        <H level={hLevel} id={headingId}>
+          {props.title}
+        </H>
+        {props.description !== undefined ? <p id={descriptionId}>{props.description}</p> : null}
+      </div>
+      {rendersSomething(props.children) ? (
+        <div class="dlg-b">
+          <HeadingScope by={nominal - 2}>{props.children}</HeadingScope>
+        </div>
+      ) : null}
+      <div class="dlg-f">{props.footer}</div>
+    </>
+  );
   return (
     <dialog
       class={cx('dlg', props.wide && 'wide', props.class)}
@@ -62,21 +100,14 @@ export function Dialog(props: DialogProps) {
       popover={props.open ? undefined : 'auto'}
       open={props.open ? true : undefined}
     >
-      <form method={props.method ?? 'post'} action={props.action}>
-        <Hidden fields={props.hidden} />
-        <div class="dlg-h">
-          <H level={hLevel} id={headingId}>
-            {props.title}
-          </H>
-          {props.description !== undefined ? <p id={descriptionId}>{props.description}</p> : null}
-        </div>
-        {rendersSomething(props.children) ? (
-          <div class="dlg-b">
-            <HeadingScope by={nominal - 2}>{props.children}</HeadingScope>
-          </div>
-        ) : null}
-        <div class="dlg-f">{props.footer}</div>
-      </form>
+      {props.form !== undefined ? (
+        <div class="dlg-in">{content}</div>
+      ) : (
+        <form method={props.method ?? 'post'} action={props.action}>
+          <Hidden fields={props.hidden} />
+          {content}
+        </form>
+      )}
     </dialog>
   );
 }
@@ -95,6 +126,7 @@ export type DialogTriggerProps = Omit<
   | 'form'
   | 'formaction'
   | 'formmethod'
+  | 'formnovalidate'
   | 'name'
   | 'value'
 > & {

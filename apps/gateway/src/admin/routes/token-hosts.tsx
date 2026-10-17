@@ -1,3 +1,28 @@
+import {
+  Button,
+  Callout,
+  Cell,
+  Chip,
+  Dialog,
+  DialogClose,
+  DialogTrigger,
+  Entity,
+  Field,
+  FieldSet,
+  firstChoiceId,
+  KeyValue,
+  Mono,
+  PageHeader,
+  Panel,
+  RadioCards,
+  Reveal,
+  Row,
+  RowHeader,
+  Table,
+  Textarea,
+  Tray,
+} from '@tokengate/ui';
+import { useContext } from 'hono/jsx';
 // Service tokens › Allowed hosts (A13.4): the upstream host allowlist a token's base URL must
 // match, on save and on every proxied request (I-SSRF-1). Owners edit it (settings:write) by
 // picking hosts the tokens and templates use, plus any others typed one per line. An empty stored
@@ -21,17 +46,10 @@ import {
 } from '../ops/upstream-hosts';
 import { paths } from '../paths';
 import { type AdminContext, adminActor, formData, redirectWithNotice, renderPage } from '../render';
-import { SERVICE_TEMPLATES } from '../service-templates';
-import {
-  AskSomeone,
-  CheckboxGroup,
-  DataTable,
-  PostForm,
-  RadioCards,
-  TextArea,
-} from '../views/components';
+import { SERVICE_TEMPLATES, templateForService } from '../service-templates';
+import { AskSomeone, CheckboxGroup, FocusTargets } from '../views/components';
 import { text, texts } from '../views/token-forms';
-import { upstreamHost } from '../views/token-page';
+import { plural, templateLogo, upstreamHost } from '../views/token-ui';
 
 const PAGE = paths.tokenHosts();
 
@@ -132,6 +150,7 @@ async function hostsPage(
   const malformed = allowlist !== null && allowlist.length === 0;
   const outside = tokens.filter((token) => storedHostOutside(token.base_url, allowlist));
   const list = candidates(tokens);
+  const inUse = list.filter((item) => item.tokens.length > 0);
   const literal = new Set(allowlist ?? []);
   const others = (allowlist ?? []).filter((entry) => !list.some((item) => item.host === entry));
   const errors = o.errors ?? [];
@@ -140,6 +159,7 @@ async function hostsPage(
       .filter((error) => error.field === field)
       .map((error) => error.message)
       .join(' ') || null;
+  const mode = o.submitted?.mode ?? (allowlist === null ? 'any' : 'list');
   return renderPage(
     c,
     {
@@ -147,116 +167,194 @@ async function hostsPage(
       section: 'tokens',
       subsection: 'hosts',
       notice: resolveNotice(NOTICES, c.req.query('notice'), null),
+      header: (
+        <PageHeader
+          title="Allowed hosts"
+          description="Service tokens can only send secrets to these hosts. Checked when a token is saved and on every request."
+        />
+      ),
       errors,
       status: o.status,
     },
     (ctx) => (
       <>
-        <p class="lead">
-          Service tokens can only send secrets to these hosts. Checked when a token is saved and on
-          every request.
-        </p>
         {malformed ? (
-          <ul class="alerts">
-            <li class="alert alert-error">
-              <p>
-                <strong>Error:</strong> The stored list is invalid, so every host is refused.{' '}
-                {ctx.can('settings:write') ? 'Save the list below to fix it.' : null}
-              </p>
-            </li>
-          </ul>
+          <Callout
+            tone="bad"
+            title="The stored list is invalid, so every host is refused."
+            more={ctx.can('settings:write') ? 'Save the list below to fix it.' : undefined}
+          />
         ) : null}
-        {ctx.can('settings:write') ? (
-          <PostForm action={PAGE} csrf={ctx.csrf} class="stack">
-            <RadioCards
-              name="mode"
-              legend="Which hosts may tokens call?"
-              value={o.submitted?.mode ?? (allowlist === null ? 'any' : 'list')}
-              options={[
+        <Tray
+          id="allowlist"
+          title="Which hosts tokens may call"
+          description="IP addresses, localhost and this gateway are always refused."
+          actions={
+            ctx.can('settings:write') ? (
+              <DialogTrigger dialog="dlg-hosts" size="sm" srSuffix="allowed hosts">
+                Change…
+              </DialogTrigger>
+            ) : undefined
+          }
+        >
+          <Panel variant="pad">
+            <KeyValue
+              items={[
                 {
-                  value: 'any',
-                  title: 'Any public HTTPS host',
-                  description:
-                    'No list. IP addresses, localhost and this gateway are always refused.',
+                  label: 'Allowed',
+                  value:
+                    allowlist === null
+                      ? 'Any public HTTPS host'
+                      : malformed
+                        ? 'No host: the stored list is invalid'
+                        : `Only ${plural(allowlist.length, 'host')}`,
                 },
-                {
-                  value: 'list',
-                  title: 'Only the hosts below',
-                  reveal: (
-                    <>
-                      <CheckboxGroup
-                        name="host"
-                        legend="Hosts used by tokens and token types"
-                        conditional
-                        error={errorOf('host')}
-                        options={list.map((item) => ({
-                          value: item.host,
-                          label: item.host,
-                          checked: o.submitted
-                            ? o.submitted.hosts.includes(item.host)
-                            : literal.has(item.host),
-                          hint: candidateHint(item, allowlist, literal),
-                        }))}
-                      />
-                      <TextArea
-                        name="other_hosts"
-                        label="Other hosts"
-                        optional
-                        conditional
-                        autocomplete="off"
-                        spellcheck={false}
-                        autocapitalize="none"
-                        rows={3}
-                        value={o.submitted ? o.submitted.other : others.join('\n')}
-                        example={'api.example.com\n*.example.net'}
-                        hint="One per line: a host such as api.example.com, or *.example.com for every host below example.com. A pasted URL is reduced to its host."
-                        error={errorOf('other_hosts')}
-                      />
-                    </>
-                  ),
-                },
+                ...(allowlist !== null && allowlist.length > 0
+                  ? [
+                      {
+                        label: 'Hosts',
+                        line: true,
+                        value: allowlist.map((entry) => (
+                          <Chip>
+                            <code>{entry}</code>
+                          </Chip>
+                        )),
+                      },
+                    ]
+                  : []),
+                ...(inUse.length > 0
+                  ? [
+                      {
+                        label: 'Used by tokens',
+                        line: true,
+                        value: inUse.map((item) => (
+                          <Chip>
+                            <code>{item.host}</code>
+                            <span class="muted">
+                              {' '}
+                              · {item.tokens.map((token) => token.name).join(', ')}
+                            </span>
+                          </Chip>
+                        )),
+                      },
+                    ]
+                  : []),
               ]}
             />
-            <div class="actions">
-              <button type="submit" class="primary">
-                Save allowed hosts
-              </button>
-            </div>
-          </PostForm>
-        ) : (
-          <>
-            {allowlist === null ? (
-              <p>Any public HTTPS host.</p>
-            ) : (
-              <ul>
-                {allowlist.map((entry) => (
-                  <li>
-                    <code>{entry}</code>
-                  </li>
-                ))}
-              </ul>
+            {ctx.can('settings:write') ? null : (
+              <AskSomeone permission="settings:write" ctx={ctx} verb="change the allowed hosts" />
             )}
-            <AskSomeone permission="settings:write" ctx={ctx} verb="change the allowed hosts" />
-          </>
-        )}
+          </Panel>
+        </Tray>
         {outside.length > 0 ? (
-          <DataTable
+          <Tray
             id="outside"
-            caption="Tokens outside the allowed hosts"
-            rowHeader="token"
-            rows={outside}
-            columns={[
-              {
-                key: 'token',
-                header: 'Token',
-                render: (token) => <a href={paths.token(token.id)}>{token.name}</a>,
-              },
-              { key: 'host', header: 'Host', render: (token) => upstreamHost(token.base_url) },
-            ]}
-          />
+            title="Tokens outside the allowed hosts"
+            count={outside.length}
+            description="Requests through these tokens are refused until their host is allowed."
+            tone="warn"
+          >
+            <Panel variant="flush">
+              <Table
+                id="outside-table"
+                labelledBy="outside-h"
+                caption="Tokens outside the allowed hosts"
+                columns={[{ label: 'Token' }, { label: 'Host' }]}
+              >
+                {outside.map((token) => (
+                  <Row>
+                    <RowHeader>
+                      <Entity
+                        logo={templateLogo(templateForService(token), {
+                          disabled: !token.enabled,
+                        })}
+                        name={token.name}
+                        href={paths.token(token.id)}
+                      />
+                    </RowHeader>
+                    <Cell>
+                      <Mono>{upstreamHost(token.base_url)}</Mono>
+                    </Cell>
+                  </Row>
+                ))}
+              </Table>
+            </Panel>
+          </Tray>
+        ) : null}
+        {ctx.can('settings:write') ? (
+          <Dialog
+            id="dlg-hosts"
+            wide
+            class="lform"
+            open={errors.length > 0 || o.submitted !== undefined}
+            title="Change allowed hosts"
+            description="A token's base URL must match; requests to any other host are refused."
+            action={PAGE}
+            hidden={ctx.hidden()}
+            footer={
+              <>
+                <DialogClose dialog="dlg-hosts" />
+                <Button variant="primary" type="submit">
+                  Save allowed hosts
+                </Button>
+              </>
+            }
+          >
+            <ModeChoice mode={mode} />
+            <Reveal field={1} option={2}>
+              <CheckboxGroup
+                name="host"
+                legend="Hosts used by tokens and token types"
+                conditional
+                error={errorOf('host')}
+                options={list.map((item) => ({
+                  value: item.host,
+                  label: item.host,
+                  checked: o.submitted
+                    ? o.submitted.hosts.includes(item.host)
+                    : literal.has(item.host),
+                  hint: candidateHint(item, allowlist, literal),
+                }))}
+              />
+              <Field
+                id="f-other_hosts"
+                label="Other hosts"
+                optional
+                hint="One per line: a host such as api.example.com, or *.example.com for every host below example.com. A pasted URL is reduced to its host."
+                error={errorOf('other_hosts') ?? undefined}
+              >
+                <Textarea
+                  name="other_hosts"
+                  mono
+                  rows={3}
+                  value={o.submitted ? o.submitted.other : others.join('\n')}
+                  placeholder={'api.example.com\n*.example.net'}
+                />
+              </Field>
+            </Reveal>
+          </Dialog>
         ) : null}
       </>
     ),
+  );
+}
+
+const MODES = [
+  {
+    value: 'any',
+    title: 'Any public HTTPS host',
+    description: 'No list. IP addresses, localhost and this gateway are always refused.',
+  },
+  { value: 'list', title: 'Only the hosts below' },
+] as const;
+
+/** "Any host" or "Only these" (live slot 1: the second choice shows the host list). */
+function ModeChoice(props: { mode: 'any' | 'list' }) {
+  useContext(FocusTargets)?.set('f-mode', firstChoiceId('f-mode', MODES));
+  return (
+    <FieldSet id="f-mode" legend="Which hosts may tokens call?" live={1}>
+      <RadioCards name="mode" columns={1} value={props.mode} options={MODES} />
+    </FieldSet>
   );
 }
 

@@ -84,6 +84,32 @@ export const stepper: ComponentDoc = {
 </Stepper>`,
     },
     {
+      title: 'Step with an error',
+      description:
+        'A fieldset step takes a hint and the server’s error, like a FieldSet: after the description, and both describe the fieldset. A group step holds Fields with their own errors.',
+      layout: 'stack',
+      render: () => (
+        <Stepper>
+          <FormStep
+            n={3}
+            title="Allowed operations"
+            id="sp-ops-bad"
+            description="Presets for the Slack Web API."
+            hint="Pick every preset the workflow needs."
+            error="Choose at least one operation"
+          >
+            <CheckPresets name="sp-ops-bad" options={slackOperations.slice(0, 2)} />
+          </FormStep>
+        </Stepper>
+      ),
+      code: `<FormStep n={3} title="Allowed operations" id="ops"
+  description="Presets for the Slack Web API."
+  hint="Pick every preset the workflow needs."
+  error="Choose at least one operation">
+  <CheckPresets name="operations" options={operations} />
+</FormStep>`,
+    },
+    {
       title: 'Done and current',
       description:
         'For pages that track progress. Done steps read “Step 1, done:”; the current step has aria-current="step". The give-access page keeps every step equal.',
@@ -152,6 +178,17 @@ export const stepper: ComponentDoc = {
         { name: 'title', type: 'Child', required: true, description: 'Legend or heading.' },
         { name: 'description', type: 'Child', description: 'One line under the title.' },
         {
+          name: 'hint',
+          type: 'Child',
+          description: 'Fieldset step: hint after the description (`${id}-hint`). Needs id.',
+        },
+        {
+          name: 'error',
+          type: 'Child',
+          description:
+            'Fieldset step: the server’s error, above the choices (`${id}-error`). Needs id.',
+        },
+        {
           name: 'kind',
           type: "'fieldset' | 'group'",
           default: "'fieldset'",
@@ -189,6 +226,7 @@ export const stepper: ComponentDoc = {
     'An ordered list: screen readers announce the number of steps.',
     'The number circle is decorative; the legend or heading starts with a hidden “Step N:”.',
     'A fieldset step groups its choices under the legend; a group step with an id is a labelled group.',
+    'A fieldset step’s hint and error describe the fieldset (aria-describedby), as on a FieldSet.',
     'The current step has aria-current="step"; a done step says “done” in words.',
   ],
   do: ['Keep one decision per step.', 'Put the summary of all steps in a LiveSummary rail.'],
@@ -196,5 +234,15 @@ export const stepper: ComponentDoc = {
     'Do not split one task over several pages.',
     'Do not mark steps done on a form where every step stays editable.',
   ],
-  classes: ['stepper', 'fstep', 'fstep-n', 'fstep-b', 'fstep-t', 'is-current', 'is-done'],
+  classes: [
+    'stepper',
+    'fstep',
+    'fstep-n',
+    'fstep-b',
+    'fstep-t',
+    'is-current',
+    'is-done',
+    'hint',
+    'field-error',
+  ],
 };

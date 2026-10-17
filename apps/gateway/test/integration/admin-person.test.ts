@@ -49,15 +49,74 @@ describe('GET /admin/users/:id', () => {
     );
     const html = await page(`/admin/users/${person.id}`);
     expect(html).toContain('<title>alex@acme.com – Users – tokengate</title>');
-    expect(html).toContain('<h1>alex@acme.com</h1>');
-    expect(html).toContain('<nav aria-label="Breadcrumb"');
-    expect(html).toContain('<code>7f3e-a1b2</code>');
+    // The identity H1 holds the status badge; it is the only H1.
+    expect(html).toContain('<h1>alex@acme.com <span class="badge ok">');
+    expect(html.match(/<h1\b/g)).toHaveLength(1);
+    expect(html).toContain('<nav class="crumbs" aria-label="Breadcrumb">');
+    expect(html.match(/aria-label="Breadcrumb"/g)).toHaveLength(1);
+    expect(html).toContain('<span class="idchip" title="Access user ID">7f3e-a1b2</span>');
     expect(html).not.toContain('acme-team');
     expect(html).toContain('Access manager');
     // The row controls, shown open (not inside a disclosure).
     expect(html).toContain(`id="role-${person.id}"`);
     expect(html).not.toContain('name="person-actions"');
     expect(html).toContain('name="_return" value="detail"');
+  });
+
+  it('changes a role with one card; Owner and the danger actions confirm in dialogs', async () => {
+    const person = await createUser(
+      {
+        email: 'tom@acme.com',
+        name: 'Tom Becker',
+        role: 'access_manager',
+        identity: { loginProvider: 'access', subject: `${TEAM}|a1b2c3` },
+      },
+      T0 - 86_400_000,
+    );
+    const html = await page(`/admin/users/${person.id}`);
+    expect(html).toContain('<p class="relline">Tom can give any service consumer access');
+    const form = html.slice(
+      html.indexOf(`id="role-${person.id}"`),
+      html.indexOf('</form>', html.indexOf(`id="role-${person.id}"`)),
+    );
+    expect(form).toContain(`name="expected_updated_at" value="${person.updated_at}"`);
+    expect(form).toContain('<legend>Make Tom</legend>');
+    expect(form).toContain('type="submit" name="role" value="token_manager"');
+    expect(form).toContain(
+      '<span class="gain">+ service tokens</span> · <span class="lose">− consumer access</span>',
+    );
+    // Owner is a card that opens a dialog; the dialog posts the change on its own form.
+    expect(form).toContain(`commandfor="dlg-owner-${person.id}"`);
+    expect(form).not.toContain('value="owner"');
+    const owner = html.slice(html.indexOf(`id="dlg-owner-${person.id}"`));
+    expect(owner.slice(0, owner.indexOf('</dialog>'))).toContain(
+      '<input type="hidden" name="role" value="owner"/>',
+    );
+    // Account access: Suspend posts directly (Undo follows), Reset sign-in confirms.
+    const danger = html.slice(html.indexOf('id="access-h"'));
+    expect(danger).toContain('Stop Tom from using the console.');
+    expect(danger).toContain('name="status" value="suspended"');
+    expect(danger).toContain(`commandfor="dlg-reset-${person.id}"`);
+    const reset = danger.slice(danger.indexOf(`id="dlg-reset-${person.id}"`));
+    expect(reset.slice(0, reset.indexOf('</dialog>'))).toContain('name="confirm" value="1"');
+    expect(reset).toContain('Access user <code>a1b2c3</code> is unlinked.');
+    expect(html).not.toContain('acme-team');
+    // The rail lists what the role can and cannot do.
+    expect(html).toContain('<span class="vh">No: </span>Download the configuration export');
+  });
+
+  it('lists the last changes the person made, newest first', async () => {
+    const other = await createUser(
+      { email: 'b@example.com', identity: { loginProvider: 'access', subject: 'team|b' } },
+      T0 - 1000,
+    );
+    await adminPost(app, session, `/admin/users/${other.id}`, { role: 'viewer' });
+    const html = await page(`/admin/users/${owner.id}`);
+    const changes = html.slice(html.indexOf('id="changes-h"'), html.indexOf('id="accounts-h"'));
+    expect(changes).toContain('Changed role admin → viewer of b@example.com');
+    expect(changes).toContain('<p class="meta">Changed a person</p>');
+    // The person's own sign-in (bootstrap/link) is not a change.
+    expect(changes).not.toContain('user.link');
   });
 
   it('lists what the person changed per category, and the history of the account', async () => {
@@ -75,8 +134,10 @@ describe('GET /admin/users/:id', () => {
 
     const html = await page(`/admin/users/${other.id}`);
     const history = html.slice(html.indexOf('id="history-h"'));
-    expect(history).toContain('Changed role admin → viewer of b@example.com');
-    expect(history).toContain('<code>user.update</code>');
+    // The actor starts the sentence: "owner@example.com changed role …".
+    expect(history).toContain(
+      'owner@example.com</a></b> changed role admin → viewer of b@example.com',
+    );
     expect(history).toContain(`href="/admin/audit?target=${other.id}"`);
     expect(html).toContain('No changes in the last 30 days.');
   });
@@ -106,8 +167,8 @@ describe('GET /admin/users/:id', () => {
       await createUser({ email: 'v@example.com', role: 'viewer' }, T0),
     );
     const html = await page(`/admin/users/${owner.id}`, viewer);
-    expect(html.slice(html.indexOf('<main'), html.indexOf('</main>'))).not.toContain(
-      '<form method="post"',
+    expect(html.slice(html.indexOf('<main'), html.indexOf('</main>'))).not.toMatch(
+      /<form\b[^>]*\bmethod="post"/,
     );
   });
 
@@ -196,7 +257,7 @@ describe('GET /admin/users/:id', () => {
     });
     expect(res.status).toBe(409);
     const html = await res.text();
-    const href = /<div class="error-summary"[\s\S]*?<a href="#([^"]+)">/.exec(html)?.[1];
+    const href = /<div class="callout bad errsum"[\s\S]*?<a href="#([^"]+)">/.exec(html)?.[1];
     expect(href).toBe(`f-dismiss-${pending.id}`);
     const refused = html.slice(html.indexOf('id="refused-h"'));
     expect(refused).toContain(`id="f-dismiss-${pending.id}"`);

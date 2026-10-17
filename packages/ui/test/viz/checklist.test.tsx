@@ -60,6 +60,43 @@ describe('Checklist', () => {
       '<div class="wide"><nav class="quick" aria-label="Token types"><a class="q" href="/admin/tokens/new?type=slack"><span class="logo xs lg-slack" aria-hidden="true">S</span>Slack</a><a class="q" href="/admin/tokens/new?type=custom">Other API</a></nav></div>',
     );
   });
+
+  it('replaces the action with ask, and adds detail after the shortcuts', () => {
+    const asked = render(
+      <Checklist
+        steps={[
+          {
+            state: 'done',
+            title: 'd',
+            why: 'w',
+            ask: <p class="ask">Never shown</p>,
+            detail: <a href="/log">See the log</a>,
+          },
+          {
+            state: 'next',
+            title: 'Add a service token',
+            why: 'Only an Owner or a Token manager can add tokens.',
+            action: { href: '/admin/tokens/new', label: 'Add token' },
+            ask: <p class="ask">Ask an Owner</p>,
+            quick: [{ href: '/q', label: 'Slack' }],
+            detail: <pre class="code">uses: tokengate/action@v1</pre>,
+          },
+        ]}
+      />,
+    );
+    expect(asked).not.toContain('Add token');
+    expect(asked).not.toContain('class="acts"');
+    expect(asked).not.toContain('Never shown');
+    expect(asked).toContain(
+      '<p class="why">Only an Owner or a Token manager can add tokens.</p><div class="wide"><p class="ask">Ask an Owner</p></div><div class="wide"><nav class="quick"',
+    );
+    expect(asked).toContain(
+      '</nav></div><div class="wide"><pre class="code">uses: tokengate/action@v1</pre></div></li>',
+    );
+    expect(asked).toContain(
+      '<p class="why">w</p><div class="wide"><a href="/log">See the log</a></div></li>',
+    );
+  });
 });
 
 describe('ChecklistProgress', () => {

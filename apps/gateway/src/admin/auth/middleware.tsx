@@ -5,6 +5,19 @@
 // (I-RBAC-1). Only then is `viewer` set and the handler run. The actor carries the identity and
 // permissions so audited writes re-check both at commit (I-SESS-1).
 // There are no gateway sessions: Access owns sign-in, sign-out and session lifetime.
+import {
+  Button,
+  ButtonRow,
+  Callout,
+  Cell,
+  PageHeader,
+  Panel,
+  Row,
+  RowHeader,
+  Stack,
+  Table,
+  Tray,
+} from '@tokengate/ui';
 import type { MiddlewareHandler } from 'hono';
 import type { Child } from 'hono/jsx';
 import { matchedRoutes } from 'hono/route';
@@ -23,8 +36,14 @@ import {
   renderPageFor,
   type ShellViewer,
 } from '../render';
-import { AskSomeone, NotFound } from '../views/components';
-import { Layout, SECTIONS, type SectionKey } from '../views/layout';
+import { AskSomeone, NotFound, type NotFoundLinks, notFoundText } from '../views/components';
+import {
+  BareLayout,
+  documentTitle,
+  SECTION_ORDER,
+  SECTIONS,
+  type SectionKey,
+} from '../views/layout';
 import { permissionSentence } from '../views/roles';
 import { CSRF_FIELD, csrfCheck, ensureCsrfCookie, isUnsafeMethod, readCsrfCookie } from './csrf';
 import { type IdentityError, requestIdentity, requestMeta, signOutUrl } from './identity';
@@ -211,6 +230,7 @@ function endpointRoute(c: AdminContext): { method: string; path: string } | null
   return route ? { method: route.method, path: route.path } : null;
 }
 
+/** "Sign-in problem": no user yet, so the bare shell (brand only). One primary: Reload. */
 function errorPage(
   c: AdminContext,
   key: MessageKey,
@@ -220,17 +240,23 @@ function errorPage(
   // The sign-out link lets a pending, suspended or mismatched user switch accounts.
   const signOut = loginProvider ? signOutUrl(loginProvider) : null;
   return c.html(
-    <Layout title="Sign-in problem">
-      <div class="alert alert-error">
-        <p>
-          <strong>Error:</strong> {MESSAGES[key]}
-        </p>
-      </div>
-      <p class="actions">
-        <a href={paths.overview()}>Reload</a>
-        {signOut ? <a href={signOut}>Sign out</a> : null}
-      </p>
-    </Layout>,
+    <BareLayout
+      title={documentTitle('Sign-in problem', null, false)}
+      host={new URL(c.req.url).hostname}
+    >
+      <PageHeader
+        title="Sign-in problem"
+        actions={
+          <>
+            {signOut ? <Button href={signOut}>Sign out</Button> : null}
+            <Button variant="primary" href={paths.overview()}>
+              Reload
+            </Button>
+          </>
+        }
+      />
+      <Callout tone="bad" title={MESSAGES[key]} />
+    </BareLayout>,
     status,
   );
 }
@@ -264,82 +290,108 @@ function setupPage(c: AdminContext) {
     });
   }
   return c.html(
-    <Layout title="Set up sign-in">
-      <div class="table-region" role="region" aria-labelledby="setup-cap" tabindex={0}>
-        <table>
-          <caption id="setup-cap">Sign-in variables</caption>
-          <thead>
-            <tr>
-              <th scope="col">Variable</th>
-              <th scope="col">Status</th>
-            </tr>
-          </thead>
-          <tbody>
+    <BareLayout title={documentTitle('Set up sign-in', null, false)} host={host}>
+      <PageHeader
+        title="Set up sign-in"
+        description="Sign-in to the admin console goes through Cloudflare Access, and no Access login is configured."
+        actions={
+          <Button variant="primary" href={paths.overview()}>
+            Reload
+          </Button>
+        }
+      />
+      <Tray id="setup-vars" title="Sign-in variables">
+        <Panel variant="flush">
+          <Table
+            labelledBy="setup-vars-h"
+            columns={[{ label: 'Variable' }, { label: 'Status' }]}
+            caption="Sign-in variables"
+          >
             {rows.map((row) => (
-              <tr>
-                <th scope="row">
+              <Row>
+                <RowHeader>
                   <code>{row.variable}</code>
-                </th>
-                <td>{row.status}</td>
-              </tr>
+                </RowHeader>
+                <Cell>{row.status}</Cell>
+              </Row>
             ))}
-          </tbody>
-        </table>
-      </div>
+          </Table>
+        </Panel>
+      </Tray>
       <SetupInstructions host={host} />
-      <p>
-        <a href={paths.overview()}>Reload</a>
-      </p>
-    </Layout>,
+    </BareLayout>,
     503,
   );
 }
 
-/** The section a request path belongs to, for the shell of the middleware's own pages. */
-function sectionOf(pathname: string): SectionKey {
-  if (pathname === '/admin/users' || pathname.startsWith('/admin/users/')) return 'users';
-  if (pathname === '/admin/tokens' || pathname.startsWith('/admin/tokens/')) return 'tokens';
-  for (const prefix of ['/admin/consumers', '/admin/access']) {
-    if (pathname === prefix || pathname.startsWith(`${prefix}/`)) return 'consumers';
+/**
+ * The section a request path belongs to, for the shell of the middleware's own pages: the section
+ * of a sidebar page or of a page under it. Null for any other path (an unknown or moved URL, the
+ * export), so the sidebar opens no section.
+ */
+function sectionOf(pathname: string): SectionKey | null {
+  for (const key of SECTION_ORDER) {
+    for (const tab of SECTIONS[key].tabs) {
+      // The Overview is /admin itself: every admin path starts with it.
+      const under = tab.href !== paths.overview() && pathname.startsWith(`${tab.href}/`);
+      if (pathname === tab.href || under) return key;
+    }
   }
-  return 'monitoring';
+  return null;
 }
 
 /**
  * 403 inside the shell. When a permission is missing, the page names the roles that hold it and
- * who to ask; "Back" goes to the section root.
+ * who to ask; the button goes back to the section root. Nothing to do here, so no primary.
  */
 function forbidden(c: AdminContext, viewer: ShellViewer, message: string, permission?: Permission) {
   const section = sectionOf(new URL(c.req.url).pathname);
   return renderPageFor(
     c,
     viewer,
-    { title: 'Forbidden', section, subsection: '', status: 403 },
+    {
+      title: 'Forbidden',
+      section,
+      subsection: '',
+      status: 403,
+      header: <PageHeader title="Forbidden" description={message} />,
+    },
     (view) => (
       <>
-        <p>{message}</p>
         {permission ? (
-          <>
-            <p>{permissionSentence(permission)}</p>
-            <AskSomeone permission={permission} ctx={view} />
-          </>
+          <Stack gap="sm">
+            <Callout tone="warn" title={permissionSentence(permission)} />
+            {/* The callout names the roles, so the ask sentence leaves out its own lead. */}
+            <AskSomeone permission={permission} ctx={view} lead={false} />
+          </Stack>
         ) : null}
-        <p>
-          <a href={SECTIONS[section].root}>Back</a>
-        </p>
+        <ButtonRow>
+          {section ? (
+            <Button href={SECTIONS[section].root}>Back to {SECTIONS[section].label}</Button>
+          ) : (
+            <Button href={paths.overview()}>Go to the Overview</Button>
+          )}
+        </ButtonRow>
       </>
     ),
   );
 }
 
 /**
- * Where the pages of old URL prefixes went (ADR 0019). There are no redirects; the 404 page shows
- * the hint of the first matching prefix. Static text only: the requested path is never echoed.
+ * Where the pages of old URL prefixes went (ADR 0019). There are no redirects; the 404 page of the
+ * first matching prefix says where the page went, in its header. Static text only: the requested
+ * path is never echoed.
  */
-const MOVED_HINTS: ReadonlyArray<{ prefix: string; hint: () => Child }> = [
+const MOVED_PAGES: ReadonlyArray<{
+  prefix: string;
+  title: string;
+  description: () => Child;
+  links?: () => NotFoundLinks;
+}> = [
   {
     prefix: '/admin/services',
-    hint: () => (
+    title: 'This page moved',
+    description: () => (
       <>
         Services are now <a href={paths.tokens()}>Service tokens</a>.
       </>
@@ -347,7 +399,8 @@ const MOVED_HINTS: ReadonlyArray<{ prefix: string; hint: () => Child }> = [
   },
   {
     prefix: '/admin/caller-providers',
-    hint: () => (
+    title: 'This page moved',
+    description: () => (
       <>
         Caller providers are now <a href={paths.consumers()}>Service consumers</a>.
       </>
@@ -355,7 +408,8 @@ const MOVED_HINTS: ReadonlyArray<{ prefix: string; hint: () => Child }> = [
   },
   {
     prefix: '/admin/grants',
-    hint: () => (
+    title: 'This page moved',
+    description: () => (
       <>
         Grants are now <a href={paths.access()}>Consumer access</a>.
       </>
@@ -363,39 +417,64 @@ const MOVED_HINTS: ReadonlyArray<{ prefix: string; hint: () => Child }> = [
   },
   {
     prefix: '/admin/settings',
-    hint: () => (
-      <>
-        The Settings page was split up:
-        <ul>
-          <li>
-            Retention, sampling and the row cap: <a href={paths.retention()}>Data retention</a>
-          </li>
-          <li>
-            The upstream host allowlist: <a href={paths.tokenHosts()}>Allowed hosts</a>
-          </li>
-          <li>
-            Encryption keys and re-encryption: <a href={paths.tokenKeys()}>Encryption keys</a>
-          </li>
-          <li>
-            Admin hosts and the login provider: <a href={paths.signIn()}>Sign-in</a>
-          </li>
-          <li>
-            System status: <a href={paths.overview({ hash: 'health' })}>the overview</a>
-          </li>
-        </ul>
-        Admins and owners download the configuration export from the bottom of every page.
-      </>
-    ),
+    title: 'The Settings page was split up',
+    description: () =>
+      'Each setting is on the page of its section. Admins and owners download the configuration export from the account menu.',
+    links: () => ({
+      title: 'Where each setting is now',
+      items: [
+        {
+          href: paths.retention(),
+          title: 'Data retention',
+          description: 'Retention, sampling and the row cap',
+        },
+        {
+          href: paths.tokenHosts(),
+          title: 'Allowed hosts',
+          description: 'The upstream host allowlist',
+        },
+        {
+          href: paths.tokenKeys(),
+          title: 'Encryption keys',
+          description: 'Encryption keys and re-encryption',
+        },
+        {
+          href: paths.signIn(),
+          title: 'Sign-in',
+          description: 'Admin hosts and the login provider',
+        },
+        {
+          href: paths.overview({ hash: 'health' }),
+          title: 'Overview',
+          description: 'System status',
+        },
+      ],
+    }),
   },
 ];
 
-/** The 404 page for an unlisted GET or HEAD, built from the resolved user (no handler ran). */
+/**
+ * The 404 page for an unlisted GET or HEAD, built from the resolved user (no handler ran). An old
+ * URL says where its page went; any other path says there is no page. Neither opens a section.
+ */
 function notFound(c: AdminContext, viewer: ShellViewer, pathname: string) {
-  const moved = MOVED_HINTS.find((entry) => pathname.startsWith(entry.prefix));
+  const moved = MOVED_PAGES.find((entry) => pathname.startsWith(entry.prefix));
+  const title = moved?.title ?? 'Page not found';
   return renderPageFor(
     c,
     viewer,
-    { title: 'Page not found', section: sectionOf(pathname), subsection: '', status: 404 },
-    () => <NotFound what="page" hint={moved?.hint()} />,
+    {
+      title,
+      section: sectionOf(pathname),
+      subsection: '',
+      status: 404,
+      header: (
+        <PageHeader
+          title={title}
+          description={moved ? moved.description() : notFoundText('page')}
+        />
+      ),
+    },
+    () => <NotFound links={moved?.links?.()} />,
   );
 }

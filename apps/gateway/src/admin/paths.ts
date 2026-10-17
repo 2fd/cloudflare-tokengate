@@ -25,7 +25,7 @@ function id(value: string): string {
 }
 
 export const paths = {
-  overview: (o?: { range?: Range; hash?: 'health' | 'get-started' }) =>
+  overview: (o?: { range?: Range; hash?: 'health' | 'attention' | 'get-started' }) =>
     build('/admin', { range: o?.range }, o?.hash),
   requests: (f?: {
     range?: '1h' | Range;
@@ -49,6 +49,8 @@ export const paths = {
     actor?: string;
   }) => build('/admin/audit', f),
   retention: () => '/admin/retention' as const,
+  /** The configuration export (POST only, from the account menu; a GET is the 404 page). */
+  export: () => '/admin/export' as const,
 
   users: (f?: {
     role?: Role;
@@ -60,10 +62,12 @@ export const paths = {
   signIn: (hash?: 'policy' | 'hosts' | 'login') => build('/admin/users/sign-in', undefined, hash),
 
   tokens: (f?: {
-    status?: 'credential_unreadable' | 'expiring' | 'no_credential' | 'outside_hosts';
+    status?: 'credential_unreadable' | 'expiring' | 'no_credential' | 'outside_hosts' | 'disabled';
     key?: string;
+    /** Name or slug search. */
+    q?: string;
     hash?: 'add';
-  }) => build('/admin/tokens', { status: f?.status, key: f?.key }, f?.hash),
+  }) => build('/admin/tokens', { status: f?.status, key: f?.key, q: f?.q }, f?.hash),
   /** `template`: a service template id, or `custom`. */
   tokenNew: (o?: { template?: string }) => build('/admin/tokens/new', o),
   token: (
@@ -84,11 +88,17 @@ export const paths = {
   ) => build(`/admin/consumers/${id(consumerId)}`, { open: o?.open }, o?.hash),
 
   access: (f?: {
+    /** Map (default; `list` is an alias) or Matrix. */
     view?: 'matrix' | 'list';
     consumer?: string;
     token?: string;
     repository?: string;
-    status?: 'active' | 'inactive' | 'expiring' | 'unused' | 'risk';
+    status?: 'active' | 'inactive' | 'expiring' | 'expired' | 'unused' | 'risk';
+    /** A consumer id the connections map focuses on. */
+    focus?: string;
+    /** The matrix of the nodes the map grouped ("+ N more"). */
+    consumers?: 'rest';
+    tokens?: 'rest';
   }) => build('/admin/access', f),
   accessNew: (p?: {
     /** A consumer id, or `new` to add the consumer inside the access form. */

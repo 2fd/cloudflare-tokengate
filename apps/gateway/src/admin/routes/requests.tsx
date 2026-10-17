@@ -1,9 +1,51 @@
-// Monitoring › Requests: the request log with link-tab and select filters (every value but the
-// repository is picked, and cells set filters too), keyset pagination both ways, and one record
-// with what to do, a re-evaluation against the current consumer accesses (always run, read-only),
-// its stored claims and policy trace. Claims shown are the allowlisted subset stored at request
-// time (I-LOG-1), and only verified records have any or prefill a form (I-LOG-2). Query text is
-// validated against closed sets and never echoed as a label.
+// Monitoring › Requests: the request log (outcome tabs, the time range control, "+ Token" style
+// filter menus, a repository search, and cells that set filters too; keyset pagination both
+// ways), and one record as a runbook: what happened, a re-evaluation against the current consumer
+// accesses (always run, read-only), what to do, then the summary, the stored trace, claims and
+// technical details. Claims shown are the allowlisted subset stored at request time (I-LOG-1), and
+// only verified records have any or prefill a form (I-LOG-2). Query text is validated against
+// closed sets and never echoed as a label.
+import {
+  ActiveFilters,
+  AddFilter,
+  ArrowRow,
+  Badge,
+  Button,
+  Callout,
+  Cell,
+  Column,
+  Disclosure,
+  EmptyState,
+  FieldError,
+  type FilterOptionGroup,
+  Filters,
+  FilterSearch,
+  Grid,
+  Identity,
+  KeyValue,
+  LinkAction,
+  Mono,
+  NextStep,
+  PageHeader,
+  Panel,
+  type PrefillValue,
+  RailKeyValue,
+  type RailKeyValueItem,
+  RelationLine,
+  Result,
+  Row,
+  RowHeader,
+  Segmented,
+  Stack,
+  Table,
+  TabRow,
+  Tabs,
+  Time as UiTime,
+  Trace,
+  type TraceStep,
+  Tray,
+  ZeroState,
+} from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
 import type { App } from '../../app';
 import { getCallerProvider, listCallerProviders } from '../../db/caller-providers';
@@ -20,7 +62,7 @@ import { getService, listServices } from '../../db/services';
 import { getSettings } from '../../db/settings';
 import type { CallerProvider, Grant, Service } from '../../db/types';
 import { tenantPinHolds } from '../../identity/jwt';
-import { getProfile, PROFILES } from '../../identity/profiles';
+import { getProfile } from '../../identity/profiles';
 import type { Claims } from '../../identity/types';
 import { idTimestamp } from '../../lib/ids';
 import { parseJson } from '../../lib/json';
@@ -36,32 +78,23 @@ import {
 } from '../../telemetry/ranges';
 import type { Outcome, RequestRecord } from '../../telemetry/types';
 import type { Permission } from '../auth/rbac';
-import type { FieldError } from '../ops/shared';
+import type { FieldError as FieldErrorData } from '../ops/shared';
 import { paths } from '../paths';
 import { type AdminContext, renderPage, type ViewContext } from '../render';
-import {
-  AskSomeone,
-  DataTable,
-  Details,
-  EmptyState,
-  Field,
-  FilterChips,
-  NotFound,
-  type OptionList,
-  Pager,
-  Select,
-  StatusBadge,
-  Tabs,
-  Time,
-} from '../views/components';
+import { AskSomeone, NotFound, notFoundText } from '../views/components';
 import { formatCount, formatDuration, formatTime } from '../views/format';
 import {
+  consumerLogo,
   extractRequestId,
   FIND_REQUEST_MAX,
-  FindRequestForm,
+  FindRequest,
+  LogPager,
+  LogTime,
   profileForIssuer,
+  tokenLogo,
 } from '../views/monitoring';
 import {
+  accessFixable,
   docsUrl,
   isReasonCode,
   REASON_CODES,
@@ -118,10 +151,10 @@ function listLink(params: RequestParams, changes: Partial<RequestParams>): strin
 
 export function parseRequestParams(query: (name: string) => string | undefined): {
   params: RequestParams;
-  errors: FieldError[];
+  errors: FieldErrorData[];
 } {
   const params: RequestParams = {};
-  const errors: FieldError[] = [];
+  const errors: FieldErrorData[] = [];
   const raw = (name: string) => query(name)?.trim() ?? '';
   const range = parseRange(raw('range'), REQUESTS_RANGES);
   if (range) params.range = range;
@@ -246,48 +279,129 @@ export function registerRequestsRoutes(app: App): void {
           section: 'monitoring',
           subsection: 'requests',
           status: 404,
-          subnavExtra: <FindRequestForm />,
-          breadcrumbs: [
-            { href: paths.overview(), label: 'Monitoring' },
-            { href: paths.requests(), label: 'Requests' },
-            { href: c.req.path, label: 'Not found' },
-          ],
+          header: (
+            <PageHeader
+              crumbs={[{ href: paths.requests(), label: 'Requests' }, { label: 'Not found' }]}
+              title="Request not found"
+              description={notFoundText('request')}
+            >
+              <FindRequest placement="header" />
+            </PageHeader>
+          ),
         },
         () => (
           <NotFound
-            what="request"
-            hint={
-              <p>
-                Records are kept {settings.request_log_retention_days} days (
-                <a href={paths.retention()}>Data retention</a>).
-              </p>
-            }
+            hint={{
+              title: `Records are kept ${settings.request_log_retention_days} days.`,
+              text: (
+                <>
+                  See <a href={paths.retention()}>Data retention</a>.
+                </>
+              ),
+            }}
           />
         ),
       );
     }
     const db = deps.env.DB;
-    const [service, provider, grants] = await Promise.all([
+    const [service, provider, grants, settings] = await Promise.all([
       record.service_id ? getService(db, record.service_id) : null,
       record.caller_provider_id ? getCallerProvider(db, record.caller_provider_id) : null,
       record.service_id ? listGrants(db, { service_id: record.service_id }) : [],
+      getSettings(db),
     ]);
     const reevaluation =
       record.claims_verified === 1
         ? reevaluate(record, { service, provider, grants, now: deps.now() })
         : null;
+    // One flag for every "Give access from this request" on the page (I-LOG-2): a verified record,
+    // an access-fixable reason, and the re-evaluation does not already allow it.
+    const accessAllowsNow = reevaluation?.ok === true && reevaluation.decision.decision === 'allow';
+    const giveAccess =
+      record.claims_verified === 1 && accessFixable(record.reason) && !accessAllowsNow;
+    const outcome = OUTCOME_TITLE[shownOutcome(record)];
+    const claims = storedClaims(record);
+    const ref = refOf(claims);
+    const repo = record.claims_verified === 1 ? record.caller_repository : null;
     return renderPage(
       c,
       {
-        title: `${OUTCOME_TITLE[record.outcome]}: ${record.method} ${record.path}`,
+        title: `${outcome}: ${record.method} ${record.path}`,
         section: 'monitoring',
         subsection: 'requests',
-        subnavExtra: <FindRequestForm />,
-        breadcrumbs: [
-          { href: paths.overview(), label: 'Monitoring' },
-          { href: paths.requests(), label: 'Requests' },
-          { href: paths.request(record.id), label: record.id },
-        ],
+        header: (ctx) => (
+          <PageHeader
+            crumbs={[
+              { href: paths.requests(), label: 'Requests' },
+              { label: `${record.id.slice(0, 12)}…` },
+            ]}
+            identity={
+              <Identity
+                logo={tokenLogo(service)}
+                title={
+                  <>
+                    <span class="vh">{outcome}: </span>
+                    <Mono>
+                      {record.method} {record.path}
+                    </Mono>
+                  </>
+                }
+                status={<OutcomeBadge record={record} />}
+                slug={service?.slug ?? record.service_slug ?? undefined}
+                entityId={{ value: record.id, kind: 'Request' }}
+                facts={[
+                  <>
+                    <UiTime datetime={new Date(record.ts)} format="datetime" /> UTC
+                  </>,
+                ]}
+              />
+            }
+            actions={
+              service || (giveAccess && ctx.can('access:write')) ? (
+                <>
+                  {service ? (
+                    <Button href={paths.token(service.id)}>Open {service.name}</Button>
+                  ) : null}
+                  {giveAccess && ctx.can('access:write') ? (
+                    <Button variant="primary" href={paths.accessNew({ from_request: record.id })}>
+                      Give access from this request
+                    </Button>
+                  ) : null}
+                </>
+              ) : undefined
+            }
+          >
+            <RelationLine>
+              HTTP {record.status}
+              {record.reason ? (
+                <>
+                  {' '}
+                  <code>{record.reason}</code>
+                  {reasonText(record.reason) ? `: ${reasonText(record.reason)}` : ''}
+                </>
+              ) : null}
+              {repo ? (
+                <>
+                  {' · '}
+                  {REPO.test(repo) ? <a href={paths.requests({ repo })}>{repo}</a> : repo}
+                  {ref ? (
+                    <>
+                      {' '}
+                      on {ref.kind} <b>{ref.name}</b>
+                    </>
+                  ) : null}
+                </>
+              ) : null}
+              {service ? (
+                <>
+                  {' → '}
+                  <a href={paths.token(service.id)}>{service.name}</a>
+                </>
+              ) : null}
+              .
+            </RelationLine>
+          </PageHeader>
+        ),
       },
       (ctx) => (
         <RequestDetail
@@ -297,6 +411,9 @@ export function registerRequestsRoutes(app: App): void {
           provider={provider}
           grants={grants}
           reevaluation={reevaluation}
+          giveAccess={giveAccess}
+          accessAllowsNow={accessAllowsNow}
+          retentionDays={settings.request_log_retention_days}
         />
       ),
     );
@@ -309,14 +426,64 @@ const OUTCOME_TITLE: Readonly<Record<Outcome, string>> = {
   error: 'Error',
 };
 
+const OUTCOME_TONE: Readonly<Record<Outcome, { tone: 'ok' | 'bad' | 'warn'; glyph: string }>> = {
+  allowed: { tone: 'ok', glyph: '✓' },
+  denied: { tone: 'bad', glyph: '✕' },
+  error: { tone: 'warn', glyph: '!' },
+};
+
+/** The outcome a person reads: an allowed call the upstream answered with a 5xx is an error, as the
+ * Errors tab counts it ("Error 502", never a green "Allowed 502"). */
+function shownOutcome(record: Pick<RequestRecord, 'outcome' | 'status'>): Outcome {
+  return record.outcome === 'allowed' && record.status >= 500 ? 'error' : record.outcome;
+}
+
+/** "✕ Denied · 403": the outcome word and the HTTP status. */
+function OutcomeBadge(props: { record: Pick<RequestRecord, 'outcome' | 'status'> }) {
+  const shown = shownOutcome(props.record);
+  const { tone, glyph } = OUTCOME_TONE[shown];
+  return (
+    <Badge tone={tone} glyph={glyph}>
+      {OUTCOME_TITLE[shown]} · {props.record.status}
+    </Badge>
+  );
+}
+
+/** The branch, tag or environment of stored claims: "branch main", "environment production". */
+function refOf(claims: Claims | null): { kind: string; name: string } | null {
+  if (!claims) return null;
+  const environment = claims.environment;
+  if (typeof environment === 'string' && environment !== '') {
+    return { kind: 'environment', name: environment };
+  }
+  const ref = claims.ref;
+  if (typeof ref !== 'string' || ref === '') return null;
+  if (ref.startsWith('refs/heads/')) return { kind: 'branch', name: ref.slice(11) };
+  if (ref.startsWith('refs/tags/')) return { kind: 'tag', name: ref.slice(10) };
+  const refType = claims.ref_type;
+  if (refType === 'branch' || refType === 'tag') return { kind: refType, name: ref };
+  return { kind: 'ref', name: ref };
+}
+
+function refText(claims: Claims | null): string | undefined {
+  const ref = refOf(claims);
+  return ref ? `${ref.kind} ${ref.name}` : undefined;
+}
+
 // ---------------------------------------------------------------------------------------------
 // List
+
+interface Names {
+  tokens: ReadonlyMap<string, Service>;
+  consumers: ReadonlyMap<string, CallerProvider>;
+  grants: ReadonlyMap<string, string>;
+}
 
 async function requestsPage(
   c: AdminContext,
   o: {
     params: RequestParams;
-    errors: FieldError[];
+    errors: FieldErrorData[];
     find?: { value: string; error: string };
     rawRepo?: string;
     status: 200 | 400 | 404;
@@ -332,7 +499,7 @@ async function requestsPage(
     repositoryLabelOptions(deps.env.DB),
     searchRequests(deps.env.TELEMETRY_DB, { ...toFilter(params, now), limit: PAGE_SIZE + 1 }),
   ]);
-  const names = {
+  const names: Names = {
     tokens: new Map(services.map((s) => [s.id, s])),
     consumers: new Map(providers.map((p) => [p.id, p])),
     grants: new Map(grants.map((g) => [g.id, g.name])),
@@ -358,6 +525,11 @@ async function requestsPage(
     params.outcome ||
     params.range,
   );
+  // A7.1: the filter bar only when it can narrow something: an active filter or cursor, an invalid
+  // value to correct, or more than 10 rows. Table cells set filters too.
+  const showFilters =
+    filtered || Boolean(params.before || params.after) || o.errors.length > 0 || rows.length > 10;
+  const sentence = filtered ? listSentence(params, names) : null;
   return renderPage(
     c,
     {
@@ -366,106 +538,237 @@ async function requestsPage(
       subsection: 'requests',
       errors: o.errors,
       status: o.status,
-      subnavExtra: <FindRequestForm value={o.find?.value} error={o.find?.error} />,
+      header: (
+        <PageHeader
+          title="Requests"
+          description={
+            sentence
+              ? `${sentence.title}${sentence.rest}, newest first.`
+              : 'Every call through tokengate, newest first. Select a repository, token or reason in a row to filter by it.'
+          }
+        >
+          <FindRequest placement="header" value={o.find?.value} error={o.find?.error} />
+          <TabRow>
+            <Tabs
+              label="Outcome"
+              items={[
+                {
+                  label: 'All',
+                  href: listLink(params, { outcome: undefined }),
+                  current: !params.outcome,
+                },
+                ...OUTCOMES.map((key) => ({
+                  label: OUTCOME_LABEL[key],
+                  href: listLink(params, { outcome: key }),
+                  current: params.outcome === key,
+                })),
+              ]}
+            />
+            <Segmented
+              label="Time range"
+              size="sm"
+              items={[
+                ...REQUESTS_RANGES.map((key) => ({
+                  label: RANGE_LABEL[key],
+                  href: listLink(params, { range: key }),
+                  current: params.range === key,
+                })),
+                {
+                  label: 'All',
+                  href: listLink(params, { range: undefined }),
+                  current: !params.range,
+                },
+              ]}
+            />
+          </TabRow>
+          <ActiveFilters
+            lead="Active filters"
+            filters={filterChips(params, names)}
+            clearHref={paths.requests()}
+            clearLabel="Clear filters"
+          />
+        </PageHeader>
+      ),
     },
     (ctx) => (
       <>
-        <p class="muted">
-          Every call that reached the gateway, newest first, as a{' '}
-          <a href={paths.docs('concepts.md#request-record')}>
-            request record<span class="vh"> (glossary)</span>
-          </a>
-          . Denied and failed requests are always recorded; allowed requests may be sampled (
-          <a href={paths.retention()}>Data retention</a>
-          ). Open a request to see why it was allowed or denied.
-        </p>
-        <Tabs
-          label="Time range"
-          current={params.range ?? 'all'}
-          items={[
-            ...REQUESTS_RANGES.map((key) => ({
-              key,
-              href: listLink(params, { range: key }),
-              label: RANGE_LABEL[key],
-            })),
-            { key: 'all', href: listLink(params, { range: undefined }), label: 'All' },
-          ]}
-        />
-        {params.range ? (
-          <p class="since">
-            since <Time ms={rangeStart(params.range, now)} />
-          </p>
-        ) : null}
-        <Tabs
-          label="Outcome"
-          current={params.outcome ?? 'all'}
-          items={[
-            { key: 'all', href: listLink(params, { outcome: undefined }), label: 'All' },
-            ...OUTCOMES.map((key) => ({
-              key,
-              href: listLink(params, { outcome: key }),
-              label: OUTCOME_LABEL[key],
-            })),
-          ]}
-        />
-        {/* A7.1: the form only when it can narrow something: an active filter or cursor, an
-            invalid value to correct, or more than 10 rows. Table cells set filters too. */}
-        {filtered || params.before || params.after || o.errors.length > 0 || rows.length > 10 ? (
-          <RequestFilters
-            params={params}
-            errors={o.errors}
-            services={services}
-            providers={providers}
-            repos={[...new Set(repos.map((r) => r.label))]}
-            rawRepo={o.rawRepo}
+        {page.olderBefore ? (
+          <Callout
+            title={
+              <>
+                Searched the {formatCount(REQUEST_SCAN_ROWS)} requests before{' '}
+                <UiTime datetime={new Date(idTimestamp(page.olderBefore) ?? now)} />.
+              </>
+            }
+            actions={
+              <LinkAction href={listLink(params, { before: page.olderBefore, after: undefined })}>
+                Search older
+              </LinkAction>
+            }
           />
         ) : null}
-        <FilterChips items={filterChips(params, names)} clearHref={paths.requests()} />
-        {page.olderBefore ? (
-          <p class="note">
-            Searched the {formatCount(REQUEST_SCAN_ROWS)} requests before{' '}
-            <Time ms={idTimestamp(page.olderBefore) ?? now} />.{' '}
-            <a href={listLink(params, { before: page.olderBefore, after: undefined })}>
-              Search older
-            </a>
-          </p>
-        ) : null}
         {page.newerAfter ? (
-          <p class="note">
-            Searched the {formatCount(REQUEST_SCAN_ROWS)} requests after{' '}
-            <Time ms={idTimestamp(page.newerAfter) ?? now} />.{' '}
-            <a href={listLink(params, { after: page.newerAfter, before: undefined })}>
-              Search newer
-            </a>
-          </p>
+          <Callout
+            title={
+              <>
+                Searched the {formatCount(REQUEST_SCAN_ROWS)} requests after{' '}
+                <UiTime datetime={new Date(idTimestamp(page.newerAfter) ?? now)} />.
+              </>
+            }
+            actions={
+              <LinkAction href={listLink(params, { after: page.newerAfter, before: undefined })}>
+                Search newer
+              </LinkAction>
+            }
+          />
         ) : null}
-        {rows.length === 0 ? (
-          filtered || params.before || params.after ? (
-            <EmptyState>
-              No requests match these filters
-              {page.olderBefore || page.newerAfter ? ' in this range' : ''}.{' '}
-              <a href={paths.requests()}>Clear filters</a>
-            </EmptyState>
-          ) : (
-            <EmptyState
-              action={
-                <>
-                  <a href={paths.overview({ hash: 'get-started' })}>Get started</a>{' '}
-                  <a href={docsUrl('callers/github-actions.md')}>
-                    GitHub Actions guide<span class="vh"> (GitHub docs)</span>
-                  </a>
-                </>
-              }
-            >
-              No requests recorded yet.
-            </EmptyState>
-          )
-        ) : (
-          <RequestTable records={rows} params={params} names={names} ctx={ctx} />
-        )}
-        <Pager {...pager} />
+        <OneCaller params={params} rows={rows} ctx={ctx} />
+        <Tray
+          id="requests"
+          title={sentence ? sentence.title : 'Requests, newest first'}
+          hideTitle={!sentence && showFilters}
+          description={
+            params.range ? (
+              <>
+                Since <UiTime datetime={new Date(rangeStart(params.range, now))} /> · newest first ·
+                times in UTC
+              </>
+            ) : (
+              'Times in UTC'
+            )
+          }
+          bar={
+            showFilters ? (
+              <RequestFilters
+                params={params}
+                errors={o.errors}
+                services={services}
+                providers={providers}
+                repos={[...new Set(repos.map((r) => r.label))]}
+                rawRepo={o.rawRepo}
+              />
+            ) : undefined
+          }
+        >
+          <Panel variant="flush">
+            {/* no empty table: an empty log is its empty state (and a pager only when it can page) */}
+            {rows.length > 0 ? (
+              <RequestTable records={rows} params={params} names={names} now={now} />
+            ) : null}
+            {rows.length === 0 ? (
+              filtered || params.before || params.after ? (
+                <EmptyState
+                  title={`No requests match these filters${page.olderBefore || page.newerAfter ? ' in this range' : ''}.`}
+                  actions={<Button href={paths.requests()}>Clear filters</Button>}
+                />
+              ) : (
+                <EmptyState
+                  title="No requests recorded yet."
+                  description={
+                    <>
+                      Requests appear once a consumer calls <code>/proxy/&lt;token slug&gt;/…</code>
+                    </>
+                  }
+                  actions={
+                    <>
+                      <Button href={paths.overview({ hash: 'get-started' })}>Get started</Button>
+                      <LinkAction
+                        href={docsUrl('callers/github-actions.md')}
+                        srSuffix="(GitHub docs)"
+                      >
+                        GitHub Actions guide
+                      </LinkAction>
+                    </>
+                  }
+                />
+              )
+            ) : null}
+            {rows.length > 0 || pager.newest || pager.newer || pager.older ? (
+              <LogPager
+                summary={
+                  <>
+                    Showing {formatCount(rows.length)} {rows.length === 1 ? 'request' : 'requests'}{' '}
+                    · times in UTC
+                  </>
+                }
+                newest={pager.newest}
+                newer={pager.newer}
+                older={pager.older}
+              />
+            ) : null}
+          </Panel>
+        </Tray>
       </>
     ),
+  );
+}
+
+/**
+ * "Denied requests to slack" + " from acme/web in the last 24 hours": the filters as a sentence,
+ * split so the tray title can stop after the token. Names come from the database or closed sets.
+ */
+function listSentence(params: RequestParams, names: Names): { title: string; rest: string } {
+  const what = params.outcome
+    ? { allowed: 'Allowed requests', denied: 'Denied requests', error: 'Requests with errors' }[
+        params.outcome
+      ]
+    : 'Requests';
+  const to = params.token
+    ? params.token === 'none'
+      ? ' refused before a token was chosen'
+      : ` to ${tokenName(params.token, names.tokens)}`
+    : params.slug
+      ? ` to the slug ${params.slug}`
+      : '';
+  const rest = [
+    params.repo ? ` from ${params.repo}` : '',
+    params.consumer
+      ? params.consumer === 'none'
+        ? ' with no verified consumer'
+        : ` through ${consumerName(params.consumer, names.consumers)}`
+      : '',
+    params.access ? ` through the access ${names.grants.get(params.access) ?? params.access}` : '',
+    params.reason ? ` for the reason ${reasonLabel(params.reason)}` : '',
+    params.range ? ` in the last ${RANGE_LABEL[params.range]}` : '',
+  ].join('');
+  return { title: `${what}${to}`, rest };
+}
+
+/**
+ * "All 38 on this page come from one caller": on a denied list where every row is the same
+ * verified caller, token and access-fixable reason, offer the access form from the newest one.
+ */
+function OneCaller(props: { params: RequestParams; rows: RequestRecord[]; ctx: ViewContext }) {
+  const { rows } = props;
+  const [first] = rows;
+  if (
+    props.params.outcome !== 'denied' ||
+    !first ||
+    rows.length < 2 ||
+    !props.ctx.can('access:write') ||
+    !rows.every(
+      (r) =>
+        r.claims_verified === 1 &&
+        accessFixable(r.reason) &&
+        r.caller_repository !== null &&
+        r.caller_repository === first.caller_repository &&
+        r.service_id !== null &&
+        r.service_id === first.service_id,
+    )
+  ) {
+    return null;
+  }
+  const ref = refText(storedClaims(first));
+  return (
+    <Callout
+      title={`All ${formatCount(rows.length)} on this page come from one caller: ${first.caller_repository}${ref ? ` on ${ref}` : ''}.`}
+      more="No consumer access allows this call. The form opens with this caller and call filled in."
+      actions={
+        <Button variant="primary" href={paths.accessNew({ from_request: first.id })}>
+          Give access from the latest request
+        </Button>
+      }
+    />
   );
 }
 
@@ -508,26 +811,27 @@ function consumerName(value: string, consumers: ReadonlyMap<string, CallerProvid
   return consumers.get(value)?.name ?? value;
 }
 
-function filterChips(
-  params: RequestParams,
-  names: {
-    tokens: ReadonlyMap<string, Service>;
-    consumers: ReadonlyMap<string, CallerProvider>;
-    grants: ReadonlyMap<string, string>;
-  },
-) {
-  const chip = (key: FilterKey, label: string) => ({
+/** "Reason: No consumer access allows this call (no_matching_grant)". */
+function capitalise(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function filterChips(params: RequestParams, names: Names) {
+  const chip = (key: FilterKey | 'outcome', label: string) => ({
     label,
-    removeHref: listLink(params, { [key]: undefined }),
+    href: listLink(params, { [key]: undefined }),
   });
-  const chips: Array<{ label: string; removeHref: string }> = [];
+  const chips: Array<{ label: string; href: string }> = [];
+  if (params.outcome) chips.push(chip('outcome', `Outcome: ${OUTCOME_LABEL[params.outcome]}`));
   if (params.token) {
     chips.push(
       chip(
         'token',
         params.token === 'none'
           ? 'Token: refused before a token was chosen'
-          : `Token: ${tokenName(params.token, names.tokens)}`,
+          : names.tokens.has(params.token)
+            ? `Token: ${tokenName(params.token, names.tokens)}`
+            : `Token: Deleted token ${params.token}`,
       ),
     );
   }
@@ -537,7 +841,9 @@ function filterChips(
         'consumer',
         params.consumer === 'none'
           ? 'Consumer: none'
-          : `Consumer: ${consumerName(params.consumer, names.consumers)}`,
+          : names.consumers.has(params.consumer)
+            ? `Consumer: ${consumerName(params.consumer, names.consumers)}`
+            : `Consumer: Deleted consumer ${params.consumer}`,
       ),
     );
   }
@@ -549,9 +855,10 @@ function filterChips(
   return chips;
 }
 
+/** The tray's filter bar: the repository search, then one menu per picked filter. */
 function RequestFilters(props: {
   params: RequestParams;
-  errors: FieldError[];
+  errors: FieldErrorData[];
   services: Service[];
   providers: CallerProvider[];
   repos: string[];
@@ -559,232 +866,243 @@ function RequestFilters(props: {
   rawRepo?: string;
 }) {
   const { params, services, providers } = props;
-  const error = (field: string) => props.errors.find((e) => e.field === field)?.message ?? null;
-  const tokenOptions = [
-    ...[...services]
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((s) => ({ value: s.id, label: `${s.name} (${s.slug})` })),
-    { value: 'none', label: 'Refused before a token was chosen' },
-  ];
-  // Only a well-formed id gets its own option: arbitrary query text is never shown as a label.
-  if (
-    params.token &&
-    SERVICE_ID.test(params.token) &&
-    !services.some((s) => s.id === params.token)
-  ) {
-    tokenOptions.push({ value: params.token, label: `Deleted token ${params.token}` });
+  const error = (field: string) => props.errors.find((e) => e.field === field)?.message;
+  // Every filter set by a link is kept when the repository is applied.
+  const hidden: Record<string, string> = {};
+  for (const key of [
+    'range',
+    'outcome',
+    'token',
+    'consumer',
+    'access',
+    'reason',
+    'slug',
+  ] as const) {
+    const value = params[key];
+    if (value) hidden[key] = value;
   }
-  const consumerOptions = [
-    ...[...providers]
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((p) => ({
-        value: p.id,
-        label: `${p.name} (${PROFILES[p.profile]?.label ?? p.profile})`,
-      })),
-    { value: 'none', label: 'No consumer (unknown issuer)' },
-  ];
-  if (
-    params.consumer &&
-    PROVIDER_ID.test(params.consumer) &&
-    !providers.some((p) => p.id === params.consumer)
-  ) {
-    consumerOptions.push({ value: params.consumer, label: `Deleted consumer ${params.consumer}` });
-  }
-  const reasonOptions: OptionList = REASON_GROUPS.map((group) => ({
+  const reasonGroups: FilterOptionGroup[] = REASON_GROUPS.map((group) => ({
     group: group.group,
     options: group.codes
       .filter((code) => REASON_CODES.includes(code))
-      .map((code) => ({ value: code, label: reasonLabel(code) })),
+      .map((code) => ({
+        href: listLink(params, { reason: code }),
+        label: capitalise(reasonText(code) ?? code),
+        slug: code,
+      })),
   }));
+  const repoError = error('repo');
   return (
-    <form method="get" action={paths.requests()} class="filters" aria-label="Filter requests">
-      <fieldset>
-        <legend>All filters are optional</legend>
-        {params.range ? <input type="hidden" name="range" value={params.range} /> : null}
-        {params.outcome ? <input type="hidden" name="outcome" value={params.outcome} /> : null}
-        {params.access ? <input type="hidden" name="access" value={params.access} /> : null}
-        {params.slug ? <input type="hidden" name="slug" value={params.slug} /> : null}
-        <Select
-          name="token"
-          label="Token"
-          value={params.token ?? null}
-          placeholder="Any token"
-          options={tokenOptions}
-          hint="Pick a token. For calls to unknown slugs, open a request and use “Requests to this slug”."
-          error={error('token')}
-        />
-        <Select
-          name="consumer"
-          label="Service consumer"
-          value={params.consumer ?? null}
-          placeholder="Any consumer"
-          options={consumerOptions}
-          hint="The service consumer the caller token was issued for."
-          error={error('consumer')}
-        />
-        <Field
-          name="repo"
-          type="search"
-          label="Repository"
-          value={params.repo ?? props.rawRepo}
-          example="acme/api"
-          hint="Owner and name exactly as GitHub or GitLab shows them; case matters. Pick a suggestion or click a repository in the table."
-          error={error('repo')}
-          pattern={REPO_PATTERN}
-          maxlength={REPO_MAX}
-          autocomplete="off"
-          spellcheck={false}
-          autocapitalize="none"
-          suggestions={props.repos.map((value) => ({ value }))}
-        />
-        <Select
-          name="reason"
-          label="Reason"
-          value={params.reason ?? null}
-          placeholder="Any reason"
-          options={reasonOptions}
-          hint="Why the gateway refused or failed the call."
-          error={error('reason')}
-        />
-        <div class="actions">
-          <button type="submit" class="secondary">
-            Apply filters
-          </button>
-        </div>
-      </fieldset>
-    </form>
+    <Filters label="Filter requests" action={paths.requests()} hidden={hidden}>
+      <FilterSearch
+        id="f-repo"
+        name="repo"
+        label="Repository"
+        value={params.repo ?? props.rawRepo}
+        placeholder="acme/api"
+        suggestions={props.repos}
+        pattern={REPO_PATTERN}
+        maxlength={REPO_MAX}
+        invalid={repoError !== undefined}
+        describedBy={
+          [props.repos.length > 0 ? 'f-repo-s' : null, repoError ? 'f-repo-error' : null]
+            .filter(Boolean)
+            .join(' ') || undefined
+        }
+      />
+      {/* Apply sits on the repository box it submits; the "+" menus are links */}
+      <Button type="submit">Apply</Button>
+      <AddFilter
+        id="f-token"
+        label="Token"
+        open={error('token') !== undefined}
+        options={[...services]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((s) => ({
+            href: listLink(params, { token: s.id }),
+            label: s.name,
+            logo: tokenLogo(s),
+            slug: s.slug,
+          }))}
+        extra={[
+          { href: listLink(params, { token: 'none' }), label: 'Refused before a token was chosen' },
+        ]}
+      />
+      <AddFilter
+        id="f-consumer"
+        label="Consumer"
+        open={error('consumer') !== undefined}
+        options={[...providers]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((p) => ({
+            href: listLink(params, { consumer: p.id }),
+            label: p.name,
+            logo: consumerLogo(p),
+          }))}
+        extra={[
+          { href: listLink(params, { consumer: 'none' }), label: 'No consumer (unknown issuer)' },
+        ]}
+      />
+      <AddFilter
+        id="f-reason"
+        label="Reason"
+        open={error('reason') !== undefined}
+        options={reasonGroups}
+      />
+      {props.repos.length > 0 ? (
+        <p class="suggest" id="f-repo-s">
+          Suggestions{' '}
+          {props.repos.map((repo) => (
+            <a href={listLink(params, { repo })}>{repo}</a>
+          ))}{' '}
+          <span class="faint">· Owner and name, exactly as GitHub or GitLab shows them.</span>
+        </p>
+      ) : null}
+      {(['repo', 'token', 'consumer', 'reason'] as const).map((field) => {
+        const message = error(field);
+        return message ? <FieldError id={`f-${field}-error`}>{message}</FieldError> : null;
+      })}
+    </Filters>
   );
 }
 
+/** The log: one dense row per record; repositories, tokens, reasons and accesses filter the list. */
 function RequestTable(props: {
   records: RequestRecord[];
   params: RequestParams;
-  names: {
-    tokens: ReadonlyMap<string, Service>;
-    consumers: ReadonlyMap<string, CallerProvider>;
-    grants: ReadonlyMap<string, string>;
-  };
-  ctx: ViewContext;
+  names: Names;
+  now: number;
 }) {
   const { params, names } = props;
-  const filterLink = (changes: Partial<RequestParams>, what: string, text: Child) => (
-    <a href={listLink(params, changes)}>
+  const filterLink = (
+    changes: Partial<RequestParams>,
+    what: string,
+    text: Child,
+    mono?: boolean,
+  ) => (
+    <a class={mono ? 'flink mono' : 'flink'} href={listLink(params, changes)}>
       <span class="vh">Filter by {what} </span>
       {text}
     </a>
   );
   return (
-    <DataTable
-      id="requests"
+    <Table
+      labelledBy="requests-h"
       caption="Requests, newest first"
-      rowHeader="request"
-      rows={props.records}
+      dense
+      stackable
+      class="log"
       columns={[
-        { key: 'when', header: 'When', render: (r) => <Time ms={r.ts} /> },
-        {
-          key: 'result',
-          header: 'Result',
-          render: (r) => (
-            <>
-              <StatusBadge status={r.outcome} /> · {r.status}
-            </>
-          ),
-        },
-        {
-          key: 'request',
-          header: 'Request',
-          render: (r) => (
-            <a href={paths.request(r.id)}>
-              <code>
-                {r.method} {r.path}
-              </code>
-              <span class="vh">
-                {' '}
-                at {formatTime(r.ts).slice(11, 19)}, {r.outcome}
-              </span>
-            </a>
-          ),
-        },
-        {
-          key: 'token',
-          header: 'Token',
-          render: (r) =>
-            r.service_id ? (
-              filterLink(
+        { label: 'When (UTC)' },
+        { label: 'Result' },
+        { label: 'Caller → token' },
+        { label: 'Request' },
+        { label: 'Reason or access' },
+        { label: 'Duration', num: true },
+      ]}
+    >
+      {props.records.map((r) => {
+        const shown = shownOutcome(r);
+        const { tone } = OUTCOME_TONE[shown];
+        const token = r.service_id ? names.tokens.get(r.service_id) : undefined;
+        const provider = r.caller_provider_id
+          ? names.consumers.get(r.caller_provider_id)
+          : undefined;
+        const tokenSide = {
+          logo: tokenLogo(token),
+          name: r.service_id
+            ? filterLink(
                 { token: r.service_id },
                 'token',
-                <code>
-                  {names.tokens.get(r.service_id)?.slug ?? r.service_slug ?? r.service_id}
-                </code>,
+                token?.slug ?? r.service_slug ?? r.service_id,
+                true,
               )
-            ) : r.service_slug && SLUG.test(r.service_slug) ? (
-              filterLink({ slug: r.service_slug }, 'slug', <code>{r.service_slug}</code>)
-            ) : r.service_slug ? (
-              <code>{r.service_slug}</code>
-            ) : (
-              '—'
-            ),
-        },
-        {
-          key: 'consumer',
-          header: 'Consumer',
-          render: (r) =>
-            r.claims_verified === 1 ? (
-              <>
-                {r.caller_repository && REPO.test(r.caller_repository)
-                  ? filterLink({ repo: r.caller_repository }, 'repository', r.caller_repository)
-                  : (r.caller_repository ?? r.caller_subject ?? '—')}
-                {r.caller_provider_id ? (
-                  <>
-                    <br />
-                    {filterLink(
-                      { consumer: r.caller_provider_id },
-                      'consumer',
-                      <span class="muted">
-                        {names.consumers.get(r.caller_provider_id)?.name ?? 'deleted consumer'}
-                      </span>,
-                    )}
-                  </>
-                ) : null}
-              </>
-            ) : (
-              <span class="muted">
-                unverified token{r.untrusted_iss ? ` (${r.untrusted_iss})` : ''}
-              </span>
-            ),
-        },
-        {
-          key: 'access',
-          header: 'Access',
-          render: (r) =>
-            r.grant_id
-              ? filterLink(
-                  { access: r.grant_id },
-                  'access',
-                  names.grants.get(r.grant_id) ?? <code>{r.grant_id}</code>,
+            : r.service_slug && SLUG.test(r.service_slug)
+              ? filterLink({ slug: r.service_slug }, 'slug', r.service_slug, true)
+              : (r.service_slug ?? '—'),
+        };
+        return (
+          <Row>
+            <Cell label="When">
+              <LogTime ms={r.ts} now={props.now} />
+            </Cell>
+            <Cell label="Result">
+              <Result tone={tone} code={r.status}>
+                {OUTCOME_TITLE[shown]}
+              </Result>
+            </Cell>
+            <Cell label="Caller → token">
+              {r.claims_verified === 1 ? (
+                <ArrowRow
+                  verb="to"
+                  consumer={{
+                    logo: consumerLogo(provider),
+                    name: (
+                      <>
+                        {provider ? <span class="vh">{provider.name} </span> : null}
+                        {r.caller_repository && REPO.test(r.caller_repository)
+                          ? filterLink(
+                              { repo: r.caller_repository },
+                              'repository',
+                              r.caller_repository,
+                            )
+                          : (r.caller_repository ?? r.caller_subject ?? '—')}
+                      </>
+                    ),
+                    context: refText(storedClaims(r)),
+                  }}
+                  token={tokenSide}
+                />
+              ) : (
+                <ArrowRow
+                  consumer={{
+                    logo: 'oidc',
+                    name: filterLink({ consumer: 'none' }, 'unverified caller', 'unverified token'),
+                    // read from a token that was not trusted: text only, never a link; the
+                    // muted second line, like a verified caller's ref
+                    context: r.untrusted_iss ? `from ${r.untrusted_iss}` : undefined,
+                  }}
+                />
+              )}
+            </Cell>
+            <RowHeader>
+              <a class="ent-n mono" href={paths.request(r.id)}>
+                {r.method} {r.path}
+                <span class="vh">
+                  {' '}
+                  at {formatTime(r.ts).slice(11, 19)}, {shown}
+                </span>
+              </a>
+            </RowHeader>
+            <Cell label="Reason or access">
+              {r.reason && isReasonCode(r.reason) ? (
+                filterLink(
+                  { reason: r.reason },
+                  'reason',
+                  capitalise(reasonText(r.reason) ?? r.reason),
                 )
-              : '—',
-        },
-        {
-          key: 'reason',
-          header: 'Reason',
-          render: (r) =>
-            r.reason && isReasonCode(r.reason) ? (
-              filterLink({ reason: r.reason }, 'reason', reasonText(r.reason) ?? r.reason)
-            ) : r.reason ? (
-              <code>{r.reason}</code>
-            ) : (
-              '—'
-            ),
-        },
-        {
-          key: 'duration',
-          header: 'Duration',
-          numeric: true,
-          render: (r) => formatDuration(r.duration_ms),
-        },
-      ]}
-    />
+              ) : r.reason ? (
+                <code>{r.reason}</code>
+              ) : r.grant_id ? (
+                <>
+                  <span class="faint">via</span>{' '}
+                  {filterLink(
+                    { access: r.grant_id },
+                    'access',
+                    names.grants.get(r.grant_id) ?? <code>{r.grant_id}</code>,
+                  )}
+                </>
+              ) : (
+                '—'
+              )}
+            </Cell>
+            <Cell label="Duration" num>
+              {formatDuration(r.duration_ms)}
+            </Cell>
+          </Row>
+        );
+      })}
+    </Table>
   );
 }
 
@@ -1049,7 +1367,30 @@ export const NEXT_ACTIONS: Readonly<
   },
 };
 
-function WhatToDo(props: { ctx: ViewContext; record: RequestRecord; accessAllowsNow: boolean }) {
+/** "Give access from this request." + the rest: the box title is the first sentence. */
+export function splitFirstSentence(text: string): { title: string; rest: string } {
+  const match = /^(.+?\.)\s+([\s\S]*)$/.exec(text);
+  return match ? { title: match[1] ?? text, rest: match[2] ?? '' } : { title: text, rest: '' };
+}
+
+/** "1" … "3" before a runbook tray title (decorative: the order is the reading order). */
+function StepNumber(props: { n: number }) {
+  return (
+    <span class="fstep-n" aria-hidden="true">
+      {props.n}
+    </span>
+  );
+}
+
+function WhatToDo(props: {
+  ctx: ViewContext;
+  record: RequestRecord;
+  service: Service | null;
+  provider: CallerProvider | null;
+  accessAllowsNow: boolean;
+  giveAccess: boolean;
+  step: number;
+}) {
   const { record, ctx } = props;
   const entry =
     record.reason !== null && Object.hasOwn(NEXT_ACTIONS, record.reason)
@@ -1060,25 +1401,578 @@ function WhatToDo(props: { ctx: ViewContext; record: RequestRecord; accessAllows
     0,
     2,
   );
+  const { title, rest } = splitFirstSentence(entry.text);
+  const claims = storedClaims(record);
+  const unprotected =
+    props.giveAccess && (claims?.ref_protected === false || claims?.ref_protected === 'false');
   return (
-    <section class="next" aria-labelledby="next-h">
-      <h2 id="next-h">What to do</h2>
-      <p>{entry.text}</p>
-      {actions.length > 0 ? (
-        <div class="actions">
-          {actions.map((action) =>
-            !action.permission || ctx.can(action.permission) ? (
-              <a href={action.href}>
-                {action.label}
-                {action.context ? <span class="vh"> {action.context}</span> : null}
-              </a>
-            ) : (
-              <AskSomeone permission={action.permission} ctx={ctx} verb={action.verb} />
-            ),
-          )}
-        </div>
+    <Tray
+      id="next"
+      title={
+        <>
+          <StepNumber n={props.step} />
+          What to do
+        </>
+      }
+    >
+      <Panel variant="pad">
+        <NextStep
+          title={title}
+          prefill={
+            props.giveAccess
+              ? prefillChips(record, claims, props.provider, props.service)
+              : undefined
+          }
+          actions={
+            actions.length > 0 ? (
+              <>
+                {actions.map((action) =>
+                  !action.permission || ctx.can(action.permission) ? (
+                    <Button href={action.href} srSuffix={action.context}>
+                      {action.label}
+                    </Button>
+                  ) : (
+                    <AskSomeone permission={action.permission} ctx={ctx} verb={action.verb} />
+                  ),
+                )}
+              </>
+            ) : undefined
+          }
+        >
+          {rest || undefined}
+        </NextStep>
+        {unprotected ? (
+          <p class="sm">
+            <span class="t-warn" aria-hidden="true">
+              ⚠
+            </span>{' '}
+            <span class="vh">Risk: </span>The branch is not protected, so anyone who can push a
+            branch to {record.caller_repository ?? 'the repository'} would get the{' '}
+            {props.service?.name ?? 'upstream'} token.
+          </p>
+        ) : null}
+      </Panel>
+    </Tray>
+  );
+}
+
+/** The values the access form opens with, from the stored allowlisted claims only (I-LOG-2). */
+function prefillChips(
+  record: RequestRecord,
+  claims: Claims | null,
+  provider: CallerProvider | null,
+  service: Service | null,
+): PrefillValue[] {
+  const chips: PrefillValue[] = [];
+  if (provider) chips.push({ label: provider.name, logo: consumerLogo(provider) });
+  if (record.caller_repository) {
+    const repoId = typeof claims?.repository_id === 'string' ? claims.repository_id : null;
+    chips.push({
+      label: (
+        <>
+          {record.caller_repository}
+          {repoId ? <span class="n"> ({repoId})</span> : null}
+        </>
+      ),
+      mono: true,
+    });
+  }
+  const ref = refText(claims);
+  if (ref) chips.push({ label: ref, mono: true });
+  if (claims?.ref_protected === false || claims?.ref_protected === 'false') {
+    chips.push({ label: 'also unprotected' });
+  }
+  if (service) chips.push({ label: service.name, logo: tokenLogo(service) });
+  return chips;
+}
+
+/** The reason group a code belongs to ("Caller token", "Consumer access", …). */
+function reasonGroup(reason: string | null): string | null {
+  if (reason === null) return null;
+  return REASON_GROUPS.find((group) => group.codes.includes(reason))?.group ?? null;
+}
+
+/**
+ * Where the call stopped, from the record alone: caller verified → token found → access matched
+ * → upstream. The failing step says so; later steps were not reached.
+ */
+function traceSteps(
+  r: RequestRecord,
+  ctx: {
+    provider: CallerProvider | null;
+    service: Service | null;
+    grantName: string | null;
+    checked: number;
+  },
+): TraceStep[] {
+  const group = reasonGroup(r.reason);
+  const upstreamFailed =
+    group === 'Upstream' || (r.upstream_status !== null && r.upstream_status >= 500);
+  let stop: number | null;
+  if (group === 'Caller token' || group === 'Service consumer') stop = 1;
+  else if (group === 'Token configuration' || group === 'Encryption keys') stop = 2;
+  else if (group === 'Consumer access') stop = 3;
+  else if (upstreamFailed) stop = 4;
+  else if (r.outcome === 'allowed') stop = null;
+  else stop = r.claims_verified !== 1 ? 1 : !r.service_id ? 2 : !r.grant_id ? 3 : 4;
+  const why = capitalise(reasonText(r.reason) ?? `HTTP ${r.status}`);
+  const tokenName = ctx.service?.name ?? r.service_slug ?? 'The upstream';
+  const steps: Array<{ title: string; pass: Child; fail: Child; notrun?: Child }> = [
+    {
+      title: 'Caller verified',
+      pass: ctx.provider?.name ?? 'Verified',
+      fail: why,
+    },
+    {
+      title: 'Token found',
+      pass: ctx.service
+        ? `/proxy/${ctx.service.slug} → ${ctx.service.name}`
+        : `/proxy/${r.service_slug ?? '…'}`,
+      fail: r.service_slug ? `/proxy/${r.service_slug}: ${why}` : why,
+    },
+    {
+      title: 'Access matched',
+      pass: ctx.grantName ?? 'An access matched',
+      fail: r.reason === 'rate_limited' ? why : `0 of ${ctx.checked} checked`,
+    },
+    {
+      title: 'Upstream',
+      pass: r.upstream_status === null ? 'Forwarded' : `HTTP ${r.upstream_status}`,
+      fail: r.upstream_status === null ? why : `HTTP ${r.upstream_status}`,
+      notrun: `${tokenName} was not called`,
+    },
+  ];
+  return steps.map((step, index) => {
+    const n = index + 1;
+    if (stop === null || n < stop) return { state: 'pass', title: step.title, detail: step.pass };
+    if (n === stop) {
+      return {
+        state: 'fail',
+        status: 'Failed, stopped here',
+        title: step.title,
+        detail: step.fail,
+      };
+    }
+    return { state: 'notrun', title: step.title, detail: step.notrun };
+  });
+}
+
+/** One sentence on what happened, from the record and the current names. */
+function happenedSentence(
+  r: RequestRecord,
+  provider: CallerProvider | null,
+  service: Service | null,
+): Child {
+  const why = reasonText(r.reason);
+  const token = service?.name ?? r.service_slug ?? 'the token';
+  if (r.claims_verified !== 1) {
+    return `The caller token was not verified${why ? `: ${why}` : ''}, so tokengate stopped the call before choosing a token.`;
+  }
+  const who = provider ? `${provider.name} verified the caller` : 'The caller was verified';
+  const caller = r.caller_repository ?? r.caller_subject ?? 'the caller';
+  const ref = refOf(storedClaims(r));
+  const callerText = (
+    <>
+      <b>{caller}</b>
+      {ref ? (
+        <>
+          {' '}
+          on {ref.kind} <b>{ref.name}</b>
+        </>
       ) : null}
-    </section>
+    </>
+  );
+  if (accessFixable(r.reason)) {
+    return (
+      <>
+        {who}, but no access lets {callerText} use {token}.
+      </>
+    );
+  }
+  if (r.outcome === 'allowed' && r.reason === null) {
+    return (
+      <>
+        {who}, and an access let {callerText} use {token}
+        {r.upstream_status !== null ? `; the upstream answered HTTP ${r.upstream_status}` : ''}.
+      </>
+    );
+  }
+  return (
+    <>
+      {who} ({callerText}), but the call {r.outcome === 'error' ? 'failed' : 'was refused'}
+      {why ? `: ${why}` : ''}.
+    </>
+  );
+}
+
+function RequestDetail(props: {
+  ctx: ViewContext;
+  record: RequestRecord;
+  service: Service | null;
+  provider: CallerProvider | null;
+  grants: Grant[];
+  reevaluation: Reevaluation | null;
+  giveAccess: boolean;
+  accessAllowsNow: boolean;
+  retentionDays: number;
+}) {
+  const { record: r, service, provider, ctx } = props;
+  const grantNames = new Map(props.grants.map((g) => [g.id, g.name]));
+  const claims = storedClaims(r);
+  const trace = storedTrace(r);
+  const tokenLabel = service?.slug ?? r.service_slug;
+  const verified = r.claims_verified === 1;
+  const ref = refOf(claims);
+  const workflow =
+    typeof claims?.job_workflow_ref === 'string'
+      ? claims.job_workflow_ref
+      : typeof claims?.workflow === 'string'
+        ? claims.workflow
+        : null;
+  const recheck = props.reevaluation;
+  const verdict =
+    recheck?.ok !== true ? null : recheck.blockers.length > 0 ? (
+      <Badge tone="bad" glyph="✕">
+        Still refused now
+      </Badge>
+    ) : recheck.decision.decision === 'allow' ? (
+      <Badge tone="ok" glyph="✓">
+        Allowed now
+      </Badge>
+    ) : (
+      <Badge tone="bad" glyph="✕">
+        Still denied now
+      </Badge>
+    );
+  const summary: RailKeyValueItem[] = [
+    { label: 'Result', value: <OutcomeBadge record={r} /> },
+    {
+      label: 'Token',
+      value:
+        r.service_id && service ? (
+          <>
+            <a href={paths.token(r.service_id)}>{service.name}</a>{' '}
+            <span class="slug">{service.slug}</span>
+          </>
+        ) : r.service_slug ? (
+          <>
+            <code>{r.service_slug}</code>{' '}
+            <span class="muted">{r.service_id ? '(deleted)' : '(no such token when called)'}</span>
+          </>
+        ) : (
+          '—'
+        ),
+    },
+    {
+      label: 'Consumer',
+      value: r.caller_provider_id ? (
+        provider ? (
+          <a href={paths.consumer(r.caller_provider_id)}>{provider.name}</a>
+        ) : (
+          <>
+            <code>{r.caller_provider_id}</code> <span class="muted">(deleted)</span>
+          </>
+        )
+      ) : (
+        '—'
+      ),
+    },
+    ...(verified && r.caller_repository
+      ? [
+          {
+            label: 'Repository',
+            value: r.caller_repository,
+            ...(typeof claims?.repository_id === 'string'
+              ? { note: `repository_id ${claims.repository_id}` }
+              : {}),
+          },
+        ]
+      : []),
+    ...(ref
+      ? [
+          {
+            label: capitalise(ref.kind),
+            value: <Mono>{ref.name}</Mono>,
+            ...(claims?.ref_protected === false || claims?.ref_protected === 'false'
+              ? { note: 'not protected' }
+              : {}),
+          },
+        ]
+      : []),
+    ...(workflow
+      ? [
+          {
+            label: 'Workflow',
+            value: <Mono>{workflow}</Mono>,
+            ...(typeof claims?.event_name === 'string' ? { note: claims.event_name } : {}),
+          },
+        ]
+      : []),
+    {
+      label: 'Access that allowed it',
+      value: r.grant_id ? (
+        <GrantLink id={r.grant_id} names={grantNames} />
+      ) : (
+        <span class="muted">None matched</span>
+      ),
+    },
+    {
+      label: 'Token verified',
+      value: verified
+        ? 'Yes: signature, issuer, audience and tenant pin were checked.'
+        : 'No: the request was refused before the token was trusted, so no caller details were stored.',
+    },
+    ...(r.untrusted_iss
+      ? [
+          {
+            label: 'Issuer (unverified)',
+            value: <code>{r.untrusted_iss}</code>,
+            note: 'read from a token that was not trusted',
+          },
+        ]
+      : []),
+    {
+      label: 'Upstream',
+      value:
+        r.upstream_status === null ? (
+          <span class="muted">Not forwarded to the upstream</span>
+        ) : (
+          `HTTP ${r.upstream_status}`
+        ),
+      ...(r.upstream_ms !== null ? { note: `${formatDuration(r.upstream_ms)} upstream` } : {}),
+    },
+    { label: 'Total time', value: formatDuration(r.duration_ms) },
+    ...(r.weight !== 1
+      ? [
+          {
+            label: 'Sampling',
+            value: `This record stands for about ${formatCount(r.weight)} allowed requests.`,
+          },
+        ]
+      : []),
+    { label: 'Request ID', value: r.id, mono: true, copyable: true },
+  ];
+  let step = 0;
+  return (
+    <Grid>
+      <Column span={8}>
+        <Stack>
+          <Tray
+            id="happened"
+            title={
+              <>
+                <StepNumber n={++step} />
+                What happened
+              </>
+            }
+          >
+            <Panel variant="pad">
+              <p>{happenedSentence(r, provider, service)}</p>
+              <Trace
+                label="Where the call stopped"
+                steps={traceSteps(r, {
+                  provider,
+                  service,
+                  grantName: r.grant_id ? (grantNames.get(r.grant_id) ?? r.grant_id) : null,
+                  checked: trace.filter((item) => !('omitted' in item)).length,
+                })}
+              />
+            </Panel>
+          </Tray>
+          {verified ? (
+            <Tray
+              id="recheck"
+              title={
+                <>
+                  <StepNumber n={++step} />
+                  Check against current access{verdict ? <> {verdict}</> : null}
+                </>
+              }
+              description="The policy runs again with this request's stored claims against the consumer accesses as they are now. Stored claims subset only: constraints on claims that were not stored fail, so a real token may be allowed where this check says denied. Nothing is changed."
+            >
+              <Panel variant="pad">
+                <Recheck record={r} result={props.reevaluation} grantNames={grantNames} />
+              </Panel>
+            </Tray>
+          ) : null}
+          <WhatToDo
+            ctx={ctx}
+            record={r}
+            service={service}
+            provider={provider}
+            accessAllowsNow={props.accessAllowsNow}
+            giveAccess={props.giveAccess}
+            step={step + 1}
+          />
+        </Stack>
+      </Column>
+      <Column span={4} rail as="aside" label="Request summary">
+        <Tray id="summary" title="Summary">
+          <Panel>
+            <RailKeyValue items={summary} />
+          </Panel>
+        </Tray>
+      </Column>
+      <Column span={8}>
+        <Stack>
+          {trace.length > 0 ? (
+            <Tray
+              id="trace"
+              title="Evaluation trace"
+              description="Each consumer access of this consumer and token, in evaluation order, with the first check that failed."
+            >
+              <Panel variant="flush">
+                <TraceTable
+                  labelledBy="trace-h"
+                  caption="Policy evaluation at request time"
+                  trace={trace}
+                  grantNames={grantNames}
+                />
+              </Panel>
+            </Tray>
+          ) : null}
+          <Tray
+            id="claims"
+            title="Caller claims"
+            description="Allowlisted claims only: claims off the service consumer's allowlist, and the token itself, are never stored."
+          >
+            <Panel variant="pad">
+              {claims && Object.keys(claims).length > 0 ? (
+                <KeyValue
+                  items={Object.entries(claims).map(([name, value]) => ({
+                    label: <Mono>{name}</Mono>,
+                    value: typeof value === 'string' ? value : JSON.stringify(value),
+                    mono: true,
+                  }))}
+                />
+              ) : (
+                <ZeroState>
+                  {verified
+                    ? 'No claims were stored for this request.'
+                    : 'None: the token was not verified, so its claims were not stored.'}
+                </ZeroState>
+              )}
+            </Panel>
+          </Tray>
+          <Tray
+            id="technical"
+            title="Technical details"
+            hideTitle
+            bar={
+              <Disclosure summary="Technical details">
+                <KeyValue
+                  items={[
+                    { label: 'Request ID', value: r.id, mono: true, copyable: true },
+                    { label: 'Time', value: formatTime(r.ts) },
+                    { label: 'Token ID (jti)', value: r.jti ?? '—', mono: r.jti !== null },
+                    {
+                      label: 'Caller subject (sub)',
+                      value: r.caller_subject ?? '—',
+                      mono: r.caller_subject !== null,
+                    },
+                    { label: 'Client IP', value: r.ip ?? '—' },
+                    { label: 'User agent', value: r.user_agent ?? '—' },
+                    { label: 'Cloudflare location', value: r.colo ?? '—' },
+                    {
+                      label: 'Kept until',
+                      value: (
+                        <>
+                          <UiTime
+                            datetime={new Date(r.ts + props.retentionDays * 86_400_000)}
+                            format="date"
+                          />{' '}
+                          ({props.retentionDays} days,{' '}
+                          <a href={paths.retention()}>Data retention</a>)
+                        </>
+                      ),
+                    },
+                  ]}
+                />
+              </Disclosure>
+            }
+          />
+        </Stack>
+      </Column>
+      <Column span={4} rail as="aside" label="Related requests">
+        <Tray id="related" title="Related">
+          <Panel>
+            <ul class="cmap-list">
+              {verified && r.caller_repository && REPO.test(r.caller_repository) ? (
+                <li>
+                  <a href={paths.requests({ repo: r.caller_repository })}>
+                    Requests from {r.caller_repository}
+                  </a>
+                </li>
+              ) : null}
+              {r.service_id ? (
+                <li>
+                  <a href={paths.requests({ token: r.service_id })}>
+                    Requests to {tokenLabel ?? 'this token'}
+                  </a>
+                </li>
+              ) : r.service_slug && SLUG.test(r.service_slug) ? (
+                <li>
+                  <a href={paths.requests({ slug: r.service_slug })}>
+                    Requests to {r.service_slug}
+                  </a>
+                </li>
+              ) : null}
+              {r.reason && isReasonCode(r.reason) ? (
+                <li>
+                  <a href={paths.requests({ reason: r.reason, range: '24h' })}>
+                    Same reason, last 24 hours
+                  </a>
+                </li>
+              ) : null}
+            </ul>
+          </Panel>
+        </Tray>
+      </Column>
+    </Grid>
+  );
+}
+
+function TraceTable(props: {
+  labelledBy: string;
+  caption: string;
+  trace: TraceItem[];
+  grantNames: Map<string, string>;
+}) {
+  return (
+    <Table
+      labelledBy={props.labelledBy}
+      caption={props.caption}
+      stackable
+      columns={[{ label: 'Consumer access and result' }, { label: 'Detail' }]}
+    >
+      {props.trace.map((item) => (
+        <Row>
+          {/* the result is the access's muted second line: two columns, so the detail has room */}
+          <RowHeader>
+            {'omitted' in item ? (
+              `${item.omitted} more not shown (trace size limit)`
+            ) : (
+              <span class="ent-t">
+                <GrantLink id={item.grant_id} names={props.grantNames} />
+                {item.result === 'matched' ? (
+                  <span class="meta t-ok">
+                    <span aria-hidden="true">✓ </span>Matched
+                  </span>
+                ) : (
+                  <span class="meta">
+                    <span class="t-bad" aria-hidden="true">
+                      ✕{' '}
+                    </span>
+                    {TRACE_RESULT_TEXT[item.result] ?? item.result}
+                  </span>
+                )}
+              </span>
+            )}
+          </RowHeader>
+          <Cell label="Detail">{'omitted' in item ? '—' : <code>{item.detail}</code>}</Cell>
+        </Row>
+      ))}
+    </Table>
   );
 }
 
@@ -1198,263 +2092,6 @@ function GrantLink(props: { id: string | null; names: Map<string, string> }) {
   const name = props.names.get(props.id);
   return <a href={paths.accessItem(props.id)}>{name ?? <code>{props.id}</code>}</a>;
 }
-
-function claimsText(claims: Claims | null): string | null {
-  if (!claims) return null;
-  const parts = ['repository', 'project_path', 'workflow', 'job_workflow_ref', 'ref', 'environment']
-    .map((key) => (typeof claims[key] === 'string' ? `${key} ${claims[key] as string}` : null))
-    .filter((part): part is string => part !== null);
-  return parts.length > 0 ? parts.join(' · ') : null;
-}
-
-function RequestDetail(props: {
-  ctx: ViewContext;
-  record: RequestRecord;
-  service: Service | null;
-  provider: CallerProvider | null;
-  grants: Grant[];
-  reevaluation: Reevaluation | null;
-}) {
-  const { record: r, service, provider, ctx } = props;
-  const grantNames = new Map(props.grants.map((g) => [g.id, g.name]));
-  const claims = storedClaims(r);
-  const trace = storedTrace(r);
-  const accessAllowsNow =
-    props.reevaluation?.ok === true && props.reevaluation.decision.decision === 'allow';
-  const tokenLabel = service?.slug ?? r.service_slug;
-  return (
-    <>
-      <p class="status-line">
-        <StatusBadge status={r.outcome} /> {tokenLabel ? <code>{tokenLabel}</code> : 'no token'} ·{' '}
-        <Time ms={r.ts} /> · HTTP {r.status}
-        {r.reason ? (
-          <>
-            {' · '}
-            <code>{r.reason}</code>
-            {reasonText(r.reason) ? `: ${reasonText(r.reason)}` : ''}
-          </>
-        ) : null}
-      </p>
-      <WhatToDo ctx={ctx} record={r} accessAllowsNow={accessAllowsNow} />
-
-      <section aria-labelledby="recheck-h">
-        <h2 id="recheck-h">Check against current access</h2>
-        <Recheck record={r} result={props.reevaluation} grantNames={grantNames} />
-      </section>
-
-      <h2>Summary</h2>
-      <Details
-        rows={[
-          [
-            'Token',
-            r.service_id && service ? (
-              <a href={paths.token(r.service_id)}>
-                {service.name} <code>{service.slug}</code>
-              </a>
-            ) : r.service_slug ? (
-              <>
-                <code>{r.service_slug}</code>{' '}
-                <span class="muted">
-                  {r.service_id ? '(deleted)' : '(no such token when called)'}
-                </span>
-              </>
-            ) : (
-              '—'
-            ),
-          ],
-          [
-            'Consumer',
-            r.caller_provider_id ? (
-              provider ? (
-                <a href={paths.consumer(r.caller_provider_id)}>{provider.name}</a>
-              ) : (
-                <>
-                  <code>{r.caller_provider_id}</code> <span class="muted">(deleted)</span>
-                </>
-              )
-            ) : (
-              '—'
-            ),
-          ],
-          ['Access that allowed it', <GrantLink id={r.grant_id} names={grantNames} />],
-          [
-            'Caller',
-            r.claims_verified === 1
-              ? (claimsText(claims) ?? r.caller_repository ?? r.caller_subject ?? '—')
-              : '—',
-          ],
-          [
-            'Token verified',
-            r.claims_verified === 1
-              ? 'Yes: signature, issuer, audience and tenant pin were checked.'
-              : 'No: the request was refused before the token was trusted, so no caller details were stored.',
-          ],
-          ...(r.untrusted_iss
-            ? ([
-                [
-                  'Issuer (unverified)',
-                  <>
-                    <code>{r.untrusted_iss}</code>{' '}
-                    <span class="muted">read from a token that was not trusted</span>
-                  </>,
-                ],
-              ] as Array<[string, Child]>)
-            : []),
-          [
-            'Upstream status',
-            r.upstream_status === null
-              ? 'Not forwarded to the upstream'
-              : String(r.upstream_status),
-          ],
-          ['Total time', formatDuration(r.duration_ms)],
-          ['Upstream time', formatDuration(r.upstream_ms)],
-          ...(r.weight !== 1
-            ? ([
-                [
-                  'Sampling',
-                  `This record stands for about ${formatCount(r.weight)} allowed requests.`,
-                ],
-              ] as Array<[string, Child]>)
-            : []),
-        ]}
-      />
-
-      {trace.length > 0 ? (
-        <>
-          <h2>Policy evaluation at request time</h2>
-          <p class="muted">
-            Each consumer access of this consumer and token, in evaluation order, with the first
-            check that failed.
-          </p>
-          <TraceTable
-            id="trace"
-            caption="Policy evaluation at request time"
-            trace={trace}
-            grantNames={grantNames}
-          />
-        </>
-      ) : null}
-
-      <h2>Caller claims</h2>
-      {claims && Object.keys(claims).length > 0 ? (
-        <>
-          <p class="muted">
-            Only claims on the service consumer's allowlist are stored; others (and the token
-            itself) are never kept.
-          </p>
-          <DataTable
-            id="claims"
-            caption="Stored caller claims"
-            captionHidden
-            rowHeader="claim"
-            rows={Object.entries(claims)}
-            columns={[
-              { key: 'claim', header: 'Claim', render: ([name]) => <code>{name}</code> },
-              {
-                key: 'value',
-                header: 'Value',
-                render: ([, value]) => (
-                  <code>{typeof value === 'string' ? value : JSON.stringify(value)}</code>
-                ),
-              },
-            ]}
-          />
-        </>
-      ) : (
-        <EmptyState>
-          {r.claims_verified === 1
-            ? 'No claims were stored for this request.'
-            : 'None: the token was not verified, so its claims were not stored.'}
-        </EmptyState>
-      )}
-
-      <details>
-        <summary>Technical details</summary>
-        <Details
-          rows={[
-            ['Request ID', <code>{r.id}</code>],
-            ['Time', <Time ms={r.ts} />],
-            ['Token ID (jti)', r.jti ? <code>{r.jti}</code> : '—'],
-            ['Caller subject (sub)', r.caller_subject ? <code>{r.caller_subject}</code> : '—'],
-            ['Client IP', r.ip ?? '—'],
-            ['User agent', r.user_agent ?? '—'],
-            ['Cloudflare location', r.colo ?? '—'],
-          ]}
-        />
-      </details>
-
-      <h2>Related</h2>
-      <ul class="related">
-        {r.claims_verified === 1 && r.caller_repository && REPO.test(r.caller_repository) ? (
-          <li>
-            <a href={paths.requests({ repo: r.caller_repository })}>
-              Requests from {r.caller_repository}
-            </a>
-          </li>
-        ) : null}
-        {r.service_id ? (
-          <li>
-            <a href={paths.requests({ token: r.service_id })}>
-              Requests to {tokenLabel ?? 'this token'}
-            </a>
-          </li>
-        ) : r.service_slug && SLUG.test(r.service_slug) ? (
-          <li>
-            <a href={paths.requests({ slug: r.service_slug })}>Requests to {r.service_slug}</a>
-          </li>
-        ) : null}
-        {r.reason && isReasonCode(r.reason) ? (
-          <li>
-            <a href={paths.requests({ reason: r.reason, range: '24h' })}>
-              Same reason, last 24 hours
-            </a>
-          </li>
-        ) : null}
-      </ul>
-    </>
-  );
-}
-
-function TraceTable(props: {
-  id: string;
-  caption: string;
-  trace: TraceItem[];
-  grantNames: Map<string, string>;
-}) {
-  return (
-    <DataTable
-      id={props.id}
-      caption={props.caption}
-      captionHidden
-      rowHeader="access"
-      rows={props.trace}
-      columns={[
-        {
-          key: 'access',
-          header: 'Consumer access',
-          render: (item) =>
-            'omitted' in item ? (
-              `${item.omitted} more not shown (trace size limit)`
-            ) : (
-              <GrantLink id={item.grant_id} names={props.grantNames} />
-            ),
-        },
-        {
-          key: 'result',
-          header: 'Result',
-          render: (item) =>
-            'omitted' in item ? '—' : (TRACE_RESULT_TEXT[item.result] ?? item.result),
-        },
-        {
-          key: 'detail',
-          header: 'Detail',
-          render: (item) => ('omitted' in item ? '—' : <code>{item.detail}</code>),
-        },
-      ]}
-    />
-  );
-}
-
 function Recheck(props: {
   record: RequestRecord;
   result: Reevaluation | null;
@@ -1463,18 +2100,10 @@ function Recheck(props: {
   if (props.record.claims_verified !== 1 || props.result === null) {
     return <p>Not available: the token was not verified, so no claims were stored.</p>;
   }
-  const intro = (
-    <p class="muted">
-      The policy runs again with this request's stored claims against the consumer accesses as they
-      are now. Stored claims subset only: constraints on claims that were not stored fail, so a real
-      token may be allowed where this check says denied. Nothing is changed.
-    </p>
-  );
   const { result } = props;
   if (!result.ok) {
     return (
       <>
-        {intro}
         <p>{result.message}</p>
       </>
     );
@@ -1488,7 +2117,6 @@ function Recheck(props: {
   // allowing access alone never makes the verdict "allowed".
   return (
     <>
-      {intro}
       {blockers.length > 0 ? (
         <>
           <p>
@@ -1523,7 +2151,7 @@ function Recheck(props: {
       )}
       {decision.trace.length > 0 ? (
         <TraceTable
-          id="recheck-trace"
+          labelledBy="recheck-h"
           caption="Check against current access"
           trace={decision.trace}
           grantNames={props.grantNames}

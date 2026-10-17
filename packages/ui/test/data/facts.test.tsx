@@ -140,4 +140,10 @@ describe('Secret', () => {
     expect(html).not.toContain('xoxb');
     expect(html).not.toContain('secret-');
   });
+
+  it('says the last characters are not stored when last4 is missing', () => {
+    const html = render(<Secret />);
+    expect(html).toContain('<span class="vh">Secret, last characters not stored</span>');
+    expect(html).not.toContain('ending in');
+  });
 });

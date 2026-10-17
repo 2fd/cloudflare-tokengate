@@ -35,6 +35,13 @@ describe('Callout', () => {
     );
   });
 
+  it('is focusable only with autofocus', () => {
+    expect(render(<Callout title="t" autofocus />)).toMatch(
+      /^<div class="callout" tabindex="-1" autofocus="">/,
+    );
+    expect(render(<Callout title="t" />)).not.toContain('tabindex');
+  });
+
   it('never renders role=alert and escapes text', () => {
     const html = render(<Callout title="<b>">{'<i>'}</Callout>);
     expect(html).not.toContain('role=');
@@ -47,6 +54,19 @@ describe('Notice', () => {
     expect(render(<Notice title="Access given." class="x" />)).toBe(
       '<div class="callout ok notice x" role="status"><span class="gl" aria-hidden="true">✓</span><div class="body"><p><b>Access given.</b></p></div></div>',
     );
+  });
+
+  it('takes focus after a redirect with autofocus', () => {
+    expect(render(<Notice title="Access given." autofocus />)).toBe(
+      '<div class="callout ok notice" role="status" tabindex="-1" autofocus=""><span class="gl" aria-hidden="true">✓</span><div class="body"><p><b>Access given.</b></p></div></div>',
+    );
+  });
+
+  it('does not change the markup without autofocus', () => {
+    const html = render(<Notice title="Access given." autofocus={false} />);
+    expect(html).toMatch(/^<div class="callout ok notice" role="status">/);
+    expect(html).not.toContain('tabindex');
+    expect(html).not.toContain('autofocus');
   });
 
   it('keeps another tone', () => {
@@ -77,6 +97,39 @@ describe('AskSomeone', () => {
     ).toBe(
       '<p class="ask x">Only token managers can add tokens. Ask <b>Priya Natarajan</b>, <b>Diego Ruiz</b> or <b>Maya Chen</b>. <a href="mailto:priya@acme.dev">Email them this page</a></p>',
     );
+  });
+
+  it('counts the people it does not name', () => {
+    expect(
+      render(
+        <AskSomeone
+          people={['A', 'B', 'C']}
+          more={2}
+          link={{ href: 'mailto:a@acme.dev', label: 'Email them this page' }}
+        >
+          Only owners can do this.
+        </AskSomeone>,
+      ),
+    ).toBe(
+      '<p class="ask">Only owners can do this. Ask <b>A</b>, <b>B</b> or <b>C</b> and 2 more. <a href="mailto:a@acme.dev">Email them this page</a></p>',
+    );
+  });
+
+  it('ignores more without people and when it is 0', () => {
+    expect(
+      render(
+        <AskSomeone people={[]} more={3}>
+          Only owners can do this.
+        </AskSomeone>,
+      ),
+    ).toBe('<p class="ask">Only owners can do this.</p>');
+    expect(
+      render(
+        <AskSomeone people={['A']} more={0}>
+          x
+        </AskSomeone>,
+      ),
+    ).toBe('<p class="ask">x Ask <b>A</b>.</p>');
   });
 
   it('escapes names', () => {

@@ -1,10 +1,25 @@
-// "Add a consumer" fields (A14.1, A14.7.1), shared by the consumer list, /admin/consumers/new and
-// the access form (prefix `new.`): the type as radio cards and each type's few inputs in its
-// reveal. Everything else (name, issuer, JWKS, algorithms, token age, audience) is derived. Every
-// input sits in a reveal, so none carries native validation (A7.6); the server checks them.
+// "Add a consumer" fields (A14.1, A14.7.1), shared by /admin/consumers/new and the access form
+// (prefix `new.`): the type as logo cards and each type's few inputs in its branch. Everything else
+// (name, issuer, JWKS, algorithms, token age, audience) is derived, and the Add consumer rail says
+// so (SetForYou). Every input sits in a hidden branch, so none carries native validation (A7.6);
+// the server checks them.
+import {
+  Badge,
+  Button,
+  Callout,
+  FieldSet,
+  type LogoSpec,
+  More,
+  Panel,
+  RadioCards,
+  RailKeyValue,
+  Reveal,
+  Tray,
+} from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
 import { labelFor } from '../../db/claim-labels';
 import type { CallerProvider, ClaimLabel } from '../../db/types';
+import { PROFILES } from '../../identity/profiles';
 import { GITHUB_ACTIONS_ISSUER } from '../../identity/profiles/github-actions';
 import { GITLAB_COM_ISSUER } from '../../identity/profiles/gitlab-ci';
 import type { ProfileId } from '../../identity/types';
@@ -13,16 +28,28 @@ import { type Fields, idText, ownerFindCommand, parseOwnerList, text } from '../
 import { type ConsumerInput, pinValues, tenantClaimOf } from '../ops/caller-providers';
 import type { FieldError } from '../ops/shared';
 import { paths } from '../paths';
-import { Field, IdWithLabelField, RadioCards } from './components';
+import { Breakable, useFocusTarget } from './access-visuals';
+import { Field, fieldId, IdWithLabelField } from './components';
 
 export const CONSUMER_TYPES: readonly ProfileId[] = ['github-actions', 'gitlab-ci', 'generic'];
 
-const TYPE_INFO: Readonly<Record<ProfileId, { title: string; description: string }>> = {
-  'github-actions': { title: 'GitHub Actions', description: 'Workflows in GitHub repositories' },
-  'gitlab-ci': { title: 'GitLab CI', description: 'Pipelines on GitLab.com or your own GitLab' },
+const TYPE_INFO: Readonly<
+  Record<ProfileId, { title: string; description: string; logo: LogoSpec }>
+> = {
+  'github-actions': {
+    title: 'GitHub Actions',
+    description: 'Workflows in GitHub repositories',
+    logo: 'github',
+  },
+  'gitlab-ci': {
+    title: 'GitLab CI',
+    description: 'Pipelines on GitLab.com or your own GitLab',
+    logo: 'gitlab',
+  },
   generic: {
     title: 'Generic OIDC',
     description: 'Buildkite, CircleCI, Kubernetes or any OIDC issuer',
+    logo: 'oidc',
   },
 };
 
@@ -241,7 +268,27 @@ function presetFor(issuer: string): (typeof GENERIC_PRESETS)[number] | null {
   }
 }
 
-/** The fields. `jobs` puts a type's "Which jobs" fieldset inside its reveal (access form). */
+/** How the type cards take part in the form: a live slot of the page, or a scoped branch. */
+export type ConsumerFieldsLive = 1 | 'scoped';
+
+/** The existing consumers a GitHub or GitLab add merges into (the one of the same issuer). */
+function mergeTargets(existing: readonly CallerProvider[]) {
+  return {
+    github: existing.find(
+      (provider) =>
+        provider.profile === 'github-actions' && provider.issuer === GITHUB_ACTIONS_ISSUER,
+    ),
+    gitlab: existing.find(
+      (provider) => provider.profile === 'gitlab-ci' && provider.issuer === GITLAB_COM_ISSUER,
+    ),
+  };
+}
+
+/**
+ * The fields. The type is a FieldSet of logo cards; each type's inputs sit in its branch: a ui
+ * Reveal of live slot 1 on the Add consumer page, a scoped branch (`.ga-tbranch`, page-local CSS)
+ * in the access form, where `jobs` adds the type's "Which jobs" fields after its inputs.
+ */
 export function AddConsumerFields(props: {
   prefix: string;
   form: ConsumerForm;
@@ -254,220 +301,355 @@ export function AddConsumerFields(props: {
   anchorSuggestions?: readonly string[];
   jobs?: Partial<Record<ProfileId, Child>>;
   legend?: string;
+  live?: ConsumerFieldsLive;
 }) {
   const { prefix, form } = props;
+  const scoped = props.live === 'scoped';
   const error = (name: keyof ConsumerForm) =>
     props.errors.find((item) => item.field === `${prefix}${name}`)?.message ?? null;
-  const github = props.existing.find(
-    (provider) =>
-      provider.profile === 'github-actions' && provider.issuer === GITHUB_ACTIONS_ISSUER,
-  );
-  const gitlab = props.existing.find(
-    (provider) => provider.profile === 'gitlab-ci' && provider.issuer === GITLAB_COM_ISSUER,
-  );
+  const { github, gitlab } = mergeTargets(props.existing);
   const genericIssuers = props.existing.filter((provider) => provider.profile === 'generic');
   const labelsOf = (provider: CallerProvider) =>
     (props.labels ?? []).filter((label) => label.caller_provider_id === provider.id);
+  const typeId = fieldId(`${prefix}type`);
+  const options = CONSUMER_TYPES.map((type, index) => ({
+    value: type,
+    o: index + 1,
+    logo: TYPE_INFO[type].logo,
+    title: TYPE_INFO[type].title,
+    description:
+      type === 'generic' ? (
+        <>
+          {TYPE_INFO[type].description}
+          <span class="d-block con-preset">
+            <Badge tone="accent">Presets: Buildkite, CircleCI</Badge>
+          </span>
+        </>
+      ) : (
+        TYPE_INFO[type].description
+      ),
+  }));
+  useFocusTarget(`${prefix}type`, { id: typeId, options });
+  const typeError = error('type');
+  const branch = (type: ProfileId, children: Child) => {
+    const o = CONSUMER_TYPES.indexOf(type) + 1;
+    return scoped ? (
+      <div class="ga-tbranch subbox" data-o={String(o)}>
+        {children}
+      </div>
+    ) : (
+      <Reveal field={1} option={o} box={false} class="con-fields">
+        {children}
+      </Reveal>
+    );
+  };
+  const jobsBranch = (type: ProfileId) =>
+    scoped && props.jobs?.[type] ? (
+      <div class="ga-tbranch ga-scope" data-o={String(CONSUMER_TYPES.indexOf(type) + 1)}>
+        {props.jobs[type]}
+      </div>
+    ) : null;
   return (
-    <RadioCards
-      name={`${prefix}type`}
-      legend={props.legend ?? 'Consumer type'}
-      value={form.type}
-      error={error('type')}
-      options={CONSUMER_TYPES.map((type) => ({
-        value: type,
-        title: TYPE_INFO[type].title,
-        description: TYPE_INFO[type].description,
-        reveal: (
-          <>
-            {type === 'github-actions' ? (
-              <>
-                <IdWithLabelField
-                  kind="github_owner_list"
-                  name={`${prefix}github_org`}
-                  label="Organizations"
-                  value={form.github_org}
-                  example="acme (1234567), acme-labs (7654321)"
-                  findCommand={ownerFindCommand({ id: type })}
-                  hint="Organizations or user accounts that own the calling repositories, as name (ID). Separate several with commas."
-                  error={error('github_org')}
-                  autocomplete="off"
-                  conditional
-                />
-                {github ? (
-                  <p class="hint">
-                    <a href={paths.consumer(github.id)}>{github.name}</a> already exists. Saving
-                    adds these organizations to it{github.enabled ? '' : ' (disabled)'}. Already
-                    added: {alreadyAdded(github, labelsOf(github)) || 'none'}.
-                  </p>
-                ) : null}
-                <details
-                  open={
-                    form.github_enterprise_slug !== '' ||
-                    form.github_enterprise_id !== '' ||
-                    error('github_enterprise_slug') !== null ||
-                    error('github_enterprise_id') !== null
-                  }
-                >
-                  <summary>GitHub Enterprise Cloud with its own issuer</summary>
-                  <Field
-                    name={`${prefix}github_enterprise_slug`}
-                    label="Enterprise slug"
-                    optional
-                    value={form.github_enterprise_slug}
-                    example="acme-corp"
-                    hint={
-                      <>
-                        Only for GitHub Enterprise Cloud with its own OIDC issuer (
-                        <code>{GITHUB_ACTIONS_ISSUER}/acme-corp</code>).
-                      </>
+    <>
+      <FieldSet
+        id={typeId}
+        legend={props.legend ?? 'Where do the jobs run?'}
+        live={scoped ? undefined : 1}
+        class={scoped ? 'ga-tf con-types' : 'con-types'}
+        error={typeError}
+      >
+        <RadioCards
+          name={`${prefix}type`}
+          columns={3}
+          value={form.type}
+          invalid={typeError ? true : undefined}
+          options={options}
+        />
+      </FieldSet>
+      {branch(
+        'github-actions',
+        <>
+          {github ? (
+            <Callout
+              title={`${github.name} already exists.`}
+              actions={
+                <Button size="sm" href={paths.consumer(github.id)} srSuffix={github.name}>
+                  Open it
+                </Button>
+              }
+            >
+              Saving adds these organizations to it{github.enabled ? '' : ' (disabled)'}. Already
+              added: {alreadyAdded(github, labelsOf(github)) || 'none'}.
+            </Callout>
+          ) : null}
+          <IdWithLabelField
+            kind="github_owner_list"
+            name={`${prefix}github_org`}
+            label="Organizations"
+            value={form.github_org}
+            example="acme (1234567), acme-labs (7654321)"
+            findCommand={ownerFindCommand({ id: 'github-actions' })}
+            hint="The ID keeps working after a rename. Separate several with commas."
+            error={error('github_org')}
+            autocomplete="off"
+            conditional
+          />
+          <More
+            summary="GitHub Enterprise Cloud with its own issuer"
+            open={
+              form.github_enterprise_slug !== '' ||
+              form.github_enterprise_id !== '' ||
+              error('github_enterprise_slug') !== null ||
+              error('github_enterprise_id') !== null
+            }
+          >
+            <Field
+              name={`${prefix}github_enterprise_slug`}
+              label="Enterprise slug"
+              optional
+              mono
+              value={form.github_enterprise_slug}
+              example="acme-corp"
+              hint={
+                <>
+                  Only for GitHub Enterprise Cloud with its own OIDC issuer (
+                  <code>{GITHUB_ACTIONS_ISSUER}/acme-corp</code>).
+                </>
+              }
+              error={error('github_enterprise_slug')}
+              autocomplete="off"
+              conditional
+            />
+            <Field
+              name={`${prefix}github_enterprise_id`}
+              label="Enterprise ID"
+              optional
+              value={form.github_enterprise_id}
+              example="12345"
+              inputmode="numeric"
+              hint={
+                <>
+                  An extra pin:{' '}
+                  <code>
+                    {
+                      'gh api graphql -f query=\'{enterprise(slug:"acme-corp"){databaseId}}\' --jq .data.enterprise.databaseId'
                     }
-                    error={error('github_enterprise_slug')}
-                    autocomplete="off"
-                    spellcheck={false}
-                    autocapitalize="none"
-                    conditional
-                  />
-                  <Field
-                    name={`${prefix}github_enterprise_id`}
-                    label="Enterprise ID"
-                    optional
-                    value={form.github_enterprise_id}
-                    example="12345"
-                    inputmode="numeric"
-                    hint={
-                      <>
-                        An extra pin:{' '}
-                        <code>
-                          {
-                            'gh api graphql -f query=\'{enterprise(slug:"acme-corp"){databaseId}}\' --jq .data.enterprise.databaseId'
-                          }
-                        </code>
-                      </>
+                  </code>
+                </>
+              }
+              error={error('github_enterprise_id')}
+              autocomplete="off"
+              conditional
+            />
+          </More>
+        </>,
+      )}
+      {jobsBranch('github-actions')}
+      {branch(
+        'gitlab-ci',
+        <>
+          {gitlab ? (
+            <Callout
+              title={`${gitlab.name} already exists.`}
+              actions={
+                <Button size="sm" href={paths.consumer(gitlab.id)} srSuffix={gitlab.name}>
+                  Open it
+                </Button>
+              }
+            >
+              Saving adds these groups to it{gitlab.enabled ? '' : ' (disabled)'}. Already added:{' '}
+              {alreadyAdded(gitlab, labelsOf(gitlab)) || 'none'}.
+            </Callout>
+          ) : null}
+          <IdWithLabelField
+            kind="gitlab_group_list"
+            name={`${prefix}gitlab_group`}
+            label="Groups"
+            value={form.gitlab_group}
+            example="acme-group (5678901), acme-group/platform (5678902)"
+            findCommand={ownerFindCommand({ id: 'gitlab-ci' })}
+            hint="The token names the project's direct group. Separate several with commas."
+            error={error('gitlab_group')}
+            autocomplete="off"
+            conditional
+          />
+          <More
+            summary="Self-managed GitLab"
+            open={form.gitlab_url !== '' || error('gitlab_url') !== null}
+          >
+            <Field
+              name={`${prefix}gitlab_url`}
+              label="GitLab URL"
+              optional
+              mono
+              type="url"
+              value={form.gitlab_url}
+              example="https://gitlab.example.com"
+              hint="Leave empty for gitlab.com. Format: https:// and the host."
+              error={error('gitlab_url')}
+              autocomplete="off"
+              conditional
+            />
+          </More>
+        </>,
+      )}
+      {jobsBranch('gitlab-ci')}
+      {branch(
+        'generic',
+        <>
+          <Field
+            name={`${prefix}generic_issuer`}
+            label="Issuer"
+            type="url"
+            mono
+            value={form.generic_issuer}
+            example="https://agent.buildkite.com"
+            suggestions={GENERIC_ISSUER_EXAMPLES.map((value) => ({ value }))}
+            hint={
+              <>
+                The <code>iss</code> claim of the tokens. When you save, the gateway reads{' '}
+                <code>&lt;issuer&gt;/.well-known/openid-configuration</code>.
+                {genericIssuers.length > 0
+                  ? ` Already added: ${genericIssuers.map((p) => p.issuer).join(', ')}.`
+                  : ''}
+              </>
+            }
+            error={error('generic_issuer')}
+            autocomplete="off"
+            conditional
+          />
+          <More
+            summary="Anchor and pin claims"
+            meta="derived from the preset"
+            open={
+              form.generic_anchor_claims !== '' ||
+              form.generic_pin_claim !== '' ||
+              form.generic_pin_value !== '' ||
+              error('generic_anchor_claims') !== null ||
+              error('generic_pin_claim') !== null ||
+              error('generic_pin_value') !== null
+            }
+          >
+            <Field
+              name={`${prefix}generic_anchor_claims`}
+              label="Anchor claims"
+              optional
+              mono
+              value={form.generic_anchor_claims}
+              example="pipeline_id"
+              suggestions={(
+                props.anchorSuggestions ?? genericAnchorSuggestions(props.existing)
+              ).map((value) => ({ value }))}
+              hint="Claims that identify one workload exactly, comma-separated. Buildkite: pipeline_id. CircleCI: oidc.circleci.com/project-id. Kubernetes: sub. Empty: the issuer's usual claim, else sub."
+              error={error('generic_anchor_claims')}
+              autocomplete="off"
+              conditional
+            />
+            <Field
+              name={`${prefix}generic_pin_claim`}
+              label="Pin claim"
+              optional
+              mono
+              value={form.generic_pin_claim}
+              example="organization_id"
+              suggestions={GENERIC_PRESETS.map((preset) => ({ value: preset.pin }))}
+              hint="Recommended: a claim that every token of your organization carries."
+              error={error('generic_pin_claim')}
+              autocomplete="off"
+              conditional
+            />
+            <Field
+              name={`${prefix}generic_pin_value`}
+              label="Pin value"
+              optional
+              mono
+              value={form.generic_pin_value}
+              example="0c9f3e1a-7b2d-4c5e-9f10-123456789abc"
+              hint={
+                <>
+                  Exact value of that claim. <strong>Risk:</strong> without a pin, every token this
+                  issuer signs for this audience reaches access evaluation.
+                </>
+              }
+              error={error('generic_pin_value')}
+              autocomplete="off"
+              conditional
+            />
+          </More>
+        </>,
+      )}
+      {jobsBranch('generic')}
+    </>
+  );
+}
+
+/**
+ * The rail of the Add consumer page: what tokengate derives for the chosen type, so the form asks
+ * only for what it cannot derive. One Reveal of live slot 1 per type.
+ */
+export function SetForYou(props: { existing: readonly CallerProvider[] }) {
+  const { github, gitlab } = mergeTargets(props.existing);
+  const age = (type: ProfileId) => `${PROFILES[type].defaults.maxTokenAgeSeconds / 60} minutes`;
+  const keys = 'Read from the issuer, refreshed automatically';
+  const audience = (existing: CallerProvider | undefined) =>
+    existing
+      ? { label: 'Audience', value: <Breakable text={existing.audience} />, mono: true }
+      : { label: 'Audience', value: 'A new value only for this consumer' };
+  return (
+    <aside class="rail" aria-labelledby="ad-set-h">
+      <Tray
+        id="ad-set"
+        title="Set for you"
+        description="Derived from the type. You can change them later under Advanced trust settings."
+      >
+        <Panel>
+          <Reveal field={1} option={1} box={false}>
+            <RailKeyValue
+              items={[
+                github
+                  ? {
+                      label: 'Name',
+                      value: github.name,
+                      note: 'Kept. The new organizations join it.',
                     }
-                    error={error('github_enterprise_id')}
-                    autocomplete="off"
-                    conditional
-                  />
-                </details>
-              </>
-            ) : type === 'gitlab-ci' ? (
-              <>
-                <IdWithLabelField
-                  kind="gitlab_group_list"
-                  name={`${prefix}gitlab_group`}
-                  label="Groups"
-                  value={form.gitlab_group}
-                  example="acme-group (5678901), acme-group/platform (5678902)"
-                  findCommand={ownerFindCommand({ id: type })}
-                  hint="The token names the project's direct group. Separate several with commas."
-                  error={error('gitlab_group')}
-                  autocomplete="off"
-                  conditional
-                />
-                {gitlab ? (
-                  <p class="hint">
-                    <a href={paths.consumer(gitlab.id)}>{gitlab.name}</a> already exists. Saving
-                    adds these groups to it{gitlab.enabled ? '' : ' (disabled)'}. Already added:{' '}
-                    {alreadyAdded(gitlab, labelsOf(gitlab)) || 'none'}.
-                  </p>
-                ) : null}
-                <details open={form.gitlab_url !== '' || error('gitlab_url') !== null}>
-                  <summary>Self-managed GitLab</summary>
-                  <Field
-                    name={`${prefix}gitlab_url`}
-                    label="GitLab URL"
-                    optional
-                    type="url"
-                    value={form.gitlab_url}
-                    example="https://gitlab.example.com"
-                    hint="Only for self-managed GitLab: your instance URL."
-                    error={error('gitlab_url')}
-                    autocomplete="off"
-                    spellcheck={false}
-                    autocapitalize="none"
-                    conditional
-                  />
-                </details>
-              </>
-            ) : (
-              <>
-                <Field
-                  name={`${prefix}generic_issuer`}
-                  label="Issuer"
-                  type="url"
-                  value={form.generic_issuer}
-                  example="https://agent.buildkite.com"
-                  suggestions={GENERIC_ISSUER_EXAMPLES.map((value) => ({ value }))}
-                  hint={
-                    <>
-                      The <code>iss</code> claim of the tokens. When you save, the gateway reads{' '}
-                      <code>&lt;issuer&gt;/.well-known/openid-configuration</code>.
-                      {genericIssuers.length > 0
-                        ? ` Already added: ${genericIssuers.map((p) => p.issuer).join(', ')}.`
-                        : ''}
-                    </>
-                  }
-                  error={error('generic_issuer')}
-                  autocomplete="off"
-                  spellcheck={false}
-                  autocapitalize="none"
-                  conditional
-                />
-                <Field
-                  name={`${prefix}generic_anchor_claims`}
-                  label="Anchor claims"
-                  optional
-                  value={form.generic_anchor_claims}
-                  example="pipeline_id"
-                  suggestions={(
-                    props.anchorSuggestions ?? genericAnchorSuggestions(props.existing)
-                  ).map((value) => ({ value }))}
-                  hint="Claims that identify one workload exactly, comma-separated. Buildkite: pipeline_id. CircleCI: oidc.circleci.com/project-id. Kubernetes: sub. Empty: the issuer's usual claim, else sub."
-                  error={error('generic_anchor_claims')}
-                  autocomplete="off"
-                  spellcheck={false}
-                  autocapitalize="none"
-                  conditional
-                />
-                <Field
-                  name={`${prefix}generic_pin_claim`}
-                  label="Pin claim"
-                  optional
-                  value={form.generic_pin_claim}
-                  example="organization_id"
-                  suggestions={GENERIC_PRESETS.map((preset) => ({ value: preset.pin }))}
-                  hint="Recommended: a claim that every token of your organization carries."
-                  error={error('generic_pin_claim')}
-                  autocomplete="off"
-                  spellcheck={false}
-                  autocapitalize="none"
-                  conditional
-                />
-                <Field
-                  name={`${prefix}generic_pin_value`}
-                  label="Pin value"
-                  optional
-                  value={form.generic_pin_value}
-                  example="0c9f3e1a-7b2d-4c5e-9f10-123456789abc"
-                  hint={
-                    <>
-                      Exact value of that claim. <strong>Risk:</strong> without a pin, every token
-                      this issuer signs for this audience reaches access evaluation.
-                    </>
-                  }
-                  error={error('generic_pin_value')}
-                  autocomplete="off"
-                  spellcheck={false}
-                  autocapitalize="none"
-                  conditional
-                />
-              </>
-            )}
-            {props.jobs?.[type] ?? null}
-          </>
-        ),
-      }))}
-    />
+                  : { label: 'Name', value: 'GitHub Actions (first organization)' },
+                { label: 'Issuer', value: <Breakable text={GITHUB_ACTIONS_ISSUER} />, mono: true },
+                { label: 'Signing keys', value: keys },
+                audience(github),
+                { label: 'Max token age', value: age('github-actions') },
+              ]}
+            />
+          </Reveal>
+          <Reveal field={1} option={2} box={false}>
+            <RailKeyValue
+              items={[
+                gitlab
+                  ? { label: 'Name', value: gitlab.name, note: 'Kept. The new groups join it.' }
+                  : { label: 'Name', value: 'GitLab (first group)' },
+                {
+                  label: 'Issuer',
+                  value: GITLAB_COM_ISSUER,
+                  mono: true,
+                  note: 'Or your GitLab URL (self-managed)',
+                },
+                { label: 'Signing keys', value: keys },
+                audience(gitlab),
+                { label: 'Max token age', value: age('gitlab-ci') },
+              ]}
+            />
+          </Reveal>
+          <Reveal field={1} option={3} box={false}>
+            <RailKeyValue
+              items={[
+                { label: 'Name', value: 'From the issuer host' },
+                { label: 'Signing keys', value: keys },
+                { label: 'Audience', value: 'A new value only for this consumer' },
+                { label: 'Max token age', value: age('generic') },
+              ]}
+            />
+          </Reveal>
+        </Panel>
+      </Tray>
+    </aside>
   );
 }

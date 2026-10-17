@@ -2,11 +2,13 @@
 // component page, in nav order. Only the viz group agent edits this file.
 import {
   ArrowRow,
+  AskSomeone,
   Avatar,
   Badge,
   Chart,
   Checklist,
   ChecklistProgress,
+  CodeBlock,
   ConfirmDialog,
   ConnectionsMap,
   Delta,
@@ -409,7 +411,7 @@ export const viz: readonly ComponentDoc[] = [
       {
         title: 'A decision about a person',
         description:
-          'who replaces the level and the title: the avatar, the name as a heading with its status, and a meta line. The role buttons sit under the legend “Approve as”; Owner… opens its confirm dialog; Reject is a separate form.',
+          'who replaces the level and the title: the avatar, the name as a heading with its status, and a meta line. The role buttons sit under the legend “Approve as”; Owner… opens its confirm dialog; Reject is a separate form at the end of the row, under the roles.',
         layout: 'stack',
         render: () => (
           <Tray id="na-ex-who" title="Needs your decision" count={1}>
@@ -468,6 +470,57 @@ export const viz: readonly ComponentDoc[] = [
       srSuffix: 'sam@acme.dev (you can reactivate Sam later)' } },
 }]} />`,
       },
+      {
+        title: 'Pending, with Dismiss',
+        description: (
+          <>
+            <code>actions</code> follows the approve buttons: Dismiss, or an inline error. The{' '}
+            <code>approve.id</code> names the form, so a control outside it (the Owner… confirm) can
+            submit it with <code>form</code>.
+          </>
+        ),
+        layout: 'stack',
+        render: () => (
+          <Panel>
+            <NeedsAttention
+              items={[
+                {
+                  level: 'warn',
+                  title: '1 person needs a decision.',
+                  body: (
+                    <>
+                      <b>Sam Ito</b> · sam@acme.dev · signed in first 25 min ago. Approve as:
+                    </>
+                  ),
+                  approve: {
+                    id: 'na-ex-approve-sam',
+                    action: '#',
+                    subject: 'sam@acme.dev',
+                    hidden: { _csrf: 'csrf-token' },
+                    roles: [
+                      { value: 'viewer', label: 'Viewer' },
+                      { value: 'token_manager', label: 'Token manager' },
+                    ],
+                  },
+                  actions: (
+                    <a class="btn sm ghost" href="#">
+                      Dismiss
+                    </a>
+                  ),
+                },
+              ]}
+            />
+          </Panel>
+        ),
+        code: `<NeedsAttention items={[{
+  level: 'warn', title: '1 person needs a decision.',
+  body: <><b>Sam Ito</b> · sam@acme.dev · signed in first 25 min ago. Approve as:</>,
+  approve: { id: 'approve-sam', action: '/admin/users/usr_sam/decide', subject: 'sam@acme.dev',
+    hidden: { _csrf: csrf },
+    roles: [{ value: 'viewer', label: 'Viewer' }, { value: 'token_manager', label: 'Token manager' }] },
+  actions: <a class="btn sm ghost" href="/admin/users/usr_sam/dismiss">Dismiss</a>,
+}]} />`,
+      },
     ],
     props: [
       {
@@ -481,10 +534,11 @@ export const viz: readonly ComponentDoc[] = [
               <>
                 Worst first. Each: <code>level</code> (<code>'warn' | 'info' | 'bad'</code>),{' '}
                 <code>levelLabel?</code> (default Warning, Note, Error), <code>title</code>,{' '}
-                <code>body?</code>, and either <code>actions?</code> (the inline fix) or{' '}
-                <code>approve?</code>. A decision item has <code>who</code> (the person:{' '}
-                <code>id</code>, <code>avatar</code>, <code>name</code>, <code>status?</code>,{' '}
-                <code>meta?</code>) instead of the level and title.
+                <code>body?</code>, <code>approve?</code>, and <code>actions?</code> (the inline
+                fix; after the approve buttons when both are set). A decision item has{' '}
+                <code>who</code> (the person: <code>id</code>, <code>avatar</code>,{' '}
+                <code>name</code>, <code>status?</code>, <code>meta?</code>) instead of the level
+                and title.
               </>
             ),
           },
@@ -498,7 +552,9 @@ export const viz: readonly ComponentDoc[] = [
                 <code>name?</code> (default <code>role</code>), <code>hidden?</code> (CSRF token,
                 ids), <code>more?</code> (the link for Owner or reject), <code>legend?</code>{' '}
                 (“Approve as”: the buttons under a fieldset), and <code>reject?</code> (a Reject
-                button in its own form). A role with <code>dialog</code> opens its confirm.
+                button in its own form). A role with <code>dialog</code> opens its confirm.{' '}
+                <code>id?</code> names the approve form, so that confirm can submit it with{' '}
+                <code>form</code>.
               </>
             ),
           },
@@ -1111,7 +1167,7 @@ export const viz: readonly ComponentDoc[] = [
     ],
     accessibility: [
       'The chart is one image (role img) named by its title and described by its description: write the finding there, not "a bar chart".',
-      'Every bar has a tooltip title with its numbers; the same numbers are a real table in the "Show the numbers" disclosure, in a focusable, named scroll region.',
+      'Every bar has a tooltip title with its numbers; the same numbers are a real table in the "Show the numbers" disclosure, in a focusable, named scroll region. The table has a hidden caption with the same name ("{title}, numbers").',
       'Denied and errors differ by pattern (hatched, dotted), not only by color; a non-zero count is at least 2.5 units tall.',
       'Axis text is in viewBox units and grows on phones (24 units below 40rem) so it stays readable.',
     ],
@@ -1135,6 +1191,7 @@ export const viz: readonly ComponentDoc[] = [
       'b-denied',
       'b-error',
       'numbers',
+      'vh',
       'legend',
       'sw',
       'allowed',
@@ -1343,6 +1400,31 @@ export const viz: readonly ComponentDoc[] = [
   focus={c.req.query('focus')} />`,
       },
       {
+        title: 'Filtered to one token',
+        description:
+          'focusToken comes from ?token= when it is the only filter: every line stays, the token, its wires and the consumers that can use it light up, the rest dims. Each consumer says how many of its accesses reach the token; the focus bar gives way.',
+        layout: 'stack',
+        render: () => (
+          <Tray
+            id="cm-ex-token"
+            headingLevel={3}
+            title="Connections to Slack"
+            description="Other connections are dimmed. Remove the filter to see all."
+            actions={viewSwitch('map', 'example 6')}
+          >
+            <ConnectionsMap
+              id="cm-ex-token-map"
+              consumers={consumers}
+              tokens={tokens}
+              accesses={accesses}
+              focusToken="slack"
+            />
+          </Tray>
+        ),
+        code: `<ConnectionsMap id="acc-map" consumers={consumers} tokens={tokens} accesses={accesses}
+  focusToken={c.req.query('token')} />`,
+      },
+      {
         title: 'At scale',
         description:
           '14 consumers, 9 tokens. At most 7 rows per side: the 6 busiest and one group node that opens the matrix filtered to the rest, with a note above the map.',
@@ -1393,6 +1475,53 @@ export const viz: readonly ComponentDoc[] = [
         code: `<ConnectionsMap id="acc-map" consumers={consumers} tokens={tokens} accesses={accesses}
   focus="gitlab-platform" />`,
       },
+      {
+        title: 'Overview, 7 days, with count links',
+        description: (
+          <>
+            On the Overview with <code>?range=7d</code>: <code>rangeLabel</code> names the range in
+            the header and in each count, <code>focusHref</code> keeps the focus links on the
+            Overview, and <code>hrefs</code> makes each token number a link to its requests.
+          </>
+        ),
+        layout: 'stack',
+        render: () => (
+          <Tray
+            id="cm-ex-range"
+            headingLevel={3}
+            title="Tokens in use"
+            description="Who calls which token through tokengate, with the last 7 days of traffic."
+            actions={viewSwitch('map', 'example 5')}
+          >
+            <ConnectionsMap
+              id="cm-ex-range-map"
+              focusLabel="Focus on a consumer (example 5)"
+              consumers={consumers}
+              tokens={tokens.map((token) => ({
+                ...token,
+                requests: token.requests * 7,
+                denied: token.denied * 7,
+                errors: token.errors * 7,
+                hrefs: {
+                  requests: `/admin/requests?range=7d&token=${token.id}`,
+                  denied: `/admin/requests?range=7d&token=${token.id}&outcome=denied`,
+                  errors: `/admin/requests?range=7d&token=${token.id}&outcome=error`,
+                },
+              }))}
+              accesses={accesses}
+              focusHref="/admin?range=7d"
+              rangeLabel={{ short: 'Req 7 d', long: 'requests in 7 days' }}
+            />
+          </Tray>
+        ),
+        code: `<ConnectionsMap id="ov-map-m" consumers={consumers} accesses={accesses}
+  tokens={tokens.map((t) => ({ ...t, hrefs: {
+    requests: \`/admin/requests?range=7d&token=\${t.id}\`,
+    denied: \`/admin/requests?range=7d&token=\${t.id}&outcome=denied\`,
+    errors: \`/admin/requests?range=7d&token=\${t.id}&outcome=error\` } }))}
+  focusHref="/admin?range=7d"
+  rangeLabel={{ short: 'Req 7 d', long: 'requests in 7 days' }} />`,
+      },
     ],
     props: [
       {
@@ -1425,7 +1554,9 @@ export const viz: readonly ComponentDoc[] = [
                 <code>id</code>, <code>name</code>, <code>logo</code>, <code>slug?</code>,{' '}
                 <code>line?</code>, <code>lineTone?</code>, <code>requests</code>,{' '}
                 <code>denied</code>, <code>errors</code>, <code>lastUsed</code>, <code>idle?</code>,{' '}
-                <code>tag?</code>. Sorted by requests.
+                <code>tag?</code>, <code>hrefs?</code> (
+                <code>{'{ requests?, denied?, errors? }'}</code>: each number as a link). Numbers
+                are in the range. Sorted by requests.
               </>
             ),
           },
@@ -1448,11 +1579,31 @@ export const viz: readonly ComponentDoc[] = [
             description: 'Consumer id from ?focus=. Lights it and its tokens, dims the rest.',
           },
           {
+            name: 'focusToken',
+            type: 'string',
+            description:
+              'Token id when the page is filtered to one token: lights it, its wires and its consumers, dims the rest and hides the focus bar. Ignored with focus.',
+          },
+          {
             name: 'baseHref',
             type: 'string',
             default: "'/admin/access'",
             description:
               'Every link is built from it: ?consumer=, ?token=, ?focus=, ?view=matrix (&consumers=rest, &tokens=rest).',
+          },
+          {
+            name: 'focusHref',
+            type: 'string',
+            default: 'baseHref',
+            description:
+              'Base of the focus bar (All consumers, ?focus=, Clear focus) and of the ?focus= node links, so a map on the Overview keeps its focus there.',
+          },
+          {
+            name: 'rangeLabel',
+            type: '{ short: string; long: string }',
+            default: "{ short: 'Req 24 h', long: 'requests in 24 hours' }",
+            description:
+              'The range of the token numbers: the column header, and the hidden words after each request count.',
           },
           {
             name: 'maxRows',
@@ -1483,7 +1634,7 @@ export const viz: readonly ComponentDoc[] = [
     ],
     accessibility: [
       'The map is a group named "Connections map. Every line is also listed as text below."; the wires are hidden, and the disclosure under it lists every access as an arrow row with its status word.',
-      'Each node name is a link; counts read as "6 accesses", metrics as "21 denied", "1 min ago" as "last used 1 min ago", and every token says which consumers use it.',
+      'Each node name is a link; counts read as "6 accesses", metrics as "21 denied", "1 min ago" as "last used 1 min ago", and every token says which consumers use it. A linked number keeps its hidden words inside the link ("3,902 requests in 24 hours").',
       'The focused consumer link has aria-current; dimmed nodes keep AA contrast text.',
       'Status is in words on the token line ("⌛ Secret expires in 6 days"); the wire color only adds to it.',
     ],
@@ -1588,6 +1739,90 @@ export const viz: readonly ComponentDoc[] = [
 <Legend as="p" items={[{ mark: 'cell', label: 'Active' }, { mark: 'cell-warn', label: 'Expiring or risk' },
   { mark: 'cell-bad', label: 'Expired' }, { mark: 'cell-off', label: 'Inactive' }]} />`,
       },
+      {
+        title: 'Overlapping accesses',
+        description: (
+          <>
+            An array in <code>cells</code> stacks one cell per access, when two accesses of a
+            repository cover the same token. <code>srPrefix</code> names each link with its row and
+            column.
+          </>
+        ),
+        layout: 'stack',
+        render: () => (
+          <Matrix
+            label="Access matrix (overlapping accesses)"
+            corner="Consumer › repository"
+            caption="Accesses of GitHub Actions (acme), by repository and token"
+            columns={matrixColumns.slice(0, 2)}
+            groups={[
+              {
+                name: 'GitHub Actions (acme)',
+                logo: { brand: 'github' },
+                href: '/admin/consumers/github-acme',
+                rows: [
+                  {
+                    label: 'acme/api',
+                    cells: {
+                      slack: [
+                        {
+                          href: '/admin/access/acc_01',
+                          status: 'Active',
+                          constraint: 'env production',
+                          srPrefix: 'acme/api can use Slack:',
+                        },
+                        {
+                          href: '/admin/access/acc_11',
+                          tone: 'warn',
+                          status: 'Expires in 9 days',
+                          constraint: 'branch main',
+                          srPrefix: 'acme/api can use Slack:',
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            ]}
+            addHref={(row, column) =>
+              `/admin/access/new?repo=${encodeURIComponent(row.label)}&token=${column.id}`
+            }
+          />
+        ),
+        code: `<Matrix label="Access matrix" corner="Consumer › repository"
+  caption="Accesses of GitHub Actions (acme), by repository and token"
+  columns={columns}
+  groups={[{ name: 'GitHub Actions (acme)', …, rows: [{ label: 'acme/api', cells: {
+    slack: [
+      { href: '/admin/access/acc_01', status: 'Active', constraint: 'env production',
+        srPrefix: 'acme/api can use Slack:' },
+      { href: '/admin/access/acc_11', tone: 'warn', status: 'Expires in 9 days',
+        constraint: 'branch main', srPrefix: 'acme/api can use Slack:' },
+    ] } }] }]}
+  addHref={addHref} />`,
+      },
+      {
+        title: 'Read-only (viewer)',
+        description: (
+          <>
+            Without <code>addHref</code> empty cells offer nothing: a dash, read as{' '}
+            <code>emptyLabel</code> (default “No access”).
+          </>
+        ),
+        layout: 'stack',
+        render: () => (
+          <Matrix
+            label="Access matrix (read-only)"
+            corner="Consumer › repository"
+            columns={matrixColumns}
+            groups={matrixGroups.slice(0, 1)}
+            emptyLabel={(row, column) => `${row.label} has no access to ${column.name}`}
+          />
+        ),
+        code: `<Matrix label="Access matrix" corner="Consumer › repository"
+  columns={columns} groups={groups}
+  emptyLabel={(row, column) => \`\${row.label} has no access to \${column.name}\`} />`,
+      },
     ],
     props: [
       {
@@ -1604,6 +1839,11 @@ export const viz: readonly ComponentDoc[] = [
             type: 'string',
             required: true,
             description: 'Header of the row-label column.',
+          },
+          {
+            name: 'caption',
+            type: 'Child',
+            description: 'Table caption, visually hidden: what the matrix shows.',
           },
           {
             name: 'columns',
@@ -1631,13 +1871,14 @@ export const viz: readonly ComponentDoc[] = [
           },
           {
             name: 'groups[].rows[].cells',
-            type: 'Record<string, MatrixCell>',
+            type: 'Record<string, MatrixCell | readonly MatrixCell[]>',
             required: true,
             description: (
               <>
                 <code>href</code>, <code>status</code>, <code>tone?</code> (
                 <code>'ok' | 'warn' | 'bad' | 'off'</code>), <code>glyph?</code>,{' '}
-                <code>constraint?</code>, <code>operations?</code>. A missing column is an empty
+                <code>constraint?</code>, <code>operations?</code>, <code>srPrefix?</code> (hidden
+                text read first). An array stacks one cell per access. A missing column is an empty
                 cell.
               </>
             ),
@@ -1645,14 +1886,20 @@ export const viz: readonly ComponentDoc[] = [
           {
             name: 'addHref',
             type: '(row, column, group) => string',
-            required: true,
-            description: 'The prefilled create form behind an empty cell.',
+            description:
+              'The prefilled create form behind an empty cell. Leave out for a read-only matrix: empty cells show a dash.',
           },
           {
             name: 'addLabel',
             type: '(row, column) => string',
             default: '"Give {row} access to {column}"',
-            description: 'Accessible name of an empty cell.',
+            description: 'Accessible name of an empty cell with addHref.',
+          },
+          {
+            name: 'emptyLabel',
+            type: '(row, column) => string',
+            default: '"No access"',
+            description: 'Accessible name of an empty cell without addHref.',
           },
           { name: 'class', type: 'string', description: 'Extra classes on the .matrix region.' },
         ],
@@ -1661,7 +1908,8 @@ export const viz: readonly ComponentDoc[] = [
     accessibility: [
       'A real table: column headers are the tokens, row headers the repositories, and each consumer is a row group header, so a screen reader announces "acme/api, Slack" with a cell.',
       'The scroll region is focusable and named, so keyboard users can scroll it.',
-      'Empty cells are links named "Give acme/web access to Slack"; the + is hidden.',
+      'Empty cells are links named "Give acme/web access to Slack"; the + is hidden. In a read-only matrix they are text read as "No access"; the dash is hidden.',
+      'Give the table a caption when the page has more than one matrix, and srPrefix when stacked cells need their row and column in the link name.',
       'Cell status is a word with a hidden glyph; tone and dashed border only add to it.',
     ],
     do: [
@@ -1687,6 +1935,8 @@ export const viz: readonly ComponentDoc[] = [
       'c',
       'o',
       'madd',
+      'mnone',
+      'vh',
       'lg-sw',
     ],
   },
@@ -1784,6 +2034,81 @@ export const viz: readonly ComponentDoc[] = [
 </Tray>`,
       },
       {
+        title: 'Viewer (Ask someone)',
+        description: (
+          <>
+            A reader who may not do the step gets <code>ask</code> instead of the button: why, and
+            who can do it.
+          </>
+        ),
+        layout: 'stack',
+        render: () => (
+          <Panel>
+            <Checklist
+              steps={[
+                {
+                  state: 'next',
+                  title: 'Add a service token',
+                  why: 'tokengate keeps the secret; CI jobs never see it.',
+                  action: { href: '/admin/tokens/new', label: 'Add token' },
+                  ask: (
+                    <AskSomeone
+                      people={['Tom Becker', 'Diego Ruiz']}
+                      link={{ href: 'mailto:tom@acme.dev,diego@acme.dev', label: 'Email them' }}
+                    >
+                      Only owners and token managers can add tokens.
+                    </AskSomeone>
+                  ),
+                },
+              ]}
+            />
+          </Panel>
+        ),
+        code: `<Checklist steps={[{
+  state: 'next', title: 'Add a service token', why: 'tokengate keeps the secret; CI jobs never see it.',
+  ask: <AskSomeone people={['Tom Becker', 'Diego Ruiz']}
+         link={{ href: 'mailto:tom@acme.dev,diego@acme.dev', label: 'Email them' }}>
+         Only owners and token managers can add tokens.</AskSomeone>,
+}]} />`,
+      },
+      {
+        title: 'Step with a code preview',
+        description: (
+          <>
+            <code>detail</code> adds block content after the shortcuts: a second link, or a{' '}
+            <code>CodeBlock</code> with what to paste.
+          </>
+        ),
+        layout: 'stack',
+        render: () => (
+          <Panel>
+            <Checklist
+              steps={[
+                {
+                  state: 'next',
+                  title: 'Call the token from a CI job',
+                  why: 'The job asks tokengate for the call; the secret stays here.',
+                  action: { href: '/admin/consumers/github-acme', label: 'Open the consumer' },
+                  detail: (
+                    <CodeBlock label="Workflow step" caption="Add this step to the workflow:">
+                      {`- uses: tokengate/action@v1
+  with:
+    token: slack`}
+                    </CodeBlock>
+                  ),
+                },
+              ]}
+            />
+          </Panel>
+        ),
+        code: `<Checklist steps={[{
+  state: 'next', title: 'Call the token from a CI job',
+  why: 'The job asks tokengate for the call; the secret stays here.',
+  action: { href: '/admin/consumers/github-acme', label: 'Open the consumer' },
+  detail: <CodeBlock label="Workflow step" caption="Add this step to the workflow:">{yaml}</CodeBlock>,
+}]} />`,
+      },
+      {
         title: 'Progress',
         render: () => (
           <>
@@ -1809,7 +2134,10 @@ export const viz: readonly ComponentDoc[] = [
               <>
                 <code>state</code> (<code>'done' | 'next' | 'todo'</code>), <code>title</code>,{' '}
                 <code>why</code>, <code>action?</code> (<code>{'{ href, label }'}</code>; primary on
-                next, hidden when done), <code>quick?</code>, <code>quickLabel?</code>.
+                next, hidden when done), <code>ask?</code> (replaces the action when the reader may
+                not do the step: an AskSomeone), <code>quick?</code>, <code>quickLabel?</code>,{' '}
+                <code>detail?</code> (block content after the shortcuts: a second link, a CodeBlock
+                preview).
               </>
             ),
           },
@@ -1835,6 +2163,7 @@ export const viz: readonly ComponentDoc[] = [
       'An ordered list of steps with h3 titles; the state is the badge word (Done, To do), the number circle is hidden.',
       'The progress bar is hidden; the sentence "1 of 3 done" is read.',
       'Quick links are a nav named by quickLabel.',
+      'A step the reader may not do says why and who can, with ask; it never shows a disabled button.',
     ],
     do: ['Mark exactly one step next.', 'Say why each step matters in one line.'],
     dont: ['Do not give a done step a button.', 'Do not use more than one primary button.'],
@@ -2073,6 +2402,35 @@ export const viz: readonly ComponentDoc[] = [
 <ArrowRow consumer={{ name: 'Buildkite (acme) › pipeline deploy', logo: { brand: 'buildkite' } }}
   token={{ name: 'Slack (legacy)', logo: { brand: 'slack', disabled: true }, context: 'Post messages' }} />`,
       },
+      {
+        title: 'Consumer only',
+        description: (
+          <>
+            Without <code>token</code> the row is the consumer side alone, with no arrow and no
+            verb: a caller refused before a token was chosen, an unverified caller.
+          </>
+        ),
+        layout: 'stack',
+        render: () => (
+          <>
+            <ArrowRow
+              consumer={{
+                name: 'GitHub Actions (acme) › acme/web',
+                logo: { brand: 'github' },
+                context: 'branch feature/login-redesign',
+              }}
+            />
+            <ArrowRow
+              href="/admin/requests?reason=issuer_unknown"
+              consumer={{ name: 'Unknown issuer', context: 'token.actions.example.com' }}
+            />
+          </>
+        ),
+        code: `<ArrowRow consumer={{ name: 'GitHub Actions (acme) › acme/web', logo: { brand: 'github' },
+  context: 'branch feature/login-redesign' }} />
+<ArrowRow href="/admin/requests?reason=issuer_unknown"
+  consumer={{ name: 'Unknown issuer', context: 'token.actions.example.com' }} />`,
+      },
     ],
     props: [
       {
@@ -2093,8 +2451,8 @@ export const viz: readonly ComponentDoc[] = [
           {
             name: 'token',
             type: 'ArrowEnd',
-            required: true,
-            description: 'Right side, same shape.',
+            description:
+              'Right side, same shape. Leave out for a consumer-only row: no arrow, no verb.',
           },
           { name: 'href', type: 'string', description: 'Makes the row one link.' },
           {
@@ -2110,10 +2468,11 @@ export const viz: readonly ComponentDoc[] = [
     accessibility: [
       'The arrow is hidden and a hidden "can use" takes its place: "GitHub Actions (acme) › acme/api · environment production can use Slack · Post messages".',
       'Logos are hidden; names are text.',
+      'The "·" before a context is hidden (span.sep), so it is not read; a page-local two-line layout can hide it with .sep.',
     ],
     do: ['Put the constraint on the consumer side and the operation on the token side.'],
     dont: ['Do not put two links in one row: link the access, filter elsewhere.'],
-    classes: ['arrow', 'side-c', 'side-t', 'to', 'ctx', 'ent-n'],
+    classes: ['arrow', 'side-c', 'side-t', 'to', 'ctx', 'sep', 'ent-n'],
   },
   {
     slug: 'sparkline',
@@ -2326,7 +2685,7 @@ export const viz: readonly ComponentDoc[] = [
       {
         title: 'At scale',
         description:
-          'The server caps the rows per consumer and the consumers per token: a dashed “+ 5 more accesses” row, and one group node for the rest that opens the matrix.',
+          'The server caps the rows per consumer and the consumers per token: a dashed “+ 5 more accesses” row, and one group node for the rest that opens the matrix. note says what the map leaves out, under the map.',
         layout: 'stack',
         render: () => (
           <Tray id="wcu-ex-scale" title="Who can use Slack" count={31}>
@@ -2356,13 +2715,21 @@ export const viz: readonly ComponentDoc[] = [
                 label: '+ 13 more consumers · 23 accesses',
                 line: 'Open them in the matrix, filtered to Slack',
               }}
+              note={
+                <>
+                  <b>14 consumers, 31 accesses.</b> The map draws the busiest consumer and groups
+                  the rest. <a href="#">Open the matrix</a> to see all 31 accesses.
+                </>
+              }
             />
           </Tray>
         ),
         code: `<WhoCanUse … groups={busiest.map((g) => ({ …g, accesses: g.accesses.slice(0, 2),
   more: { href: '…', label: '+ 6 more accesses', srSuffix: 'of GitHub Actions (acme) to Slack', meta: '1 expiring' } }))}
   rest={{ href: '/admin/access?token=slack&view=matrix&rest=1', label: '+ 13 more consumers · 23 accesses',
-    line: 'Open them in the matrix, filtered to Slack' }} />`,
+    line: 'Open them in the matrix, filtered to Slack' }}
+  note={<><b>14 consumers, 31 accesses.</b> The map draws the busiest consumer and groups the rest.{' '}
+    <a href="/admin/access?token=slack&view=matrix">Open the matrix</a> to see all 31 accesses.</>} />`,
       },
     ],
     props: [
@@ -2404,6 +2771,12 @@ export const viz: readonly ComponentDoc[] = [
             default: '3',
             description: 'Level of the empty title; a Tray around it shifts it.',
           },
+          {
+            name: 'note',
+            type: 'Child',
+            description:
+              'Scale note inside the panel, under the map (.cmap-note): what the map leaves out, with a link to all of it.',
+          },
           { name: 'footer', type: 'Child', description: 'Footer line under the panel (.wfoot).' },
           {
             name: 'footerAction',
@@ -2420,7 +2793,10 @@ export const viz: readonly ComponentDoc[] = [
       'Status is a word in a badge; the warn ring and dashed wires only add to it.',
       'The “+ 6 more accesses” link names its consumer and token with srSuffix.',
     ],
-    do: ['Cap the rows per consumer and say how many are left, with a link to all of them.'],
+    do: [
+      'Cap the rows per consumer and say how many are left, with a link to all of them.',
+      'Keep the status a short word: a long one (Inactive: token disabled) moves under the access text in a narrow row.',
+    ],
     dont: ['Do not draw more than about 3 consumers: group the rest into the matrix node.'],
     classes: [
       'wmap',
@@ -2435,6 +2811,7 @@ export const viz: readonly ComponentDoc[] = [
       'wghost',
       'is-empty',
       'wfoot',
+      'cmap-note',
       'node',
       'cnode',
       'cnt',

@@ -1,6 +1,7 @@
 // Internal wiring of the forms group (not exported from the barrel). A Field or FieldSet provides
 // the ids its control needs; a Reveal marks a hidden branch, where `required` is a bug.
 import { createContext, useContext } from 'hono/jsx';
+import { idList } from '../../lib/cx';
 
 /** What a Field gives the one control inside it: its id and the ids that describe it. */
 export interface FieldControl {
@@ -32,7 +33,8 @@ export function useControl(
   if (!id) throw new Error(`${component} needs an id, or a Field around it`);
   return {
     id,
-    describedBy: props.describedBy ?? field?.describedBy,
+    // an explicit describedBy (a shared hint) comes after the Field's own hint, error and note
+    describedBy: idList(field?.describedBy, props.describedBy),
     invalid: props.invalid ?? field?.invalid ?? false,
   };
 }

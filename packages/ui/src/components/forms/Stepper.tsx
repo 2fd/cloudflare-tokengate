@@ -1,7 +1,8 @@
 import type { Child } from 'hono/jsx';
-import { cx } from '../../lib/cx';
+import { cx, idList } from '../../lib/cx';
 import { H, useHeadingLevel, type HeadingLevel } from '../../lib/heading';
 import { ChoiceContext, type LiveSlot } from './context';
+import { FieldError } from './Field';
 
 export interface StepperProps {
   class?: string;
@@ -21,6 +22,13 @@ export interface FormStepProps {
   title: Child;
   /** One line under the title (inherited facts, what the step decides). */
   description?: Child;
+  /** `fieldset` step only: hint under the description (`${id}-hint`). Needs `id`. */
+  hint?: Child;
+  /**
+   * `fieldset` step only: the server's error, above the choices (`${id}-error`), as on a FieldSet.
+   * Needs `id`.
+   */
+  error?: Child;
   /**
    * `fieldset` (default): the step is one question; the title is its legend and the choices sit
    * directly inside. `group`: the step holds several fields; the title is a heading.
@@ -60,6 +68,12 @@ export function FormStep(props: FormStepProps) {
     props.countScope && 'count-scope',
   );
   let body: Child;
+  if ((props.hint || props.error) && props.kind === 'group') {
+    throw new Error('FormStep: hint and error are for a fieldset step (a group holds Fields)');
+  }
+  if ((props.hint || props.error) && !props.id) {
+    throw new Error('FormStep: hint and error need an id');
+  }
   if (props.kind === 'group') {
     const hLevel = useHeadingLevel(props.headingLevel ?? 2);
     const headingId = props.id ? `${props.id}-h` : undefined;
@@ -86,13 +100,21 @@ export function FormStep(props: FormStepProps) {
     ) : (
       props.children
     );
+    const hintId = props.hint ? `${props.id}-hint` : undefined;
+    const errorId = props.error ? `${props.id}-error` : undefined;
     body = (
-      <fieldset class={bodyClass} id={props.id}>
+      <fieldset class={bodyClass} id={props.id} aria-describedby={idList(hintId, errorId)}>
         <legend class="fstep-t">
           {prefix}
           {props.title}
         </legend>
         {props.description ? <p class="hint">{props.description}</p> : null}
+        {hintId ? (
+          <span class="hint" id={hintId}>
+            {props.hint}
+          </span>
+        ) : null}
+        {errorId ? <FieldError id={errorId}>{props.error}</FieldError> : null}
         {inner}
       </fieldset>
     );

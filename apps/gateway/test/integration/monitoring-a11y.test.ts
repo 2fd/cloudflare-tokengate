@@ -36,11 +36,15 @@ function checkPage(html: string, label: string): void {
     expect(table, label).toMatch(/^<table[^>]*>\s*<caption/);
     expect(table, label).toContain('<th scope="col"');
   }
-  const regions =
-    html.match(
-      /<div class="table-region" role="region" aria-labelledby="[^"]+" tabindex="0">\s*<table/g,
-    ) ?? [];
-  expect(regions.length, label).toBe(tables.length);
+  // Every data table sits in a ui Table region (div.scroll); only the narrow before/after tables
+  // of the audit log (table.diff, three short columns inside a disclosure) have none.
+  const regions = [...html.matchAll(/<div class="scroll" role="region"([^>]*)>\s*<table/g)];
+  const diffs = tables.filter((table) => table.startsWith('<table class="diff">'));
+  expect(regions.length, label).toBe(tables.length - diffs.length);
+  for (const region of regions) {
+    expect(region[1], label).toContain('tabindex="0"');
+    expect(region[1], label).toMatch(/aria-label(?:ledby)?="[^"]+"/);
+  }
   // aria-describedby and aria-labelledby only name ids that exist.
   const ids = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]));
   for (const ref of html.matchAll(/aria-(?:describedby|labelledby)="([^"]+)"/g)) {
@@ -54,9 +58,10 @@ function checkPage(html: string, label: string): void {
   // At most one page-level autofocus (the Cancel buttons of closed dialogs do not count).
   const outsideDialogs = html.replace(/<dialog[\s\S]*?<\/dialog>/g, '');
   expect((outsideDialogs.match(/\sautofocus/g) ?? []).length, label).toBeLessThanOrEqual(1);
-  // Every link that opens in-page tabs marks the current one.
+  // Every row of view links (outcome and category tabs, time range and view controls) marks the
+  // current one.
   for (const nav of html.matchAll(
-    /<nav aria-label="(Time range|Outcome|Category)" class="tabs">([\s\S]*?)<\/nav>/g,
+    /<nav class="(?:tabs|seg sm)" aria-label="(Time range|Outcome|Category|View)">([\s\S]*?)<\/nav>/g,
   )) {
     expect(nav[2], `${label}: ${nav[1]}`).toContain('aria-current="page"');
   }
@@ -94,17 +99,18 @@ describe('Monitoring pages: WCAG 2.2 AA markup', () => {
     const html = await (
       await adminGet(fixture.app, await loginAs(fixture.app, viewer), '/admin')
     ).text();
-    expect(html).toMatch(/<time datetime="\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z">/);
+    expect(html).toMatch(/<time datetime="\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z">/);
     expect(html).toMatch(
-      /<svg class="chart-svg" viewBox="[^"]+" role="img" aria-labelledby="traffic-chart-title traffic-chart-desc">/,
+      /<svg class="chart" viewBox="[^"]+" role="img" aria-labelledby="traffic-chart-t traffic-chart-d" focusable="false">/,
     );
-    expect(html).toContain('<desc id="traffic-chart-desc">Peak: ');
+    expect(html).toContain('<desc id="traffic-chart-d">Peak: ');
     expect(html).toMatch(
-      /<\/svg><figcaption>[\s\S]*?<\/figcaption><details><summary>Show the numbers<\/summary><div class="table-region"/,
+      /<\/svg><\/div><div class="panel"><details class="numbers"><summary>Show the numbers<\/summary><div class="scroll"/,
     );
-    // Denied and errors differ by pattern, not only by colour.
-    expect(html).toContain('<pattern id="chart-hatch"');
-    expect(html).toContain('<pattern id="chart-dots"');
+    // Each bar has its own title; denied and errors differ by pattern, not only by colour.
+    expect(html).toMatch(/<g class="bar[^"]*"><title>\d{2}:\d{2}–\d{2}:\d{2}[^<]*: \d+ requests?/);
+    expect(html).toContain('<pattern id="hatch"');
+    expect(html).toContain('<pattern id="dots"');
   });
 
   it('error re-renders: "Error:" title, a focused summary linking to invalid fields', async () => {
@@ -119,15 +125,14 @@ describe('Monitoring pages: WCAG 2.2 AA markup', () => {
     checkPage(html, 'requests error');
     expect(html).toContain('<title>Error: Requests');
     expect(html).toContain(
-      '<div class="error-summary" role="group" tabindex="-1" autofocus="" aria-labelledby="es-h">',
+      '<div class="callout bad errsum" id="error-summary" role="group" tabindex="-1" autofocus="" aria-labelledby="error-summary-h">',
     );
+    // A filter menu with an invalid value: the summary links the menu, which renders open on its
+    // list of valid choices, and the error text follows the menus.
     for (const field of ['token', 'reason']) {
       expect(html).toContain(`<a href="#f-${field}">`);
-      expect(html).toMatch(
-        new RegExp(
-          `<select id="f-${field}" name="${field}" aria-describedby="f-${field}-hint f-${field}-error" aria-invalid="true">`,
-        ),
-      );
+      expect(html).toContain(`<details class="fadd" id="f-${field}" open="">`);
+      expect(html).toContain(`<p class="field-error" id="f-${field}-error">`);
     }
     const retention = await adminPost(a, await loginAs(a, owner), '/admin/retention', {
       request_log_retention_days: '0',
@@ -136,6 +141,19 @@ describe('Monitoring pages: WCAG 2.2 AA markup', () => {
     const form = await retention.text();
     checkPage(form, 'retention error');
     expect(form).toContain('<a href="#f-request_log_retention_days">');
+    // A group error links to the first radio (a fieldset cannot take focus), which is invalid.
+    const group = await adminPost(a, await loginAs(a, owner), '/admin/retention', {
+      audit_log_retention_days: '10',
+      allowed_sample_rate: '',
+    });
+    expect(group.status).toBe(400);
+    const groupHtml = await group.text();
+    checkPage(groupHtml, 'retention group error');
+    expect(groupHtml).toContain('<a href="#f-allowed_sample_rate-1">');
+    expect(groupHtml).toMatch(
+      /<input type="radio" id="f-allowed_sample_rate-1"[^>]*aria-invalid="true"/,
+    );
+    expect(groupHtml).toContain('<fieldset class="field" id="f-allowed_sample_rate"');
   });
 
   it('the notice after a save is the one autofocus, with role=status', async () => {
@@ -144,7 +162,9 @@ describe('Monitoring pages: WCAG 2.2 AA markup', () => {
       await adminGet(a, await loginAs(a, owner), '/admin/retention?notice=saved')
     ).text();
     checkPage(html, 'retention notice');
-    expect(html).toContain('<div class="notice" role="status" tabindex="-1" autofocus="">');
+    expect(html).toContain(
+      '<div class="callout ok notice" role="status" tabindex="-1" autofocus="">',
+    );
     await env.DB.prepare('DELETE FROM audit_log').run();
   });
 });

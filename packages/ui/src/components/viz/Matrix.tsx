@@ -1,5 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { SrPrefix } from '../../lib/sr';
 import { LogoTile, type LogoSpec } from '../base/Logo';
 
 export interface MatrixColumn {
@@ -16,6 +17,8 @@ export interface MatrixColumn {
 export interface MatrixCell {
   /** The access. */
   href: string;
+  /** Hidden text read first, so the link names the access ("acme/api can use OpenAI:"). */
+  srPrefix?: string;
   /** `ok` (default) active, `warn` expiring or risk, `bad` expired, `off` inactive (dashed). */
   tone?: 'ok' | 'warn' | 'bad' | 'off';
   /** Status word ("Active", "Secret expires", "Expired", "Inactive"). */
@@ -37,8 +40,11 @@ export interface MatrixRow {
   meta?: Child;
   /** Mono label (repositories, pipelines). Default true. */
   mono?: boolean;
-  /** Cells by column id. A missing column is an empty cell that offers "+". */
-  cells: Readonly<Record<string, MatrixCell>>;
+  /**
+   * Cells by column id. An array stacks one cell per access (overlapping accesses). A missing
+   * column is an empty cell: "+" with `addHref`, "—" without.
+   */
+  cells: Readonly<Record<string, MatrixCell | readonly MatrixCell[]>>;
 }
 
 export interface MatrixGroup {
@@ -56,12 +62,19 @@ export interface MatrixProps {
   label: string;
   /** Header of the row-label column ("Consumer › repository"). */
   corner: string;
+  /** Table caption, visually hidden (`caption.vh`): what the matrix shows. */
+  caption?: Child;
   columns: readonly MatrixColumn[];
   groups: readonly MatrixGroup[];
-  /** Link of an empty cell: the create form, prefilled with the row and the column. */
-  addHref: (row: MatrixRow, column: MatrixColumn, group: MatrixGroup) => string;
-  /** Accessible name of an empty cell. Default "Give {row} access to {column}". */
+  /**
+   * Link of an empty cell: the create form, prefilled with the row and the column. Leave out for
+   * a read-only matrix (a viewer): empty cells show "—" (`.mnone`) and offer nothing.
+   */
+  addHref?: (row: MatrixRow, column: MatrixColumn, group: MatrixGroup) => string;
+  /** Accessible name of an empty cell with `addHref`. Default "Give {row} access to {column}". */
   addLabel?: (row: MatrixRow, column: MatrixColumn) => string;
+  /** Accessible name of an empty cell without `addHref`. Default "No access". */
+  emptyLabel?: (row: MatrixRow, column: MatrixColumn) => string;
   class?: string;
 }
 
@@ -73,6 +86,7 @@ function Cell(props: { cell: MatrixCell }) {
   const glyph = cell.glyph ?? GLYPH[tone];
   return (
     <a class={cx('mcell', tone !== 'ok' && tone)} href={cell.href}>
+      <SrPrefix text={cell.srPrefix} />
       <span class="s">
         {glyph ? <span aria-hidden="true">{glyph}</span> : null}
         {cell.status}
@@ -94,9 +108,12 @@ export function Matrix(props: MatrixProps) {
   const addLabel =
     props.addLabel ??
     ((row: MatrixRow, column: MatrixColumn) => `Give ${row.label} access to ${column.name}`);
+  const emptyLabel = props.emptyLabel ?? (() => 'No access');
+  const { addHref } = props;
   return (
     <div class={cx('matrix', props.class)} role="region" tabindex={0} aria-label={props.label}>
       <table class="mx">
+        {props.caption !== undefined ? <caption class="vh">{props.caption}</caption> : null}
         <thead>
           <tr>
             <th scope="col">{props.corner}</th>
@@ -145,16 +162,23 @@ export function Matrix(props: MatrixProps) {
                   {row.meta !== undefined ? <span class="meta">{row.meta}</span> : null}
                 </th>
                 {columns.map((column) => {
-                  const cell = row.cells[column.id];
+                  const value = row.cells[column.id];
+                  const cells: readonly MatrixCell[] =
+                    value === undefined ? [] : Array.isArray(value) ? value : [value as MatrixCell];
                   return (
                     <td>
-                      {cell ? (
-                        <Cell cell={cell} />
-                      ) : (
-                        <a class="madd" href={props.addHref(row, column, group)}>
+                      {cells.length > 0 ? (
+                        cells.map((cell) => <Cell cell={cell} />)
+                      ) : addHref ? (
+                        <a class="madd" href={addHref(row, column, group)}>
                           <span aria-hidden="true">+</span>
                           <span class="vh">{addLabel(row, column)}</span>
                         </a>
+                      ) : (
+                        <span class="mnone">
+                          <span aria-hidden="true">—</span>
+                          <span class="vh">{emptyLabel(row, column)}</span>
+                        </span>
                       )}
                     </td>
                   );

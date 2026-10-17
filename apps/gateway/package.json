@@ -18,6 +18,7 @@
     "test:scripts": "bash scripts/check-config.sh && bash test/security/check-config-test.sh && bash scripts/check-bundle.sh"
   },
   "dependencies": {
+    "@tokengate/ui": "workspace:*",
     "hono": "^4.13.13",
     "jose": "^6.2.12"
   },

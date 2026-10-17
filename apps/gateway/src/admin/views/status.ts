@@ -93,6 +93,7 @@ export function statusLabel(status: StatusKey, detail?: string): string {
   return STATUS[status].label(detail);
 }
 
-export function statusTone(status: StatusKey): Tone {
-  return STATUS[status].tone;
+/** The ui tone of an admin tone (`@tokengate/ui` has no `muted`: its gray tone is `off`). */
+export function uiTone(tone: Tone): 'ok' | 'warn' | 'bad' | 'off' {
+  return tone === 'muted' ? 'off' : tone;
 }

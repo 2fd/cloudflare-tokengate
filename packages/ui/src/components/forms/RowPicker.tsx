@@ -1,7 +1,7 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
 import { LogoTile, type LogoSpec } from '../base/Logo';
-import { type ChoiceBase, choiceAttrs, isChecked } from './choice';
+import { type ChoiceBase, choiceAttrs, firstChoiceId, isChecked } from './choice';
 import { useChoiceIds } from './context';
 
 export interface RowPick extends ChoiceBase {
@@ -26,6 +26,11 @@ export interface RowPickerProps {
   id?: string;
   /** Never inside a Reveal. */
   required?: boolean;
+  /**
+   * The server rejected the group (the FieldSet or FormStep shows the error): the first row that
+   * is not disabled gets `aria-invalid`. It is the ErrorSummary link target (`firstChoiceId`).
+   */
+  invalid?: boolean;
   class?: string;
 }
 
@@ -35,6 +40,7 @@ export interface RowPickerProps {
  */
 export function RowPicker(props: RowPickerProps) {
   const prefix = useChoiceIds('RowPicker', props);
+  const invalidId = props.invalid && prefix ? firstChoiceId(prefix, props.options) : undefined;
   return (
     <div class={cx('rlist', props.class)}>
       {props.options.map((option, index) => {
@@ -53,6 +59,9 @@ export function RowPicker(props: RowPickerProps) {
               checked={isChecked(option, props.value)}
               disabled={option.disabled}
               required={props.required}
+              aria-invalid={
+                invalidId !== undefined && attrs.inputId === invalidId ? 'true' : undefined
+              }
             />
             {option.logo !== undefined ? <LogoTile logo={option.logo} size="sm" /> : null}
             <span class={cx('t', option.mono && 'mono')}>

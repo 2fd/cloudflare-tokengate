@@ -1,4 +1,4 @@
-import { RiskAcceptance } from '@tokengate/ui';
+import { LiveForm, RiskAcceptance } from '@tokengate/ui';
 import type { ComponentDoc } from '../types';
 
 const prRisk = {
@@ -80,6 +80,28 @@ export const riskAcceptance: ComponentDoc = {
   confirm="I accept this risk for acme/api → Slack" checked
   hint="The access page shows “⚠ Risk accepted” with your name." />`,
     },
+    {
+      title: 'Server-computed, required',
+      description:
+        'always: the server computed the risk (a copy, the row editor, validator warnings), so the block shows inside a LiveForm without a checked risky option. Only then can the box be required: it is always visible, so it never blocks a submit it hides. There is no default hint.',
+      layout: 'stack',
+      render: () => (
+        <LiveForm layout="fields" action="/admin/access/copy">
+          <RiskAcceptance
+            id="ra-srv"
+            title="Accept 1 risk to copy this access"
+            risks={[prRisk]}
+            confirm="I accept this risk for acme/web → Slack"
+            always
+            required
+          />
+        </LiveForm>
+      ),
+      code: `<LiveForm layout="fields" action="/admin/access/copy">
+  <RiskAcceptance id="risk" title="Accept 1 risk to copy this access" risks={[prRisk]}
+    confirm="I accept this risk for acme/web → Slack" always required />
+</LiveForm>`,
+    },
   ],
   props: [
     {
@@ -117,7 +139,24 @@ export const riskAcceptance: ComponentDoc = {
         },
         { name: 'value', type: 'string', default: "'1'", description: 'Checkbox value.' },
         { name: 'checked', type: 'boolean', description: 'Keep it checked on a re-render.' },
-        { name: 'hint', type: 'Child | null', description: 'Line under the box; null hides it.' },
+        {
+          name: 'hint',
+          type: 'Child | null',
+          default: "'Or pick a safer option above; …' (none with always)",
+          description: 'Line under the box; null hides it.',
+        },
+        {
+          name: 'always',
+          type: 'boolean',
+          description:
+            'Shown without a checked risky option (.riskacc.always): for risks the server computed.',
+        },
+        {
+          name: 'required',
+          type: 'boolean',
+          description:
+            'required on the box. Only with always (a type error otherwise); never inside a Reveal (it throws).',
+        },
         {
           name: 'error',
           type: 'Child',
@@ -135,7 +174,7 @@ export const riskAcceptance: ComponentDoc = {
   ],
   accessibility: [
     'A group labelled by its heading; the ⚠ glyph is hidden and the heading says “risk” in words.',
-    'The box is never required, so a hidden block never blocks the submit; the server refuses a risky save without it and re-renders with the error.',
+    'The box is never required unless always, so a hidden block never blocks the submit; the server refuses a risky save without it and re-renders with the error. An always block is visible, so its box may be required.',
     'The error describes the box and sets aria-invalid; link to `${id}-ack` from the ErrorSummary.',
     'Warn text and background meet 4.5:1 in both schemes.',
   ],
@@ -144,5 +183,5 @@ export const riskAcceptance: ComponentDoc = {
     'Do not use it for actions that cannot be undone.',
     'Do not accept risks with a single page-wide checkbox for several accesses.',
   ],
-  classes: ['riskacc', 'check', 'hint', 'field-error'],
+  classes: ['riskacc', 'always', 'check', 'hint', 'field-error'],
 };

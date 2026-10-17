@@ -64,6 +64,23 @@ describe('Tray header bar', () => {
     );
   });
 
+  it('drops the header row when the hidden title has nothing beside it', () => {
+    const html = render(
+      <Tray id="adv" title="Advanced" hideTitle headingLevel={3} footer="f">
+        <Panel variant="pad">x</Panel>
+      </Tray>,
+    );
+    expect(html).toBe(
+      '<section class="tray" id="adv" aria-labelledby="adv-h"><h3 class="vh" id="adv-h">Advanced</h3><div class="panel pad">x</div><div class="tray-f">f</div></section>',
+    );
+  });
+
+  it('keeps the header row for a hidden title with actions only', () => {
+    expect(render(<Tray id="a" title="T" hideTitle actions={<a href="#">x</a>} />)).toContain(
+      '<div class="tray-h"><h2 class="vh" id="a-h">T</h2><div class="end"><a href="#">x</a></div></div>',
+    );
+  });
+
   it('keeps the visible title block when the title is shown', () => {
     expect(render(<Tray id="q" title="Tokens" bar={<nav>q</nav>} />)).toContain(
       '<div class="t"><h2 id="q-h">Tokens</h2></div><nav>q</nav>',

@@ -1,6 +1,7 @@
 import type { Child } from 'hono/jsx';
-import { cx } from '../../lib/cx';
+import { cx, idList } from '../../lib/cx';
 import { assertNotRequiredInReveal } from './context';
+import { FieldError } from './Field';
 
 export interface CheckboxProps {
   name: string;
@@ -15,16 +16,27 @@ export interface CheckboxProps {
   hint?: Child;
   /** Set when the server rejected the form because of this box (risk not accepted). */
   invalid?: boolean;
+  /**
+   * The server's error for this box, as a line above it (`${id}-error`). Needs `id`. Implies
+   * `invalid`.
+   */
+  error?: Child;
+  /** Ids that describe the box, after the error. */
   describedBy?: string;
   class?: string;
   /** The label: what checking the box does, as a statement. */
   children: Child;
 }
 
-/** A single checkbox row (`label.check`): box, then the label and an optional hint line. */
+/**
+ * A single checkbox row (`label.check`): box, then the label and an optional hint line. With an
+ * `error`, the error line (`p.field-error`) comes first, outside the label.
+ */
 export function Checkbox(props: CheckboxProps) {
   assertNotRequiredInReveal('Checkbox', props.required);
-  return (
+  if (props.error && !props.id) throw new Error('Checkbox: error needs an id');
+  const errorId = props.error ? `${props.id}-error` : undefined;
+  const row = (
     <label class={cx('check', props.class)}>
       <input
         type="checkbox"
@@ -34,8 +46,8 @@ export function Checkbox(props: CheckboxProps) {
         checked={props.checked}
         disabled={props.disabled}
         required={props.required}
-        aria-invalid={props.invalid ? 'true' : undefined}
-        aria-describedby={props.describedBy}
+        aria-invalid={props.invalid || errorId ? 'true' : undefined}
+        aria-describedby={idList(errorId, props.describedBy)}
       />
       {props.hint ? (
         <span>
@@ -46,5 +58,12 @@ export function Checkbox(props: CheckboxProps) {
         <span>{props.children}</span>
       )}
     </label>
+  );
+  if (!errorId) return row;
+  return (
+    <>
+      <FieldError id={errorId}>{props.error}</FieldError>
+      {row}
+    </>
   );
 }

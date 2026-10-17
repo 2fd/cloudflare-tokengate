@@ -3,18 +3,52 @@
 // I-AUTHZ-2, audit I-AUDIT-1). Adding a consumer asks only what cannot be derived (its
 // organizations, groups or issuer); an issuer/JWKS change under enabled accesses needs the confirm
 // checkbox; disabling never validates; deleting with accesses is one confirmed cascade.
+import {
+  ArrowRow,
+  Button,
+  Callout,
+  Cell,
+  Chip,
+  Chips,
+  DangerRow,
+  DangerZone,
+  DetailLayout,
+  Dialog,
+  DialogClose,
+  DialogTrigger,
+  Disclosure,
+  EmptyState as UiEmptyState,
+  Entity,
+  formatTime,
+  GroupRow,
+  Identity,
+  KeyValue,
+  LiveForm,
+  Mono,
+  PageHeader,
+  Panel,
+  RailFoot,
+  RailKeyValue,
+  RelationLine,
+  Row,
+  RowHeader,
+  SubmitRow,
+  Table,
+  Tray,
+} from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
 import type { App } from '../../app';
 import { getCallerProvider } from '../../db/caller-providers';
 import { labelFor, listClaimLabels } from '../../db/claim-labels';
 import { listGrants } from '../../db/grants';
-import type { CallerProvider, ClaimLabel, Grant } from '../../db/types';
+import type { CallerProvider, ClaimLabel, Grant, Service } from '../../db/types';
 import { getProfile } from '../../identity/profiles';
 import { GITHUB_ACTIONS_ISSUER } from '../../identity/profiles/github-actions';
 import { GITLAB_COM_ISSUER } from '../../identity/profiles/gitlab-ci';
 import type { IssuerProfile, ProfileId } from '../../identity/types';
 import type { Condition } from '../../policy/types';
 import { ALLOWED_ALGS, validateCallerProvider } from '../../policy/validate';
+import { loadUnknownIssuers, type UnknownIssuer } from '../access-traffic';
 import { type AccessEdge, type Connections, loadConnections } from '../connections';
 import {
   all,
@@ -26,7 +60,7 @@ import {
   withAnyRefFlags,
 } from '../consumer-access';
 import { formatValueList, parseValueList } from '../grant-text';
-import { loadDone, type NoticeContext, type NoticeTable, resolveNotice } from '../notice';
+import { type NoticeContext, type NoticeTable, resolveNotice } from '../notice';
 import {
   addTenantValue,
   type CallerProviderUpdateInput,
@@ -51,6 +85,18 @@ import {
   type ViewContext,
 } from '../render';
 import {
+  accessesText,
+  consumerLogo,
+  Breakable,
+  busiestFirst,
+  issuerHost,
+  leadStatus,
+  operationsText,
+  StatusDot,
+  tenantsText,
+  tokenLogo,
+} from '../views/access-visuals';
+import {
   AddConsumerFields,
   blankConsumerForm,
   type ConsumerForm,
@@ -58,34 +104,32 @@ import {
   genericAnchorSuggestions,
   parseConsumerForm,
   readConsumerForm,
+  SetForYou,
 } from '../views/add-consumer-fields';
 import {
   ActionButton,
   AskSomeone,
   Checkbox,
   CheckboxGroup,
-  ChipList,
-  type ChipProps,
-  ConfirmDialog,
-  DataTable,
-  Details,
-  EmptyState,
+  type ConfirmDialogProps,
+  ConfirmBox,
+  ConfirmTrigger,
   Field,
   IdWithLabelField,
   NotFound,
+  notFoundText,
   PostForm,
   Select,
   StatusBadge,
-  Time,
   VersionField,
 } from '../views/components';
 import { ConsumerSnippet } from '../views/consumer-snippet';
-import { relativeTime } from '../views/format';
+import { formatCount, lastUsedTime, relativeTime } from '../views/format';
+import { LearnMore } from '../views/header';
 import { anchorsOf } from '../views/matrix';
+import { profileForIssuer } from '../views/monitoring';
 import { RepeatingRows } from '../views/rows';
 import { statusLabel } from '../views/status';
-
-const HOUR_MS = 3_600_000;
 
 export function registerConsumersRoutes(app: App): void {
   app.get('/admin/consumers', listPage);
@@ -128,6 +172,7 @@ const NOTICES: NoticeTable<NoticeContext & ConsumerNoticeData> = {
             action: `${paths.consumer(consumer.id)}/toggle`,
             fields: { enabled: '1', _return: 'detail' },
             label: 'Enable again',
+            srSuffix: consumer.name,
           },
         }
       : {}),
@@ -141,210 +186,456 @@ function pageNotice(c: AdminContext, consumer: CallerProvider | null) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// List and add
+// Shared facts
 
-async function listPage(c: AdminContext) {
-  return renderList(c, null);
+/** "Organization", "Groups", the pin claims of a generic consumer, or null without a pin. */
+function trustKind(consumer: CallerProvider): string | null {
+  const claim = tenantClaimOf(consumer.profile);
+  if (claim === null) {
+    return consumer.tenant_pin.length === 0
+      ? null
+      : `Tenant pin on ${consumer.tenant_pin.map((c) => c.claim).join(', ')}`;
+  }
+  const count = pinValues(consumer.tenant_pin, claim).length;
+  if (count === 0) return null;
+  const word = consumer.profile === 'gitlab-ci' ? 'Group' : 'Organization';
+  return count === 1 ? word : `${word}s`;
 }
 
-async function renderList(
-  c: AdminContext,
-  failed: { form: ConsumerForm; errors: FieldError[] } | null,
-) {
+/** "organization", "groups": the word for a consumer's pinned owners in a sentence. */
+function ownerWord(consumer: CallerProvider, count: number): string {
+  const word = consumer.profile === 'gitlab-ci' ? 'group' : 'organization';
+  return count === 1 ? word : `${word}s`;
+}
+
+function lastCall(
+  edges: readonly AccessEdge[],
+  connections: Pick<Connections, 'usageAvailable'>,
+  now: number,
+): string {
+  if (!connections.usageAvailable) return 'Unknown';
+  const hours = edges
+    .map((edge) => edge.lastUsedHour)
+    .filter((hour): hour is number => hour !== null);
+  return hours.length === 0 ? 'None in 30 days' : lastUsedTime(Math.max(...hours), now);
+}
+
+function byConsumer(accesses: readonly AccessEdge[]): Map<string, AccessEdge[]> {
+  const map = new Map<string, AccessEdge[]>();
+  for (const edge of accesses) {
+    const list = map.get(edge.grant.caller_provider_id) ?? [];
+    list.push(edge);
+    map.set(edge.grant.caller_provider_id, list);
+  }
+  return map;
+}
+
+// ---------------------------------------------------------------------------------------------
+// List
+
+async function listPage(c: AdminContext) {
   const deps = c.get('deps');
-  const connections = withAnyRefFlags(await loadConnections(deps));
-  const consumers = connections.consumers;
-  const anchorClaims = genericAnchorSuggestions(consumers);
+  const [connections, unknownIssuers] = await Promise.all([
+    loadConnections(deps).then(withAnyRefFlags),
+    loadUnknownIssuers(deps),
+  ]);
+  const { consumers, accesses } = connections;
+  const tokenCount = new Set(accesses.map((edge) => edge.grant.service_id)).size;
+  const description = (
+    <>
+      CI systems whose jobs call the gateway.
+      {consumers.length === 0 ? null : accesses.length === 0 ? (
+        ' None can use a token yet.'
+      ) : (
+        <>
+          {' '}
+          Together they can use{' '}
+          <a href={paths.access()}>
+            {tokenCount} {tokenCount === 1 ? 'token' : 'tokens'} through{' '}
+            {accessesText(accesses.length)}
+          </a>
+          .
+        </>
+      )}
+      <LearnMore path="concepts.md#service-consumer" about="service consumers" />
+    </>
+  );
   return renderPage(
     c,
     {
       title: 'Service consumers',
       section: 'consumers',
       subsection: 'consumers',
-      notice: failed ? null : pageNotice(c, null),
-      ...(failed ? { errors: failed.errors, status: 422 as const } : {}),
+      notice: pageNotice(c, null),
+      header: (ctx) => (
+        <PageHeader
+          title="Service consumers"
+          count={consumers.length}
+          description={description}
+          actions={
+            ctx.can('access:write') ? (
+              <>
+                {connections.tokens.length > 0 ? (
+                  <Button href={paths.accessNew()}>Give a consumer access</Button>
+                ) : null}
+                {consumers.length > 0 ? (
+                  <Button variant="primary" plus href={paths.consumerNew()}>
+                    Add consumer
+                  </Button>
+                ) : null}
+              </>
+            ) : undefined
+          }
+        />
+      ),
     },
     (ctx) => (
       <>
-        <p>
-          Consumers are the CI systems whose jobs call the gateway. Give them access to tokens under{' '}
-          <a href={paths.access()}>Consumer access</a>.{' '}
-          <a href={paths.docs('concepts.md#service-consumer')}>What is a consumer?</a>
-        </p>
-        {ctx.can('access:write') ? (
-          <details id="add" class="primary-action" open={consumers.length === 0 || failed !== null}>
-            <summary>Add a consumer</summary>
-            <AddConsumerForm
-              ctx={ctx}
-              form={failed?.form ?? blankConsumerForm()}
-              errors={failed?.errors ?? []}
-              existing={consumers}
-              labels={connections.labels}
-              anchorSuggestions={anchorClaims}
-            />
-          </details>
-        ) : null}
-        {consumers.length === 0 ? (
-          <EmptyState
-            action={
-              ctx.can('access:write') ? null : (
-                <AskSomeone permission="access:write" ctx={ctx} verb="add one" />
-              )
-            }
-          >
-            {ctx.can('access:write') ? (
-              <>
-                No consumers yet. Add the CI system whose jobs will call the gateway.
-                {connections.tokens.length > 0 ? (
-                  <>
-                    {' '}
-                    Or do it in one step:{' '}
-                    <a href={paths.accessNew({ consumer: 'new' })}>Give a consumer access</a>.
-                  </>
-                ) : null}
-              </>
-            ) : (
-              'No consumers yet.'
-            )}
-          </EmptyState>
-        ) : (
-          <ConsumerTable connections={connections} ctx={ctx} />
-        )}
+        <ConsumerList connections={connections} ctx={ctx} />
+        <UnknownIssuers issuers={unknownIssuers} ctx={ctx} />
       </>
     ),
   );
 }
 
-function AddConsumerForm(props: {
-  ctx: ViewContext;
-  form: ConsumerForm;
-  errors: FieldError[];
-  existing: readonly CallerProvider[];
-  labels: readonly ClaimLabel[];
-  anchorSuggestions: readonly string[];
-}) {
-  return (
-    <PostForm action={paths.consumers()} csrf={props.ctx.csrf} class="stack">
-      <AddConsumerFields
-        prefix=""
-        form={props.form}
-        errors={props.errors}
-        existing={props.existing}
-        labels={props.labels}
-        anchorSuggestions={props.anchorSuggestions}
-      />
-      <div class="actions">
-        <button type="submit" class="primary">
-          Add consumer
-        </button>
-      </div>
-    </PostForm>
-  );
-}
-
-function tenantsText(consumer: CallerProvider, labels: readonly ClaimLabel[]): string {
-  const claim = tenantClaimOf(consumer.profile);
-  if (claim === null) {
-    return consumer.tenant_pin.length === 0
-      ? 'No pin'
-      : consumer.tenant_pin.map((c) => `${c.claim}=${c.values.join('|')}`).join(', ');
-  }
-  return pinValues(consumer.tenant_pin, claim)
-    .map((value) => {
-      const label = labelFor(labels, claim, value);
-      return label ? `${label} (${value})` : value;
-    })
-    .join(', ');
-}
-
-function accessChip(edge: AccessEdge, labelSubject = true): ChipProps {
-  const token = edge.token?.name ?? 'a deleted token';
-  const status = statusLabel(edge.status, edge.statusDetail);
-  return {
-    href: paths.accessItem(edge.grant.id),
-    text: labelSubject
-      ? `${token} · ${edge.subject} · ${edge.context}`
-      : `${token} · ${edge.context}`,
-    status: edge.status,
-    ...(edge.statusDetail === undefined ? {} : { statusDetail: edge.statusDetail }),
-    srText: `${edge.subject} in ${edge.context} can use ${token}: ${status}`,
-  };
-}
-
-function ConsumerTable(props: { connections: Connections; ctx: ViewContext }) {
+function ConsumerList(props: { connections: Connections; ctx: ViewContext }) {
   const { connections, ctx } = props;
-  const byConsumer = new Map<string, AccessEdge[]>();
-  for (const edge of connections.accesses) {
-    const list = byConsumer.get(edge.grant.caller_provider_id) ?? [];
-    list.push(edge);
-    byConsumer.set(edge.grant.caller_provider_id, list);
-  }
+  const { consumers } = connections;
+  const canWrite = ctx.can('access:write');
+  const hasTokens = connections.tokens.length > 0;
+  const rowAction = canWrite && hasTokens;
+  const edges = byConsumer(connections.accesses);
+  const tokenCount = new Set(connections.accesses.map((edge) => edge.grant.service_id)).size;
+  const sorted = busiestFirst(consumers, (id) => edges.get(id)?.length ?? 0);
   return (
-    <DataTable<CallerProvider>
-      id="consumers"
-      caption="Service consumers"
-      rowHeader="consumer"
-      rows={connections.consumers}
-      columns={[
-        {
-          key: 'consumer',
-          header: 'Consumer',
-          render: (consumer) => <a href={paths.consumer(consumer.id)}>{consumer.name}</a>,
-        },
-        {
-          key: 'type',
-          header: 'Type',
-          render: (consumer) => getProfile(consumer.profile)?.label ?? consumer.profile,
-        },
-        {
-          key: 'tenants',
-          header: 'Organizations / groups',
-          render: (consumer) =>
-            tenantsText(
-              consumer,
-              connections.labels.filter((label) => label.caller_provider_id === consumer.id),
-            ),
-        },
-        {
-          key: 'uses',
-          header: 'Can use',
-          render: (consumer) => {
-            const edges = byConsumer.get(consumer.id) ?? [];
-            return edges.length === 0 ? (
-              <span class="secondary-text">No token yet</span>
-            ) : (
-              <ChipList
-                label={`Tokens ${consumer.name} can use`}
-                items={edges.map((edge) => accessChip(edge))}
-                max={3}
-                moreHref={paths.access({ consumer: consumer.id })}
-                moreText={`+${edges.length - 3} more`}
-              />
+    <Tray
+      id="cl"
+      title="All consumers"
+      count={consumers.length}
+      description={
+        consumers.length === 0
+          ? undefined
+          : `${accessesText(connections.accesses.length)} to ${tokenCount} ${tokenCount === 1 ? 'token' : 'tokens'}. A chip opens that consumer's accesses for the token.`
+      }
+      actions={
+        consumers.length > 0 ? (
+          <Button size="sm" href={paths.access()}>
+            Open the connections map
+          </Button>
+        ) : undefined
+      }
+    >
+      <Panel variant="flush">
+        <Table
+          id="consumers"
+          labelledBy="cl-h"
+          stackable
+          columns={[
+            { label: 'Consumer' },
+            { label: 'Trusts' },
+            { label: 'Can use' },
+            { label: 'Last call', num: true },
+            { label: 'Status' },
+            ...(rowAction ? [{ label: 'Actions', act: true }] : []),
+          ]}
+        >
+          {sorted.map((consumer) => {
+            const own = edges.get(consumer.id) ?? [];
+            const labels = connections.labels.filter(
+              (label) => label.caller_provider_id === consumer.id,
             );
-          },
-        },
-        {
-          key: 'last',
-          header: 'Last call',
-          render: (consumer) => {
-            const hours = (byConsumer.get(consumer.id) ?? [])
-              .map((edge) => edge.lastUsedHour)
-              .filter((hour): hour is number => hour !== null);
-            if (!connections.usageAvailable) return <span class="secondary-text">Unknown</span>;
-            return hours.length === 0
-              ? 'No allowed calls in 30 days'
-              : relativeTime(Math.max(...hours) + HOUR_MS / 2, ctx.now);
-          },
-        },
-        {
-          key: 'status',
-          header: 'Status',
-          render: (consumer) => <StatusBadge status={consumer.enabled ? 'active' : 'disabled'} />,
-        },
-      ]}
-    />
+            const profile = getProfile(consumer.profile);
+            const kind = trustKind(consumer);
+            return (
+              <Row>
+                <RowHeader>
+                  <Entity
+                    logo={consumerLogo(consumer)}
+                    href={paths.consumer(consumer.id)}
+                    name={consumer.name}
+                    meta={`${profile?.label ?? consumer.profile} · ${issuerHost(consumer.issuer)}`}
+                  />
+                </RowHeader>
+                <Cell label="Trusts">
+                  {kind === null ? (
+                    <span class="t-warn">No pin</span>
+                  ) : (
+                    <TrustsCell consumer={consumer} labels={labels} kind={kind} />
+                  )}
+                </Cell>
+                <Cell label="Can use">
+                  <CanUse consumer={consumer} edges={own} />
+                </Cell>
+                <Cell label="Last call" num nowrap>
+                  {lastCall(own, connections, ctx.now)}
+                </Cell>
+                <Cell label="Status">
+                  <StatusDot status={consumer.enabled ? 'active' : 'disabled'} />
+                </Cell>
+                {rowAction ? (
+                  <Cell act>
+                    <Button
+                      size="sm"
+                      href={paths.accessNew({ consumer: consumer.id })}
+                      srSuffix={`to ${consumer.name}`}
+                    >
+                      Give access
+                    </Button>
+                  </Cell>
+                ) : null}
+              </Row>
+            );
+          })}
+        </Table>
+        {consumers.length === 0 ? (
+          <UiEmptyState
+            title="No consumers yet."
+            description={
+              canWrite ? (
+                <>
+                  Add the CI system whose jobs will call the gateway.
+                  {hasTokens ? (
+                    <>
+                      {' '}
+                      Or do it in one step:{' '}
+                      <a href={paths.accessNew({ consumer: 'new' })}>Give a consumer access</a>.
+                    </>
+                  ) : null}
+                </>
+              ) : undefined
+            }
+            actions={
+              canWrite ? (
+                <Button variant="primary" plus href={paths.consumerNew()}>
+                  Add consumer
+                </Button>
+              ) : (
+                <AskSomeone permission="access:write" ctx={ctx} verb="add a service consumer" />
+              )
+            }
+          />
+        ) : null}
+      </Panel>
+    </Tray>
   );
 }
+
+/**
+ * "Callers no consumer trusts": issuers refused in the last 24 hours (`issuer_unknown`), so an
+ * admin who recognizes one adds it in one click. The issuer is unverified text: it is shown, never
+ * put into the add form (I-LOG-2); a built-in issuer only preselects its type.
+ */
+function UnknownIssuers(props: { issuers: UnknownIssuer[]; ctx: ViewContext }) {
+  const { issuers, ctx } = props;
+  if (issuers.length === 0) return null;
+  return (
+    <Tray
+      id="unk"
+      title="Callers no consumer trusts"
+      description="Refused before a token was chosen, last 24 hours. Add a consumer only if you recognize the issuer."
+      actions={
+        <Button
+          size="sm"
+          href={paths.requests({ outcome: 'denied', token: 'none', reason: 'issuer_unknown' })}
+        >
+          See refused requests
+        </Button>
+      }
+    >
+      <Panel variant="flush">
+        {issuers.map((item) => {
+          const type = profileForIssuer(item.issuer);
+          return (
+            <div class="dz-row">
+              <Entity
+                logo="oidc"
+                name={<span class="mono">{item.issuer}</span>}
+                meta={
+                  <>
+                    Unknown issuer ·{' '}
+                    <span class="t-bad">{formatCount(item.requests)} requests</span> · last seen{' '}
+                    {relativeTime(item.latestTs, ctx.now)}
+                  </>
+                }
+              />
+              {ctx.can('access:write') ? (
+                <Button
+                  href={paths.consumerNew(type ? { type } : undefined)}
+                  srSuffix={`: ${item.issuer}`}
+                >
+                  Add consumer
+                </Button>
+              ) : null}
+            </div>
+          );
+        })}
+      </Panel>
+    </Tray>
+  );
+}
+
+/** "0c9f3e1a-…-123456789abc": a long pin value kept to one line in the list (the page shows it all). */
+function shortValue(value: string): string {
+  return value.length > 24 ? `${value.slice(0, 8)}…${value.slice(-12)}` : value;
+}
+
+/** "organization_id" → "Organization ID": a pin claim as the second line of the Trusts cell. */
+function claimWords(claim: string): string {
+  const words = claim
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((word) => (word.toLowerCase() === 'id' ? 'ID' : word));
+  const text = words.join(' ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * What a consumer trusts, as one short mono line plus its kind: the pinned owners of GitHub and
+ * GitLab, or a generic pin's value under the words of its claim. The full value is in the title.
+ */
+function TrustsCell(props: { consumer: CallerProvider; labels: ClaimLabel[]; kind: string }) {
+  const { consumer } = props;
+  const full = tenantsText(consumer, props.labels);
+  const [only] = consumer.tenant_pin;
+  if (tenantClaimOf(consumer.profile) === null && consumer.tenant_pin.length === 1 && only) {
+    const value = only.values.join(', ');
+    return (
+      <>
+        <span class={only.values.length === 1 ? 'mono nw' : 'mono'} title={full}>
+          {only.values.length === 1 ? shortValue(value) : value}
+        </span>
+        <span class="meta d-block">{claimWords(only.claim)}</span>
+      </>
+    );
+  }
+  return (
+    <>
+      <span class="mono">
+        {full.split(', ').map((part, index) => (
+          <>
+            {index > 0 ? ', ' : null}
+            <span class="nw">{part}</span>
+          </>
+        ))}
+      </span>
+      <span class="meta d-block">{props.kind}</span>
+    </>
+  );
+}
+
+const CHIPS_SHOWN = 4;
+
+/** The tokens one consumer can use: a chip per token (its accesses grouped), then the facts. */
+function CanUse(props: { consumer: CallerProvider; edges: readonly AccessEdge[] }) {
+  const { consumer, edges } = props;
+  if (edges.length === 0) return <span class="meta">No token yet</span>;
+  const tokens = new Map<string, { token: Service | null; edges: AccessEdge[] }>();
+  for (const edge of edges) {
+    const entry = tokens.get(edge.grant.service_id) ?? { token: edge.token, edges: [] };
+    entry.edges.push(edge);
+    tokens.set(edge.grant.service_id, entry);
+  }
+  const groups = [...tokens.entries()].sort((a, b) =>
+    (a[1].token?.name ?? '').localeCompare(b[1].token?.name ?? ''),
+  );
+  const shown = groups.slice(0, CHIPS_SHOWN);
+  const rest = groups.length - shown.length;
+  const facts = edgeFacts(edges);
+  return (
+    <>
+      <Chips
+        label={`Tokens ${consumer.name} can use`}
+        more={
+          rest > 0
+            ? { href: paths.access({ consumer: consumer.id }), label: `+${rest} more` }
+            : undefined
+        }
+      >
+        {shown.map(([tokenId, group]) => {
+          const look = chipLook(group.edges);
+          return (
+            <Chip
+              href={paths.access({ consumer: consumer.id, token: tokenId })}
+              logo={tokenLogo(group.token)}
+              count={group.edges.length}
+              tone={look.tone}
+              glyph={look.glyph}
+              srSuffix={`: ${accessesText(group.edges.length)}${look.words}. Open.`}
+            >
+              {group.token?.name ?? 'Deleted token'}
+            </Chip>
+          );
+        })}
+      </Chips>
+      <span class="meta d-block">
+        {accessesText(edges.length)}
+        {facts.map((fact) => (
+          <>
+            {' · '}
+            <span class={fact.tone ? `t-${fact.tone}` : undefined}>
+              <span aria-hidden="true">{fact.glyph} </span>
+              {fact.text}
+            </span>
+          </>
+        ))}
+      </span>
+    </>
+  );
+}
+
+/** The worst state of a token's accesses, as a chip tone, glyph and spoken words. */
+function chipLook(edges: readonly AccessEdge[]): {
+  tone?: 'warn' | 'bad' | 'off';
+  glyph?: string;
+  words: string;
+} {
+  const expired = edges.filter((edge) => edge.status === 'expired').length;
+  const expiring = edges.filter((edge) => edge.status === 'expiring');
+  const risky = edges.filter((edge) => edge.flags.some((f) => f.status === 'risk_accepted')).length;
+  const off = edges.filter((edge) => edge.status === 'inactive' || edge.status === 'disabled');
+  const words = [
+    expired > 0 ? `${expired} expired` : null,
+    expiring.length > 0 ? statusLabel('expiring', expiring[0]?.statusDetail).toLowerCase() : null,
+    risky > 0 ? 'risk accepted' : null,
+    off.length > 0 ? (off[0]?.status === 'disabled' ? 'disabled' : 'inactive') : null,
+  ].filter((word): word is string => word !== null);
+  const spoken = words.length > 0 ? `, ${words.join(', ')}` : '';
+  if (expired > 0) return { tone: 'bad', glyph: '✕', words: spoken };
+  if (expiring.length > 0) return { tone: 'warn', glyph: '⌛', words: spoken };
+  if (risky > 0) return { tone: 'warn', glyph: '⚠', words: spoken };
+  if (off.length === edges.length) return { tone: 'off', glyph: '⏸', words: spoken };
+  return { words: spoken };
+}
+
+/** The facts line under the chips: risks, expired and expiring accesses, inactive ones. */
+function edgeFacts(
+  edges: readonly AccessEdge[],
+): Array<{ glyph: string; text: string; tone?: 'warn' | 'bad' }> {
+  const facts: Array<{ glyph: string; text: string; tone?: 'warn' | 'bad' }> = [];
+  const risky = edges.filter((edge) => edge.flags.some((f) => f.status === 'risk_accepted')).length;
+  if (risky > 0) facts.push({ glyph: '⚠', text: `${risky} risk accepted`, tone: 'warn' });
+  const expired = edges.filter((edge) => edge.status === 'expired').length;
+  if (expired > 0) facts.push({ glyph: '✕', text: `${expired} expired`, tone: 'bad' });
+  for (const edge of edges.filter((item) => item.status === 'expiring')) {
+    facts.push({
+      glyph: '⌛',
+      text: `1 ${statusLabel('expiring', edge.statusDetail).toLowerCase()}`,
+    });
+  }
+  // One line per reason: "2 inactive: token has no credential".
+  const inactive = new Map<string, number>();
+  for (const edge of edges.filter((item) => item.status === 'inactive')) {
+    const reason = edge.statusDetail ?? '';
+    inactive.set(reason, (inactive.get(reason) ?? 0) + 1);
+  }
+  for (const [reason, count] of inactive) {
+    facts.push({ glyph: '⏸', text: `${count} inactive${reason ? `: ${reason}` : ''}` });
+  }
+  return facts;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Add
 
 async function newPage(c: AdminContext) {
   return renderNew(c, blankConsumerForm(c.req.query('type')), [], 200);
@@ -357,31 +648,1020 @@ async function renderNew(
   status: 200 | 409 | 422,
 ) {
   const connections = withAnyRefFlags(await loadConnections(c.get('deps')));
+  const hasTokens = connections.tokens.length > 0;
   return renderPage(
     c,
     {
       title: 'Add a service consumer',
       section: 'consumers',
       subsection: 'consumers',
-      breadcrumbs: [
-        { href: paths.consumers(), label: 'Service consumers' },
-        { href: paths.consumerNew(), label: 'Add a service consumer' },
-      ],
       errors,
       status,
+      errorSummary: errors.length > 0 ? { title: 'The consumer was not added' } : undefined,
+      header: (
+        <PageHeader
+          crumbs={[
+            { label: 'Service consumers', href: paths.consumers() },
+            { label: 'Add consumer' },
+          ]}
+          title="Add a service consumer"
+          description="Tell tokengate which CI system to trust. Adding a consumer gives nobody access; you choose tokens next."
+        />
+      ),
     },
     (ctx) => (
-      <AddConsumerForm
-        ctx={ctx}
-        form={form}
-        errors={errors}
-        existing={connections.consumers}
-        labels={connections.labels}
-        anchorSuggestions={genericAnchorSuggestions(connections.consumers)}
-      />
+      <LiveForm
+        id="f-add"
+        action={paths.consumers()}
+        hidden={ctx.hidden()}
+        rail={<SetForYou existing={connections.consumers} />}
+      >
+        <AddConsumerFields
+          prefix=""
+          live={1}
+          form={form}
+          errors={errors}
+          existing={connections.consumers}
+          labels={connections.labels}
+          anchorSuggestions={genericAnchorSuggestions(connections.consumers)}
+        />
+        <SubmitRow
+          hint={
+            hasTokens
+              ? 'Next you land on “Give a consumer access” with this consumer preselected.'
+              : 'Next you get the workflow snippet for this consumer.'
+          }
+        >
+          <Button variant="primary" type="submit">
+            Add consumer
+          </Button>
+          <Button href={paths.consumers()}>Cancel</Button>
+        </SubmitRow>
+      </LiveForm>
     ),
   );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Consumer page
+
+interface DetailState {
+  errors?: FieldError[];
+  /** Which form the errors belong to; its dialog or disclosure opens. */
+  open?: 'rename' | 'trust' | 'tenants' | null;
+  rename?: string;
+  trust?: Fields;
+  tenant?: string;
+  pin?: Array<{ claim: string; value: string }>;
+  status?: 200 | 400 | 409 | 422;
+}
+
+async function detailPage(c: AdminContext) {
+  const loaded = await loadProvider(c);
+  if (!loaded) return notFound(c);
+  return renderDetail(c, loaded.provider, loaded.profile, {
+    open: c.req.query('open') === 'trust' ? 'trust' : null,
+  });
+}
+
+interface ConsumerPageModel {
+  provider: CallerProvider;
+  profile: IssuerProfile;
+  connections: Connections;
+  labels: ClaimLabel[];
+  grants: Grant[];
+  origin: string;
+  warnings: string[];
+  state: DetailState;
+}
+
+async function renderDetail(
+  c: AdminContext,
+  provider: CallerProvider,
+  profile: IssuerProfile,
+  state: DetailState,
+) {
+  const deps = c.get('deps');
+  const [connections, labels, grants] = await Promise.all([
+    loadConnections(deps, { consumerId: provider.id }).then(withAnyRefFlags),
+    listClaimLabels(deps.env.DB, provider.id),
+    listGrants(deps.env.DB, { caller_provider_id: provider.id }),
+  ]);
+  const stored = validateCallerProvider(provider, profile, provider);
+  const errors = state.errors ?? [];
+  const model: ConsumerPageModel = {
+    provider,
+    profile,
+    connections,
+    labels,
+    grants,
+    origin: new URL(c.req.url).origin,
+    warnings: [...stored.errors, ...stored.warnings],
+    state,
+  };
+  return renderPage(
+    c,
+    {
+      title: provider.name,
+      section: 'consumers',
+      subsection: 'consumers',
+      notice: errors.length > 0 ? null : (pageNotice(c, provider) ?? null),
+      errors,
+      status: state.status ?? 200,
+      header: (ctx) => <ConsumerHeader model={model} ctx={ctx} />,
+    },
+    (ctx) => <ConsumerPage model={model} ctx={ctx} />,
+  );
+}
+
+function ConsumerHeader(props: { model: ConsumerPageModel; ctx: ViewContext }) {
+  const { provider, profile, connections, labels } = props.model;
+  const { ctx } = props;
+  const edges = connections.accesses;
+  const tokenCount = new Set(edges.map((edge) => edge.grant.service_id)).size;
+  const repositories = new Set(
+    edges.flatMap((edge) =>
+      anchorsOf(edge, labels)
+        .filter((anchor) => anchor.repositoryId !== null)
+        .map((anchor) => anchor.key),
+    ),
+  ).size;
+  const claim = tenantClaimOf(provider.profile);
+  const owners = claim === null ? [] : pinValues(provider.tenant_pin, claim);
+  return (
+    <PageHeader
+      crumbs={[{ label: 'Service consumers', href: paths.consumers() }, { label: provider.name }]}
+      identity={
+        <Identity
+          logo={consumerLogo(provider)}
+          title={provider.name}
+          status={<StatusBadge status={provider.enabled ? 'active' : 'disabled'} />}
+          type={`${profile.label} · ${issuerHost(provider.issuer)}`}
+          entityId={{ value: provider.id, kind: 'Consumer' }}
+          facts={[`Created ${formatTime(new Date(provider.created_at), 'date')}`]}
+        />
+      }
+      actions={
+        ctx.can('access:write') ? (
+          <>
+            <DialogTrigger dialog="dlg-rename-consumer">Rename…</DialogTrigger>
+            <ActionButton
+              action={`${paths.consumer(provider.id)}/toggle`}
+              csrf={ctx.csrf}
+              label={provider.enabled ? 'Disable' : 'Enable'}
+              context={provider.name}
+              fields={{ enabled: provider.enabled ? '0' : '1' }}
+              returnTo="detail"
+            />
+            <Button variant="primary" plus href={paths.accessNew({ consumer: provider.id })}>
+              Give access to a token
+            </Button>
+          </>
+        ) : undefined
+      }
+    >
+      <RelationLine>
+        {edges.length === 0 ? (
+          'Cannot use any token yet.'
+        ) : (
+          <>
+            Can use{' '}
+            <a href={paths.access({ consumer: provider.id })}>
+              {tokenCount} {tokenCount === 1 ? 'token' : 'tokens'}
+            </a>{' '}
+            through <b>{accessesText(edges.length)}</b>
+            {repositories > 0 ? (
+              <>
+                {' '}
+                from{' '}
+                <b>
+                  {repositories} {repositories === 1 ? 'repository' : 'repositories'}
+                </b>
+              </>
+            ) : null}
+            {owners.length > 0 ? (
+              <>
+                {' '}
+                of {ownerWord(provider, owners.length)} <Mono>{tenantsText(provider, labels)}</Mono>
+              </>
+            ) : null}
+            .
+          </>
+        )}
+      </RelationLine>
+    </PageHeader>
+  );
+}
+
+function ConsumerPage(props: { model: ConsumerPageModel; ctx: ViewContext }) {
+  const { model, ctx } = props;
+  const { provider, profile, connections, labels, grants, state } = model;
+  const canWrite = ctx.can('access:write');
+  const edges = connections.accesses;
+  const slugs = [
+    ...new Set(edges.map((edge) => edge.token?.slug).filter((slug): slug is string => !!slug)),
+  ];
+  const errors = state.errors ?? [];
+  const err = (name: string) => errors.find((error) => error.field === name)?.message ?? null;
+  const deleteDialog = deleteDialogProps(ctx, provider, grants, connections);
+  return (
+    <>
+      {model.warnings.map((warning) => (
+        <Callout tone="warn" title="Risk:">
+          {warning}
+        </Callout>
+      ))}
+      <DetailLayout railLabel="Consumer facts" rail={<ConsumerRail model={model} ctx={ctx} />}>
+        <Tray
+          id="access"
+          title="Accesses by repository"
+          count={edges.length}
+          description="Each row is one consumer access: which jobs, which token, what they may call."
+          actions={
+            edges.length > 0 ? (
+              <Button size="sm" href={paths.access({ consumer: provider.id })}>
+                Open in connections map
+              </Button>
+            ) : undefined
+          }
+          footer={
+            <span>
+              <a href={paths.access({ consumer: provider.id })}>
+                All consumer access of {provider.name}
+              </a>{' '}
+              · <a href={paths.requests({ consumer: provider.id })}>Requests</a> ·{' '}
+              <a href={paths.audit({ target: provider.id })}>History</a>
+            </span>
+          }
+        >
+          <Panel variant="flush">
+            <Table
+              labelledBy="access-h"
+              stackable
+              columns={[
+                { label: 'Jobs → token' },
+                { label: 'Status' },
+                { label: 'Last used', num: true },
+              ]}
+            >
+              {edges.length > 0 ? (
+                <AccessBlocks
+                  edges={edges}
+                  labels={labels}
+                  provider={provider}
+                  canWrite={canWrite}
+                  connections={connections}
+                  now={ctx.now}
+                />
+              ) : undefined}
+            </Table>
+            {edges.length === 0 ? (
+              <UiEmptyState
+                title="This consumer cannot use any token yet."
+                description="Give it access to a token; the snippet below then names the token."
+              />
+            ) : null}
+          </Panel>
+        </Tray>
+
+        <Tray
+          id="snippet"
+          title="Connect your jobs"
+          description="Add this step to a workflow in any repository above. The audience is unique to this consumer."
+        >
+          <Panel variant="pad">
+            <ConsumerSnippet consumer={provider} origin={model.origin} slugs={slugs} />
+          </Panel>
+        </Tray>
+
+        <TenantsSection
+          ctx={ctx}
+          provider={provider}
+          profile={profile}
+          labels={labels}
+          grants={grants}
+          state={state}
+        />
+
+        <TrustSection
+          ctx={ctx}
+          provider={provider}
+          profile={profile}
+          grants={grants}
+          state={state}
+          tokens={connections}
+        />
+
+        {canWrite ? (
+          <DangerZone id="danger">
+            <DangerRow
+              title="Delete this consumer"
+              description={
+                grants.length > 0
+                  ? `Removes ${provider.name} and its ${accessesText(grants.length).replace('access', 'consumer access')}. To pause it instead, use Disable at the top; you can enable it again.`
+                  : 'The audit log keeps a copy of its configuration. To stop its jobs for now, disable it instead.'
+              }
+              action={<ConfirmTrigger {...deleteDialog} />}
+            />
+          </DangerZone>
+        ) : null}
+      </DetailLayout>
+      {canWrite ? (
+        <>
+          <Dialog
+            id="dlg-rename-consumer"
+            title={`Rename ${provider.name}`}
+            action={paths.consumer(provider.id)}
+            hidden={ctx.hidden({ expected_updated_at: String(provider.updated_at) })}
+            open={state.open === 'rename'}
+            footer={
+              <>
+                <DialogClose dialog="dlg-rename-consumer" />
+                <Button variant="primary" type="submit" name="intent" value="rename">
+                  Save name
+                </Button>
+              </>
+            }
+          >
+            <Field
+              name="name"
+              label="Name"
+              value={state.rename ?? provider.name}
+              example="GitHub Actions (acme)"
+              maxlength={100}
+              error={err('name')}
+              autocomplete="off"
+              conditional
+            />
+          </Dialog>
+          <ConfirmBox {...deleteDialog} />
+        </>
+      ) : null}
+    </>
+  );
+}
+
+function deleteDialogProps(
+  ctx: ViewContext,
+  provider: CallerProvider,
+  grants: readonly Grant[],
+  connections: Connections,
+): ConfirmDialogProps {
+  const ids = grants.map((grant) => grant.id).sort();
+  const count = grants.length;
+  const tokenNames = [
+    ...new Set(
+      grants.map(
+        (grant) => connections.tokens.find((token) => token.id === grant.service_id)?.name,
+      ),
+    ),
+  ].filter((name): name is string => !!name);
+  const requests = connections.usageAvailable
+    ? grants.reduce((sum, grant) => sum + (connections.usage.get(grant.id)?.requests ?? 0), 0)
+    : null;
+  return {
+    id: 'delete-consumer',
+    trigger: `Delete ${provider.name}…`,
+    title:
+      count > 0
+        ? `Delete ${provider.name} and its ${count} consumer ${count === 1 ? 'access' : 'accesses'}?`
+        : `Delete ${provider.name}?`,
+    body:
+      count > 0
+        ? 'You cannot undo this. Its jobs are refused from the next request on, and these accesses are deleted with it.'
+        : 'Its jobs are refused from the next request on.',
+    affected: [
+      ...(count > 0 && tokenNames.length > 0
+        ? [`Its jobs stop getting ${tokenNames.join(', ')} at their next call.`]
+        : []),
+      ...(count > 0 && requests !== null
+        ? [`${formatCount(requests)} allowed requests used it in 30 days.`]
+        : []),
+      ...grants.map((grant) => <a href={paths.accessItem(grant.id)}>{grant.name}</a>),
+    ],
+    confirmLabel:
+      count > 0
+        ? `Delete consumer and ${count} ${count === 1 ? 'access' : 'accesses'}`
+        : 'Delete consumer',
+    danger: true,
+    variant: 'standalone',
+    action: `${paths.consumer(provider.id)}/delete`,
+    csrf: ctx.csrf,
+    fields: count > 0 ? { with_accesses: '1', access_ids: ids.join(',') } : {},
+  };
+}
+
+function ConsumerRail(props: { model: ConsumerPageModel; ctx: ViewContext }) {
+  const { provider, connections } = props.model;
+  const edges = connections.accesses;
+  const requests = edges.reduce(
+    (sum, edge) => sum + (connections.usage.get(edge.grant.id)?.requests ?? 0),
+    0,
+  );
+  const last = lastCall(edges, connections, props.ctx.now);
+  return (
+    <Tray id="facts" title="Details">
+      <Panel>
+        <RailKeyValue
+          items={[
+            {
+              label: 'Last call',
+              value: last,
+              note: connections.usageAvailable ? (
+                <>
+                  {formatCount(requests)} allowed in 30 days ·{' '}
+                  <a href={paths.requests({ consumer: provider.id })}>See requests</a>
+                </>
+              ) : undefined,
+            },
+            { label: 'Issuer', value: <Breakable text={provider.issuer} />, mono: true },
+            {
+              label: 'Audience',
+              value: <Breakable text={provider.audience} />,
+              mono: true,
+              copyable: true,
+            },
+            {
+              label: 'Max token age',
+              value: `${ageText(provider.max_token_age_seconds)} · ${provider.allowed_algs.join(', ')}`,
+            },
+            { label: 'Created', value: formatTime(new Date(provider.created_at), 'date') },
+            { label: 'Last changed', value: relativeTime(provider.updated_at, props.ctx.now) },
+            { label: 'ID', value: provider.id, mono: true, copyable: true },
+          ]}
+        />
+        <RailFoot>
+          <a href={paths.audit({ target: provider.id })}>Audit history →</a>
+        </RailFoot>
+      </Panel>
+    </Tray>
+  );
+}
+
+function ageText(seconds: number): string {
+  return seconds % 60 === 0 ? `${seconds / 60} minutes` : `${seconds} seconds`;
+}
+
+function protectedRefs(edge: AccessEdge): boolean {
+  return edge.grant.conditions.some(
+    (c) => c.claim === 'ref_protected' && c.match === 'exact' && c.values.includes('true'),
+  );
+}
+
+function AccessBlocks(props: {
+  edges: AccessEdge[];
+  labels: ClaimLabel[];
+  provider: CallerProvider;
+  canWrite: boolean;
+  connections: Connections;
+  now: number;
+}) {
+  const blocks = new Map<
+    string,
+    { header: string; subject: string; repositoryId: string | null; edges: AccessEdge[] }
+  >();
+  for (const edge of props.edges) {
+    for (const anchor of anchorsOf(edge, props.labels)) {
+      const block = blocks.get(anchor.key) ?? { ...anchor, edges: [] };
+      block.edges.push(edge);
+      blocks.set(anchor.key, block);
+    }
+  }
+  return (
+    <>
+      {[...blocks.values()]
+        .sort((a, b) => b.edges.length - a.edges.length || a.header.localeCompare(b.header))
+        .map((block) => {
+          const heading = block.repositoryId !== null ? block.subject : block.header;
+          return (
+            <>
+              <GroupRow
+                colspan={3}
+                actions={
+                  props.canWrite ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      plus
+                      href={paths.accessNew({
+                        consumer: props.provider.id,
+                        repository: block.repositoryId ?? undefined,
+                        copy: block.edges[0]?.grant.id,
+                      })}
+                    >
+                      Give {heading} access to another token
+                    </Button>
+                  ) : undefined
+                }
+              >
+                <Mono>{heading}</Mono>
+                {block.repositoryId !== null ? (
+                  <>
+                    {' '}
+                    <span class="meta">({block.repositoryId})</span>
+                  </>
+                ) : null}
+              </GroupRow>
+              {block.edges.map((edge) => (
+                <Row>
+                  <RowHeader>
+                    <ArrowRow
+                      href={paths.accessItem(edge.grant.id)}
+                      verb={
+                        ['expired', 'disabled', 'inactive'].includes(edge.status)
+                          ? 'could use'
+                          : 'can use'
+                      }
+                      consumer={{
+                        name: edge.context,
+                        context: edge.flags.some((f) => f.status === 'risk_accepted') ? (
+                          <span class="t-warn">risk accepted</span>
+                        ) : protectedRefs(edge) ? (
+                          'protected refs only'
+                        ) : undefined,
+                      }}
+                      token={{
+                        name: edge.token?.name ?? 'Deleted token',
+                        logo: tokenLogo(edge.token),
+                        context: operationsText(edge),
+                      }}
+                    />
+                  </RowHeader>
+                  <Cell label="Status">
+                    <AccessStatus edge={edge} now={props.now} />
+                  </Cell>
+                  <Cell label="Last used" num nowrap>
+                    {!props.connections.usageAvailable
+                      ? 'Unknown'
+                      : edge.lastUsedHour === null
+                        ? 'None in 30 days'
+                        : lastUsedTime(edge.lastUsedHour, props.now)}
+                  </Cell>
+                </Row>
+              ))}
+            </>
+          );
+        })}
+    </>
+  );
+}
+
+/** The status dot of an access, then its flags and its expiry, one muted line each. */
+export function AccessStatus(props: { edge: AccessEdge; now: number; expiry?: boolean }) {
+  const { edge } = props;
+  const expires = edge.grant.expires_at;
+  const lead = leadStatus(edge);
+  return (
+    <>
+      <StatusDot status={lead.status} detail={lead.detail} />
+      {lead.rest.map((flagItem) => (
+        <span class="meta d-block">{statusLabel(flagItem.status, flagItem.detail)}</span>
+      ))}
+      {props.expiry !== false &&
+      expires !== null &&
+      expires > props.now &&
+      edge.status !== 'expiring' ? (
+        <span class="meta d-block">Expires {formatTime(new Date(expires), 'date')}</span>
+      ) : null}
+    </>
+  );
+}
+
+function TenantsSection(props: {
+  ctx: ViewContext;
+  provider: CallerProvider;
+  profile: IssuerProfile;
+  labels: ClaimLabel[];
+  grants: Grant[];
+  state: DetailState;
+}) {
+  const { ctx, provider, profile, labels, grants, state } = props;
+  const canWrite = ctx.can('access:write');
+  const claim = tenantClaimOf(provider.profile);
+  const errors = state.errors ?? [];
+  const err = (name: string) => errors.find((error) => error.field === name)?.message ?? null;
+  const gitlab = provider.profile === 'gitlab-ci';
+  if (claim === null) {
+    // The presets' pin claims, then the claims this pin already uses.
+    const pinClaimSuggestions = [
+      ...new Set([
+        ...GENERIC_PRESETS.map((preset) => preset.pin),
+        ...provider.tenant_pin.map((condition) => condition.claim),
+      ]),
+    ].map((value) => ({ value }));
+    const rows =
+      state.pin ??
+      provider.tenant_pin.map((condition) => ({
+        claim: condition.claim,
+        value: formatValueList(condition.values),
+      }));
+    return (
+      <Tray
+        id="tenants"
+        title="Tenant pin"
+        description="Claims every token of this issuer must carry before any access is evaluated."
+      >
+        <Panel variant="pad">
+          {provider.tenant_pin.length === 0 ? (
+            <Callout tone="warn" title="Risk:">
+              no pin: every token this issuer signs for this audience reaches access evaluation.
+            </Callout>
+          ) : (
+            <ul class="con-pins">
+              {provider.tenant_pin.map((condition) => (
+                <li>
+                  <code>{condition.claim}</code> is {condition.values.join(' or ')}
+                </li>
+              ))}
+            </ul>
+          )}
+          {canWrite ? (
+            <Disclosure id="pin" summary="Change the pin" open={state.open === 'tenants'}>
+              <PostForm action={paths.consumer(provider.id)} csrf={ctx.csrf} class="con-stack">
+                <VersionField value={String(provider.updated_at)} />
+                <input type="hidden" name="pin_rows" value="1" />
+                <RepeatingRows
+                  group="pin"
+                  legend="Claims every token must carry"
+                  keys={['claim', 'value']}
+                  rows={rows}
+                  render={(index, row, prefix) => (
+                    <>
+                      <Field
+                        name={`${prefix}claim`}
+                        label={`Claim ${index + 1}`}
+                        value={row.claim ?? ''}
+                        example="organization_id"
+                        suggestions={pinClaimSuggestions}
+                        hint="Literal top-level claim name that every token of your organization carries."
+                        error={err(`${prefix}claim`)}
+                        autocomplete="off"
+                        mono
+                        conditional
+                      />
+                      <Field
+                        name={`${prefix}value`}
+                        label={`Value ${index + 1}`}
+                        value={row.value ?? ''}
+                        example="0c9f3e1a-7b2d-4c5e-9f10-123456789abc"
+                        hint='Exact value; several alternatives separated by commas, "a,b" quoted.'
+                        error={err(`${prefix}value`)}
+                        autocomplete="off"
+                        mono
+                        conditional
+                      />
+                    </>
+                  )}
+                />
+                <SubmitRow>
+                  <Button variant="primary" type="submit" name="intent" value="trust">
+                    Save the pin
+                  </Button>
+                </SubmitRow>
+              </PostForm>
+            </Disclosure>
+          ) : null}
+        </Panel>
+      </Tray>
+    );
+  }
+  const values = pinValues(provider.tenant_pin, claim);
+  const word = gitlab ? 'group' : 'organization';
+  return (
+    <Tray
+      id="tenants"
+      title={gitlab ? 'Groups' : 'Organizations'}
+      description={
+        gitlab
+          ? 'Only jobs from projects in these groups are trusted.'
+          : 'Only jobs from repositories owned by these organizations are trusted.'
+      }
+    >
+      {values.length === 0 ? (
+        <Panel variant="pad">
+          <Callout tone="warn" title="Risk:">
+            no {word} is pinned.
+          </Callout>
+        </Panel>
+      ) : (
+        <Panel variant="flush">
+          {values.map((value, index) => {
+            const label = labelFor(labels, claim, value);
+            const shown = label ? `${label} (${value})` : value;
+            const users = grantsUsingPinValue(grants, profile, provider, claim, value);
+            const blocked = users.enabled.length > 0;
+            const last = values.length === 1;
+            const whyId = blocked || last ? `tn-${index}-why` : undefined;
+            return (
+              <div class="dz-row con-tenant">
+                <div>
+                  <Mono>{shown}</Mono>
+                  {blocked ? (
+                    <p class="hint" id={whyId}>
+                      Used by {users.enabled.length} enabled{' '}
+                      {users.enabled.length === 1 ? 'access' : 'accesses'}
+                      {users.enabled.length <= 2 ? (
+                        <>
+                          :{' '}
+                          {users.enabled.map((grant, i) => (
+                            <>
+                              {i > 0 ? ', ' : ''}
+                              <a href={paths.accessItem(grant.id)}>{grant.name}</a>
+                            </>
+                          ))}
+                        </>
+                      ) : (
+                        <>
+                          {' '}
+                          (<a href={paths.access({ consumer: provider.id })}>see them</a>)
+                        </>
+                      )}
+                      , so it cannot be removed now. Disable or change{' '}
+                      {users.enabled.length === 1 ? 'it' : 'them'} first.
+                    </p>
+                  ) : last ? (
+                    <p class="hint" id={whyId}>
+                      The last {word} cannot be removed; add another first.
+                    </p>
+                  ) : null}
+                  {users.disabled.length > 0 ? (
+                    <p class="hint">
+                      {users.disabled.length} disabled{' '}
+                      {users.disabled.length === 1 ? 'access uses' : 'accesses use'} it; they cannot
+                      be enabled again after removal.
+                    </p>
+                  ) : null}
+                </div>
+                {canWrite ? (
+                  <PostForm action={`${paths.consumer(provider.id)}/tenants`} csrf={ctx.csrf}>
+                    <input type="hidden" name="intent" value="remove" />
+                    <Button
+                      size="sm"
+                      type="submit"
+                      name="remove"
+                      value={value}
+                      disabled={blocked || last}
+                      describedBy={whyId}
+                      srSuffix={shown}
+                    >
+                      Remove
+                    </Button>
+                  </PostForm>
+                ) : null}
+              </div>
+            );
+          })}
+        </Panel>
+      )}
+      {canWrite ? (
+        <Panel variant="pad">
+          <PostForm
+            action={`${paths.consumer(provider.id)}/tenants`}
+            csrf={ctx.csrf}
+            class="con-stack"
+          >
+            <IdWithLabelField
+              kind={gitlab ? 'gitlab_group_list' : 'github_owner_list'}
+              name="tenant"
+              label={gitlab ? 'Add groups' : 'Add organizations'}
+              value={state.tenant ?? ''}
+              example={gitlab ? 'acme-group/platform (5678902)' : 'acme-labs (7654321)'}
+              findCommand={ownerFindCommand(profile)}
+              hint="Separate several with commas."
+              error={err('tenant')}
+              autocomplete="off"
+              required
+            />
+            <SubmitRow>
+              <Button type="submit" name="intent" value="add">
+                {gitlab ? 'Add groups' : 'Add organizations'}
+              </Button>
+            </SubmitRow>
+          </PostForm>
+        </Panel>
+      ) : null}
+    </Tray>
+  );
+}
+
+function ageOptions(
+  profile: IssuerProfile,
+  stored: number,
+): Array<{ value: string; label: string }> {
+  const limit = profile.defaults.maxTokenAgeLimitSeconds;
+  const seconds = [300, 600, 900, 1800, 3600].filter((value) => value <= limit);
+  if (!seconds.includes(stored)) seconds.push(stored);
+  return seconds
+    .sort((a, b) => a - b)
+    .map((value) => ({ value: String(value), label: ageText(value) }));
+}
+
+/** True when the issuer of this consumer can be edited (generic, GHE slug, self-managed GitLab). */
+function issuerEditable(provider: CallerProvider): boolean {
+  if (provider.profile === 'generic') return true;
+  if (provider.profile === 'github-actions') return provider.issuer !== GITHUB_ACTIONS_ISSUER;
+  return provider.issuer !== GITLAB_COM_ISSUER;
+}
+
+function TrustSection(props: {
+  ctx: ViewContext;
+  provider: CallerProvider;
+  profile: IssuerProfile;
+  grants: Grant[];
+  state: DetailState;
+  tokens: Connections;
+}) {
+  const { ctx, provider, profile, grants, state } = props;
+  const errors = state.errors ?? [];
+  const err = (name: string) => errors.find((error) => error.field === name)?.message ?? null;
+  const trust = state.trust;
+  const value = (name: string, fallback: string) => (trust ? text(trust, name) : fallback);
+  const enabledGrants = grants.filter((grant) => grant.enabled);
+  const tokenName = (grant: Grant) =>
+    props.tokens.tokens.find((token) => token.id === grant.service_id)?.name ?? 'a deleted token';
+  const enterprise = pinValues(provider.tenant_pin, 'enterprise_id')[0] ?? '';
+  const algs = trust ? all(trust, 'allowed_algs') : provider.allowed_algs;
+  if (!ctx.can('access:write')) {
+    return (
+      <Tray id="trust" title="Trust settings">
+        <Panel variant="pad">
+          <KeyValue
+            items={[
+              { label: 'Issuer', value: provider.issuer, mono: true },
+              { label: 'JWKS URI', value: provider.jwks_uri, mono: true },
+              { label: 'Audience', value: provider.audience, mono: true, copyable: true },
+              { label: 'Signature algorithms', value: provider.allowed_algs.join(', ') },
+              {
+                label: 'Maximum token age',
+                value: `${provider.max_token_age_seconds} seconds`,
+              },
+              ...(provider.profile === 'generic'
+                ? [
+                    {
+                      label: 'Anchor claims',
+                      value: provider.anchor_claims.join(', '),
+                      mono: true,
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </Panel>
+      </Tray>
+    );
+  }
+  const fixedFacts: Array<{ label: string; value: Child; mono?: boolean }> = [
+    ...(issuerEditable(provider) ? [] : [{ label: 'Issuer', value: provider.issuer, mono: true }]),
+    ...(provider.profile === 'generic'
+      ? []
+      : [
+          {
+            label: 'JWKS URI',
+            value: provider.jwks_uri,
+            mono: true,
+          },
+        ]),
+  ];
+  return (
+    <Tray id="trust-tray" title="Advanced trust settings" hideTitle>
+      <Panel variant="pad">
+        <Disclosure
+          id="trust"
+          summary="Advanced trust settings"
+          hint="issuer, audience, algorithms, max token age"
+          open={state.open === 'trust'}
+        >
+          <p class="hint">Changing them affects every job of this consumer.</p>
+          <PostForm action={paths.consumer(provider.id)} csrf={ctx.csrf} class="con-stack">
+            <VersionField value={String(provider.updated_at)} />
+            {fixedFacts.length > 0 ? <KeyValue items={fixedFacts} /> : null}
+            {issuerEditable(provider) ? (
+              <Field
+                name="issuer"
+                label="Issuer"
+                type="url"
+                mono
+                value={value('issuer', provider.issuer)}
+                example={provider.issuer}
+                hint="Changing it makes every access of this consumer trust a new issuer."
+                error={err('issuer')}
+                autocomplete="off"
+                conditional
+              />
+            ) : null}
+            {provider.profile === 'generic' ? (
+              <Field
+                name="jwks_uri"
+                label="JWKS URI"
+                type="url"
+                mono
+                value={value('jwks_uri', provider.jwks_uri)}
+                example="https://agent.buildkite.com/.well-known/jwks"
+                hint="Where the issuer publishes its signing keys. Clear it to discover it again from a new issuer."
+                error={err('jwks_uri')}
+                autocomplete="off"
+                conditional
+              />
+            ) : null}
+            <Field
+              name="audience"
+              label="Audience"
+              mono
+              value={value('audience', provider.audience)}
+              example="tokengate:abcdefghijklmnopqrstuvwxyz"
+              hint="Changing it breaks every job until its snippet is updated."
+              error={err('audience')}
+              autocomplete="off"
+              conditional
+            />
+            <CheckboxGroup
+              name="allowed_algs"
+              legend="Signature algorithms"
+              hint="Algorithms the issuer signs with."
+              error={err('allowed_algs')}
+              options={ALLOWED_ALGS.map((alg) => ({
+                value: alg,
+                label: alg,
+                checked: algs.includes(alg),
+              }))}
+            />
+            <Select
+              name="max_token_age_seconds"
+              label="Maximum token age"
+              value={value('max_token_age_seconds', String(provider.max_token_age_seconds))}
+              options={ageOptions(profile, provider.max_token_age_seconds)}
+              hint="Tokens older than this are refused."
+              error={err('max_token_age_seconds')}
+              conditional
+            />
+            {provider.profile === 'github-actions' ? (
+              <Field
+                name="enterprise_id"
+                label="Enterprise ID"
+                optional
+                value={value('enterprise_id', enterprise)}
+                example="12345"
+                inputmode="numeric"
+                hint="Tokens must also come from this GitHub Enterprise. Empty: no enterprise pin."
+                error={err('enterprise_id')}
+                autocomplete="off"
+                conditional
+              />
+            ) : null}
+            {provider.profile === 'generic' ? (
+              <Field
+                name="anchor_claims"
+                label="Anchor claims"
+                mono
+                value={value('anchor_claims', provider.anchor_claims.join(', '))}
+                example="pipeline_id"
+                suggestions={genericAnchorSuggestions(props.tokens.consumers).map((claim) => ({
+                  value: claim,
+                }))}
+                hint="Claims that identify one workload exactly, comma-separated. Every access needs an exact condition on one of them."
+                error={err('anchor_claims')}
+                autocomplete="off"
+                conditional
+              />
+            ) : null}
+            {/* Only the issuer (editable here) or the JWKS URI (generic) can need the confirmation. */}
+            {enabledGrants.length > 0 &&
+            (issuerEditable(provider) || provider.profile === 'generic') ? (
+              <div class="con-confirm">
+                <Checkbox
+                  name="confirm_trust_change"
+                  label={
+                    enabledGrants.length === 1
+                      ? 'I understand that this enabled access will trust the new issuer or keys'
+                      : `I understand that these ${enabledGrants.length} enabled accesses will trust the new issuer or keys`
+                  }
+                  hint="Needed only when the issuer or the JWKS URI changes."
+                  checked={trust ? flag(trust, 'confirm_trust_change') : false}
+                  error={err('confirm_trust_change')}
+                />
+                <ul>
+                  {enabledGrants.map((grant) => (
+                    <li>
+                      <a href={paths.accessItem(grant.id)}>{grant.name}</a> ({tokenName(grant)})
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <SubmitRow>
+              <Button variant="primary" type="submit" name="intent" value="trust">
+                Save trust settings
+              </Button>
+            </SubmitRow>
+          </PostForm>
+        </Disclosure>
+      </Panel>
+    </Tray>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Add consumer: errors and the create route
 
 /** Field of an op error of the add form, so the summary links to the input that fixes it. */
 function consumerErrorField(form: ConsumerForm, message: string, prefix = ''): string | null {
@@ -480,694 +1760,6 @@ async function loadTokenCount(c: AdminContext): Promise<number> {
     .env.DB.prepare('SELECT count(*) AS n FROM services')
     .first<{ n: number }>();
   return Number(row?.n ?? 0);
-}
-
-// ---------------------------------------------------------------------------------------------
-// Consumer page
-
-interface DetailState {
-  errors?: FieldError[];
-  /** Which form the errors belong to; its <details> opens. */
-  open?: 'rename' | 'trust' | 'tenants' | null;
-  rename?: string;
-  trust?: Fields;
-  tenant?: string;
-  pin?: Array<{ claim: string; value: string }>;
-  status?: 200 | 400 | 409 | 422;
-}
-
-async function detailPage(c: AdminContext) {
-  const loaded = await loadProvider(c);
-  if (!loaded) return notFound(c);
-  return renderDetail(c, loaded.provider, loaded.profile, {
-    open: c.req.query('open') === 'trust' ? 'trust' : null,
-  });
-}
-
-async function renderDetail(
-  c: AdminContext,
-  provider: CallerProvider,
-  profile: IssuerProfile,
-  state: DetailState,
-) {
-  const deps = c.get('deps');
-  const [connections, labels, grants] = await Promise.all([
-    loadConnections(deps, { consumerId: provider.id }).then(withAnyRefFlags),
-    listClaimLabels(deps.env.DB, provider.id),
-    listGrants(deps.env.DB, { caller_provider_id: provider.id }),
-  ]);
-  const origin = new URL(c.req.url).origin;
-  const stored = validateCallerProvider(provider, profile, provider);
-  const done = await loadDone(deps, { userId: c.get('viewer').user.id }, c.req.query('done'));
-  const errors = state.errors ?? [];
-  return renderPage(
-    c,
-    {
-      title: provider.name,
-      section: 'consumers',
-      subsection: 'consumers',
-      breadcrumbs: [
-        { href: paths.consumers(), label: 'Service consumers' },
-        { href: paths.consumer(provider.id), label: provider.name },
-      ],
-      notice: errors.length > 0 ? null : (pageNotice(c, provider) ?? null),
-      errors,
-      status: state.status ?? 200,
-    },
-    (ctx) => (
-      <ConsumerPage
-        ctx={ctx}
-        provider={provider}
-        profile={profile}
-        connections={connections}
-        labels={labels}
-        grants={grants}
-        origin={origin}
-        warnings={[...stored.errors, ...stored.warnings]}
-        state={state}
-        doneId={done?.id ?? null}
-      />
-    ),
-  );
-}
-
-function ConsumerPage(props: {
-  ctx: ViewContext;
-  provider: CallerProvider;
-  profile: IssuerProfile;
-  connections: Connections;
-  labels: ClaimLabel[];
-  grants: Grant[];
-  origin: string;
-  warnings: string[];
-  state: DetailState;
-  doneId: string | null;
-}) {
-  const { ctx, provider, profile, connections, labels, grants, state } = props;
-  const canWrite = ctx.can('access:write');
-  const edges = connections.accesses;
-  const slugs = [
-    ...new Set(edges.map((edge) => edge.token?.slug).filter((slug): slug is string => !!slug)),
-  ];
-  const errors = state.errors ?? [];
-  const err = (name: string) => errors.find((error) => error.field === name)?.message ?? null;
-  return (
-    <>
-      <p class="status-line">
-        {profile.label} <StatusBadge status={provider.enabled ? 'active' : 'disabled'} />
-      </p>
-      {props.warnings.map((warning) => (
-        <p class="risk">
-          <strong>Risk:</strong> {warning}
-        </p>
-      ))}
-      {canWrite ? (
-        <div class="actions header-actions">
-          <ActionButton
-            action={`${paths.consumer(provider.id)}/toggle`}
-            csrf={ctx.csrf}
-            label={provider.enabled ? 'Disable' : 'Enable'}
-            context={provider.name}
-            fields={{ enabled: provider.enabled ? '0' : '1' }}
-            returnTo="detail"
-          />
-          <details class="inline-details" open={state.open === 'rename'}>
-            <summary>Rename</summary>
-            <PostForm action={paths.consumer(provider.id)} csrf={ctx.csrf} class="stack">
-              <VersionField value={String(provider.updated_at)} />
-              <Field
-                name="name"
-                label="Name"
-                value={state.rename ?? provider.name}
-                example="GitHub Actions (acme)"
-                maxlength={100}
-                error={err('name')}
-                autocomplete="off"
-                conditional
-              />
-              <div class="actions">
-                <button type="submit" name="intent" value="rename" class="primary">
-                  Save name
-                </button>
-              </div>
-            </PostForm>
-          </details>
-        </div>
-      ) : null}
-
-      <section id="snippet" aria-labelledby="snippet-h">
-        <h2 id="snippet-h">Connect your jobs</h2>
-        <ConsumerSnippet consumer={provider} origin={props.origin} slugs={slugs} />
-      </section>
-
-      <section id="access" aria-labelledby="access-h">
-        <h2 id="access-h">Tokens this consumer can use ({edges.length})</h2>
-        {canWrite ? (
-          <p class="actions">
-            <a class="button" href={paths.accessNew({ consumer: provider.id })}>
-              Give access to a token
-            </a>
-          </p>
-        ) : null}
-        {edges.length === 0 ? (
-          <EmptyState>This consumer cannot use any token yet.</EmptyState>
-        ) : (
-          <AccessBlocks edges={edges} labels={labels} provider={provider} canWrite={canWrite} />
-        )}
-        <p>
-          <a href={paths.access({ consumer: provider.id })}>
-            All consumer access of {provider.name}
-          </a>{' '}
-          · <a href={paths.requests({ consumer: provider.id })}>Requests</a> ·{' '}
-          <a href={paths.audit({ target: provider.id })}>History</a>
-        </p>
-      </section>
-
-      <TenantsSection
-        ctx={ctx}
-        provider={provider}
-        profile={profile}
-        labels={labels}
-        grants={grants}
-        state={state}
-      />
-
-      <TrustSection
-        ctx={ctx}
-        provider={provider}
-        profile={profile}
-        grants={grants}
-        state={state}
-        tokens={connections}
-      />
-
-      <Details
-        rows={[
-          ['ID', <code>{provider.id}</code>],
-          ['Created', <Time ms={provider.created_at} />],
-          ['Last changed', <Time ms={provider.updated_at} relative now={ctx.now} />],
-        ]}
-      />
-
-      {canWrite ? (
-        <section id="danger" aria-labelledby="danger-h">
-          <h2 id="danger-h">Delete</h2>
-          <DeleteConsumer ctx={ctx} provider={provider} grants={grants} />
-        </section>
-      ) : null}
-    </>
-  );
-}
-
-function AccessBlocks(props: {
-  edges: AccessEdge[];
-  labels: ClaimLabel[];
-  provider: CallerProvider;
-  canWrite: boolean;
-}) {
-  const blocks = new Map<
-    string,
-    { header: string; subject: string; repositoryId: string | null; edges: AccessEdge[] }
-  >();
-  for (const edge of props.edges) {
-    for (const anchor of anchorsOf(edge, props.labels)) {
-      const block = blocks.get(anchor.key) ?? { ...anchor, edges: [] };
-      block.edges.push(edge);
-      blocks.set(anchor.key, block);
-    }
-  }
-  return (
-    <>
-      {[...blocks.values()]
-        .sort((a, b) => a.header.localeCompare(b.header))
-        .map((block, index) => {
-          const idText = block.repositoryId !== null ? ` (${block.repositoryId})` : '';
-          const heading = block.repositoryId !== null ? block.subject : block.header;
-          return (
-            <div class="access-block">
-              <h3 id={`access-block-${index}`}>
-                {heading}
-                {idText ? <span class="secondary-text">{idText}</span> : null}
-              </h3>
-              <ChipList
-                label={`Tokens ${heading} can use`}
-                items={block.edges.map((edge) => accessChip(edge, false))}
-                max={50}
-              />
-              {props.canWrite ? (
-                <p>
-                  <a
-                    href={paths.accessNew({
-                      consumer: props.provider.id,
-                      repository: block.repositoryId ?? undefined,
-                      copy: block.edges[0]?.grant.id,
-                    })}
-                  >
-                    <span aria-hidden="true">+ </span>Give {heading} access to another token
-                  </a>
-                </p>
-              ) : null}
-            </div>
-          );
-        })}
-    </>
-  );
-}
-
-function TenantsSection(props: {
-  ctx: ViewContext;
-  provider: CallerProvider;
-  profile: IssuerProfile;
-  labels: ClaimLabel[];
-  grants: Grant[];
-  state: DetailState;
-}) {
-  const { ctx, provider, profile, labels, grants, state } = props;
-  const canWrite = ctx.can('access:write');
-  const claim = tenantClaimOf(provider.profile);
-  const errors = state.errors ?? [];
-  const err = (name: string) => errors.find((error) => error.field === name)?.message ?? null;
-  const heading =
-    provider.profile === 'github-actions'
-      ? 'Organizations'
-      : provider.profile === 'gitlab-ci'
-        ? 'Groups'
-        : 'Tenant pin';
-  if (claim === null) {
-    // The presets' pin claims, then the claims this pin already uses.
-    const pinClaimSuggestions = [
-      ...new Set([
-        ...GENERIC_PRESETS.map((preset) => preset.pin),
-        ...provider.tenant_pin.map((condition) => condition.claim),
-      ]),
-    ].map((value) => ({ value }));
-    const rows =
-      state.pin ??
-      provider.tenant_pin.map((condition) => ({
-        claim: condition.claim,
-        value: formatValueList(condition.values),
-      }));
-    return (
-      <section id="tenants" aria-labelledby="tenants-h">
-        <h2 id="tenants-h">{heading}</h2>
-        {provider.tenant_pin.length === 0 ? (
-          <p class="risk">
-            <strong>Risk:</strong> no pin: every token this issuer signs for this audience reaches
-            access evaluation.
-          </p>
-        ) : (
-          <ul>
-            {provider.tenant_pin.map((condition) => (
-              <li>
-                <code>{condition.claim}</code> is {condition.values.join(' or ')}
-              </li>
-            ))}
-          </ul>
-        )}
-        {canWrite ? (
-          <details open={state.open === 'tenants'}>
-            <summary>Change the pin</summary>
-            <PostForm action={paths.consumer(provider.id)} csrf={ctx.csrf} class="stack">
-              <VersionField value={String(provider.updated_at)} />
-              <input type="hidden" name="pin_rows" value="1" />
-              <RepeatingRows
-                group="pin"
-                legend="Claims every token must carry"
-                keys={['claim', 'value']}
-                rows={rows}
-                render={(index, row, prefix) => (
-                  <>
-                    <Field
-                      name={`${prefix}claim`}
-                      label={`Claim ${index + 1}`}
-                      value={row.claim ?? ''}
-                      example="organization_id"
-                      suggestions={pinClaimSuggestions}
-                      hint="Literal top-level claim name that every token of your organization carries."
-                      error={err(`${prefix}claim`)}
-                      autocomplete="off"
-                      spellcheck={false}
-                      autocapitalize="none"
-                      conditional
-                    />
-                    <Field
-                      name={`${prefix}value`}
-                      label={`Value ${index + 1}`}
-                      value={row.value ?? ''}
-                      example="0c9f3e1a-7b2d-4c5e-9f10-123456789abc"
-                      hint='Exact value; several alternatives separated by commas, "a,b" quoted.'
-                      error={err(`${prefix}value`)}
-                      autocomplete="off"
-                      spellcheck={false}
-                      autocapitalize="none"
-                      conditional
-                    />
-                  </>
-                )}
-              />
-              <div class="actions">
-                <button type="submit" name="intent" value="trust" class="primary">
-                  Save the pin
-                </button>
-              </div>
-            </PostForm>
-          </details>
-        ) : null}
-      </section>
-    );
-  }
-  const values = pinValues(provider.tenant_pin, claim);
-  const gitlab = provider.profile === 'gitlab-ci';
-  return (
-    <section id="tenants" aria-labelledby="tenants-h">
-      <h2 id="tenants-h">{heading}</h2>
-      {values.length === 0 ? (
-        <p class="risk">
-          <strong>Risk:</strong> no {gitlab ? 'group' : 'organization'} is pinned.
-        </p>
-      ) : (
-        <ul class="tenants">
-          {values.map((value) => {
-            const label = labelFor(labels, claim, value);
-            const text = label ? `${label} (${value})` : value;
-            const users = grantsUsingPinValue(grants, profile, provider, claim, value);
-            const blocked = users.enabled.length > 0;
-            return (
-              <li>
-                <span class="tenant">{text}</span>{' '}
-                {canWrite ? (
-                  <PostForm
-                    action={`${paths.consumer(provider.id)}/tenants`}
-                    csrf={ctx.csrf}
-                    class="inline"
-                  >
-                    <input type="hidden" name="intent" value="remove" />
-                    <button
-                      type="submit"
-                      name="remove"
-                      value={value}
-                      class="secondary"
-                      disabled={blocked || values.length === 1}
-                    >
-                      Remove<span class="vh"> {text}</span>
-                    </button>
-                  </PostForm>
-                ) : null}
-                {blocked ? (
-                  <p class="hint">
-                    Used by {users.enabled.length} enabled{' '}
-                    {users.enabled.length === 1 ? 'access' : 'accesses'}:{' '}
-                    {users.enabled.map((grant, index) => (
-                      <>
-                        {index > 0 ? ', ' : ''}
-                        <a href={paths.accessItem(grant.id)}>{grant.name}</a>
-                      </>
-                    ))}
-                    . Disable or change them first.
-                  </p>
-                ) : values.length === 1 ? (
-                  <p class="hint">
-                    The last {gitlab ? 'group' : 'organization'} cannot be removed; add another
-                    first.
-                  </p>
-                ) : null}
-                {users.disabled.length > 0 ? (
-                  <p class="hint">
-                    {users.disabled.length} disabled{' '}
-                    {users.disabled.length === 1 ? 'access uses' : 'accesses use'} it; they cannot
-                    be enabled again after removal.
-                  </p>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {canWrite ? (
-        <PostForm action={`${paths.consumer(provider.id)}/tenants`} csrf={ctx.csrf} class="stack">
-          <IdWithLabelField
-            kind={gitlab ? 'gitlab_group_list' : 'github_owner_list'}
-            name="tenant"
-            label={gitlab ? 'Add groups' : 'Add organizations'}
-            value={state.tenant ?? ''}
-            example={gitlab ? 'acme-group/platform (5678902)' : 'acme-labs (7654321)'}
-            findCommand={ownerFindCommand(profile)}
-            hint="Separate several with commas."
-            error={err('tenant')}
-            autocomplete="off"
-            required
-          />
-          <div class="actions">
-            <button type="submit" name="intent" value="add" class="primary">
-              {gitlab ? 'Add groups' : 'Add organizations'}
-            </button>
-          </div>
-        </PostForm>
-      ) : null}
-    </section>
-  );
-}
-
-function ageOptions(
-  profile: IssuerProfile,
-  stored: number,
-): Array<{ value: string; label: string }> {
-  const limit = profile.defaults.maxTokenAgeLimitSeconds;
-  const seconds = [300, 600, 900, 1800, 3600].filter((value) => value <= limit);
-  if (!seconds.includes(stored)) seconds.push(stored);
-  return seconds
-    .sort((a, b) => a - b)
-    .map((value) => ({
-      value: String(value),
-      label: value % 60 === 0 ? `${value / 60} minutes` : `${value} seconds`,
-    }));
-}
-
-/** True when the issuer of this consumer can be edited (generic, GHE slug, self-managed GitLab). */
-function issuerEditable(provider: CallerProvider): boolean {
-  if (provider.profile === 'generic') return true;
-  if (provider.profile === 'github-actions') return provider.issuer !== GITHUB_ACTIONS_ISSUER;
-  return provider.issuer !== GITLAB_COM_ISSUER;
-}
-
-function TrustSection(props: {
-  ctx: ViewContext;
-  provider: CallerProvider;
-  profile: IssuerProfile;
-  grants: Grant[];
-  state: DetailState;
-  tokens: Connections;
-}) {
-  const { ctx, provider, profile, grants, state } = props;
-  const errors = state.errors ?? [];
-  const err = (name: string) => errors.find((error) => error.field === name)?.message ?? null;
-  const trust = state.trust;
-  const value = (name: string, fallback: string) => (trust ? text(trust, name) : fallback);
-  const enabledGrants = grants.filter((grant) => grant.enabled);
-  const tokenName = (grant: Grant) =>
-    props.tokens.tokens.find((token) => token.id === grant.service_id)?.name ?? 'a deleted token';
-  const enterprise = pinValues(provider.tenant_pin, 'enterprise_id')[0] ?? '';
-  const algs = trust ? all(trust, 'allowed_algs') : provider.allowed_algs;
-  if (!ctx.can('access:write')) {
-    return (
-      <section id="trust" aria-labelledby="trust-h">
-        <h2 id="trust-h">Trust settings</h2>
-        <Details
-          rows={[
-            ['Issuer', <code>{provider.issuer}</code>],
-            ['JWKS URI', <code>{provider.jwks_uri}</code>],
-            ['Audience', <code>{provider.audience}</code>],
-            ['Signature algorithms', provider.allowed_algs.join(', ')],
-            ['Maximum token age', `${provider.max_token_age_seconds} seconds`],
-            ...(provider.profile === 'generic'
-              ? ([['Anchor claims', provider.anchor_claims.join(', ')]] as Array<[string, Child]>)
-              : []),
-          ]}
-        />
-      </section>
-    );
-  }
-  return (
-    <details id="trust" open={state.open === 'trust'}>
-      <summary>Advanced trust settings</summary>
-      <PostForm action={paths.consumer(provider.id)} csrf={ctx.csrf} class="stack">
-        <VersionField value={String(provider.updated_at)} />
-        {issuerEditable(provider) ? (
-          <Field
-            name="issuer"
-            label="Issuer"
-            type="url"
-            value={value('issuer', provider.issuer)}
-            example={provider.issuer}
-            hint="Changing it makes every access of this consumer trust a new issuer."
-            error={err('issuer')}
-            autocomplete="off"
-            spellcheck={false}
-            autocapitalize="none"
-            conditional
-          />
-        ) : (
-          <p>
-            Issuer: <code>{provider.issuer}</code>
-          </p>
-        )}
-        {provider.profile === 'generic' ? (
-          <Field
-            name="jwks_uri"
-            label="JWKS URI"
-            type="url"
-            value={value('jwks_uri', provider.jwks_uri)}
-            example="https://agent.buildkite.com/.well-known/jwks"
-            hint="Where the issuer publishes its signing keys. Clear it to discover it again from a new issuer."
-            error={err('jwks_uri')}
-            autocomplete="off"
-            spellcheck={false}
-            autocapitalize="none"
-            conditional
-          />
-        ) : (
-          <p>
-            JWKS URI: <code>{provider.jwks_uri}</code> (read from the issuer's discovery document)
-          </p>
-        )}
-        <Field
-          name="audience"
-          label="Audience"
-          value={value('audience', provider.audience)}
-          example="tokengate:abcdefghijklmnopqrstuvwxyz"
-          hint="Changing it breaks every job until its snippet is updated."
-          error={err('audience')}
-          autocomplete="off"
-          spellcheck={false}
-          autocapitalize="none"
-          conditional
-        />
-        <CheckboxGroup
-          name="allowed_algs"
-          legend="Signature algorithms"
-          hint="Algorithms the issuer signs with."
-          error={err('allowed_algs')}
-          options={ALLOWED_ALGS.map((alg) => ({
-            value: alg,
-            label: alg,
-            checked: algs.includes(alg),
-          }))}
-        />
-        <Select
-          name="max_token_age_seconds"
-          label="Maximum token age"
-          value={value('max_token_age_seconds', String(provider.max_token_age_seconds))}
-          options={ageOptions(profile, provider.max_token_age_seconds)}
-          hint="Tokens older than this are refused."
-          error={err('max_token_age_seconds')}
-          conditional
-        />
-        {provider.profile === 'github-actions' ? (
-          <Field
-            name="enterprise_id"
-            label="Enterprise ID"
-            optional
-            value={value('enterprise_id', enterprise)}
-            example="12345"
-            inputmode="numeric"
-            hint="Tokens must also come from this GitHub Enterprise. Empty: no enterprise pin."
-            error={err('enterprise_id')}
-            autocomplete="off"
-            conditional
-          />
-        ) : null}
-        {provider.profile === 'generic' ? (
-          <Field
-            name="anchor_claims"
-            label="Anchor claims"
-            value={value('anchor_claims', provider.anchor_claims.join(', '))}
-            example="pipeline_id"
-            suggestions={genericAnchorSuggestions(props.tokens.consumers).map((claim) => ({
-              value: claim,
-            }))}
-            hint="Claims that identify one workload exactly, comma-separated. Every access needs an exact condition on one of them."
-            error={err('anchor_claims')}
-            autocomplete="off"
-            spellcheck={false}
-            autocapitalize="none"
-            conditional
-          />
-        ) : null}
-        {/* Only the issuer (editable here) or the JWKS URI (generic) can need the confirmation. */}
-        {enabledGrants.length > 0 &&
-        (issuerEditable(provider) || provider.profile === 'generic') ? (
-          <div class="confirm-trust">
-            <Checkbox
-              name="confirm_trust_change"
-              label={
-                enabledGrants.length === 1
-                  ? 'I understand that this enabled access will trust the new issuer or keys'
-                  : `I understand that these ${enabledGrants.length} enabled accesses will trust the new issuer or keys`
-              }
-              hint="Needed only when the issuer or the JWKS URI changes."
-              checked={trust ? flag(trust, 'confirm_trust_change') : false}
-              error={err('confirm_trust_change')}
-            />
-            <ul>
-              {enabledGrants.map((grant) => (
-                <li>
-                  <a href={paths.accessItem(grant.id)}>{grant.name}</a> ({tokenName(grant)})
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        <div class="actions">
-          <button type="submit" name="intent" value="trust" class="primary">
-            Save trust settings
-          </button>
-        </div>
-      </PostForm>
-    </details>
-  );
-}
-
-function DeleteConsumer(props: { ctx: ViewContext; provider: CallerProvider; grants: Grant[] }) {
-  const { ctx, provider, grants } = props;
-  const ids = grants.map((grant) => grant.id).sort();
-  const count = grants.length;
-  return (
-    <>
-      <p>
-        {count > 0
-          ? `Deleting removes its ${count} consumer ${count === 1 ? 'access' : 'accesses'} too. To stop all its tokens now and keep the configuration, disable the consumer instead.`
-          : 'The audit log keeps a copy of its configuration. To stop its jobs for now, disable it instead.'}
-      </p>
-      <ConfirmDialog
-        id="delete-consumer"
-        trigger="Delete…"
-        triggerContext={provider.name}
-        title={
-          count > 0
-            ? `Delete ${provider.name} and its ${count} consumer ${count === 1 ? 'access' : 'accesses'}?`
-            : `Delete ${provider.name}?`
-        }
-        body={
-          count > 0
-            ? 'Its jobs are refused from the next request on, and these accesses are deleted with it. Disable the consumer to stop all its tokens now instead.'
-            : 'Its jobs are refused from the next request on.'
-        }
-        affected={grants.map((grant) => (
-          <a href={paths.accessItem(grant.id)}>{grant.name}</a>
-        ))}
-        confirmLabel={
-          count > 0
-            ? `Delete consumer and ${count} ${count === 1 ? 'access' : 'accesses'}`
-            : 'Delete consumer'
-        }
-        danger
-        variant="standalone"
-        action={`${paths.consumer(provider.id)}/delete`}
-        csrf={ctx.csrf}
-        fields={count > 0 ? { with_accesses: '1', access_ids: ids.join(',') } : {}}
-      />
-    </>
-  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1511,8 +2103,15 @@ function notFound(c: AdminContext) {
       section: 'consumers',
       subsection: 'consumers',
       status: 404,
+      header: (
+        <PageHeader
+          crumbs={[{ href: paths.consumers(), label: 'Service consumers' }, { label: 'Not found' }]}
+          title="Consumer not found"
+          description={notFoundText('consumer')}
+        />
+      ),
     },
-    () => <NotFound what="consumer" />,
+    () => <NotFound />,
   );
 }
 

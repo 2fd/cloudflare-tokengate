@@ -100,6 +100,55 @@ export const fieldInline: ComponentDoc = {
   hidden={{ _csrf: csrf }} describedBy="add-org-h" placeholder="acme-labs" />
 <span class="hint" id="add-org-h">The GitHub login or numeric ID …</span>`,
     },
+    {
+      title: 'Find a request, invalid ID',
+      description:
+        'The server rejected the lookup: it re-renders with the value kept and the error line above the box, so the 40px box keeps its shape. The input is aria-invalid and described by the error.',
+      layout: 'stack',
+      render: () => (
+        <FieldInline
+          id="fi-bad"
+          label="Request ID"
+          name="request"
+          submit="Find"
+          formLabel="Find a request, invalid ID"
+          action="/admin/requests"
+          value="req_nope"
+          error="Enter a request ID that starts with req_, or paste the log line."
+        />
+      ),
+      code: `<FieldInline id="find" label="Request ID" name="request" submit="Find"
+  formLabel="Find a request" action="/admin/requests" value="req_nope"
+  error="Enter a request ID that starts with req_, or paste the log line." />`,
+    },
+    {
+      title: 'Add a host, with constraints',
+      description:
+        'A POST with native constraints: the browser checks required, pattern and maxlength before the server does; inputmode and enterkeyhint pick the keyboard.',
+      layout: 'stack',
+      render: () => (
+        <FieldInline
+          id="fi-host"
+          label="Host"
+          name="host"
+          submit="Add"
+          method="post"
+          formLabel="Add an upstream host"
+          action="/admin/settings/upstream-hosts"
+          hidden={{ _csrf: 'csrf-token', _action: 'add' }}
+          required
+          pattern="[a-z0-9.-]+"
+          maxlength={253}
+          inputmode="url"
+          enterkeyhint="done"
+          placeholder="api.example.com"
+        />
+      ),
+      code: `<FieldInline id="host" label="Host" name="host" submit="Add" method="post"
+  formLabel="Add an upstream host" action="/admin/settings/upstream-hosts"
+  hidden={{ _csrf: csrf, _action: 'add' }} required pattern="[a-z0-9.-]+"
+  maxlength={253} inputmode="url" enterkeyhint="done" placeholder="api.example.com" />`,
+    },
   ],
   props: [
     {
@@ -115,6 +164,34 @@ export const fieldInline: ComponentDoc = {
         { name: 'name', type: 'string', required: true, description: 'Query parameter name.' },
         { name: 'value', type: 'string', description: 'Current value (escaped).' },
         { name: 'placeholder', type: 'string', description: 'An example of the exact format.' },
+        {
+          name: 'type',
+          type: "'text' | 'search' | 'url'",
+          default: "'text'",
+          description: 'Input type; text renders no attribute.',
+        },
+        {
+          name: 'pattern, minlength, maxlength, required',
+          type: 'native',
+          description: 'Native constraints, passed to the input.',
+        },
+        {
+          name: 'inputmode',
+          type: "'text' | 'url' | 'search'",
+          description: 'Virtual keyboard layout.',
+        },
+        {
+          name: 'enterkeyhint',
+          type: "'go' | 'search' | 'send' | 'done'",
+          description: 'Label of the Enter key on virtual keyboards.',
+        },
+        { name: 'invalid', type: 'boolean', description: 'Sets aria-invalid; implied by error.' },
+        {
+          name: 'error',
+          type: 'Child',
+          description:
+            'The server’s error: a line before the form (`${id}-error`) that describes the input. Keep the submitted value.',
+        },
         { name: 'submit', type: 'Child', required: true, description: 'Button text.' },
         {
           name: 'labelledBy',
@@ -129,7 +206,8 @@ export const fieldInline: ComponentDoc = {
         {
           name: 'describedBy',
           type: 'string',
-          description: 'Ids of elements that describe the input: a hint under the box.',
+          description:
+            'Ids of elements that describe the input: a hint under the box. After the error.',
         },
         { name: 'action', type: 'string', description: 'Where the form goes.' },
         {
@@ -157,13 +235,15 @@ export const fieldInline: ComponentDoc = {
   accessibility: [
     'A GET lookup is a search landmark (role="search"); a POST action is a plain form. Both are named by the visible title (labelledBy) or formLabel.',
     'describedBy connects the input to its hint under the box.',
+    'An error renders as a line before the form; the input is aria-invalid and described by the error first, then by describedBy.',
     'The leading label is a real label for the input.',
     'The whole box shows the focus ring while the input has focus.',
   ],
   do: [
     'Accept the whole log line as well as the bare ID, and extract it on the server.',
-    'Send the _csrf token of a POST in hidden.',
+    'Send the _csrf token of a POST in hidden, and an _action there too: the button has no name or value.',
+    'Keep the submitted value when you re-render with an error.',
   ],
   dont: ['Do not use it for multi-field filters.', 'Do not leave the button without words.'],
-  classes: ['field-inline', 'lbl', 'btn', 'secondary'],
+  classes: ['field-inline', 'lbl', 'btn', 'secondary', 'field-error'],
 };

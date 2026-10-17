@@ -99,7 +99,7 @@ describe('I-AUTHZ-3: risky access needs explicit acceptance', () => {
     const first = await adminPost(world.app, session(), '/admin/access', rows());
     expect(first.status).toBe(422);
     const html = await first.text();
-    expect(html).toContain('href="#f-acknowledge_warnings"');
+    expect(html).toContain('href="#ga-risk-ack"');
     expect(html).toMatch(/name="acknowledge_warnings"[^>]*required/);
     const digest = inputValue(html, 'warnings_digest');
     expect(digest).toMatch(/^[0-9a-f]{64}$/);
@@ -184,7 +184,7 @@ describe('I-AUTHZ-3: risky access needs explicit acceptance', () => {
     const html = await (
       await adminGet(world.app, session(), `/admin/access/new?copy=${source.id}`)
     ).text();
-    expect(html).toContain('<fieldset class="ack">');
+    expect(html).toContain('<div class="riskacc always" id="ga-risk"');
     expect(html).toMatch(/name="acknowledge_warnings"[^>]*required/);
     // The bare ID has no name yet: the hint names the command that prints it.
     expect(html).toContain(`gh api repositories/${REPOSITORY_ID}`);
@@ -206,7 +206,7 @@ describe('I-AUTHZ-3: risky access needs explicit acceptance', () => {
     // A 422 for another input keeps the acknowledgement on the page.
     const missing = await adminPost(world.app, session(), '/admin/access', withoutDigest);
     expect(missing.status).toBe(422);
-    expect(await missing.text()).toContain('<fieldset class="ack">');
+    expect(await missing.text()).toContain('<div class="riskacc always" id="ga-risk"');
     expect(await listGrants(env.DB)).toHaveLength(1);
     const ticked = await adminPost(world.app, session(), '/admin/access', {
       ...fields,
@@ -247,7 +247,7 @@ describe('I-AUTHZ-3: risky access needs explicit acceptance', () => {
       expires: 'keep',
     });
     expect(res.status).toBe(422);
-    expect(await res.text()).toMatch(/<details id="edit" open/);
+    expect(await res.text()).toMatch(/<details class="disc" id="edit" open/);
     expect((await getGrant(env.DB, id))?.conditions).toHaveLength(6);
   });
 });

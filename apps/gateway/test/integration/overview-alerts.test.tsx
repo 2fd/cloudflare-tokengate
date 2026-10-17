@@ -7,7 +7,8 @@ import type { Child } from 'hono/jsx';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { can, type Permission } from '../../src/admin/auth/rbac';
 import type { ViewContext } from '../../src/admin/render';
-import { type AlertCode, AlertList } from '../../src/admin/views/components';
+import type { AlertCode } from '../../src/admin/views/alerts';
+import { AttentionCards, toAttentionItems } from '../../src/admin/views/monitoring';
 import type { Role } from '../../src/db/types';
 import { type AlertData, overviewAlerts } from '../../src/telemetry/dashboard';
 import { adminGet, createUser, loginAs, resetControlPlane } from '../helpers/admin-auth';
@@ -173,6 +174,7 @@ function view(role: Role): ViewContext {
     can: (permission: Permission) => can(role, permission),
     askers: () => [{ email: 'owner@example.com' }],
     askersMore: () => 0,
+    hidden: (extra) => ({ _csrf: 'csrf-token', ...extra }),
   };
 }
 
@@ -213,16 +215,26 @@ describe('the alert catalogue', () => {
       const ctx = view(role);
       for (const data of catalogue()) {
         for (const alert of overviewAlerts(data)) {
-          const out = html(<AlertList alerts={[alert]} ctx={ctx} />);
-          expect(out, alert.code).toContain('<ul class="alerts">');
+          const out = html(<AttentionCards items={toAttentionItems([alert], ctx)} layout="list" />);
+          expect(out, alert.code).toContain('<ul class="att');
           expect(out, alert.code).not.toContain('role="alert"');
-          for (const object of alert.objects) {
+          // An approver gets one item per waiting person (name + approve buttons) instead of the
+          // link to the list; everyone else gets the link.
+          const perPerson = alert.form?.kind === 'approve-pending' && can(role, 'users:write');
+          if (perPerson && alert.form?.kind === 'approve-pending') {
+            for (const user of alert.form.users) {
+              expect(out, alert.code).toContain(`action="/admin/users/${user.id}/approve"`);
+            }
+          }
+          for (const object of perPerson ? [] : alert.objects) {
             expect(out, `${alert.code} ${object.href}`).toContain(
               `href="${object.href.replaceAll('&', '&amp;')}"`,
             );
           }
           if (alert.fix) {
-            const fixLink = `href="${alert.fix.href.replaceAll('&', '&amp;')}">${alert.fix.label.replaceAll('"', '&quot;')}</a>`;
+            // A narrow card shows the short label; the rest of it is read by screen readers.
+            const label = alert.fix.short?.label ?? alert.fix.label;
+            const fixLink = `href="${alert.fix.href.replaceAll('&', '&amp;')}">${label.replaceAll('"', '&quot;')}`;
             if (can(role, alert.fix.permission)) expect(out, alert.code).toContain(fixLink);
             else {
               expect(out, alert.code).not.toContain(fixLink);
@@ -245,7 +257,7 @@ describe('the alert catalogue', () => {
     });
   }
 
-  it('groups same-code alerts into one item and puts items after the tenth in a details', () => {
+  it('groups same-code alerts into one item and puts items after the eighth in a details', () => {
     const many: AlertData = {
       ...base(),
       services: Array.from({ length: 7 }, (_, i) =>
@@ -267,9 +279,10 @@ describe('the alert catalogue', () => {
       '+2 more',
     ]);
     const all = catalogue().flatMap(overviewAlerts);
-    expect(all.length).toBeGreaterThan(10);
-    const out = html(<AlertList alerts={all} ctx={view('owner')} />);
-    expect(out).toContain(`<summary>${all.length - 10} more problems</summary>`);
+    const items = toAttentionItems(all, view('owner'));
+    expect(items.length).toBeGreaterThan(8);
+    const out = html(<AttentionCards items={items} layout="cols" />);
+    expect(out).toContain(`<summary>${items.length - 8} more problems</summary>`);
   });
 
   it('never shows a secret value: the KEK and sealed values do not reach an alert', () => {

@@ -135,6 +135,38 @@ describe('ConnectionsMap', () => {
     expect(html).toContain('Focused consumer');
   });
 
+  it('focuses one token: it, its wires and its consumers on, the rest dim, no focus bar', () => {
+    const html = render(
+      <ConnectionsMap
+        id="cm"
+        consumers={consumers}
+        tokens={tokens}
+        accesses={accesses}
+        focusToken="slack"
+      />,
+    );
+    expect(html).toContain(
+      'aria-label="Connections map focused on Slack. Its accesses are also listed as text below."',
+    );
+    expect(html).not.toContain('class="cmap-bar"');
+    expect(html.match(/class="node tnode[^"]*is-on"/g)).toHaveLength(1);
+    expect(html.match(/class="node tnode[^"]*dim"/g)).toHaveLength(tokens.length - 1);
+    const slackConsumers = new Set(
+      accesses.filter((a) => a.token === 'slack').map((a) => a.consumer),
+    );
+    expect(html.match(/class="node cnode[^"]*is-on"/g)).toHaveLength(slackConsumers.size);
+    const toSlack = accesses.filter((a) => a.consumer === 'github-acme' && a.token === 'slack');
+    expect(html).toContain(
+      `<span class="nl">${toSlack.length} ${toSlack.length === 1 ? 'access' : 'accesses'} to Slack</span>`,
+    );
+    const drawn = wires(html);
+    expect(drawn.filter((w) => w.cls.endsWith(' on')).length).toBe(slackConsumers.size);
+    expect(drawn.filter((w) => !w.cls.endsWith(' on')).every((w) => w.cls.endsWith('dim'))).toBe(
+      true,
+    );
+    expect(html).toContain('Lines to Slack');
+  });
+
   it('applies the scale rule: 6 busiest per side plus a group node, never more than 7 rows', () => {
     const data = atScale();
     const html = render(<ConnectionsMap id="cm" {...data} />);
@@ -186,5 +218,62 @@ describe('ConnectionsMap', () => {
       '<div class="tray-f"><span>Refused before a token was chosen: 182</span>',
     );
     expect(html).toContain('class="cmap extra"');
+  });
+
+  it('labels the numbers with the range', () => {
+    const html = render(
+      <ConnectionsMap
+        id="cm"
+        consumers={consumers}
+        tokens={tokens}
+        accesses={accesses}
+        rangeLabel={{ short: 'Req 7 d', long: 'requests in 7 days' }}
+      />,
+    );
+    expect(html).toContain('<span class="keep">Req 7 d</span>');
+    expect(html).toContain('<span class="vh"> requests in 7 days</span>');
+    expect(html).not.toContain('24 h');
+    expect(base()).toContain('<span class="keep">Req 24 h</span>');
+  });
+
+  it('keeps focus links on focusHref and links the token numbers', () => {
+    const html = render(
+      <ConnectionsMap
+        id="cm"
+        consumers={consumers}
+        tokens={tokens.map((t) =>
+          t.id === 'openai'
+            ? {
+                ...t,
+                hrefs: {
+                  requests: `/admin/requests?token=${t.id}`,
+                  denied: `/admin/requests?token=${t.id}&outcome=denied`,
+                  errors: `/admin/requests?token=${t.id}&outcome=error`,
+                },
+              }
+            : t,
+        )}
+        accesses={accesses}
+        focus="gitlab-platform"
+        focusHref="/admin"
+      />,
+    );
+    expect(html).toContain('<a class="ql" href="/admin">All consumers</a>');
+    expect(html).toContain('href="/admin?focus=github-acme"');
+    expect(html).toContain('<a class="sm" href="/admin">Clear focus</a>');
+    // the other consumer nodes refocus on focusHref; the focused one and the tokens stay on baseHref
+    expect(html).toContain('<a class="id" href="/admin?focus=buildkite-acme">');
+    expect(html).toContain('href="/admin/access?consumer=gitlab-platform" aria-current="true"');
+    expect(html).toContain('href="/admin/access?token=openai"');
+    expect(html).toContain(
+      '<span class="m keep"><a href="/admin/requests?token=openai">3,902<span class="vh"> requests in 24 hours</span></a><span class="u" aria-hidden="true"> req</span></span>',
+    );
+    expect(html).toContain(
+      '<span class="m bad"><a href="/admin/requests?token=openai&amp;outcome=denied">21<span class="vh"> denied</span></a></span>',
+    );
+    expect(html).toContain(
+      '<span class="m warn x"><a href="/admin/requests?token=openai&amp;outcome=error">11<span class="vh"> errors</span></a></span>',
+    );
+    expect(html).toContain('<span class="m keep">2,140<span class="u" aria-hidden="true">');
   });
 });

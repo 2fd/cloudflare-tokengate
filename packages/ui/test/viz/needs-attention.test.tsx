@@ -101,5 +101,47 @@ describe('NeedsAttention', () => {
     expect(list.startsWith('<ul class="att x">')).toBe(true);
     expect(list).toContain('name="grant" value="v"');
     expect(list).not.toContain('linkish');
+    expect(list).not.toContain(' id=');
+  });
+
+  it('puts the form id on the approve form in both layouts and keeps actions after it', () => {
+    const approve = {
+      action: '/a',
+      subject: 's',
+      id: 'ap-sam',
+      roles: [{ value: 'v', label: 'V' }],
+    };
+    const grid = render(
+      <NeedsAttention
+        items={[
+          {
+            level: 'warn',
+            title: 't',
+            approve,
+            actions: <button class="btn sm ghost">Dismiss</button>,
+          },
+        ]}
+      />,
+    );
+    expect(grid).toContain('<form id="ap-sam" class="att-a roles" method="post" action="/a">');
+    expect(grid).toContain(
+      'V</button></form><div class="att-a"><button class="btn sm ghost">Dismiss</button></div></li>',
+    );
+    const legend = render(
+      <NeedsAttention
+        layout="list"
+        items={[
+          {
+            who: { id: 'w1', avatar: null, name: 'sam@acme.dev' },
+            approve: { ...approve, legend: 'Approve as' },
+            actions: <p class="err">Pick a role.</p>,
+          },
+        ]}
+      />,
+    );
+    expect(legend).toContain('<div class="att-a"><form id="ap-sam" method="post" action="/a">');
+    expect(legend).toContain(
+      '</fieldset></form></div><div class="att-a"><p class="err">Pick a role.</p></div></li>',
+    );
   });
 });

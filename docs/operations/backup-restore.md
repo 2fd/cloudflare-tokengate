@@ -102,7 +102,8 @@ pnpm wrangler d1 export tokengate-telemetry --remote --output "tokengate-telemet
 
 ## Configuration export
 
-The export form in the footer of every admin page (admins and owners, permission `config:export`)
+The "Export configuration" item of the account menu, at the bottom of the sidebar of every admin page
+(admins and owners, permission `config:export`),
 downloads `tokengate-export-<date>.json`. Each download writes a `config.export` audit event.
 
 The file is deterministic JSON (`schema_version` 2) with every caller provider, service (with its

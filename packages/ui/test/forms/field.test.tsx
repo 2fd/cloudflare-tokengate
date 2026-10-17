@@ -73,17 +73,39 @@ describe('Field', () => {
     );
   });
 
-  it('lets the control override the wiring and does not leak it past the field', () => {
+  it('lets the control override id and invalid, and does not leak the wiring past the field', () => {
     const html = render(
       <>
         <Field id="x" label="X" hint="h">
-          <Input id="y" describedBy="other" invalid={false} />
+          <Input id="y" invalid={false} />
         </Field>
         <Input id="z" />
       </>,
     );
-    expect(html).toContain('<input class="input" id="y" type="text" aria-describedby="other"/>');
+    expect(html).toContain('<input class="input" id="y" type="text" aria-describedby="x-hint"/>');
     expect(html).toContain('<input class="input" id="z" type="text"/>');
+  });
+
+  it('appends an explicit describedBy after the Field hint, error and note ids', () => {
+    const html = render(
+      <Field id="f-name" label="Name" hint="h" error="e">
+        <Input describedBy="shared-hint" />
+      </Field>,
+    );
+    expect(html).toContain('aria-describedby="f-name-hint f-name-error shared-hint"');
+    const select = render(
+      <Field id="s" label="S" note="n">
+        <Select options={[]} describedBy="shared" />
+      </Field>,
+    );
+    expect(select).toContain('aria-describedby="s-note shared"');
+    const textarea = render(
+      <Field id="t" label="T" hint="h">
+        <Textarea describedBy="shared" />
+      </Field>,
+    );
+    expect(textarea).toContain('aria-describedby="t-hint shared"');
+    expect(render(<Input id="solo" describedBy="shared" />)).toContain('aria-describedby="shared"');
   });
 
   it('escapes label, hint and error text', () => {

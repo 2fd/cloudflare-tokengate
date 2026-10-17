@@ -176,7 +176,7 @@ describe('I-CRED-2: the service page flags an unattested destination', () => {
     // The stored destination is shown, but flagged, and the credential is not shown as usable.
     expect(page).toMatch(/attacker\.example<\/code>\s*<span class="badge bad">not confirmed/);
     expect(page).toContain('Credential unreadable');
-    expect(page).toMatch(/<details id="destination-edit" open="">/);
+    expect(page).toMatch(/<details[^>]*id="destination-edit"[^>]*open=""/);
     expect(page).not.toMatch(/name="base_url"[^>]*value="https:\/\/attacker\.example"/);
     expect(page).not.toMatch(/value="https:\/\/attacker\.example"[^>]*name="base_url"/);
     // The base URL suggestions come only from code (templates), never from D1.
@@ -237,7 +237,7 @@ describe('I-CRED-2: a token without a stored secret confirms its destination fir
     await repoint(id);
     const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
     const page = await (await adminGet(app, session, `/admin/tokens/${id}`)).text();
-    expect(page).toMatch(/<details id="destination-edit" open="">/);
+    expect(page).toMatch(/<details[^>]*id="destination-edit"[^>]*open=""/);
     expect(page).toContain('name="confirm_destination"');
     expect(page).not.toMatch(/name="base_url"[^>]*value="https:\/\/attacker/);
     const datalist =

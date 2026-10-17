@@ -3,8 +3,12 @@ import { cx } from '../../lib/cx';
 import { H, useHeadingLevel, type HeadingLevel } from '../../lib/heading';
 
 export interface ErrorSummaryItem {
-  /** Id of the control to fix: an Input's id, or `${fieldSetId}-1` for a group of choices. */
-  target: string;
+  /**
+   * Id of the control to fix: an Input's id, or `${fieldSetId}-1` for a group of choices. Leave it
+   * out for an error that is not about one field (a form-level error, a row that is not rendered):
+   * the entry is then plain text, not a link.
+   */
+  target?: string;
   /** The same words as the field's inline error. */
   message: Child;
 }
@@ -20,15 +24,20 @@ export interface ErrorSummaryProps {
   id?: string;
   /** Focus the summary on load (default), so keyboard and screen reader users start at it. */
   autofocus?: boolean;
+  /**
+   * `group` (default): focus on load already announces the summary, and `alert` together with
+   * autofocus would announce it twice. `alert`: only for a summary rendered with `autofocus={false}`.
+   */
+  role?: 'alert' | 'group';
   /** Level of the heading. Default 2: the summary sits under the page H1. */
   headingLevel?: HeadingLevel;
   class?: string;
 }
 
 /**
- * Error summary (GOV.UK pattern) at the top of a re-rendered form: a bad callout, focused on load
- * and announced, listing every error as a link to its field. Each field still shows its inline
- * error with the same words.
+ * Error summary (GOV.UK pattern) at the top of a re-rendered form: a bad callout, focused on load,
+ * listing every error as a link to its field (plain text for an error that is not about one
+ * field). Each field still shows its inline error with the same words.
  */
 export function ErrorSummary(props: ErrorSummaryProps) {
   if (props.errors.length === 0) return null;
@@ -39,7 +48,7 @@ export function ErrorSummary(props: ErrorSummaryProps) {
     <div
       class={cx('callout', 'bad', 'errsum', props.class)}
       id={id}
-      role="alert"
+      role={props.role ?? 'group'}
       tabindex={-1}
       autofocus={props.autofocus !== false}
       aria-labelledby={headingId}
@@ -53,11 +62,15 @@ export function ErrorSummary(props: ErrorSummaryProps) {
         </H>
         {props.description ? <p>{props.description}</p> : null}
         <ul>
-          {props.errors.map((error) => (
-            <li>
-              <a href={`#${error.target}`}>{error.message}</a>
-            </li>
-          ))}
+          {props.errors.map((error) =>
+            error.target !== undefined ? (
+              <li>
+                <a href={`#${error.target}`}>{error.message}</a>
+              </li>
+            ) : (
+              <li>{error.message}</li>
+            ),
+          )}
         </ul>
       </div>
     </div>

@@ -35,7 +35,7 @@ The admin UI uses task names for some terms. The code, the database, the audit l
 | Accepted risks | acknowledged grant warnings | The access page |
 | Display label | a row in `claim_labels` ([display label](#display-label)) | The consumer and access pages |
 
-The admin UI has four sections: Monitoring (Overview, Requests, Audit log, Data retention), Users (People, Sign-in), Service tokens (Tokens, Allowed hosts, Encryption keys) and Service consumers (Consumers, Consumer access). See [ADR 0019](adr/0019-admin-information-architecture.md).
+The admin UI has four sections, in the order of its sidebar: Monitoring (Overview, Requests, Audit log, Data retention), Service tokens (Tokens, Allowed hosts, Encryption keys), Service consumers (Consumers, Consumer access) and Users (People, Sign-in). See [ADR 0019](adr/0019-admin-information-architecture.md) and [ADR 0022](adr/0022-admin-ui-on-design-system-d.md).
 
 ## Glossary
 

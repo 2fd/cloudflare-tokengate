@@ -273,7 +273,6 @@ Hosts of the service templates (`apps/gateway/src/admin/service-templates.ts`):
 |---|---|---|---|
 | `DB` | D1 (`tokengate`, `apps/gateway/migrations/`) | Yes | Control plane: users, caller providers, services, grants, settings, audit log |
 | `TELEMETRY_DB` | D1 (`tokengate-telemetry`, `apps/gateway/migrations-telemetry/`) | Yes | Request log and hourly rollups |
-| `ASSETS` | Static assets (`./public`) | Yes | Serves `/static/*` (the stylesheet) |
 | `REQUEST_LOG_QUEUE` | Queue producer + consumer | Optional | Batches request-log writes |
 | `REQUEST_ARCHIVE` | Pipelines stream | Optional | Archives every recorded request to R2 |
 | `PROXY_RATE_LIMITER` | Rate limiting | Optional | Per-grant request ceiling |
@@ -411,7 +410,7 @@ The Worker configuration is `apps/gateway/wrangler.jsonc`.
 | `workers_dev` | `true` | Enables the `*.workers.dev` URL for the quick start. Only `/proxy` and the health endpoints answer there; `/admin` needs a custom domain ([admin hosts](#admin-hosts)) |
 | `preview_urls` | `false` | Version preview URLs would run old code against production data and secrets ([I-DEPLOY-1](threat-model.md#i-deploy-1)) |
 | `observability.head_sampling_rate` | `1` | Audit events are `audit.event` log lines; sampling below 1 can drop them |
-| `assets.run_worker_first` | `["/*", "!/static/*"]` | The Worker handles every path except `/static/*`, so security headers and host pinning always apply |
+| `rules` | `Text` for `**/*.css` | The admin stylesheets are bundled as strings and served by the Worker (`/static/<name>.<hash>.css`), so security headers apply to them too |
 | `d1_databases` | `DB`, `TELEMETRY_DB` | No database IDs are committed; see [getting-started.md](getting-started.md) to create the databases |
 | `triggers.crons` | `7 * * * *` | Hourly job: rollups, retention, credential expiry notices (`apps/gateway/src/telemetry/cron.ts`) |
 | `keep_vars` | `true` | Deploys keep variables set in the dashboard |

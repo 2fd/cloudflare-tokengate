@@ -29,6 +29,8 @@ Request volume and control-plane data behave differently:
 
 > Note (2026-10-14): [0015](0015-cloudflare-access-only-admin-login.md) removed `oauth4webapi` and the `sessions` table. Admin login is Cloudflare Access only.
 
+> Note (2026-10-17): since [0022](0022-admin-ui-on-design-system-d.md) the Worker serves the admin stylesheets itself. The project no longer uses Workers Assets.
+
 ## Consequences
 
 - There are no servers. A deployment is one Worker, two databases and a few secrets ([configuration.md](../configuration.md)).

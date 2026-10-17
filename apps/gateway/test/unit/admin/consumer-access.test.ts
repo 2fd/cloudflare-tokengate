@@ -280,6 +280,37 @@ describe('parseJobs', () => {
     expect(form.repository).toBe('acme/api (2000)');
     expect(form.context).toBe('any');
   });
+
+  it('reads the typed "Another…" value only when no known one is picked', () => {
+    // A picked repository wins over a stale typed one.
+    const picked = readJobsForm(
+      { repository: 'acme/api (2000)', repository_other: 'acme/old (9)' },
+      '',
+      github,
+    );
+    expect(picked.repository).toBe('acme/api (2000)');
+    // "Another…" posts '' and the typed value.
+    const typed = readJobsForm(
+      {
+        repository: '',
+        repository_other: 'acme/web (3000)',
+        environment: '',
+        environment_other: 'staging',
+      },
+      '',
+      github,
+    );
+    expect(typed.repository).toBe('acme/web (3000)');
+    expect(typed.environment).toBe('staging');
+    // A direct POST of the plain names keeps working.
+    const plain = readJobsForm(
+      { 'p.repository': 'acme/api (2000)', 'p.environment': 'production' },
+      'p.',
+      github,
+    );
+    expect(plain.repository).toBe('acme/api (2000)');
+    expect(plain.environment).toBe('production');
+  });
 });
 
 describe('coveredRiskCodes (A7.7)', () => {

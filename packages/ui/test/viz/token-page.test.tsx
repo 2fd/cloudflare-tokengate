@@ -1,6 +1,7 @@
 // The token page parts: Sparkline, WhoCanUse, Kpis columns, decision items, the chart scale.
 import { describe, expect, it } from 'vitest';
 import { Chart, Kpis, NeedsAttention, Pipeline, Sparkline, WhoCanUse } from '../../src';
+import { uiCss } from '../../src/css';
 import { render } from '../render';
 
 describe('Sparkline', () => {
@@ -95,6 +96,10 @@ describe('WhoCanUse', () => {
     );
   });
 
+  it('wraps a long status word under the access text instead of squeezing it', () => {
+    expect(uiCss.text).toContain('.wrow>.ent-t{flex:1 1 8rem;min-width:0}');
+  });
+
   it('shows the ghost when no consumer has access', () => {
     const html = render(
       <WhoCanUse
@@ -106,6 +111,27 @@ describe('WhoCanUse', () => {
     );
     expect(html).toContain(
       '<div class="wmap is-empty"><div class="wghost"><h3>No consumer access yet</h3><p class="ask">Ask</p></div>',
+    );
+    expect(html).not.toContain('cmap-note');
+  });
+
+  it('shows the scale note inside the panel, after the map and before the footer', () => {
+    const html = render(
+      <WhoCanUse
+        label="l"
+        token={{ name: 'Slack', logo: 'slack', path: '/proxy/slack' }}
+        groups={[]}
+        rest={{ href: '/matrix', label: '+ 11 more consumers' }}
+        note={
+          <>
+            <b>14 consumers.</b> The map draws the 3 busiest. <a href="/matrix">Open the matrix</a>
+          </>
+        }
+        footer="f"
+      />,
+    );
+    expect(html).toContain(
+      '</div></div></div><p class="cmap-note"><b>14 consumers.</b> The map draws the 3 busiest. <a href="/matrix">Open the matrix</a></p></div><div class="wfoot"><span>f</span></div>',
     );
   });
 });

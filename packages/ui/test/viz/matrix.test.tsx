@@ -144,5 +144,73 @@ describe('Matrix', () => {
     );
     expect(custom).toContain('<th scope="col">&lt;c&gt;</th>');
     expect(custom).toContain('<span class="vh">Add Slack for r</span>');
+    expect(custom).not.toContain('<caption');
+  });
+
+  it('stacks several accesses in one cell, each with its hidden prefix', () => {
+    const stacked = render(
+      <Matrix
+        label="m"
+        corner="c"
+        columns={columns.slice(0, 1)}
+        groups={[
+          {
+            rows: [
+              {
+                label: 'acme/api',
+                cells: {
+                  slack: [
+                    { href: '/a/1', status: 'Active', srPrefix: 'acme/api can use Slack:' },
+                    { href: '/a/2', tone: 'warn', status: 'Expires in 9 days' },
+                  ],
+                },
+              },
+            ],
+          },
+        ]}
+        addHref={() => '/new'}
+      />,
+    );
+    expect(stacked).toContain(
+      '<td><a class="mcell" href="/a/1"><span class="vh">acme/api can use Slack: </span><span class="s"><span aria-hidden="true">✓</span>Active</span></a><a class="mcell warn" href="/a/2"><span class="s"><span aria-hidden="true">⌛</span>Expires in 9 days</span></a></td>',
+    );
+    expect(stacked).not.toContain('madd');
+  });
+
+  it('is read-only without addHref: empty cells show a dash with a spoken label', () => {
+    const readOnly = render(
+      <Matrix
+        label="m"
+        corner="c"
+        caption="Accesses of acme, by repository and token"
+        columns={columns.slice(0, 1)}
+        groups={[
+          {
+            rows: [
+              { label: 'r', cells: {} },
+              { label: 's', cells: { slack: [] } },
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(readOnly).toContain(
+      '<table class="mx"><caption class="vh">Accesses of acme, by repository and token</caption><thead>',
+    );
+    expect(readOnly).toContain(
+      '<td><span class="mnone"><span aria-hidden="true">—</span><span class="vh">No access</span></span></td>',
+    );
+    expect(readOnly.match(/class="mnone"/g)).toHaveLength(2);
+    expect(readOnly).not.toContain('madd');
+    const custom = render(
+      <Matrix
+        label="m"
+        corner="c"
+        columns={columns.slice(0, 1)}
+        groups={[{ rows: [{ label: 'r', cells: {} }] }]}
+        emptyLabel={(row, column) => `${row.label} cannot use ${column.name}`}
+      />,
+    );
+    expect(custom).toContain('<span class="vh">r cannot use Slack</span>');
   });
 });

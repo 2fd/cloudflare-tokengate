@@ -188,9 +188,11 @@ describe('I-CRED-1 and I-CRED-2: credential drafts in the token forms', () => {
     expect(html).not.toContain(SECRET);
     expect(html).toContain(`Secret kept for 15 minutes (…WXYZ, ${SECRET.length} characters).`);
     // The secret field is no longer required: leaving it empty uses the draft.
-    expect(html).toMatch(
-      /<input id="f-openai-credential" name="credential" type="password" value=""(?![^>]*required)/,
-    );
+    // A secret input never renders a value (the draft is not echoed into the field).
+    const field = /<input [^>]*id="f-openai-credential"[^>]*>/.exec(html)?.[0] ?? '';
+    expect(field).toContain('name="credential" type="password"');
+    expect(field).not.toContain('required');
+    expect(field).not.toContain('value=');
     const draft = draftOf(html);
     expect(draft).not.toBeNull();
 

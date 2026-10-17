@@ -39,6 +39,34 @@ describe('Checkbox', () => {
     );
   });
 
+  it('renders an error line before the label and wires it to the box', () => {
+    expect(
+      render(
+        <Checkbox
+          name="allow_host"
+          id="ah"
+          error="Confirm the new host"
+          describedBy="ah-note"
+          class="x"
+        >
+          Allow api.example.com
+        </Checkbox>,
+      ),
+    ).toBe(
+      '<p class="field-error" id="ah-error"><span aria-hidden="true">✕</span><span class="vh">Error:</span> Confirm the new host</p><label class="check x"><input type="checkbox" id="ah" name="allow_host" aria-invalid="true" aria-describedby="ah-error ah-note"/><span>Allow api.example.com</span></label>',
+    );
+  });
+
+  it('an error needs an id', () => {
+    expect(() =>
+      render(
+        <Checkbox name="n" error="E">
+          N
+        </Checkbox>,
+      ),
+    ).toThrow('Checkbox: error needs an id');
+  });
+
   it('escapes the label and refuses required inside a Reveal', () => {
     expect(render(<Checkbox name="e">{'<i>'}</Checkbox>)).toContain('&lt;i&gt;');
     expect(() =>

@@ -59,9 +59,15 @@ describe('I-SSRF-1: upstream host allowlist at /admin/tokens/hosts', () => {
     expect(hostBox(html, 'slack.com')).not.toContain('checked');
     expect(html).toContain('Template: Slack Web API');
     expect(html).toContain('name="other_hosts"');
-    // Inside the conditional panel nothing carries native validation (A7.6).
-    const reveal = /<div class="reveal">[\s\S]*?<\/fieldset>/.exec(html)?.[0] ?? '';
+    // The edit is a dialog behind "Change…" (a settings card), with the host list revealed by
+    // the "Only" choice; inside that branch nothing carries native validation (A7.6).
+    expect(html).toContain('commandfor="dlg-hosts"');
+    expect(html).toMatch(/<dialog class="dlg wide lform" id="dlg-hosts"/);
+    const reveal = /<div class="rv1 subbox" data-o="2">[\s\S]*?<\/textarea>/.exec(html)?.[0] ?? '';
+    expect(reveal).toContain('name="host"');
+    expect(reveal).toContain('name="other_hosts"');
     expect(reveal).not.toMatch(/ required| pattern=/);
+    expect(html).toContain('Any public HTTPS host');
   });
 
   it('shows the list read-only to admins, with who to ask', async () => {
@@ -129,7 +135,8 @@ describe('I-SSRF-1: upstream host allowlist at /admin/tokens/hosts', () => {
     expect(res.status).toBe(400);
     const html = await res.text();
     expect(html).toContain('Choose at least one host, or choose Any public HTTPS host.');
-    expect(html).toContain('href="#f-host"');
+    // The group's error links to its first box (a fieldset cannot take focus).
+    expect(html).toContain('href="#f-host-1"');
     expect(await getAllowedUpstreamHosts(env.DB)).toBeNull();
   });
 
@@ -163,8 +170,8 @@ describe('I-SSRF-1: upstream host allowlist at /admin/tokens/hosts', () => {
     const id = await seedService(opsDeps(), { slug: 'gh', secret: 'ghp_0123456789abcdefghij' });
     await setUpstreamHosts(['only.example.com']);
     const html = await (await adminGet(app, owner, '/admin/tokens/hosts')).text();
-    expect(html).toContain('<caption id="outside-cap">Tokens outside the allowed hosts</caption>');
-    expect(html).toContain(`<a href="/admin/tokens/${id}">GitHub</a>`);
+    expect(html).toContain('<caption class="vh">Tokens outside the allowed hosts</caption>');
+    expect(html).toContain(`<a class="ent-n" href="/admin/tokens/${id}">GitHub</a>`);
     expect(html).toContain('Used by GitHub, which is refused now. Check to allow.');
   });
 

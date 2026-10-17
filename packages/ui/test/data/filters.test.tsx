@@ -67,6 +67,31 @@ describe('FilterSearch', () => {
     expect(html).not.toContain('list=');
     expect(html).not.toContain('datalist');
   });
+
+  it('puts the validation attributes on the input', () => {
+    const html = render(
+      <FilterSearch
+        id="rq-repo"
+        label="Filter by repository"
+        name="repo"
+        value="acme/"
+        pattern="[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+        maxlength={256}
+        invalid
+        describedBy="rq-repo-error"
+      />,
+    );
+    expect(html).toContain(
+      '<input class="input" id="rq-repo" type="search" name="repo" value="acme/" pattern="[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+" maxlength="256" aria-invalid="true" aria-describedby="rq-repo-error" autocomplete="off"',
+    );
+    // no error line of its own: the page renders the FieldError
+    expect(html).not.toContain('field-error');
+  });
+
+  it('leaves the validation attributes out by default', () => {
+    const html = render(<FilterSearch id="s" label="Search" invalid={false} />);
+    expect(html).not.toMatch(/pattern=|maxlength=|aria-invalid|aria-describedby/);
+  });
 });
 
 describe('AddFilter', () => {
@@ -117,6 +142,55 @@ describe('AddFilter', () => {
     expect(closed).toContain('<details class="fadd x"><summary>');
     expect(closed).not.toContain('<hr');
     expect(closed).toContain('<a href="?c=1">GitHub Actions (acme)</a>');
+    expect(closed).not.toContain('id=');
+    expect(closed).not.toContain('role="group"');
+  });
+
+  it('takes an id on the details, the target of an error summary link', () => {
+    expect(
+      render(
+        <AddFilter id="f-reason" open label="Reason" options={[{ href: '?r=1', label: 'x' }]} />,
+      ),
+    ).toContain('<details class="fadd" id="f-reason" open=""><summary>');
+  });
+
+  it('renders titled option groups, mixed with plain values in order', () => {
+    const grouped = render(
+      <AddFilter
+        label="Reason"
+        srSuffix="requests"
+        options={[
+          { href: '?reason=any', label: 'Any denial' },
+          {
+            group: 'Caller',
+            options: [
+              { href: '?reason=issuer_unknown', label: 'Unknown issuer', count: 182 },
+              { href: '?reason=no_matching_grant', label: 'No consumer access' },
+            ],
+          },
+          {
+            group: 'Upstream',
+            options: [{ href: '?reason=upstream_5xx', label: 'Upstream error' }],
+          },
+        ]}
+      />,
+    );
+    expect(grouped).toContain(
+      '<div class="fpop"><a href="?reason=any">Any denial</a>' +
+        '<div role="group" aria-label="Caller"><p class="fpop-h" aria-hidden="true">Caller</p>' +
+        '<a href="?reason=issuer_unknown">Unknown issuer<span class="n">182<span class="vh"> requests</span></span></a>' +
+        '<a href="?reason=no_matching_grant">No consumer access</a></div>' +
+        '<div role="group" aria-label="Upstream"><p class="fpop-h" aria-hidden="true">Upstream</p>' +
+        '<a href="?reason=upstream_5xx">Upstream error</a></div></div>',
+    );
+  });
+
+  it('escapes the group title', () => {
+    const html = render(
+      <AddFilter label="R" options={[{ group: '<b>"x"', options: [{ href: '?', label: 'y' }] }]} />,
+    );
+    expect(html).toContain('aria-label="&lt;b&gt;&quot;x&quot;"');
+    expect(html).toContain('<p class="fpop-h" aria-hidden="true">&lt;b&gt;&quot;x&quot;</p>');
   });
 });
 

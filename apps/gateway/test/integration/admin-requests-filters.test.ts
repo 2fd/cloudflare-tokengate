@@ -76,11 +76,14 @@ describe('Requests filters', () => {
     const query = `range=24h&outcome=denied&token=${SVC}&consumer=none&access=${GRT}&repo=acme%2Fapi&reason=no_matching_grant&slug=echo`;
     const html = await (await adminGet(app, session, `/admin/requests?${query}`)).text();
     const chips =
-      /<ul class="chips filters" aria-label="Active filters">[\s\S]*?<\/ul>/.exec(html)?.[0] ?? '';
-    const hrefs = [...chips.matchAll(/class="chip" href="([^"]+)"/g)].map((m) =>
+      /<div class="achips" role="group" aria-label="Active filters">[\s\S]*?<\/div>/.exec(
+        html,
+      )?.[0] ?? '';
+    const hrefs = [...chips.matchAll(/class="achip" href="([^"]+)"/g)].map((m) =>
       decode(m[1] ?? ''),
     );
-    expect(hrefs).toHaveLength(6);
+    // Six filters plus the outcome: each chip drops exactly one key.
+    expect(hrefs).toHaveLength(7);
     const full = new URLSearchParams(query);
     for (const href of hrefs) {
       const params = new URL(href, 'https://x').searchParams;
@@ -90,7 +93,7 @@ describe('Requests filters', () => {
         if (!dropped.includes(key)) expect(params.get(key), `${href} ${key}`).toBe(full.get(key));
       }
     }
-    expect(chips).toContain('<a href="/admin/requests">Clear filters</a>');
+    expect(chips).toContain('<a class="sm" href="/admin/requests">Clear filters</a>');
   });
 
   it('keeps link-only filters in hidden fields of the filter form', async () => {
@@ -98,10 +101,9 @@ describe('Requests filters', () => {
       await adminGet(app, session, `/admin/requests?range=1h&outcome=error&access=${GRT}&slug=echo`)
     ).text();
     const form =
-      /<form method="get" action="\/admin\/requests" class="filters"[\s\S]*?<\/form>/.exec(
+      /<form class="filters" role="search" method="get" action="\/admin\/requests" aria-label="Filter requests">[\s\S]*?<\/form>/.exec(
         html,
       )?.[0] ?? '';
-    expect(form).toContain('<legend>All filters are optional</legend>');
     for (const [name, value] of [
       ['range', '1h'],
       ['outcome', 'error'],
@@ -154,7 +156,7 @@ describe('Requests filters', () => {
     // An active filter shows the form; its suggestions come from claim labels only.
     const html = await (await adminGet(app, session, '/admin/requests?outcome=denied')).text();
     const list = /<datalist id="f-repo-list">[\s\S]*?<\/datalist>/.exec(html)?.[0] ?? '';
-    expect(list).toContain('<option value="acme/labelled">acme/labelled</option>');
+    expect(list).toContain('<option value="acme/labelled">');
     expect(list).not.toContain('only-in-log');
   });
 
@@ -167,9 +169,9 @@ describe('Requests filters', () => {
 
   it('states the actual start of a time range', async () => {
     const html = await (await adminGet(app, session, '/admin/requests?range=24h')).text();
-    expect(html).toMatch(/<p class="since">since <time datetime="[^"]+">/);
+    expect(html).toMatch(/<p>Since <time datetime="[^"]+">[^<]+<\/time> · newest first/);
     expect(await (await adminGet(app, session, '/admin/requests')).text()).not.toContain(
-      'class="since"',
+      'Since <time',
     );
   });
 
@@ -190,7 +192,8 @@ describe('Requests filters', () => {
     expect(html).toContain(
       '<a href="#f-repo">Enter the owner and name, like acme/api, or pick a suggestion.</a>',
     );
-    expect(html).toMatch(/id="f-repo" name="repo"[^>]*aria-invalid="true"/);
+    expect(html).toMatch(/id="f-repo"[^>]*name="repo"[^>]*aria-invalid="true"/);
+    expect(html).toContain('<p class="field-error" id="f-repo-error">');
   });
 });
 
@@ -212,7 +215,8 @@ describe('Find a request', () => {
     expect(html).toContain('<title>Error: Requests – Monitoring – tokengate</title>');
     expect(html).toContain(`value="${missing}"`);
     expect(html).toContain('<a href="#f-id">There is no request record with this ID.');
-    expect(html).toMatch(/id="f-id" name="id"[^>]*aria-invalid="true"/);
+    expect(html).toMatch(/id="f-id"[^>]*name="id"[^>]*aria-invalid="true"/);
+    expect(html).toContain('<p class="field-error" id="f-id-error">');
     const garbage = await adminGet(app, session, '/admin/requests?id=%3Cscript%3E');
     expect(garbage.status).toBe(404);
     const text = await garbage.text();
@@ -224,7 +228,7 @@ describe('Find a request', () => {
     for (const path of ['/admin', '/admin/requests', '/admin/audit', '/admin/retention']) {
       const html = await (await adminGet(app, session, path)).text();
       expect(html, path).toContain(
-        '<form role="search" method="get" action="/admin/requests" class="find-request">',
+        '<form class="field-inline find-request" role="search" method="get" action="/admin/requests" aria-label="Find a request">',
       );
     }
   });

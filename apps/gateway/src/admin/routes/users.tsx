@@ -4,6 +4,45 @@
 // ops/users.ts, which keeps an active owner (I-OWNER-1) and never links or re-invites a user who
 // signed in (I-LINK-1); every admin request re-reads the user, so changes apply at once (I-SESS-1).
 // Result notices are built from the viewer's own audit row (`done`), never from query text.
+import {
+  Avatar,
+  Button,
+  Callout,
+  Chip,
+  Chips,
+  Column,
+  DangerRow,
+  DangerZone,
+  DetailLayout,
+  DialogTrigger,
+  EmptyState,
+  Feed,
+  FeedItem,
+  FieldError,
+  Filters,
+  FilterSearch,
+  Grid,
+  Icon,
+  IdChip,
+  Identity,
+  PageHeader,
+  Panel,
+  QuickLinks,
+  RailFoot,
+  RailKeyValue,
+  type RailKeyValueItem,
+  RelationLine,
+  Row,
+  RowHeader,
+  Cell,
+  Stack,
+  Table,
+  Time,
+  Tray,
+  Badge,
+  ActionForm,
+} from '@tokengate/ui';
+import type { Child } from 'hono/jsx';
 import type { App } from '../../app';
 import { auditCountByActor, auditCountByActorAndCategory, listAuditEvents } from '../../db/audit';
 import { getJoinDefaults } from '../../db/settings';
@@ -20,7 +59,7 @@ import {
   type UserListEntry,
 } from '../../db/users';
 import { type NoticeContext, type NoticeTable, loadDone, resolveNotice } from '../notice';
-import { type FieldError, fieldError, type OpFailure } from '../ops/shared';
+import { type FieldError as OpFieldError, fieldError, type OpFailure } from '../ops/shared';
 import {
   decidePending,
   deleteUser,
@@ -44,30 +83,29 @@ import {
   submittedVersion,
   type ViewContext,
 } from '../render';
-import {
-  ActionButton,
-  ApproveForm,
-  DataTable,
-  Field,
-  NotFound,
-  StatusBadge,
-  Time,
-} from '../views/components';
-import { formatTime, relativeTime } from '../views/format';
+import { AskSomeone, NotFound, notFoundText } from '../views/components';
+import { relativeTime } from '../views/format';
+import { AUDIT_ACTION_TEXT } from '../views/monitoring';
 import { ROLE_INFO, ROLE_ORDER, roleLabel } from '../views/roles';
 import {
   accessUserId,
+  ApproveCards,
+  CanList,
   type DecisionCard,
-  DecisionCards,
+  DecisionTray,
   decisionKind,
-  DismissError,
-  InviteSection,
-  PersonChange,
+  firstName,
+  InviteTray,
+  PersonDialogs,
+  PersonRow,
+  RoleCards,
+  RoleMap,
   signInMailto,
   StateButton,
-  StatusCell,
   type UserReturn,
+  UserBadge,
   userStatus,
+  utcTime,
 } from '../views/users';
 
 const DAY_MS = 86_400_000;
@@ -77,6 +115,8 @@ const SEARCH_THRESHOLD = 20;
 const Q_MAX = 254;
 const STATUS_FILTERS = ['active', 'invited', 'expired', 'suspended'] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
+/** A person's own sign-ins are audited, but they are not changes they made. */
+const SIGN_IN_ACTIONS: ReadonlySet<string> = new Set(['user.bootstrap', 'user.join', 'user.link']);
 
 interface UsersNoticeData {
   users: ReadonlyMap<string, UserListEntry>;
@@ -122,9 +162,10 @@ const NOTICES: NoticeTable<Ctx> = {
     if (!event || !user) return { text: 'Invitation saved. Nothing was sent.' };
     const again = event.diff?.before !== undefined ? ' again' : '';
     const until =
-      user.invite_expires_at === null ? '' : ` until ${formatTime(user.invite_expires_at)}`;
+      user.invite_expires_at === null ? '' : ` until ${utcTime(user.invite_expires_at)}`;
     return {
       text: `Invited ${user.email}${again} as ${roleLabel(user.role)}${until}. Nothing was sent.`,
+      more: `Send them https://${ctx.host}/admin. They sign in with Cloudflare Access as ${user.email}.`,
       next: {
         href: signInMailto(user, ctx.host, ctx.view.now),
         label: `Email ${user.email} the sign-in link`,
@@ -137,8 +178,11 @@ const NOTICES: NoticeTable<Ctx> = {
     if (!event || !user) return { text: 'Saved. The change applies to their next request.' };
     const { before, after } = rolePair(event);
     let text: string;
-    if (before.role !== after.role && after.role && before.role) {
+    let more: string | undefined;
+    const roleChanged = before.role !== after.role && after.role && before.role;
+    if (roleChanged && after.role && before.role) {
       text = `Made ${user.email} ${roleLabel(after.role)} (was ${roleLabel(before.role)}).`;
+      more = `${roleLabel(after.role)}: ${ROLE_INFO[after.role].description}`;
     } else if (after.status === 'suspended') {
       text = `Suspended ${user.email}. Their Access session stays valid, but tokengate refuses every request they make.`;
     } else {
@@ -148,15 +192,25 @@ const NOTICES: NoticeTable<Ctx> = {
     const unchanged = user.role === after.role && user.status === after.status;
     const ownerInvolved = before.role === 'owner' || after.role === 'owner';
     const undoable = before.status === 'active' || before.status === 'suspended';
-    if (!unchanged || ownerInvolved || !undoable || !before.role || !before.status) return { text };
-    const field: Record<string, string> =
-      before.role !== after.role ? { role: before.role } : { status: before.status };
+    if (!unchanged || ownerInvolved || !undoable || !before.role || !before.status) {
+      return { text, more };
+    }
+    const byRole = before.role !== after.role;
+    const field: Record<string, string> = byRole
+      ? { role: before.role }
+      : { status: before.status };
     return {
       text,
+      more,
       undo: {
         action: paths.user(user.id),
         label: 'Undo',
-        fields: { ...field, expected_updated_at: String(user.updated_at), _return: ctx.back },
+        srSuffix: byRole
+          ? `: make ${user.email} ${roleLabel(before.role)} again`
+          : before.status === 'active'
+            ? `: reactivate ${user.email}`
+            : `: suspend ${user.email} again`,
+        fields: { _return: ctx.back, ...field, expected_updated_at: String(user.updated_at) },
       },
     };
   },
@@ -222,7 +276,7 @@ interface RowError {
 }
 
 interface PageOptions {
-  errors?: FieldError[];
+  errors?: OpFieldError[];
   /** The row a failed row action belongs to, and its message. */
   rowError?: RowError;
   invite?: InviteValues;
@@ -476,6 +530,47 @@ function decisionCards(users: readonly UserListEntry[], now: number): DecisionCa
   return [...pending, ...refused].map((user) => ({ kind: decisionKind(user), user }));
 }
 
+/** The order of roles in People (as in the role map): owners first, then the two duties. */
+const ROW_ROLES: readonly Role[] = ['owner', 'admin', 'token_manager', 'access_manager', 'viewer'];
+
+/** Rows of People: active people first, by role, then invitations, then the rest. */
+function rowOrder(a: UserListEntry, b: UserListEntry): number {
+  const state = (user: UserListEntry) =>
+    user.status === 'active' ? 0 : user.status === 'invited' ? 1 : 2;
+  return (
+    state(a) - state(b) ||
+    ROW_ROLES.indexOf(a.role) - ROW_ROLES.indexOf(b.role) ||
+    a.email.localeCompare(b.email)
+  );
+}
+
+/** At most this many invitation rows look up who sent them (one audit query each). */
+const INVITERS_MAX = 25;
+
+/** Who sent each open invitation, and when: the newest invite or renewal in the audit log. */
+async function invitersOf(
+  db: D1Database,
+  rows: readonly UserListEntry[],
+  byId: ReadonlyMap<string, UserListEntry>,
+): Promise<Map<string, { name: string; at: number }>> {
+  const invited = rows.filter((user) => user.status === 'invited').slice(0, INVITERS_MAX);
+  const found = await Promise.all(
+    invited.map(async (user) => {
+      const [event] = await listAuditEvents(db, {
+        targetType: 'user',
+        targetId: user.id,
+        actions: { prefixes: [], exact: ['user.invite', 'user.resend_invite'] },
+        limit: 1,
+      });
+      if (!event || event.actor_type !== 'user') return null;
+      const actor = event.actor_id ? byId.get(event.actor_id) : undefined;
+      const name = actor?.name ?? actor?.email ?? event.actor_email;
+      return name ? ([user.id, { name, at: event.ts }] as const) : null;
+    }),
+  );
+  return new Map(found.filter((entry) => entry !== null));
+}
+
 async function peoplePage(c: AdminContext, options: PageOptions) {
   const deps = c.get('deps');
   const db = deps.env.DB;
@@ -493,8 +588,12 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
   ]);
   const byId = new Map(all.map((user) => [user.id, user]));
   const listed = all.filter((user) => user.status !== 'pending');
+  const rows = [...shown].sort(rowOrder);
+  const inviters = await invitersOf(db, rows, byId);
+  const pendingPeople = all.filter((user) => user.status === 'pending');
   const cards = decisionCards(all, now);
-  const policy = JOIN_POLICY_LABELS[joinPolicyOf(defaults)];
+  const policyKey = joinPolicyOf(defaults);
+  const policy = JOIN_POLICY_LABELS[policyKey];
   const notice = options.status
     ? null
     : resolveNotice(NOTICES, c.req.query('notice'), done, {
@@ -502,18 +601,20 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
         host: new URL(c.req.url).hostname,
         back: 'list',
       });
-  // The summary links only to an error that is rendered: a failed Dismiss at its card, anything
-  // else (or a Dismiss whose card is gone) at the row's "Change"; otherwise a plain item.
+  // The summary links only to an error that is rendered: a failed Dismiss at its card (pending
+  // cards have no Dismiss), anything else (or a Dismiss whose card is gone) at the row's
+  // "Change"; otherwise a plain item.
   const rowError = options.rowError;
   const ownerViewer = viewer.user.role === 'owner';
   const atCard =
     rowError?.target === 'dismiss' &&
     ownerViewer &&
-    cards.some((card) => card.user.id === rowError.userId);
+    cards.some((card) => card.kind !== 'pending' && card.user.id === rowError.userId);
   const atRow =
     rowError !== undefined &&
     !atCard &&
     ownerViewer &&
+    rowError.userId !== viewer.user.id &&
     shown.some((user) => user.id === rowError.userId);
   const errors =
     options.errors ??
@@ -527,6 +628,7 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
       : undefined);
   const filtered =
     filter.role !== undefined || filter.status !== undefined || filter.q !== undefined;
+  const highlight = notice && done?.target_id ? done.target_id : null;
 
   return renderPage(
     c,
@@ -537,6 +639,25 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
       errors,
       notice,
       status: options.status,
+      header: (ctx) => (
+        <PageHeader
+          title="People"
+          count={all.length}
+          description={
+            <>
+              Who signs in to this console, and what each person may change.{' '}
+              <a href={paths.docs('concepts.md#user')}>How roles work</a>
+            </>
+          }
+          actions={
+            ctx.can('users:write') ? (
+              <Button variant="primary" plus href={paths.users({ hash: 'invite' })}>
+                Invite someone
+              </Button>
+            ) : undefined
+          }
+        />
+      ),
     },
     (ctx) => {
       const owner = ctx.can('users:write');
@@ -544,53 +665,59 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
       const existing = options.invite?.existingId
         ? (byId.get(options.invite.existingId) ?? null)
         : null;
+      const singleOwner = owner && activeOwners === 1;
+      const hasStack = cards.length > 0 || singleOwner;
       return (
-        <>
-          <p>
-            People who can sign in to this console, and their{' '}
-            <a href={paths.docs('concepts.md#user')}>roles</a>. Workloads that call through the
-            gateway are <a href={paths.consumers()}>service consumers</a>, not people.
-          </p>
-          {owner && activeOwners === 1 ? (
-            <div class="callout">
-              <p>
-                You are the only owner. If you lose access, recovery means editing the database
-                (break-glass). <a href={paths.users({ hash: 'invite' })}>Invite a second owner</a>
-              </p>
-            </div>
-          ) : null}
-          <DecisionCards cards={cards} ctx={ctx} dismissError={atCard ? rowError : null} />
+        <Grid>
           {owner ? (
-            <InviteSection
+            <InviteTray
               ctx={ctx}
+              open={options.invite !== undefined}
               email={options.invite?.email}
               error={options.invite?.error}
               roleError={options.invite?.roleError}
               existing={existing}
               emailExample={emailExample(all)}
-              joinPolicy={policy}
             />
           ) : null}
-          <h2 id="people-h">Everyone</h2>
-          <FilterNav listed={listed} filter={filter} now={now} />
-          {listed.length > SEARCH_THRESHOLD ? (
-            <SearchForm filter={filter} listed={listed} qTooLong={qTooLong} />
+          {hasStack ? (
+            <Column span={7}>
+              <Stack>
+                <DecisionTray cards={cards} ctx={ctx} dismissError={atCard ? rowError : null} />
+                {singleOwner ? (
+                  <Callout
+                    title="You are the only owner."
+                    actions={
+                      <Button size="sm" href={paths.users({ hash: 'invite' })}>
+                        Invite a second owner
+                      </Button>
+                    }
+                  >
+                    If you lose access, only a break-glass database edit gets you back.
+                  </Callout>
+                ) : null}
+              </Stack>
+            </Column>
           ) : null}
-          <PeopleTable
-            rows={shown}
-            total={listed.length}
+          {hasStack ? <RoleMap listed={listed} selfId={ctx.userId} /> : null}
+          <AccountsTray
+            all={all}
+            listed={listed}
+            shown={rows}
+            inviters={inviters}
+            pendingPeople={pendingPeople}
+            filter={filter}
+            qTooLong={qTooLong}
+            filtered={filtered}
             ctx={ctx}
             owner={owner}
             changes={changes}
             policy={policy}
-            filtered={filtered}
+            policyPending={policyKey === 'pending'}
+            highlight={highlight}
             rowError={atRow ? rowError : undefined}
           />
-          <p>
-            New people who sign in: <strong>{policy}</strong>.{' '}
-            <a href={paths.signIn('policy')}>Change on Sign-in</a>
-          </p>
-        </>
+        </Grid>
       );
     },
   );
@@ -620,15 +747,28 @@ function matchesStatus(user: UserListEntry, status: StatusFilter, now: number): 
   return user.status === status;
 }
 
-/** Who holds which role: link chips that are also the filters (1 load, no submit). */
-function FilterNav(props: { listed: readonly UserListEntry[]; filter: UserFilter; now: number }) {
+/** Who holds which role: quick links that are also the filters (1 load, no submit). */
+function filterLinks(props: {
+  all: readonly UserListEntry[];
+  listed: readonly UserListEntry[];
+  pending: number;
+  filter: UserFilter;
+  now: number;
+}) {
   const { listed, filter, now } = props;
   const q = filter.q;
-  const chips: Array<{ href: string; label: string; count: number; current: boolean }> = [
+  const links: Array<{
+    href: string;
+    label: string;
+    count: number;
+    current: boolean;
+    tone?: 'warn';
+    glyph?: string;
+  }> = [
     {
       href: paths.users({ q }),
       label: 'Everyone',
-      count: listed.length,
+      count: props.all.length,
       current: filter.role === undefined && filter.status === undefined,
     },
     ...ROLE_CHIPS.map((chip) => ({
@@ -637,172 +777,155 @@ function FilterNav(props: { listed: readonly UserListEntry[]; filter: UserFilter
       count: listed.filter((user) => user.role === chip.role).length,
       current: filter.role === chip.role,
     })),
+    // A jump to the decisions, not a filter: pending people have no row.
+    ...(props.pending > 0
+      ? [
+          {
+            href: '#decide',
+            label: 'Pending',
+            count: props.pending,
+            current: false,
+            tone: 'warn' as const,
+            glyph: '◐',
+          },
+        ]
+      : []),
     ...STATUS_CHIPS.map((chip) => ({
       href: paths.users({ role: filter.role, status: chip.status, q }),
       label: chip.label,
       count: listed.filter((user) => matchesStatus(user, chip.status, now)).length,
       current: filter.status === chip.status,
     })),
-  ].filter((chip) => chip.count > 0 || chip.current || chip.label === 'Everyone');
-  const active = filter.role !== undefined || filter.status !== undefined || q !== undefined;
-  return (
-    <nav aria-label="Filter people">
-      <ul class="chips">
-        {chips.map((chip) => (
-          <li>
-            <a class="chip" href={chip.href} aria-current={chip.current ? 'true' : undefined}>
-              {chip.label} <span class="count">{chip.count}</span>
-            </a>
-          </li>
-        ))}
-        {active ? (
-          <li>
-            <a href={paths.users()}>Clear filters</a>
-          </li>
-        ) : null}
-      </ul>
-    </nav>
-  );
+  ];
+  return links.filter((link) => link.count > 0 || link.current || link.label === 'Everyone');
 }
 
-function SearchForm(props: {
-  filter: UserFilter;
+/** "Accounts": everyone but the pending people, filterable, with the row controls for owners. */
+function AccountsTray(props: {
+  all: readonly UserListEntry[];
   listed: readonly UserListEntry[];
+  shown: readonly UserListEntry[];
+  pendingPeople: readonly UserListEntry[];
+  filter: UserFilter;
   qTooLong: boolean;
-}) {
-  const { filter } = props;
-  return (
-    <form
-      method="get"
-      action={paths.users()}
-      role="search"
-      class="filters"
-      aria-label="Search people"
-    >
-      {filter.role ? <input type="hidden" name="role" value={filter.role} /> : null}
-      {filter.status ? <input type="hidden" name="status" value={filter.status} /> : null}
-      <Field
-        name="q"
-        label="Search"
-        type="search"
-        value={filter.q}
-        maxlength={Q_MAX}
-        autocomplete="off"
-        spellcheck={false}
-        example="alex@acme.com"
-        hint={
-          props.qTooLong
-            ? 'Search text too long; showing everyone. Part of an email address or a name.'
-            : 'Part of an email address or a name.'
-        }
-        suggestions={props.listed.map((user) => ({ value: user.email }))}
-      />
-      <button type="submit" class="secondary">
-        Search
-      </button>
-    </form>
-  );
-}
-
-function PeopleTable(props: {
-  rows: readonly UserListEntry[];
-  total: number;
+  filtered: boolean;
   ctx: ViewContext;
   owner: boolean;
   changes: ReadonlyMap<string, number>;
   policy: string;
-  filtered: boolean;
+  policyPending: boolean;
+  highlight: string | null;
   rowError?: { userId: string; message: string };
+  inviters: ReadonlyMap<string, { name: string; at: number }>;
 }) {
-  const { ctx } = props;
+  const { ctx, filter, listed, pendingPeople } = props;
+  const [firstPending] = pendingPeople;
+  const waiting =
+    pendingPeople.length === 1 && firstPending
+      ? `${firstPending.name ?? firstPending.email} waits`
+      : `${pendingPeople.length} people wait`;
+  const waitingCaption =
+    pendingPeople.length === 1 && firstPending
+      ? `${firstPending.name ?? firstPending.email} is waiting`
+      : `${pendingPeople.length} people are waiting`;
+  const caption = `People (${props.shown.length} shown of ${listed.length}${
+    pendingPeople.length > 0 ? `; ${waitingCaption} for a decision above` : ''
+  })`;
   const columns = [
-    {
-      key: 'person',
-      header: 'Person',
-      render: (user: UserListEntry) => (
-        <>
-          <a id={`user-${user.id}`} href={paths.user(user.id)}>
-            {user.email}
-          </a>
-          {user.id === ctx.userId ? (
-            <>
-              {' '}
-              <span class="badge">You</span>
-            </>
-          ) : null}
-          {user.name ? <div class="muted">{user.name}</div> : null}
-        </>
-      ),
-    },
-    { key: 'role', header: 'Role', render: (user: UserListEntry) => roleLabel(user.role) },
-    {
-      key: 'status',
-      header: 'Status',
-      render: (user: UserListEntry) => <StatusCell user={user} now={ctx.now} />,
-    },
-    {
-      key: 'last',
-      header: 'Last sign-in',
-      render: (user: UserListEntry) =>
-        user.last_login_at === null ? (
-          'Never'
-        ) : (
-          <Time ms={user.last_login_at} relative now={ctx.now} />
-        ),
-    },
-    {
-      key: 'changes',
-      header: 'Changes',
-      render: (user: UserListEntry) => {
-        const n = props.changes.get(user.id) ?? 0;
-        return n === 0 ? (
-          '—'
-        ) : (
-          <a href={paths.audit({ actor: user.id })}>
-            {n} in 30 days<span class="vh"> by {user.email}</span>
-          </a>
-        );
-      },
-    },
-    ...(props.owner
-      ? [
-          {
-            key: 'actions',
-            header: 'Actions',
-            render: (user: UserListEntry) =>
-              user.id === ctx.userId ? (
-                <span class="muted">This is you. Another owner can change your account.</span>
-              ) : (
-                <div class="row-actions">
-                  <StateButton user={user} ctx={ctx} returnTo="list" />
-                  <PersonChange
-                    user={user}
-                    ctx={ctx}
-                    returnTo="list"
-                    joinPolicy={props.policy}
-                    error={props.rowError?.userId === user.id ? props.rowError.message : null}
-                  />
-                </div>
-              ),
-          },
-        ]
-      : []),
+    { label: 'Person' },
+    { label: 'Role' },
+    { label: 'Status' },
+    { label: 'Last sign-in · changes' },
+    ...(props.owner ? [{ label: 'Actions', act: true }] : []),
   ];
   return (
-    <DataTable
+    <Tray
       id="people"
-      caption={`People (${props.rows.length} shown of ${props.total})`}
-      rowHeader="person"
-      rows={props.rows}
-      columns={columns}
-      empty={
-        props.filtered ? (
-          <p class="empty">
-            No people match these filters. <a href={paths.users()}>Clear filters</a>
-          </p>
-        ) : undefined
+      class="span-12"
+      title="Accounts"
+      count={listed.length}
+      description={
+        pendingPeople.length > 0 ? `${waiting} above, under “Needs your decision”.` : undefined
       }
-    />
+      bar={
+        <QuickLinks
+          label="Filter people"
+          links={filterLinks({
+            all: props.all,
+            listed,
+            pending: pendingPeople.length,
+            filter,
+            now: ctx.now,
+          })}
+        />
+      }
+      actions={props.filtered ? <a href={paths.users()}>Clear filters</a> : undefined}
+      footer={
+        <>
+          <span>
+            New people who sign in: <b>{props.policy}</b>.
+            {props.policyPending ? ' They wait in “Needs your decision”.' : null}
+          </span>
+          <a href={paths.signIn('policy')}>Change on Sign-in</a>
+        </>
+      }
+    >
+      {listed.length > SEARCH_THRESHOLD ? (
+        <Panel variant="pad">
+          <Filters
+            label="Search people"
+            action={paths.users()}
+            hidden={{
+              ...(filter.role ? { role: filter.role } : {}),
+              ...(filter.status ? { status: filter.status } : {}),
+            }}
+            submitLabel="Search"
+          >
+            <FilterSearch
+              id="f-q"
+              label="Search"
+              name="q"
+              value={filter.q}
+              placeholder="alex@acme.com"
+              maxlength={Q_MAX}
+              describedBy="f-q-hint"
+              suggestions={listed.map((user) => user.email)}
+            />
+          </Filters>
+          <p class="hint" id="f-q-hint">
+            {props.qTooLong
+              ? 'Search text too long; showing everyone. Part of an email address or a name.'
+              : 'Part of an email address or a name.'}
+          </p>
+        </Panel>
+      ) : null}
+      <Panel variant="flush">
+        <Table scroll={false} caption={caption} stackable columns={columns}>
+          {props.shown.map((user) => (
+            <PersonRow
+              user={user}
+              ctx={ctx}
+              owner={props.owner}
+              changes={props.changes.get(user.id) ?? 0}
+              joinPolicy={props.policy}
+              highlight={props.highlight === user.id}
+              error={props.rowError?.userId === user.id ? props.rowError.message : null}
+              invitedBy={props.inviters.get(user.id) ?? null}
+            />
+          ))}
+        </Table>
+        {props.shown.length === 0 && props.filtered ? (
+          <EmptyState
+            title="No people match these filters."
+            actions={
+              <Button size="sm" href={paths.users()}>
+                Clear filters
+              </Button>
+            }
+          />
+        ) : null}
+      </Panel>
+    </Tray>
   );
 }
 
@@ -826,6 +949,49 @@ const PROVIDER_LABELS: Readonly<Record<string, string>> = {
   dev: 'Local development login',
 };
 
+type Categories = Awaited<ReturnType<typeof auditCountByActorAndCategory>>;
+
+/** "7 accesses · 1 consumer": the category counts in words. */
+function categoryWords(categories: Categories): string {
+  return CATEGORY_CHIPS.filter((chip) => categories[chip.category] > 0)
+    .map((chip) => {
+      const n = categories[chip.category];
+      return `${n} ${n === 1 ? chip.one : chip.many}`;
+    })
+    .join(' · ');
+}
+
+/** The one sentence under the identity: what this person can do (no counts). */
+function relationSentence(user: UserListEntry, now: number): string {
+  const first = firstName(user);
+  if (user.status === 'pending') {
+    return `tokengate refuses everything ${first} does until an owner approves them.`;
+  }
+  if (user.status === 'invited') {
+    return user.invite_expires_at !== null && user.invite_expires_at > now
+      ? `Invited as ${roleLabel(user.role)} until ${utcTime(user.invite_expires_at)}. Nothing happens until they sign in.`
+      : `The invitation as ${roleLabel(user.role)} expired. Renew it to let ${first} sign in.`;
+  }
+  const can: Record<Role, string> = {
+    viewer: `${first} sees every page and changes nothing.`,
+    token_manager: `${first} can add, rotate, test, disable and delete every service token, and cannot give any consumer access to them.`,
+    access_manager: `${first} can give any service consumer access to every service token, and never sees a secret. They cannot add or replace tokens.`,
+    admin: `${first} can change service tokens and consumer access, and download the configuration export.`,
+    owner: `${first} can change everything, including people, sign-in and settings.`,
+  };
+  return user.status === 'suspended'
+    ? `Suspended: tokengate refuses every request they make. As ${roleLabel(user.role)}, ${can[user.role].charAt(0).toLowerCase()}${can[user.role].slice(1)}`
+    : can[user.role];
+}
+
+/** The icon of an audit action's category, for a feed avatar. */
+function actionIcon(action: string): 'token' | 'consumer' | 'users' | 'system' {
+  if (/^(service|credential|keyring)\./.test(action)) return 'token';
+  if (/^(caller_provider|grant)\./.test(action)) return 'consumer';
+  if (action.startsWith('user.')) return 'users';
+  return 'system';
+}
+
 async function personPage(c: AdminContext, id: string, options: PageOptions) {
   const deps = c.get('deps');
   const db = deps.env.DB;
@@ -839,21 +1005,32 @@ async function personPage(c: AdminContext, id: string, options: PageOptions) {
         title: 'Person not found',
         section: 'users',
         subsection: 'people',
-        breadcrumbs: [{ href: paths.users(), label: 'People' }],
         status: 404,
+        header: (
+          <PageHeader
+            crumbs={[{ href: paths.users(), label: 'People' }, { label: 'Not found' }]}
+            title="Person not found"
+            description={notFoundText('user')}
+          />
+        ),
       },
-      () => <NotFound what="user" />,
+      () => <NotFound />,
     );
   }
-  const [identities, categories, history, defaults, done] = await Promise.all([
+  const since = now - CHANGES_WINDOW_MS;
+  const [identities, categories, history, recent, defaults, done] = await Promise.all([
     listIdentities(db, id),
-    auditCountByActorAndCategory(db, id, now - CHANGES_WINDOW_MS),
+    auditCountByActorAndCategory(db, id, since),
     listAuditEvents(db, { targetType: 'user', targetId: id, limit: 20 }),
+    listAuditEvents(db, { actorId: id, since, limit: 10 }),
     getJoinDefaults(db),
     options.status
       ? Promise.resolve(null)
       : loadDone(deps, { userId: viewer.user.id }, c.req.query('done')),
   ]);
+  const changesFeed = recent
+    .filter((event) => event.actor_type === 'user' && !SIGN_IN_ACTIONS.has(event.action))
+    .slice(0, 5);
   const policy = JOIN_POLICY_LABELS[joinPolicyOf(defaults)];
   const notice = options.status
     ? null
@@ -863,8 +1040,8 @@ async function personPage(c: AdminContext, id: string, options: PageOptions) {
         back: 'detail',
       });
   // As on People: link the summary only to an error this page renders. A failed Dismiss shows at
-  // the Dismiss button; anything else at "Change", which a pending person (ApproveForm) and the
-  // viewer's own page do not have.
+  // the Dismiss button; anything else at the role cards, which a pending person (approve cards)
+  // and the viewer's own page do not have.
   const rowError = options.rowError;
   const ownerViewer = viewer.user.role === 'owner';
   const atDismiss = rowError?.target === 'dismiss' && ownerViewer && user.last_refused_at !== null;
@@ -877,208 +1054,538 @@ async function personPage(c: AdminContext, id: string, options: PageOptions) {
   const errors = rowError
     ? [fieldError(atDismiss ? `dismiss-${id}` : atChange ? `user-${id}` : null, rowError.message)]
     : options.errors;
+  const changesTotal = Object.values(categories).reduce((sum, n) => sum + n, 0);
+  const first = firstName(user);
   const status = userStatus(user, now);
+  const invited = status.key === 'invited' || status.key === 'invite_expired';
+  const firstLinked = identities.reduce<number | null>(
+    (min, row) => (min === null || row.created_at < min ? row.created_at : min),
+    null,
+  );
   return renderPage(
     c,
     {
       title: user.email,
       section: 'users',
       subsection: 'people',
-      breadcrumbs: [
-        { href: paths.users(), label: 'People' },
-        { href: paths.user(id), label: user.email },
-      ],
       errors,
       notice,
       status: options.status,
+      header: (ctx) => (
+        <PageHeader
+          class="u-person"
+          crumbs={[{ href: paths.users(), label: 'People' }, { label: user.email }]}
+          identity={
+            <Identity
+              logoSlot={
+                <Avatar
+                  size="lg"
+                  name={user.name ?? user.email}
+                  variant={user.status === 'pending' || invited ? 'pending' : undefined}
+                />
+              }
+              title={user.email}
+              status={<UserBadge user={user} now={now} />}
+              type={
+                user.name ? (
+                  <>
+                    {user.name} · <b>{roleLabel(user.role)}</b>
+                  </>
+                ) : (
+                  <b>{roleLabel(user.role)}</b>
+                )
+              }
+              entityId={{ value: user.id, kind: 'User' }}
+              facts={[
+                user.last_login_at === null ? (
+                  'Never signed in'
+                ) : (
+                  <>
+                    Last sign-in{' '}
+                    <Time datetime={new Date(user.last_login_at)}>
+                      {relativeTime(user.last_login_at, now)}
+                    </Time>
+                  </>
+                ),
+              ]}
+            />
+          }
+          actions={
+            <>
+              <Button
+                href={
+                  status.key === 'invited'
+                    ? signInMailto(user, ctx.host, now)
+                    : `mailto:${encodeURIComponent(user.email).replace('%40', '@')}`
+                }
+              >
+                {status.key === 'invited' ? 'Email sign-in link' : `Email ${first}`}
+              </Button>
+              <Button href={paths.audit({ actor: id })}>Open in audit log</Button>
+            </>
+          }
+        >
+          <RelationLine>{relationSentence(user, now)}</RelationLine>
+        </PageHeader>
+      ),
     },
     (ctx) => {
       const owner = ctx.can('users:write');
       const self = ctx.userId === id;
-      return (
+      const manage = owner && !self && user.status !== 'pending';
+      const rail = (
         <>
-          <p class="status-line">
-            {user.name ? <span>{user.name} · </span> : null}
-            <StatusBadge status={status.key} detail={status.detail} /> · {roleLabel(user.role)}
-          </p>
-          <section aria-labelledby="role-h">
-            <h2 id="role-h">Role and status</h2>
-            <p>
-              {roleLabel(user.role)}: {ROLE_INFO[user.role].description}
-            </p>
-            {self ? (
-              <p class="muted">This is you. Another owner can change your account.</p>
-            ) : owner && user.status === 'pending' ? (
-              <ApproveForm user={user} ctx={ctx} returnTo="list" />
-            ) : user.status === 'pending' ? (
-              <p>Only owners can decide.</p>
-            ) : owner ? (
-              <>
-                <div class="actions">
-                  <StateButton user={user} ctx={ctx} returnTo="detail" />
-                </div>
-                <PersonChange
-                  user={user}
-                  ctx={ctx}
-                  returnTo="detail"
-                  joinPolicy={policy}
-                  error={atChange ? rowError.message : null}
-                  bare
-                />
-              </>
-            ) : null}
-          </section>
-          {user.last_refused_at !== null ? (
-            <section aria-labelledby="refused-h">
-              <h2 id="refused-h">Refused sign-in</h2>
-              <p>
-                Last refused sign-in {relativeTime(user.last_refused_at, now)} (
-                <Time ms={user.last_refused_at} />) with Access user ID{' '}
-                <code>{accessUserId(user.last_refused_subject)}</code>.
-              </p>
-              {atDismiss ? <DismissError userId={id} message={rowError.message} /> : null}
-              {owner ? <DismissButton user={user} ctx={ctx} /> : null}
-            </section>
-          ) : null}
-          <section aria-labelledby="accounts-h">
-            <h2 id="accounts-h">Sign-in accounts</h2>
-            <AccountsTable identities={identities} now={now} />
-          </section>
-          <section aria-labelledby="changes-h">
-            <h2 id="changes-h">Changes by this person (30 days)</h2>
-            <ChangeChips id={id} categories={categories} />
-            <p>
-              <a href={paths.audit({ actor: id })}>All changes by {user.email}</a>
-            </p>
-          </section>
-          <section aria-labelledby="history-h">
-            <h2 id="history-h">History of this account</h2>
-            <HistoryTable events={history} now={now} />
-            <p>
-              <a href={paths.audit({ target: id })}>
-                Full history<span class="vh"> of {user.email}</span>
-              </a>
-            </p>
-          </section>
+          <Tray id="can" title={`What ${first} can do`} description={`As ${roleLabel(user.role)}.`}>
+            <Panel>
+              <CanList role={user.role} />
+              <RailFoot>
+                {owner ? (
+                  <a href={`${paths.users()}#compare-roles`}>Compare all roles</a>
+                ) : (
+                  <a href={paths.docs('concepts.md#user')}>How roles work</a>
+                )}
+              </RailFoot>
+            </Panel>
+          </Tray>
+          <Tray id="details" title="Details">
+            <Panel>
+              <RailKeyValue
+                items={[
+                  { label: 'User ID', value: user.id, mono: true, copyable: true },
+                  {
+                    label: 'Signs in with',
+                    value:
+                      [
+                        ...new Set(
+                          identities.map(
+                            (row) => PROVIDER_LABELS[row.login_provider] ?? row.login_provider,
+                          ),
+                        ),
+                      ].join(', ') || 'Not signed in yet',
+                  },
+                  {
+                    label: 'First sign-in',
+                    value:
+                      firstLinked === null ? (
+                        '—'
+                      ) : (
+                        <Time datetime={new Date(firstLinked)} format="date" />
+                      ),
+                  },
+                  {
+                    label: 'Last sign-in',
+                    value:
+                      user.last_login_at === null ? (
+                        'Never'
+                      ) : (
+                        <Time datetime={new Date(user.last_login_at)}>
+                          {relativeTime(user.last_login_at, now)}
+                        </Time>
+                      ),
+                  },
+                  ...(user.status === 'invited' && user.invite_expires_at !== null
+                    ? [
+                        {
+                          label: 'Invitation',
+                          value: `until ${utcTime(user.invite_expires_at)}`,
+                        } satisfies RailKeyValueItem,
+                      ]
+                    : []),
+                  {
+                    label: 'Changes · 30 days',
+                    value: (
+                      <a href={paths.audit({ actor: id })}>
+                        {changesTotal}
+                        <span class="vh"> changes by {user.email}</span>
+                      </a>
+                    ),
+                    note: changesTotal > 0 ? categoryWords(categories) : undefined,
+                  },
+                ]}
+              />
+            </Panel>
+          </Tray>
         </>
+      );
+      return (
+        <DetailLayout railLabel={`${user.email}: what they can do and details`} rail={rail}>
+          <Tray
+            id="role"
+            title="Role"
+            description={
+              manage ? 'One click changes it. The notice that follows has Undo.' : undefined
+            }
+            actions={
+              <>
+                {manage ? (
+                  <StateButton user={user} ctx={ctx} returnTo="detail" scope="detail" />
+                ) : null}
+                <Badge tone="accent">Current: {roleLabel(user.role)}</Badge>
+              </>
+            }
+          >
+            <Panel variant="pad">
+              {self ? (
+                <>
+                  <p>
+                    {roleLabel(user.role)}: {ROLE_INFO[user.role].description}
+                  </p>
+                  <p class="meta">This is you. Another owner can change your account.</p>
+                </>
+              ) : user.status === 'pending' ? (
+                owner ? (
+                  <ApproveCards user={user} ctx={ctx} />
+                ) : (
+                  <>
+                    <p>Only owners can decide.</p>
+                    <AskSomeoneLine ctx={ctx} />
+                  </>
+                )
+              ) : owner ? (
+                <>
+                  <RoleCards user={user} ctx={ctx} error={atChange ? rowError.message : null} />
+                  <PersonDialogsRoles user={user} ctx={ctx} policy={policy} />
+                </>
+              ) : (
+                <>
+                  <p>
+                    {roleLabel(user.role)}: {ROLE_INFO[user.role].description}
+                  </p>
+                  <AskSomeoneLine ctx={ctx} />
+                </>
+              )}
+            </Panel>
+          </Tray>
+          {user.last_refused_at !== null ? (
+            <Tray id="refused" tone="warn" title="Refused sign-in">
+              <Panel variant="pad">
+                <p>
+                  Last refused sign-in {relativeTime(user.last_refused_at, now)} (
+                  <Time datetime={new Date(user.last_refused_at)} />) with Access user ID{' '}
+                  <code>{accessUserId(user.last_refused_subject)}</code>.
+                </p>
+                {atDismiss ? (
+                  <FieldError id={`f-dismiss-${id}`}>{rowError.message}</FieldError>
+                ) : null}
+                {owner ? (
+                  <div>
+                    <ActionForm
+                      size="sm"
+                      action={`${paths.user(id)}/dismiss-attempt`}
+                      hidden={ctx.hidden({
+                        _return: 'detail',
+                        expected_refused_at: String(user.last_refused_at),
+                      })}
+                      srSuffix={`the sign-in attempt of ${user.email}`}
+                    >
+                      Dismiss
+                    </ActionForm>
+                  </div>
+                ) : null}
+              </Panel>
+            </Tray>
+          ) : null}
+          <ChangesTray id={id} user={user} categories={categories} events={changesFeed} />
+          <Tray
+            id="accounts"
+            title="Sign-in accounts"
+            description="The Cloudflare Access identity linked to this person. tokengate never shows your Access team domain."
+          >
+            <Panel variant="flush">
+              <AccountsTable user={user} identities={identities} now={now} />
+            </Panel>
+          </Tray>
+          <Tray
+            id="history"
+            title="History of this account"
+            actions={
+              <Button size="sm" href={paths.audit({ target: id })} srSuffix={`of ${user.email}`}>
+                Full history
+              </Button>
+            }
+          >
+            <Panel>
+              {history.length === 0 ? (
+                <p class="meta u-pad">No events yet.</p>
+              ) : (
+                <Feed>
+                  {history.map((event) => (
+                    <FeedItem
+                      avatar={
+                        event.actor_type === 'system' ? (
+                          <Avatar variant="sys">
+                            <Icon name="system" />
+                          </Avatar>
+                        ) : (
+                          <Avatar name={event.actor_email ?? '?'} />
+                        )
+                      }
+                      time={<Time datetime={new Date(event.ts)} format="day" />}
+                    >
+                      <b>
+                        {event.actor_type === 'system' ? (
+                          'System'
+                        ) : event.actor_id ? (
+                          <a href={paths.audit({ actor: event.actor_id })}>
+                            {event.actor_email ?? event.actor_id}
+                          </a>
+                        ) : (
+                          (event.actor_email ?? '—')
+                        )}
+                      </b>{' '}
+                      {/* User summaries start with a verb: "maya@acme.dev made tom@acme.dev …" */}
+                      {event.summary.charAt(0).toLowerCase() + event.summary.slice(1)}
+                    </FeedItem>
+                  ))}
+                </Feed>
+              )}
+            </Panel>
+          </Tray>
+          {manage ? (
+            <AccessDangerZone
+              user={user}
+              ctx={ctx}
+              policy={policy}
+              changes={changesTotal}
+              subject={identities[0]?.subject ?? null}
+            />
+          ) : null}
+        </DetailLayout>
       );
     },
   );
 }
 
-function DismissButton(props: { user: UserListEntry; ctx: ViewContext }) {
-  const { user, ctx } = props;
+/** "Only owners can change people. Ask …": the same AskSomeone sentence as every page. */
+function AskSomeoneLine(props: { ctx: ViewContext }) {
+  return <AskSomeone permission="users:write" ctx={props.ctx} verb="change people" />;
+}
+
+/** The role confirm dialogs (owner promotion and demotions), after the role form. */
+function PersonDialogsRoles(props: { user: UserListEntry; ctx: ViewContext; policy: string }) {
   return (
-    <ActionButton
-      action={`${paths.user(user.id)}/dismiss-attempt`}
-      csrf={ctx.csrf}
-      label="Dismiss"
-      context={`the sign-in attempt of ${user.email}`}
-      fields={{ expected_refused_at: String(user.last_refused_at) }}
+    <PersonDialogs
+      user={props.user}
+      ctx={props.ctx}
       returnTo="detail"
+      joinPolicy={props.policy}
+      only="roles"
     />
   );
 }
 
-function AccountsTable(props: { identities: UserIdentity[]; now: number }) {
+function ChangesTray(props: {
+  id: string;
+  user: UserListEntry;
+  categories: Categories;
+  events: AuditEvent[];
+}) {
+  const { id, user } = props;
+  const first = firstName(user);
+  const chips = CATEGORY_CHIPS.filter((chip) => props.categories[chip.category] > 0);
   return (
-    <DataTable
-      id="accounts"
-      caption="Sign-in accounts"
-      captionHidden
-      rowHeader="sub"
-      rows={props.identities}
-      empty={<p class="empty">Never signed in.</p>}
-      columns={[
-        {
-          key: 'provider',
-          header: 'Login provider',
-          render: (row) => PROVIDER_LABELS[row.login_provider] ?? row.login_provider,
-        },
-        {
-          key: 'sub',
-          header: 'Access user ID',
-          render: (row) => <code>{accessUserId(row.subject)}</code>,
-        },
-        { key: 'email', header: 'Email at link time', render: (row) => row.email ?? '—' },
-        { key: 'linked', header: 'Linked', render: (row) => <Time ms={row.created_at} /> },
-        {
-          key: 'used',
-          header: 'Last used',
-          render: (row) =>
-            row.last_used_at === null ? (
+    <Tray
+      id="changes"
+      title={`Changes by ${first}`}
+      count="30 days"
+      description={`What ${first} changed, newest first. The counts open the audit log filtered to them.`}
+      actions={
+        chips.length > 0 ? (
+          <Chips label="Changes by category">
+            {chips.map((chip) => {
+              const n = props.categories[chip.category];
+              return (
+                <Chip href={paths.audit({ actor: id, category: chip.category })}>
+                  {`${n} ${n === 1 ? chip.one : chip.many}`}
+                </Chip>
+              );
+            })}
+          </Chips>
+        ) : undefined
+      }
+    >
+      <Panel>
+        {props.events.length === 0 ? (
+          <p class="meta u-pad">No changes in the last 30 days.</p>
+        ) : (
+          <Feed>
+            {props.events.map((event) => (
+              <FeedItem
+                avatar={
+                  <Avatar variant="sys">
+                    <Icon name={actionIcon(event.action)} />
+                  </Avatar>
+                }
+                time={<Time datetime={new Date(event.ts)} format="day" />}
+                meta={AUDIT_ACTION_TEXT[event.action] ?? <code>{event.action}</code>}
+              >
+                {event.summary}
+              </FeedItem>
+            ))}
+          </Feed>
+        )}
+        <RailFoot>
+          <a href={paths.audit({ actor: id })}>All changes by {user.email} in the audit log</a>
+        </RailFoot>
+      </Panel>
+    </Tray>
+  );
+}
+
+function AccountsTable(props: { user: UserListEntry; identities: UserIdentity[]; now: number }) {
+  const columns = [
+    { label: 'Login provider' },
+    { label: 'Access user ID' },
+    { label: 'Email at link time' },
+    { label: 'Linked' },
+    { label: 'Last used' },
+  ];
+  if (props.identities.length === 0) {
+    return (
+      <>
+        <Table
+          scroll={false}
+          caption={`Sign-in accounts of ${props.user.email}`}
+          stackable
+          columns={columns}
+        />
+        <EmptyState
+          title="Never signed in."
+          description="Their first sign-in through Cloudflare Access links an account."
+        />
+      </>
+    );
+  }
+  return (
+    <Table
+      labelledBy="accounts-h"
+      caption={`Sign-in accounts of ${props.user.email}`}
+      stackable
+      columns={columns}
+    >
+      {props.identities.map((row) => (
+        <Row>
+          <RowHeader>
+            <span class="ent-n">{PROVIDER_LABELS[row.login_provider] ?? row.login_provider}</span>
+          </RowHeader>
+          <Cell label="Access user ID">
+            <IdChip kind="Access user">{accessUserId(row.subject)}</IdChip>
+          </Cell>
+          <Cell label="Email at link time">{row.email ?? '—'}</Cell>
+          <Cell label="Linked">
+            <Time datetime={new Date(row.created_at)} format="date" />
+          </Cell>
+          <Cell label="Last used">
+            {row.last_used_at === null ? (
               'Never'
             ) : (
-              <Time ms={row.last_used_at} relative now={props.now} />
-            ),
-        },
-      ]}
-    />
+              <Time datetime={new Date(row.last_used_at)}>
+                {relativeTime(row.last_used_at, props.now)}
+              </Time>
+            )}
+          </Cell>
+        </Row>
+      ))}
+    </Table>
   );
 }
 
-function ChangeChips(props: {
-  id: string;
-  categories: Awaited<ReturnType<typeof auditCountByActorAndCategory>>;
+/** "Account access": suspend, reset sign-in, delete or cancel the invitation, by state. */
+function AccessDangerZone(props: {
+  user: UserListEntry;
+  ctx: ViewContext;
+  policy: string;
+  changes: number;
+  subject: string | null;
 }) {
-  const chips = CATEGORY_CHIPS.filter((chip) => props.categories[chip.category] > 0);
-  if (chips.length === 0) return <p class="muted">No changes in the last 30 days.</p>;
-  return (
-    <ul class="chips" aria-label="Changes by category">
-      {chips.map((chip) => {
-        const n = props.categories[chip.category];
-        return (
-          <li>
-            <a class="chip" href={paths.audit({ actor: props.id, category: chip.category })}>
-              {n} {n === 1 ? chip.one : chip.many}
-            </a>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
-function HistoryTable(props: { events: AuditEvent[]; now: number }) {
-  return (
-    <DataTable
-      id="history"
-      caption="History of this account, newest first"
-      captionHidden
-      rowHeader="when"
-      rows={props.events}
-      empty={<p class="empty">No events yet.</p>}
-      columns={[
-        {
-          key: 'when',
-          header: 'When',
-          render: (event) => <Time ms={event.ts} relative now={props.now} />,
-        },
-        {
-          key: 'who',
-          header: 'Who',
-          render: (event) =>
-            event.actor_type === 'system' ? (
-              'System'
-            ) : event.actor_id ? (
-              <a href={paths.audit({ actor: event.actor_id })}>
-                {event.actor_email ?? event.actor_id}
-              </a>
-            ) : (
-              (event.actor_email ?? '—')
-            ),
-        },
-        {
-          key: 'what',
-          header: 'What',
-          render: (event) => (
-            <>
-              {event.summary} <code>{event.action}</code>
-            </>
-          ),
-        },
-      ]}
+  const { user, ctx } = props;
+  const first = firstName(user);
+  const sub = accessUserId(props.subject);
+  const reset = (
+    <DangerRow
+      title="Reset sign-in"
+      description={`Unlinks Access user ${sub}. Use it only after ${first} changed their Cloudflare Access account. Cannot be undone.`}
+      action={
+        <DialogTrigger variant="danger" dialog={`dlg-reset-${user.id}`}>
+          Reset sign-in…
+        </DialogTrigger>
+      }
     />
+  );
+  const suspendText = `tokengate refuses every request ${first} makes. Their Access session stays valid.`;
+  let rows: Child;
+  if (user.status === 'active') {
+    rows = (
+      <>
+        <DangerRow
+          title={`Suspend ${user.email}`}
+          description={
+            user.role === 'owner'
+              ? `${suspendText} You confirm in a dialog.`
+              : `${suspendText} Undo appears right after.`
+          }
+          action={
+            user.role === 'owner' ? (
+              <DialogTrigger variant="danger" dialog={`dlg-suspend-${user.id}`}>
+                Suspend…
+              </DialogTrigger>
+            ) : (
+              <ActionForm
+                variant="danger"
+                action={paths.user(user.id)}
+                hidden={ctx.hidden({
+                  _return: 'detail',
+                  expected_updated_at: String(user.updated_at),
+                  status: 'suspended',
+                })}
+                srSuffix={user.email}
+              >
+                Suspend {first}
+              </ActionForm>
+            )
+          }
+        />
+        {reset}
+      </>
+    );
+  } else if (user.status === 'suspended' && user.identity_count > 0) {
+    rows = reset;
+  } else {
+    const invitation = user.status === 'invited';
+    rows = (
+      <DangerRow
+        title={invitation ? 'Cancel the invitation' : `Delete ${user.email}`}
+        description={
+          invitation
+            ? 'Deletes the invitation. You can invite again later.'
+            : 'Deletes this person, who never signed in.'
+        }
+        action={
+          <DialogTrigger variant="danger" dialog={`dlg-delete-${user.id}`}>
+            {invitation ? 'Cancel invitation…' : 'Delete…'}
+          </DialogTrigger>
+        }
+      />
+    );
+  }
+  return (
+    <>
+      <DangerZone
+        id="access"
+        title="Account access"
+        description={`Stop ${first} from using the console.`}
+      >
+        {rows}
+      </DangerZone>
+      <PersonDialogs
+        user={user}
+        ctx={ctx}
+        returnTo="detail"
+        joinPolicy={props.policy}
+        only="state"
+        detail={{ changes: props.changes, accessUserId: sub }}
+      />
+    </>
   );
 }
 

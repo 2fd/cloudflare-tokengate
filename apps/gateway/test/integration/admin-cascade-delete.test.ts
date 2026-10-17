@@ -35,7 +35,10 @@ describe('I-AUDIT-1: cascade delete', () => {
     const page = await (
       await adminGet(world.app, admin, `/admin/tokens/${world.serviceId}`)
     ).text();
-    expect(page).toContain('and its 2 consumer accesses…');
+    expect(page).toContain('<h3>Delete GitHub and its 2 consumer accesses</h3>');
+    expect(page).toMatch(/commandfor="dlg-delete"[^>]*>Delete GitHub…<\/button>/);
+    expect(page).toContain('Delete GitHub and its 2 consumer accesses?');
+    expect(page).toContain('name="confirm_slug"');
     expect(page).toContain('name="with_accesses" value="1"');
     expect(page).toContain(`href="/admin/access/${world.grantId}"`);
 
@@ -68,7 +71,7 @@ describe('I-AUDIT-1: cascade delete', () => {
     expect(res.status).toBe(409);
     const html = await res.text();
     expect(html).toContain('changed since the page was loaded; nothing was deleted');
-    expect(html).toContain('and its 3 consumer accesses…');
+    expect(html).toContain('<h3>Delete GitHub and its 3 consumer accesses</h3>');
     expect(await count('grants', 'service_id', world.serviceId)).toBe(3);
     expect((await auditRows()).length).toBe(before);
   });

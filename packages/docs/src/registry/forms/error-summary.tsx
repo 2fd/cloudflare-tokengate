@@ -99,6 +99,27 @@ export const errorSummary: ComponentDoc = {
 </Field>`,
     },
     {
+      title: 'Form-level error (no link)',
+      description:
+        'An error that is not about one field (the upstream check failed, a row that is not on the page) has no target: it is plain text, not a link.',
+      layout: 'stack',
+      render: () => (
+        <ErrorSummary
+          id="es-form"
+          autofocus={false}
+          title="The access was not saved"
+          errors={[
+            { message: 'GitHub did not answer the permission check. Try again in a minute.' },
+            { target: 'es-repo', message: 'Enter the repository as owner/name (ID)' },
+          ]}
+        />
+      ),
+      code: `<ErrorSummary title="The access was not saved" errors={[
+  { message: 'GitHub did not answer the permission check. Try again in a minute.' },
+  { target: 'repo', message: 'Enter the repository as owner/name (ID)' },
+]} />`,
+    },
+    {
       title: 'No errors',
       description: 'An empty list renders nothing, so a form page can always include it.',
       render: () => (
@@ -116,9 +137,10 @@ export const errorSummary: ComponentDoc = {
       props: [
         {
           name: 'errors',
-          type: 'readonly { target: string; message: Child }[]',
+          type: 'readonly { target?: string; message: Child }[]',
           required: true,
-          description: 'In page order. target is the control id; for a FieldSet use `${id}-1`.',
+          description:
+            'In page order. target is the control id; for a FieldSet use `${id}-1`. Without a target the entry is plain text (a form-level error).',
         },
         { name: 'title', type: 'Child', default: "'There is a problem'", description: 'Heading.' },
         { name: 'description', type: 'Child', description: 'Sentence under the heading.' },
@@ -129,13 +151,22 @@ export const errorSummary: ComponentDoc = {
           description: 'Id; heading `${id}-h`.',
         },
         { name: 'autofocus', type: 'boolean', default: 'true', description: 'Focus it on load.' },
+        {
+          name: 'role',
+          type: "'alert' | 'group'",
+          default: "'group'",
+          description:
+            'group: focus on load already announces it. alert: only with autofocus={false}, or it is announced twice.',
+        },
         { name: 'headingLevel', type: '2 | 3 | 4', default: '2', description: 'Heading level.' },
         { name: 'class', type: 'string', description: 'Extra classes.' },
       ],
     },
   ],
   accessibility: [
-    'role="alert" and autofocus on a tabindex="-1" container: it is announced and focused on load, without JS, so keyboard and screen reader users start at the problems.',
+    'autofocus on a tabindex="-1" container labelled by its heading: it is focused and announced on load, without JS, so keyboard and screen reader users start at the problems.',
+    'role="group" by default, not alert: the focus already announces it, and alert together with autofocus announces it twice. Use role="alert" only for a summary rendered with autofocus={false}.',
+    'An entry without a target is plain text: a link must lead somewhere, and a form-level error has no field.',
     'Labelled by its heading; the ✕ glyph is hidden.',
     'Each entry is a link to the control: activating it moves focus there (for a group, to its first option).',
     'Link text matches the inline error, so people recognise the field when they get there.',

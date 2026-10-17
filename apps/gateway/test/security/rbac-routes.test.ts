@@ -160,7 +160,12 @@ describe('I-RBAC-1: routes outside the table are denied (fail closed)', () => {
     const before = await controlPlaneDump();
     const res = await ownerRequest(method, path);
     expect(res.status).toBe(404);
-    if (method === 'GET') expect(await res.text()).toContain('Page not found');
+    // An unknown path says there is no page; an old one says where its page went.
+    if (method === 'GET') {
+      expect(await res.text()).toMatch(
+        /<h1>(?:Page not found|This page moved|The Settings page was split up)<\/h1>/,
+      );
+    }
     expect(await controlPlaneDump()).toBe(before);
   });
 

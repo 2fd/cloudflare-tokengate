@@ -145,6 +145,49 @@ export const liveForm: ComponentDoc = {
 </LiveForm>`,
     },
     {
+      title: 'Nested live form without a rail',
+      description:
+        'layout="fields": the form column alone, without .form-layout, so a live form inside a detail column or a disclosure (the edit and copy forms) reserves no empty rail column at 80rem and wider. The :has() contract still applies: pick 90 days and the risk block shows.',
+      layout: 'stack',
+      render: () => (
+        <LiveForm layout="fields" action="/admin/access/1" hidden={{ _csrf: 'csrf-token' }}>
+          <FieldSet id="lfn-exp" legend="Expires" live={1}>
+            <Picks
+              name="lfn-exp"
+              value="30d"
+              options={expiries.map((pick) =>
+                pick.value === '90d' ? { ...pick, risk: true } : pick,
+              )}
+            />
+          </FieldSet>
+          <RiskAcceptance
+            id="lfn-risk"
+            title="Accept 1 risk to save this access"
+            risks={[
+              {
+                label: '90 days',
+                text: 'the OpenAI project key stays usable for a quarter without a review.',
+              },
+            ]}
+            confirm="I accept this risk for GitHub Actions (acme) → OpenAI"
+          />
+          <div>
+            <button class="btn primary" type="submit">
+              Save
+            </button>
+          </div>
+        </LiveForm>
+      ),
+      code: `<LiveForm layout="fields" action="/admin/access/1" hidden={{ _csrf: csrf }}>
+  <FieldSet id="exp" legend="Expires" live={1}>
+    <Picks name="exp" value="30d" options={[…, { value: '90d', label: '90 days', risk: true }, …]} />
+  </FieldSet>
+  <RiskAcceptance id="risk" title="Accept 1 risk to save this access" risks={[…]}
+    confirm="I accept this risk for GitHub Actions (acme) → OpenAI" />
+  <div><button class="btn primary" type="submit">Save</button></div>
+</LiveForm>`,
+    },
+    {
       title: 'Summary parts',
       description:
         'Rows joined by wires, and the foot line. Outside a LiveForm a LivePhrase shows every phrase, so use the parts inside one.',
@@ -246,9 +289,17 @@ export const liveForm: ComponentDoc = {
         { name: 'action', type: 'string', description: 'Where the form posts.' },
         { name: 'id', type: 'string', description: 'Id of the form.' },
         {
+          name: 'layout',
+          type: "'form-layout' | 'fields'",
+          default: "'form-layout'",
+          description:
+            'form-layout: the column and its rail (.form-layout). fields: the column alone, for a live form inside a detail column or a disclosure.',
+        },
+        {
           name: 'rail',
           type: 'Child',
-          description: 'The LiveSummary: right of the form at >= 80rem (sticky), under it below.',
+          description:
+            'The LiveSummary: right of the form at >= 80rem (sticky), under it below. Not with layout="fields" (it throws).',
         },
         {
           name: 'hidden',

@@ -46,8 +46,8 @@ describe('consumer access form: preselection', () => {
     ).text();
     expect(inputValue(html, 'consumer_id')).toBe(provider.id);
     expect(inputValue(html, 'token_id')).toBe(a);
-    expect(html).toContain('Change token');
-    expect(html).toContain('Use a new consumer');
+    expect(html).toContain('Change<span class="vh"> token</span>');
+    expect(html).toContain('Add a new consumer');
     expect(inputValue(html, 'token_view')).toBe('fixed');
   });
 
@@ -64,8 +64,8 @@ describe('consumer access form: preselection', () => {
       .bind(withSecret)
       .first<{ credential_hint: string }>();
     expect(hint?.credential_hint).toBeTruthy();
-    expect(html).toContain('Credential loaded');
-    expect(html).toContain('No credential yet: calls fail until a token manager loads it');
+    expect(html).toContain('Secret set');
+    expect(html).toContain('No secret yet: calls fail until a token manager sets it');
     expect(html).not.toContain(hint?.credential_hint ?? 'x');
   });
 
@@ -127,7 +127,7 @@ describe('consumer access form: preselection', () => {
     const token = await seedService(world.app.deps);
     const chosen = consumers[3]?.id ?? '';
     const html = await (await adminGet(world.app, session(), '/admin/access/new')).text();
-    expect(html).toContain('<select id="f-consumer_id" name="consumer_id"');
+    expect(html).toContain('<select class="select" id="f-consumer_id" name="consumer_id"');
     expect(html).not.toContain(`name="${chosen}.cond.0.claim"`);
     const refresh = await adminPost(world.app, session(), '/admin/access', {
       consumer_id: chosen,

@@ -147,6 +147,12 @@ export const rowPicker: ComponentDoc = {
           description: 'Input id prefix; defaults to the FieldSet’s id.',
         },
         { name: 'required', type: 'boolean', description: 'Never inside a Reveal (it throws).' },
+        {
+          name: 'invalid',
+          type: 'boolean',
+          description:
+            'The server rejected the group (the FieldSet or FormStep shows the error): the first enabled row gets aria-invalid, the ErrorSummary link target.',
+        },
         { name: 'class', type: 'string', description: 'Extra classes on .rlist.' },
       ],
     },

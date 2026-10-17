@@ -24,7 +24,7 @@ beforeEach(async () => {
 
 /** The hrefs of the getting-started section, in order. */
 function stepLinks(html: string): string[] {
-  const section = /<section id="get-started"[\s\S]*?<\/section>/.exec(html)?.[0] ?? '';
+  const section = /<section class="tray" id="get-started"[\s\S]*?<\/section>/.exec(html)?.[0] ?? '';
   return [...section.matchAll(/href="([^"]+)"/g)].map((m) => (m[1] ?? '').replaceAll('&amp;', '&'));
 }
 
@@ -44,8 +44,17 @@ describe('GET /admin on a fresh deployment', () => {
       'https://github.com/2fd/cloudflare-tokengate/blob/main/docs/callers/github-actions.md',
     ]);
     expect(html).toContain('Steps 1 and 2 can be done in any order, and by different people.');
-    expect(html).toContain('No requests in the selected range.');
-    expect(html).toContain('No denied requests in the selected range.');
+    // Get started is the content: one primary, on step 1, and no empty charts or tables.
+    expect(html.match(/class="btn primary"/g) ?? []).toHaveLength(1);
+    expect(html).toContain('<a class="btn primary" href="/admin/tokens/new">');
+    expect(html).toContain('0 of 4 done');
+    expect(html).toContain('<section class="tray" id="plan" aria-labelledby="plan-h">');
+    expect(html).toContain('No requests yet.');
+    expect(html).toContain('aria-label="Where calls went, all zero"');
+    expect(html).not.toContain('No denied requests in the selected range.');
+    expect(html).not.toContain('class="pipe"');
+    expect(html).not.toContain('class="cmap"');
+    expect(html).not.toContain('<svg class="chart"');
   });
 
   it('adds the consumer inside the access form once a token exists', async () => {
@@ -61,25 +70,32 @@ describe('GET /admin on a fresh deployment', () => {
   it('tells viewers whom to ask instead of linking to forms they cannot use', async () => {
     const a = app();
     const html = await (await adminGet(a, await loginAs(a, viewer), '/admin')).text();
-    expect(html).toContain('Ask a token manager to add a service token: ');
-    expect(html).toContain('Ask an access manager to add a service consumer: ');
-    expect(html).toContain('href="mailto:owner@example.com"');
+    expect(html).toContain('Only token managers can add a service token. Ask ');
+    expect(html).toContain('Only access managers can add a service consumer. Ask ');
+    expect(html).toContain('href="mailto:owner@example.com');
     expect(html).not.toContain('href="/admin/tokens/new"');
     expect(html).not.toContain('href="/admin/access/new');
   });
 
-  it('renders the alerts inside the health panel, never as role=alert', async () => {
+  it('renders the alerts after Get started, never as role=alert', async () => {
     const a = app();
     const html = await (await adminGet(a, await loginAs(a, viewer), '/admin')).text();
-    const health = /<section id="health"[\s\S]*?<\/section>/.exec(html)?.[0] ?? '';
-    // No TOKENGATE_KEK in the test env; cron never ran; one active owner.
-    expect(health).toContain('<ul class="alerts">');
-    expect(health).toContain('Encryption keys are not loaded (keyring_absent)');
-    expect(health).toContain('The hourly job has not run yet; it starts within the hour.');
-    expect(health).toContain('Only one active owner.');
+    const attention =
+      /<section class="tray" id="attention"[\s\S]*?<\/section>/.exec(html)?.[0] ?? '';
+    const notes = /<div class="notes" id="notes">[\s\S]*?<\/div>/.exec(html)?.[0] ?? '';
+    // No TOKENGATE_KEK in the test env (an error); cron never ran and one active owner (notes).
+    expect(attention).toContain('<ul class="att">');
+    expect(attention).toContain('Encryption keys are not loaded (keyring_absent)');
+    expect(notes).toContain(
+      '<span class="vh">Note: </span>The hourly job has not run yet; it starts within the hour.',
+    );
+    expect(notes).toContain('Only one active owner.');
+    // The empty install puts Get started first, the problems after it.
+    expect(html.indexOf('id="get-started"')).toBeLessThan(html.indexOf('id="attention"'));
+    expect(html).toContain('<section class="tray" id="health" aria-labelledby="health-h">');
     expect(html).not.toContain('role="alert"');
     // The health strip is not repeated on the Overview itself.
-    expect(html).not.toContain('class="health-strip"');
+    expect(html).not.toContain('class="hstrip"');
   });
 
   it('falls back to 24 hours for an unknown range without echoing it', async () => {
@@ -113,18 +129,20 @@ describe('GET /admin with traffic', () => {
       await adminGet(fixture.app, await loginAs(fixture.app, viewer), '/admin')
     ).text();
     expect(html).not.toContain('id="get-started"');
-    expect(html).toContain('<dl class="kpis">');
-    expect(html).toMatch(
-      /<dt>Requests<\/dt><dd><a href="\/admin\/requests\?range=24h">4<span class="vh"> requests, last 24 hours<\/span><\/a>/,
+    // The pipeline: every count links to the request list it counts.
+    expect(html).toContain('<ol class="pipe">');
+    expect(html).toContain(
+      '<a class="stage in" href="/admin/requests?range=24h"><span class="lbl">Received</span><span class="big">4</span>',
     );
-    expect(html).toMatch(
-      /<dt>Allowed<\/dt><dd><a href="\/admin\/requests\?range=24h&amp;outcome=allowed">3<span class="vh"> allowed requests, last 24 hours<\/span><\/a>/,
+    expect(html).toContain(
+      '<a class="stage out" href="/admin/requests?range=24h&amp;outcome=allowed"><span class="lbl">Upstream OK · allowed</span><span class="big">3</span>',
     );
-    expect(html).toMatch(
-      /<dt>Denied<\/dt><dd><a href="\/admin\/requests\?range=24h&amp;outcome=denied">1<span class="vh"> denied requests, last 24 hours<\/span><\/a>/,
+    expect(html).toContain(
+      '<a href="/admin/requests?range=24h&amp;outcome=denied"><span class="tl">Denied</span><b>1</b>',
     );
     expect(html).toContain('role="img"');
-    expect(html).toContain(`href="/admin/tokens/${fixture.serviceId}"`);
+    // The map: the token node opens its consumer accesses, the counts the request list.
+    expect(html).toContain(`href="/admin/access?token=${fixture.serviceId}"`);
     expect(html).toContain(`href="/admin/requests?token=${fixture.serviceId}&amp;range=24h"`);
     expect(html).toContain(`href="/admin/access/${fixture.grantId}"`);
     expect(html).toContain('href="/admin/access"');
@@ -145,7 +163,7 @@ describe('GET /admin with traffic', () => {
       expect(html, role).toContain('Top denied callers since');
       expect(html, role).toContain(`href="/admin/requests/${denial?.id}"`);
       expect(html, role).toContain(create);
-      expect(html, role).toContain('no consumer access allows this call');
+      expect(html, role).toContain('No consumer access allows this call');
     }
     for (const role of ['viewer', 'token_manager'] as const) {
       const user =
@@ -172,6 +190,29 @@ describe('GET /admin with traffic', () => {
     await fixture.app.settle();
     const after = await (await adminGet(a, await loginAs(a, viewer), '/admin')).text();
     expect(after).not.toContain('id="get-started"');
+  });
+
+  it('shows a new install with refused calls the setup layout: steps first, then the traffic', async () => {
+    const fixture = await setupProxy();
+    expect((await fixture.call('/x', { token: null })).status).toBe(401);
+    await fixture.app.settle();
+    const html = await (
+      await adminGet(fixture.app, await loginAs(fixture.app, viewer), '/admin')
+    ).text();
+    const order = [
+      'id="get-started"',
+      'id="attention"',
+      'id="flow"',
+      'id="denials"',
+      'id="tokens"',
+    ];
+    const at = order.map((id) => html.indexOf(id));
+    expect(at.every((i) => i > -1)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    // The Overview has no solid primary of its own in the header.
+    const header = /<header class="ph">[\s\S]*?<\/header>/.exec(html)?.[0] ?? '';
+    expect(header).not.toContain('btn primary');
+    expect(header).toContain('<nav class="seg sm" aria-label="Time range">');
   });
 
   it('finds the first verified call through the partial index, not a table scan', async () => {
@@ -250,7 +291,9 @@ describe('GET /admin health checks', () => {
   it('lists every check with an id, names only', async () => {
     const a = app();
     const html = await (await adminGet(a, await loginAs(a, viewer), '/admin')).text();
-    expect(html).toMatch(/<summary>All checks \(\d+ ok, \d+ problems?\)<\/summary>/);
+    expect(html).toMatch(
+      /<summary>All checks \(\d+ ok, \d+ problems?\) <span class="hint"><span class="badge (?:ok|bad)">/,
+    );
     for (const id of [
       'schema',
       'telemetry-schema',
@@ -274,7 +317,9 @@ describe('GET /admin health checks', () => {
     ).text();
     expect(html).toContain('The hourly job has not run yet; it starts within the hour.');
     expect(html).toContain('href="/admin#check-maintenance"');
-    expect(html).toMatch(/<details open="">\s*<summary>All checks \(\d+ ok, 0 problems\)/);
+    expect(html).toMatch(
+      /<details class="disc" id="checks" open=""><summary>All checks \(\d+ ok, 0 problems\)/,
+    );
   });
 
   it('escapes stored text such as the last cron error', async () => {
@@ -294,6 +339,8 @@ describe('GET /admin health checks', () => {
     expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
     // A failing check opens "All checks", so the alert's #check-maintenance link lands on its row.
     expect(html).toContain('href="/admin#check-maintenance"');
-    expect(html).toMatch(/<details open="">\s*<summary>All checks \(\d+ ok, [1-9]\d* problems?\)/);
+    expect(html).toMatch(
+      /<details class="disc" id="checks" open=""><summary>All checks \(\d+ ok, [1-9]\d* problems?\)/,
+    );
   });
 });

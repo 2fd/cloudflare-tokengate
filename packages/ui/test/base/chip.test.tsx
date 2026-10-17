@@ -62,6 +62,28 @@ describe('Chip', () => {
 });
 
 describe('Chips', () => {
+  it('is a named group with a label', () => {
+    expect(
+      render(
+        <Chips label="Can use">
+          <Chip>a</Chip>
+        </Chips>,
+      ),
+    ).toBe(
+      '<div class="chips" role="group" aria-label="Can use"><span class="chip text">a</span></div>',
+    );
+  });
+
+  it('has no role without a label', () => {
+    expect(
+      render(
+        <Chips>
+          <Chip>a</Chip>
+        </Chips>,
+      ),
+    ).toBe('<div class="chips"><span class="chip text">a</span></div>');
+  });
+
   it('wraps chips and ends with the more link', () => {
     expect(
       render(

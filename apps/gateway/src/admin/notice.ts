@@ -9,10 +9,16 @@ import type { Deps } from '../deps';
 import type { AdminContext, ViewContext } from './render';
 
 export interface Notice {
+  /** The bold first sentence: what was done. */
   text: string;
+  /** A second line: the consequence. */
+  more?: string;
   next?: { href: string; label: string };
-  /** A one-button form that reverses the change; fields carry the current expected_updated_at. */
-  undo?: { action: string; fields: Record<string, string>; label: string };
+  /**
+   * A one-button form that reverses the change; fields carry the current expected_updated_at.
+   * `srSuffix` completes the button name for screen readers (": make lena@acme.dev Viewer again").
+   */
+  undo?: { action: string; fields: Record<string, string>; label: string; srSuffix?: string };
 }
 
 export interface NoticeContext {

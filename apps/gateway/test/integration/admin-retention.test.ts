@@ -48,7 +48,7 @@ describe('GET /admin/retention', () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('<title>Data retention – Monitoring – tokengate</title>');
-    expect(html).toContain('Ask an owner to change these settings');
+    expect(html).toContain('Only owners can change these settings');
     expect(html).toContain('<dt>Request log retention (days)</dt><dd>14</dd>');
     expect(html).toContain('<dt>Share of allowed requests to record</dt><dd>100 % (all)</dd>');
     expect(html).not.toContain('name="request_log_retention_days"');
@@ -69,13 +69,26 @@ describe('GET /admin/retention', () => {
       expect(html).toContain(`<legend>${legend}</legend>`);
     }
     // Numbers are prefilled, bounded and have a suggestion list.
-    expect(html).toMatch(
-      /<input id="f-request_log_retention_days" name="request_log_retention_days" type="number" value="14" placeholder="14" required="" min="1" max="3650" step="1" inputmode="numeric" autocomplete="off" list="f-request_log_retention_days-list"/,
-    );
-    expect(html).toContain('<option value="30">30</option>');
+    const input = /<input [^>]*id="f-request_log_retention_days"[^>]*>/.exec(html)?.[0] ?? '';
+    for (const attribute of [
+      'name="request_log_retention_days"',
+      'type="number"',
+      'value="14"',
+      'placeholder="14"',
+      'required=""',
+      'min="1"',
+      'max="3650"',
+      'step="1"',
+      'inputmode="numeric"',
+      'autocomplete="off"',
+      'list="f-request_log_retention_days-list"',
+    ]) {
+      expect(input).toContain(attribute);
+    }
+    expect(html).toContain('<option value="30">');
     // The sample rate is a pick, the current value marked.
-    expect(html).toContain(
-      'type="radio" id="f-allowed_sample_rate" name="allowed_sample_rate" value="1" checked=""',
+    expect(html).toMatch(
+      /type="radio" id="f-allowed_sample_rate-\d" name="allowed_sample_rate" value="1" checked=""/,
     );
     expect(html).toContain('100 % (all) (current)');
     expect(html).toContain('Stored now: up to about 0 records (upper estimate).');
@@ -152,6 +165,47 @@ describe('POST /admin/retention', () => {
     });
     expect(res.status).toBe(400);
     expect(await res.text()).toContain('must be a whole number');
+  });
+});
+
+describe('Data retention settings cards', () => {
+  it('shows owners an Edit… on each card that opens one closed dialog with the form', async () => {
+    const html = await (await adminGet(app, await sessionFor('owner'), '/admin/retention')).text();
+    for (const id of ['records', 'summaries', 'audit']) {
+      expect(html).toContain(`<section class="tray" id="${id}" aria-labelledby="${id}-h">`);
+    }
+    expect(html.match(/commandfor="retention-edit" popovertarget="retention-edit"/g)).toHaveLength(
+      3,
+    );
+    expect(html).toContain(
+      '<dialog class="dlg wide" id="retention-edit" aria-labelledby="retention-edit-h" aria-describedby="retention-edit-d" popover="auto">',
+    );
+    expect(html).toMatch(
+      /<form method="post" action="\/admin\/retention"><input type="hidden" name="_csrf"/,
+    );
+    // The values are read-only on the cards for everyone.
+    expect(html).toContain('<dt>Request log retention (days)</dt><dd>14</dd>');
+    expect(html).not.toContain('Only owners can change these settings');
+  });
+
+  it('re-renders the dialog open in the page flow after a failed save', async () => {
+    const res = await adminPost(app, await sessionFor('owner'), '/admin/retention', {
+      audit_log_retention_days: '10',
+    });
+    expect(res.status).toBe(400);
+    const html = await res.text();
+    expect(html).toMatch(/<dialog class="dlg wide" id="retention-edit"[^>]* open="">/);
+  });
+
+  it('marks a sampled share of allowed requests on its card', async () => {
+    await env.DB.prepare(
+      "INSERT INTO settings (key, value, updated_at) VALUES ('allowed_sample_rate', '0.1', 0)",
+    ).run();
+    const html = await (await adminGet(app, await sessionFor('viewer'), '/admin/retention')).text();
+    expect(html).toContain(
+      '<dt>Share of allowed requests to record</dt><dd>10 % <span class="badge warn"><span aria-hidden="true">⚠</span>Sampled</span></dd>',
+    );
+    expect(html).not.toContain('id="retention-edit"');
   });
 });
 

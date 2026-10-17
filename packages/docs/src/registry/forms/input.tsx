@@ -79,9 +79,34 @@ export const input: ComponentDoc = {
 </Field>`,
     },
     {
+      title: 'Invite email',
+      description:
+        'An email address is exact but not mono: turn off spellcheck and autocapitalize, and label the Enter key “send”.',
+      layout: 'stack',
+      render: () => (
+        <div class="fields">
+          <Field id="in-email" label="Email" hint="We send the invitation to this address.">
+            <Input
+              name="email"
+              type="email"
+              autocomplete="email"
+              spellcheck={false}
+              autocapitalize="none"
+              enterkeyhint="send"
+              placeholder="ada@acme.dev"
+            />
+          </Field>
+        </div>
+      ),
+      code: `<Field id="email" label="Email" hint="We send the invitation to this address.">
+  <Input name="email" type="email" autocomplete="email" spellcheck={false}
+    autocapitalize="none" enterkeyhint="send" placeholder="ada@acme.dev" />
+</Field>`,
+    },
+    {
       title: 'Suggestions',
       description:
-        'Values used before: all go in the datalist; those with a link also show under the input. A link reloads the form with the value filled in, without JS.',
+        'Values used before: all go in the datalist; those with a link also show under the input. A link reloads the form with the value filled in, without JS. A label is the text of the datalist option; the link still shows the value.',
       layout: 'stack',
       render: () => (
         <div class="fields">
@@ -97,7 +122,7 @@ export const input: ComponentDoc = {
               suggestionsLabel="Used before"
               suggestions={[
                 { value: 'main', href: '?branch=main' },
-                { value: 'release/*', href: '?branch=release/*' },
+                { value: 'release/*', href: '?branch=release/*', label: 'Release branches' },
                 { value: 'develop' },
               ]}
             />
@@ -109,7 +134,7 @@ export const input: ComponentDoc = {
   <Input name="branch" mono placeholder="main" suggestionsLabel="Used before"
     suggestions={[
       { value: 'main', href: '?branch=main' },
-      { value: 'release/*', href: '?branch=release/*' },
+      { value: 'release/*', href: '?branch=release/*', label: 'Release branches' },
       { value: 'develop' },
     ]} />
 </Field>`,
@@ -208,12 +233,33 @@ export const input: ComponentDoc = {
         {
           name: 'mono',
           type: 'boolean',
-          description: 'Mono type; autocomplete, spellcheck and autocapitalize off.',
+          description: 'Mono type; autocomplete, autocorrect, spellcheck and autocapitalize off.',
+        },
+        {
+          name: 'spellcheck',
+          type: 'boolean',
+          description: 'Overrides the mono default (false): false on an email input.',
+        },
+        {
+          name: 'autocapitalize',
+          type: "'none' | 'sentences' | 'words' | 'characters'",
+          description: "Overrides the mono default ('none').",
         },
         {
           name: 'secret',
           type: 'boolean',
-          description: 'Password type, mono, ignored by password managers.',
+          description:
+            'Password type, mono, no autocorrect, ignored by password managers (data-1p-ignore, data-lpignore, data-bwignore).',
+        },
+        {
+          name: 'autofocus',
+          type: 'boolean',
+          description: 'Focus on load: the one field of a page whose only task is to fill it.',
+        },
+        {
+          name: 'enterkeyhint',
+          type: "'enter' | 'done' | 'go' | 'next' | 'previous' | 'search' | 'send'",
+          description: 'Label of the Enter key on virtual keyboards.',
         },
         { name: 'readonly', type: 'boolean', description: 'Gray, for a derived value.' },
         { name: 'disabled', type: 'boolean', description: 'Not editable and not submitted.' },
@@ -232,12 +278,13 @@ export const input: ComponentDoc = {
         {
           name: 'describedBy',
           type: 'string',
-          description: 'Defaults to the Field’s hint, error and note ids.',
+          description: 'Ids added after the Field’s hint, error and note ids (a shared hint).',
         },
         {
           name: 'suggestions',
-          type: 'readonly { value: string; href?: string }[]',
-          description: 'Datalist values; those with href also show as links under the input.',
+          type: 'readonly { value: string; label?: string; href?: string }[]',
+          description:
+            'Datalist values (label: the option text); those with href also show as links under the input, by value.',
         },
         {
           name: 'suggestionsLabel',
@@ -259,10 +306,11 @@ export const input: ComponentDoc = {
         { name: 'mono', type: 'boolean', description: 'Mono type, no spellcheck.' },
         { name: 'readonly, disabled', type: 'boolean', description: 'States.' },
         { name: 'required', type: 'boolean', description: 'Never inside a Reveal.' },
+        { name: 'invalid', type: 'boolean', description: 'Defaults to the Field’s error state.' },
         {
-          name: 'invalid, describedBy',
-          type: 'boolean, string',
-          description: 'Default to the Field’s.',
+          name: 'describedBy',
+          type: 'string',
+          description: 'Ids added after the Field’s hint, error and note ids.',
         },
         { name: 'class', type: 'string', description: 'Extra classes.' },
       ],
@@ -270,7 +318,8 @@ export const input: ComponentDoc = {
   ],
   accessibility: [
     'Inside a Field the input is labelled, described by the rendered hint, error and note, and aria-invalid when there is an error.',
-    'A secret is a password input, so it is never shown on screen or read aloud as text.',
+    'Inside a Field, describedBy adds ids after the Field’s own (a hint shared by several fields); it never replaces them.',
+    'A secret is a password input, so it is never shown on screen or read aloud as text. autocorrect="off" and data-1p-ignore, data-lpignore and data-bwignore keep keyboards and password managers (1Password, LastPass, Bitwarden) from changing it or offering to save an API key as a login.',
     'The datalist is native: browsers and screen readers offer its values as suggestions; the visible line has real links.',
     'The invalid border is 2px and the error is also in words, so color is not the only signal.',
   ],

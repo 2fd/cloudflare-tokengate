@@ -1,3 +1,23 @@
+import {
+  Badge,
+  Callout,
+  Cell,
+  Column,
+  ConfirmDialog,
+  CountLink,
+  DialogTrigger,
+  EmptyState as UiEmptyState,
+  Grid,
+  LinkAction,
+  Mono,
+  PageHeader,
+  Panel,
+  Row,
+  RowHeader,
+  Table,
+  Tray,
+  ZeroState,
+} from '@tokengate/ui';
 // Service tokens › Encryption keys (A13.5): key ids and check values (KCVs) of the loaded keyring,
 // the secrets sealed with each, problems with their fix, and re-encryption with the active key
 // (keyring:rewrap). Shows key ids and check values only, never key material (I-CFG-1).
@@ -11,8 +31,15 @@ import { KEYRING_ERROR_TEXT, keyringStatus, rewrapCredentials } from '../ops/key
 import { fieldError } from '../ops/shared';
 import type { FieldError } from '../ops/shared';
 import { paths, returnPath } from '../paths';
-import { type AdminContext, adminActor, formData, redirectWithNotice, renderPage } from '../render';
-import { AskSomeone, ConfirmDialog, DataTable, EmptyState } from '../views/components';
+import {
+  type AdminContext,
+  adminActor,
+  formData,
+  redirectWithNotice,
+  renderPage,
+  type ViewContext,
+} from '../render';
+import { AskSomeone } from '../views/components';
 import { docsUrl } from '../views/docs';
 
 const NOTICES: NoticeTable = {
@@ -119,8 +146,9 @@ async function keysPage(c: AdminContext, o: { errors?: FieldError[]; status?: 40
       : `Active key ${status.activeKid}. ${plural(status.keys.length, 'key', 'keys')} loaded. ${
           blocking.length === 0 && changed.length === 0
             ? 'Every stored secret opens.'
-            : 'Some stored secrets do not open: see Problems.'
+            : 'Some stored secrets do not open: see the problems below.'
         }`;
+  const problems = [...changed, ...blocking];
   return renderPage(
     c,
     {
@@ -128,121 +156,196 @@ async function keysPage(c: AdminContext, o: { errors?: FieldError[]; status?: 40
       section: 'tokens',
       subsection: 'keys',
       notice: resolveNotice(NOTICES, c.req.query('notice'), null),
+      header: (
+        <PageHeader
+          title="Encryption keys"
+          description={
+            <>
+              {sentence ? `${sentence} ` : null}Secrets are stored encrypted with the key from the{' '}
+              <code>TOKENGATE_KEK</code> or <code>TOKENGATE_KEYRING</code> secret.
+            </>
+          }
+        />
+      ),
       errors: o.errors,
       status: o.status,
     },
     (ctx) => (
       <>
-        {status.error === 'keyring_absent' ? (
-          <EmptyState
-            title="No encryption key"
-            action={<a href={docsUrl('operations/key-rotation.md')}>How to set up keys</a>}
-          >
-            No encryption key is configured. Set TOKENGATE_KEK or TOKENGATE_KEYRING. Until then
-            secrets cannot be saved and the proxy answers 503.
-          </EmptyState>
-        ) : status.error !== null ? (
-          <ul class="alerts">
-            <li class="alert alert-error">
-              <p>
-                <strong>Error:</strong> {KEYRING_ERROR_TEXT[status.error]}
-              </p>
-            </li>
-          </ul>
-        ) : (
-          <p class="lead">
-            {sentence} Secrets are stored encrypted with the key from the <code>TOKENGATE_KEK</code>{' '}
-            or <code>TOKENGATE_KEYRING</code> secret.
-          </p>
-        )}
-        {rows.length > 0 ? (
-          <DataTable
-            id="keys"
-            caption="Keys in the keyring"
-            rowHeader="kid"
-            rows={rows}
-            columns={[
-              { key: 'kid', header: 'Key ID', render: (row) => <code>{row.kid}</code> },
-              {
-                key: 'kcv',
-                header: 'Key check value',
-                render: (row) => (row.kcv ? <code>{row.kcv}</code> : <span class="muted">—</span>),
-              },
-              {
-                key: 'status',
-                header: 'Status',
-                render: (row) => (
-                  <span
-                    class={`badge ${row.status === 'active' ? 'ok' : row.status === 'loaded' ? 'muted' : 'bad'}`}
+        {status.error !== null && status.error !== 'keyring_absent' ? (
+          <Callout tone="bad" title={KEYRING_ERROR_TEXT[status.error]} />
+        ) : null}
+        {problems.map((problem) => (
+          <Callout
+            tone="bad"
+            title={problem.text}
+            more={
+              problem.tokens.length > 0 ? (
+                <>
+                  {problem.tokens.map((token, index) => (
+                    <>
+                      {index > 0 ? ' · ' : null}
+                      <a href={paths.token(token.id)}>{token.name}</a>
+                    </>
+                  ))}
+                </>
+              ) : undefined
+            }
+          />
+        ))}
+        <Grid>
+          <Column span={12}>
+            <Tray
+              id="keys"
+              title="Keys in the keyring"
+              count={rows.length > 0 ? rows.length : undefined}
+            >
+              {status.error === 'keyring_absent' ? (
+                <Panel variant="pad">
+                  <UiEmptyState
+                    title="No encryption key"
+                    icon="token"
+                    description="No encryption key is configured. Set TOKENGATE_KEK or TOKENGATE_KEYRING. Until then secrets cannot be saved and the proxy answers 503."
+                    actions={
+                      <LinkAction href={docsUrl('operations/key-rotation.md')} arrow>
+                        How to set up keys
+                      </LinkAction>
+                    }
+                  />
+                </Panel>
+              ) : rows.length > 0 ? (
+                <Panel variant="flush">
+                  <Table
+                    id="keys-table"
+                    labelledBy="keys-h"
+                    caption="Keys in the keyring"
+                    stackable
+                    columns={[
+                      { label: 'Key ID' },
+                      { label: 'Key check value' },
+                      { label: 'Status' },
+                      { label: 'Secrets sealed with it', num: true },
+                    ]}
                   >
-                    {row.status}
-                  </span>
-                ),
-              },
-              {
-                key: 'secrets',
-                header: 'Secrets sealed with it',
-                numeric: true,
-                render: (row) =>
-                  row.secrets > 0 ? (
-                    <a href={paths.tokens({ key: row.kid })}>
-                      {row.secrets}
-                      <span class="vh"> tokens with key {row.kid}</span>
-                    </a>
-                  ) : (
-                    '0'
-                  ),
-              },
-            ]}
-          />
-        ) : null}
-        {blocking.length + changed.length > 0 ? (
-          <section aria-labelledby="key-problems-h">
-            <h2 id="key-problems-h">Problems</h2>
-            <ul class="alerts">
-              {[...changed, ...blocking].map((problem) => (
-                <li class="alert alert-error">
-                  <p>
-                    <strong>Error:</strong> {problem.text}
-                  </p>
-                  {problem.tokens.length > 0 ? (
-                    <p class="objects">
-                      {problem.tokens.map((token, index) => (
-                        <>
-                          {index > 0 ? ' · ' : null}
-                          <a href={paths.token(token.id)}>{token.name}</a>
-                        </>
-                      ))}
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
-        <section id="rewrap" aria-labelledby="rewrap-h">
-          <h2 id="rewrap-h">Re-encrypt secrets</h2>
-          <Rewrap
-            ctx={ctx}
-            error={status.error !== null}
-            needsRewrap={status.needsRewrap}
-            changedKids={health.changedKids}
-            blocked={blocking.length > 0}
-          />
-        </section>
-        <section aria-labelledby="kcv-h">
-          <h2 id="kcv-h">Check a key value</h2>
-          <p>
-            Compare each check value with the one printed by <code>pnpm keyring check</code> for the
-            key in your vault. Run it with <code>AUTH_ACCESS_TEAM_DOMAIN</code>,{' '}
-            <code>AUTH_ACCESS_AUD</code> and <code>AUTH_ACCESS_DEVELOPMENT</code> set as in
-            production: keys are bound to the login variables (I-CRED-3), so other values print
-            other check values.{' '}
-            <a href={docsUrl('operations/key-rotation.md')}>Key rotation guide</a>
-          </p>
-        </section>
+                    {rows.map((row) => (
+                      <Row>
+                        <RowHeader>
+                          <Mono>{row.kid}</Mono>
+                        </RowHeader>
+                        <Cell label="Key check value">
+                          {row.kcv ? <code>{row.kcv}</code> : <span class="muted">—</span>}
+                        </Cell>
+                        <Cell label="Status">
+                          <KeyBadge status={row.status} />
+                        </Cell>
+                        <Cell label="Secrets sealed with it" num zero={row.secrets === 0}>
+                          {row.secrets > 0 ? (
+                            <CountLink
+                              href={paths.tokens({ key: row.kid })}
+                              srSuffix={`tokens with key ${row.kid}`}
+                            >
+                              {row.secrets}
+                            </CountLink>
+                          ) : (
+                            '0'
+                          )}
+                        </Cell>
+                      </Row>
+                    ))}
+                  </Table>
+                </Panel>
+              ) : (
+                <Panel>
+                  <ZeroState>No key is loaded.</ZeroState>
+                </Panel>
+              )}
+            </Tray>
+          </Column>
+          <Column span={7}>
+            <Tray id="rewrap" title="Re-encrypt secrets">
+              <Panel variant="pad">
+                <Rewrap
+                  ctx={ctx}
+                  error={status.error !== null}
+                  needsRewrap={status.needsRewrap}
+                  changedKids={health.changedKids}
+                  blocked={blocking.length > 0}
+                />
+              </Panel>
+            </Tray>
+          </Column>
+          <Column span={5}>
+            <Tray id="kcv" title="Check a key value">
+              <Panel variant="pad">
+                <p>
+                  Compare each check value with the one printed by <code>pnpm keyring check</code>{' '}
+                  for the key in your vault. Run it with <code>AUTH_ACCESS_TEAM_DOMAIN</code>,{' '}
+                  <code>AUTH_ACCESS_AUD</code> and <code>AUTH_ACCESS_DEVELOPMENT</code> set as in
+                  production: keys are bound to the login variables (I-CRED-3), so other values
+                  print other check values.
+                </p>
+                <p>
+                  <LinkAction href={docsUrl('operations/key-rotation.md')} arrow>
+                    Key rotation guide
+                  </LinkAction>
+                </p>
+              </Panel>
+            </Tray>
+          </Column>
+        </Grid>
+        <RewrapDialog
+          ctx={ctx}
+          error={status.error !== null}
+          needsRewrap={status.needsRewrap}
+          changedKids={health.changedKids}
+          blocked={blocking.length > 0}
+        />
       </>
     ),
+  );
+}
+
+/** A key's state as a word: Active, Loaded, Missing or Changed. */
+function KeyBadge(props: { status: KeyRow['status'] }) {
+  switch (props.status) {
+    case 'active':
+      return (
+        <Badge tone="ok" glyph="✓">
+          Active
+        </Badge>
+      );
+    case 'loaded':
+      return <Badge>Loaded</Badge>;
+    case 'missing':
+      return (
+        <Badge tone="bad" glyph="✕">
+          Missing
+        </Badge>
+      );
+    case 'changed':
+      return (
+        <Badge tone="bad" glyph="✕">
+          Changed
+        </Badge>
+      );
+  }
+}
+
+interface RewrapProps {
+  ctx: ViewContext;
+  error: boolean;
+  needsRewrap: number;
+  changedKids: string[];
+  blocked: boolean;
+}
+
+/** The rewrap is offered to an owner when it can run: something to do, and nothing blocking it. */
+function rewrapOffered(props: RewrapProps): boolean {
+  return (
+    !props.error &&
+    !props.blocked &&
+    (props.needsRewrap > 0 || props.changedKids.length > 0) &&
+    props.ctx.can('keyring:rewrap')
   );
 }
 
@@ -250,17 +353,18 @@ async function keysPage(c: AdminContext, o: { errors?: FieldError[]; status?: 40
  * A rewrap needs a loaded keyring and every stored secret readable (all or nothing), so it is
  * offered only without blocking problems. It is also how a changed key check value is accepted.
  */
-function Rewrap(props: {
-  ctx: Parameters<typeof AskSomeone>[0]['ctx'];
-  error: boolean;
-  needsRewrap: number;
-  changedKids: string[];
-  blocked: boolean;
-}) {
+function Rewrap(props: RewrapProps) {
   if (props.error) return <p class="muted">Re-encryption needs a loaded keyring.</p>;
   const count = props.needsRewrap;
   if (count === 0 && props.changedKids.length === 0) {
-    return <p class="muted">Every stored secret uses the active key.</p>;
+    return (
+      <p>
+        <Badge tone="ok" glyph="✓">
+          Up to date
+        </Badge>{' '}
+        Every stored secret uses the active key.
+      </p>
+    );
   }
   const intro = (
     <>
@@ -291,25 +395,34 @@ function Rewrap(props: {
   return (
     <>
       <p>{intro}</p>
-      <ConfirmDialog
-        id="rewrap"
-        variant="standalone"
-        action="/admin/tokens/keys/rewrap"
-        csrf={props.ctx.csrf}
-        returnTo="detail"
-        trigger={
-          count > 0 ? `Re-encrypt ${plural(count, 'secret', 'secrets')}…` : 'Accept the new key…'
-        }
-        title={
-          count > 0 ? `Re-encrypt ${plural(count, 'secret', 'secrets')}?` : 'Accept the new key?'
-        }
-        body={
-          props.changedKids.length > 0
-            ? 'Every stored secret is opened and sealed again with the active key. Confirming also accepts the new check value of the changed key, if every secret under it opens. Nothing changes otherwise.'
-            : 'Every stored secret is opened and sealed again with the active key. Consumers keep working.'
-        }
-        confirmLabel="Re-encrypt"
-      />
+      <div>
+        <DialogTrigger dialog="dlg-rewrap">
+          {count > 0 ? `Re-encrypt ${plural(count, 'secret', 'secrets')}…` : 'Accept the new key…'}
+        </DialogTrigger>
+      </div>
     </>
+  );
+}
+
+/** The confirm dialog of the rewrap, at page level (outside the trays and the grid). */
+function RewrapDialog(props: RewrapProps) {
+  if (!rewrapOffered(props)) return null;
+  const count = props.needsRewrap;
+  return (
+    <ConfirmDialog
+      id="dlg-rewrap"
+      title={
+        count > 0 ? `Re-encrypt ${plural(count, 'secret', 'secrets')}?` : 'Accept the new key?'
+      }
+      description={
+        props.changedKids.length > 0
+          ? 'Every stored secret is opened and sealed again with the active key. Confirming also accepts the new check value of the changed key, if every secret under it opens. Nothing changes otherwise.'
+          : 'Every stored secret is opened and sealed again with the active key. Consumers keep working.'
+      }
+      action="/admin/tokens/keys/rewrap"
+      hidden={props.ctx.hidden({ _return: 'detail', confirm: '1' })}
+      confirmLabel="Re-encrypt"
+      confirmVariant="primary"
+    />
   );
 }

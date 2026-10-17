@@ -39,6 +39,48 @@ describe('FormStep', () => {
     );
   });
 
+  it('a fieldset step renders a hint and an error after the description, describing it', () => {
+    const html = render(
+      <FormStep
+        n={2}
+        id="ops"
+        title="Allowed operations"
+        description="Presets for the Slack Web API."
+        hint="Pick one or more."
+        error="Choose at least one operation"
+      >
+        x
+      </FormStep>,
+    );
+    expect(html).toContain(
+      '<fieldset class="fstep-b" id="ops" aria-describedby="ops-hint ops-error"><legend class="fstep-t"><span class="vh">Step 2: </span>Allowed operations</legend><p class="hint">Presets for the Slack Web API.</p><span class="hint" id="ops-hint">Pick one or more.</span><p class="field-error" id="ops-error"><span aria-hidden="true">✕</span><span class="vh">Error:</span> Choose at least one operation</p>x</fieldset>',
+    );
+    expect(
+      render(
+        <FormStep n={1} id="e" title="T" error="E">
+          x
+        </FormStep>,
+      ),
+    ).toContain('<fieldset class="fstep-b" id="e" aria-describedby="e-error">');
+  });
+
+  it('hint and error need an id and a fieldset step', () => {
+    expect(() =>
+      render(
+        <FormStep n={1} title="T" hint="H">
+          x
+        </FormStep>,
+      ),
+    ).toThrow('FormStep: hint and error need an id');
+    expect(() =>
+      render(
+        <FormStep n={1} id="g" kind="group" title="T" error="E">
+          x
+        </FormStep>,
+      ),
+    ).toThrow(/for a fieldset step/);
+  });
+
   it('renders a group step with a heading that labels it', () => {
     expect(
       render(

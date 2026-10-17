@@ -28,6 +28,11 @@ export interface ButtonProps {
   /** Overrides the form action / method for this submit. */
   formaction?: string;
   formmethod?: 'get' | 'post' | 'dialog';
+  /**
+   * Submit without the browser's constraint validation: secondary submits (`_action=add:…`,
+   * `rows`, `refresh`) and a confirm that submits another form. Ignored with `href`.
+   */
+  formnovalidate?: boolean;
   /** Invoker commands, no JS: `command="show-modal"` + `commandfor="dlg-del"` opens a dialog. */
   command?:
     | 'show-modal'
@@ -109,6 +114,7 @@ export function Button(props: ButtonProps) {
       form={props.form}
       formaction={props.formaction}
       formmethod={props.formmethod}
+      formnovalidate={props.formnovalidate}
       command={props.command}
       commandfor={props.commandfor}
       popovertarget={props.popovertarget}

@@ -15,6 +15,8 @@ import {
   Feed,
   FeedDay,
   FeedItem,
+  FieldError,
+  type FilterOptionGroup,
   FilterSearch,
   Filters,
   Icon,
@@ -251,6 +253,90 @@ const TOKEN_OPTIONS = [
   },
 ];
 
+/** About 45 denial reason codes, by where the request failed: the “+ Reason” menu in groups. */
+const REASON_GROUPS: readonly FilterOptionGroup[] = (
+  [
+    [
+      'Caller',
+      [
+        ['issuer_unknown', 'Unknown issuer', 182],
+        ['token_missing', 'No caller token', 31],
+        ['token_malformed', 'Caller token unreadable', 4],
+        ['token_expired', 'Caller token expired', 3],
+        ['token_not_yet_valid', 'Caller token not valid yet'],
+        ['audience_mismatch', 'Wrong audience', 2],
+        ['signature_invalid', 'Bad signature'],
+        ['jwks_unavailable', 'Issuer keys unavailable'],
+        ['claims_missing', 'Required claims missing'],
+      ],
+    ],
+    [
+      'Access',
+      [
+        ['no_matching_grant', 'No consumer access allows this call', 59],
+        ['grant_expired', 'Consumer access expired', 6],
+        ['grant_disabled', 'Consumer access disabled'],
+        ['consumer_disabled', 'Consumer disabled'],
+        ['repo_not_allowed', 'Repository not allowed', 9],
+        ['branch_not_allowed', 'Branch not allowed', 5],
+        ['environment_not_allowed', 'Environment not allowed'],
+        ['workflow_not_allowed', 'Workflow not allowed'],
+        ['event_not_allowed', 'Event not allowed'],
+      ],
+    ],
+    [
+      'Request',
+      [
+        ['method_not_allowed', 'Method not allowed', 7],
+        ['path_not_allowed', 'Path not allowed', 11],
+        ['host_not_allowed', 'Upstream host not allowed'],
+        ['header_not_allowed', 'Header not allowed'],
+        ['query_not_allowed', 'Query not allowed'],
+        ['scheme_not_allowed', 'Scheme not allowed'],
+        ['body_too_large', 'Request body too large'],
+        ['request_malformed', 'Request unreadable'],
+        ['rate_limited', 'Rate limited', 14],
+      ],
+    ],
+    [
+      'Token',
+      [
+        ['token_unknown', 'Unknown token', 8],
+        ['token_disabled', 'Token disabled', 3],
+        ['token_paused', 'Token paused'],
+        ['secret_missing', 'No secret stored'],
+        ['secret_expired', 'Secret expired', 1],
+        ['secret_unsealable', 'Secret cannot be unsealed'],
+        ['kek_mismatch', 'Sealing key changed'],
+        ['rotation_pending', 'Rotation pending'],
+        ['token_slug_invalid', 'Token name unreadable'],
+      ],
+    ],
+    [
+      'Upstream',
+      [
+        ['upstream_5xx', 'Upstream error', 12],
+        ['upstream_4xx', 'Upstream refused', 2],
+        ['upstream_timeout', 'Upstream timed out', 1],
+        ['upstream_unreachable', 'Upstream unreachable'],
+        ['upstream_tls', 'Upstream TLS failed'],
+        ['upstream_redirect', 'Upstream redirected'],
+        ['upstream_too_large', 'Upstream answer too large'],
+        ['upstream_reset', 'Upstream reset the connection'],
+        ['dns_failure', 'Upstream name not found'],
+      ],
+    ],
+  ] as const
+).map(([group, codes]) => ({
+  group,
+  options: codes.map(([slug, label, count]: readonly [string, string, number?]) => ({
+    href: `?reason=${slug}`,
+    label,
+    slug,
+    count,
+  })),
+}));
+
 // ----- Shared prop docs ------------------------------------------------------------------------
 
 const FILTER_OPTION_TYPE =
@@ -287,7 +373,7 @@ export const data: readonly ComponentDoc[] = [
       {
         title: 'List with entity, numbers, status and row actions',
         description:
-          'The tokens list: the first column is the row header (logo, name link, mono meta line), numbers are tabular, one row is highlighted, a zero is faint. Below 48rem each row becomes a card with the column name above each value.',
+          'The tokens list: the first column is the row header (logo, name link, mono meta line), numbers are tabular, one row is highlighted, a zero is faint. Each row has an id, so a redirect to #token-slack lands on it. Below 48rem each row becomes a card with the column name above each value.',
         layout: 'stack',
         render: () => (
           <Tray
@@ -304,7 +390,7 @@ export const data: readonly ComponentDoc[] = [
             <Panel variant="flush">
               <Table labelledBy="ex-tbl-tokens-h" stackable columns={TOKEN_COLUMNS}>
                 {TOKENS.map((t) => (
-                  <Row highlight={'highlight' in t}>
+                  <Row highlight={'highlight' in t} id={`ex-tbl-token-${t.slug}`}>
                     <RowHeader>
                       <Entity
                         logo={t.logo}
@@ -338,7 +424,7 @@ export const data: readonly ComponentDoc[] = [
       { label: 'Status' }, { label: 'Last used' }, { label: 'Actions', act: true },
     ]}>
       {tokens.map((t) => (
-        <Row highlight={t.slug === changed}>
+        <Row highlight={t.slug === changed} id={\`token-\${t.slug}\`}>
           <RowHeader>
             <Entity logo={t.brand}
               name={t.name} href={\`/admin/tokens/\${t.slug}\`} meta={\`/proxy/\${t.slug}\`} metaMono />
@@ -487,11 +573,12 @@ export const data: readonly ComponentDoc[] = [
       {
         title: 'Number table without a region',
         description:
-          'A narrow dense table that fits every width, so it needs no scroll region: scroll={false}, a caption to name it, row headers for the hour. A table with more columns keeps its region.',
+          'A narrow dense table that fits every width, so it needs no scroll region: scroll={false}, a caption to name it, row headers for the hour. A table with more columns keeps its region. The id is on the table element, so a link to #requests-per-hour lands on it.',
         layout: 'stack',
         render: () => (
           <Panel variant="flush">
             <Table
+              id="ex-tbl-hours"
               scroll={false}
               dense
               caption="Requests per hour, numbers"
@@ -516,7 +603,7 @@ export const data: readonly ComponentDoc[] = [
             </Table>
           </Panel>
         ),
-        code: `<Table scroll={false} dense caption="Requests per hour, numbers" columns={[
+        code: `<Table id="requests-per-hour" scroll={false} dense caption="Requests per hour, numbers" columns={[
   { label: 'Hour (UTC)' }, { label: 'Requests', num: true }, { label: 'Denied', num: true },
 ]}>
   {hours.map((h) => (
@@ -668,6 +755,12 @@ export const data: readonly ComponentDoc[] = [
             ),
           },
           {
+            name: 'id',
+            type: 'string',
+            description:
+              'Id of the table element, not of the scroll region: a fragment target (#requests), and where checkers start reading the table up to its caption.',
+          },
+          {
             name: 'labelledBy',
             type: 'string',
             description: (
@@ -722,6 +815,12 @@ export const data: readonly ComponentDoc[] = [
       {
         component: 'Row',
         props: [
+          {
+            name: 'id',
+            type: 'string',
+            description:
+              'Id of the tr: the fragment target of a redirect back to the row (#user-usr_1).',
+          },
           {
             name: 'highlight',
             type: 'boolean',
@@ -1117,6 +1216,86 @@ export const data: readonly ComponentDoc[] = [
 </Tray>`,
       },
       {
+        title: '“+ Reason” with about 45 codes in groups',
+        description:
+          'A long menu splits into titled groups (Caller, Access, Request, Token, Upstream) and scrolls past 24rem. Each group is a named group; its visible title is hidden from screen readers so it is not read twice. The id on the details is the target of an ErrorSummary link (#f-reason).',
+        layout: 'stack',
+        render: () => (
+          <Tray
+            id="ex-flt-groups"
+            title="Denials by reason"
+            count={253}
+            actions={
+              <Filters as="group" end label="Filter denied requests by reason">
+                <AddFilter
+                  id="ex-flt-reason-menu"
+                  label="Reason"
+                  open
+                  srSuffix="requests"
+                  options={REASON_GROUPS}
+                />
+              </Filters>
+            }
+          >
+            <Panel variant="flush">
+              <Table
+                label="Denied requests by reason (example)"
+                dense
+                stackable
+                columns={REQUEST_COLUMNS}
+              >
+                <RequestRows />
+                <RequestRows />
+              </Table>
+            </Panel>
+          </Tray>
+        ),
+        code: `<AddFilter id="f-reason" label="Reason" srSuffix="requests" open={errors.reason !== undefined} options={[
+  { group: 'Caller', options: [
+    { href: '?reason=issuer_unknown', label: 'Unknown issuer', slug: 'issuer_unknown', count: 182 },
+    { href: '?reason=token_missing', label: 'No caller token', slug: 'token_missing', count: 31 },
+    …
+  ] },
+  { group: 'Access', options: [
+    { href: '?reason=no_matching_grant', label: 'No consumer access allows this call', slug: 'no_matching_grant', count: 59 },
+    …
+  ] },
+  { group: 'Request', options: […] },
+  { group: 'Token', options: […] },
+  { group: 'Upstream', options: […] },
+]} />`,
+      },
+      {
+        title: 'Invalid repository filter',
+        description:
+          'The browser checks the format (pattern, maxlength) before it submits; the server refuses what it cannot parse and renders the page again. The error line is the page’s FieldError in the bar, referenced by describedBy; invalid sets aria-invalid.',
+        layout: 'stack',
+        render: () => (
+          <Filters label="Filter requests by repository (example)" submitLabel="Apply">
+            <FilterSearch
+              id="ex-flt-repo"
+              label="Filter by repository"
+              name="repo"
+              value="acme/"
+              placeholder="owner/name"
+              pattern="[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+"
+              maxlength={256}
+              invalid
+              describedBy="ex-flt-repo-error"
+            />
+            <FieldError id="ex-flt-repo-error">
+              Type a repository as owner/name, for example acme/api.
+            </FieldError>
+          </Filters>
+        ),
+        code: `<Filters label="Filter requests" action="/admin/requests" submitLabel="Apply">
+  <FilterSearch id="rq-repo" label="Filter by repository" name="repo" value={repo} placeholder="owner/name"
+    pattern="[A-Za-z0-9_.\\-]+/[A-Za-z0-9_.\\-]+" maxlength={256}
+    invalid={errors.repo !== undefined} describedBy={errors.repo ? 'rq-repo-error' : undefined} />
+  {errors.repo ? <FieldError id="rq-repo-error">{errors.repo}</FieldError> : null}
+</Filters>`,
+      },
+      {
         title: 'Active filters',
         description:
           'Each chip links to the list without that filter; Clear all links to the unfiltered list. Nothing renders when no filter is active.',
@@ -1210,12 +1389,40 @@ export const data: readonly ComponentDoc[] = [
             type: 'readonly string[]',
             description: 'Known values for the browser datalist.',
           },
+          {
+            name: 'pattern',
+            type: 'string',
+            description: 'Format the browser checks before it submits (a repository owner/name).',
+          },
+          {
+            name: 'maxlength',
+            type: 'number',
+            description: 'Longest query: 254 for an email search, 256 for a repository filter.',
+          },
+          {
+            name: 'invalid',
+            type: 'boolean',
+            default: 'false',
+            description: 'The query was refused: aria-invalid="true". Say why with describedBy.',
+          },
+          {
+            name: 'describedBy',
+            type: 'string',
+            description:
+              'Id of the hint or FieldError the page renders in the bar (aria-describedby). There is no error slot.',
+          },
           classProp('label.search'),
         ],
       },
       {
         component: 'AddFilter',
         props: [
+          {
+            name: 'id',
+            type: 'string',
+            description:
+              'Id of the details: the target of an ErrorSummary link (#f-reason). Pass open too on error.',
+          },
           {
             name: 'label',
             type: 'string',
@@ -1224,9 +1431,10 @@ export const data: readonly ComponentDoc[] = [
           },
           {
             name: 'options',
-            type: `readonly ${FILTER_OPTION_TYPE}[]`,
+            type: `readonly (${FILTER_OPTION_TYPE} | { group: string; options: readonly FilterOption[] })[]`,
             required: true,
-            description: 'One link per value, most rows first.',
+            description:
+              'One link per value, most rows first. A long list splits into titled groups (FilterOptionGroup); values and groups mix in the order given.',
           },
           {
             name: 'extra',
@@ -1279,6 +1487,8 @@ export const data: readonly ComponentDoc[] = [
       'The search input has a real label (visually hidden). The placeholder only shows the format.',
       'Each menu is a native details/summary: Enter or Space opens it, and its values are plain links in tab order. The summary reads “Filter by Token”; the “+” is hidden.',
       'Counts in a menu can carry a hidden unit (“2,140 requests”).',
+      'An option group is a div with role group named by its title; the visible title is aria-hidden, so it is read once.',
+      'A refused query sets aria-invalid on the input and points aria-describedby at the error line the page renders in the bar.',
       'Each active chip reads “Remove filter Token: Slack”; the ✕ is hidden.',
       'Everything is links and a GET form, with no JavaScript, so every filtered view is a URL.',
     ],
@@ -1300,6 +1510,7 @@ export const data: readonly ComponentDoc[] = [
       'input',
       'fadd',
       'fpop',
+      'fpop-h',
       'n',
       'slug',
       'achips',
@@ -1452,7 +1663,7 @@ export const data: readonly ComponentDoc[] = [
     slug: 'pager',
     name: 'Pager',
     summary:
-      'The footer of a long table: what is shown, then Newer and Older cursor links; a missing end is faint text.',
+      'The footer of a long table: what is shown, then an optional Newest link, Newer and Older cursor links; a missing end is faint text.',
     usage: {
       when: [
         'Under a table with more rows than one page (25): requests, audit events.',
@@ -1510,6 +1721,28 @@ export const data: readonly ComponentDoc[] = [
         code: `<Pager summary="Showing 26–37 of 37 events in 30 days" newer="?after=evt_01JB8W2C" buttons
   newerLabel="Newer events" olderLabel="Older events" label="Audit log pages" />`,
       },
+      {
+        title: 'An older page of the log',
+        description:
+          'Deep in a log, “Newest entries” goes back to the first page in one step. It shows only when set: the first page has no Newest link, not a faint one.',
+        layout: 'stack',
+        render: () => (
+          <Panel variant="flush">
+            <Pager
+              summary="Showing 201–225 of 8,214 · times in UTC"
+              newest="#"
+              newestLabel="Newest entries"
+              newer="#"
+              older="#"
+              buttons
+              label="Pages (example 4)"
+            />
+          </Panel>
+        ),
+        code: `<Pager summary="Showing 201–225 of 8,214 · times in UTC" buttons
+  newest="/admin/requests" newestLabel="Newest entries"
+  newer="?after=req_01JB8Y7Q" older="?before=req_01JB8X2M" />`,
+      },
     ],
     props: [
       {
@@ -1525,6 +1758,13 @@ export const data: readonly ComponentDoc[] = [
           { name: 'older', type: 'string', description: 'Link to the older page (rel next).' },
           { name: 'newerLabel', type: 'string', default: "'Newer'", description: 'Text.' },
           { name: 'olderLabel', type: 'string', default: "'Older'", description: 'Text.' },
+          {
+            name: 'newest',
+            type: 'string',
+            description:
+              'Link to the first page, shown first and only when set (an older page of a log). No rel, no faint placeholder.',
+          },
+          { name: 'newestLabel', type: 'string', default: "'Newest'", description: 'Text.' },
           {
             name: 'buttons',
             type: 'boolean',
@@ -1544,7 +1784,7 @@ export const data: readonly ComponentDoc[] = [
     accessibility: [
       'A nav landmark named “Pages” (or label); name each pager differently when a page has two.',
       'A missing end is plain text, not a disabled or dead link, so it is never in the tab order.',
-      'The arrows are aria-hidden; rel prev and next describe the order.',
+      'The arrows are aria-hidden; rel prev and next describe the order. The Newest link has no rel: it jumps, it is not the adjacent page.',
     ],
     do: [
       'Say what is shown, with the total and the time zone when the rows have times.',
@@ -1955,8 +2195,8 @@ export const data: readonly ComponentDoc[] = [
           {
             name: 'last4',
             type: 'string',
-            required: true,
-            description: 'The last 4 characters, the only part kept for display.',
+            description:
+              'The last 4 characters, the only part kept for display. Missing or empty: the mask says they are not stored.',
           },
           { name: 'facts', type: 'Child', description: 'Kind and length.' },
           { name: 'meta', type: 'Child', description: 'Set when, by whom, expiry, key.' },

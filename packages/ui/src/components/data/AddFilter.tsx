@@ -18,11 +18,31 @@ export interface FilterOption {
   count?: number | string;
 }
 
+/** A titled group of values in a long menu ("Caller", "Upstream"). */
+export interface FilterOptionGroup {
+  /** Group title, shown above its values and read as the group's name. */
+  group: string;
+  /** The values of the group, most rows first. */
+  options: readonly FilterOption[];
+}
+
+function isGroup(entry: FilterOption | FilterOptionGroup): entry is FilterOptionGroup {
+  return 'group' in entry;
+}
+
 export interface AddFilterProps {
+  /**
+   * Id of the `details`: the target of an `ErrorSummary` link (`#f-token`). Pass `open` too, so
+   * the menu is shown open on error. Unique on the page.
+   */
+  id?: string;
   /** What the menu filters by: the summary reads "+ Token". */
   label: string;
-  /** Values, most rows first. */
-  options: readonly FilterOption[];
+  /**
+   * Values, most rows first. A long list (about 45 reason codes) splits into titled groups; plain
+   * values and groups can be mixed, in the order given. The menu scrolls past 24rem.
+   */
+  options: readonly (FilterOption | FilterOptionGroup)[];
   /** Special values after a divider ("No token chosen", "Unverified callers"). */
   extra?: readonly FilterOption[];
   /** Screen reader suffix after each count ("requests"). The space is added. */
@@ -60,16 +80,27 @@ function Option(props: { option: FilterOption; srSuffix: string | undefined }) {
  */
 export function AddFilter(props: AddFilterProps) {
   return (
-    <details class={cx('fadd', props.class)} open={props.open}>
+    <details class={cx('fadd', props.class)} id={props.id} open={props.open}>
       <summary>
         <span aria-hidden="true">+</span>
         <span class="vh">Filter by </span>
         {props.label}
       </summary>
       <div class="fpop">
-        {props.options.map((option) => (
-          <Option option={option} srSuffix={props.srSuffix} />
-        ))}
+        {props.options.map((entry) =>
+          isGroup(entry) ? (
+            <div role="group" aria-label={entry.group}>
+              <p class="fpop-h" aria-hidden="true">
+                {entry.group}
+              </p>
+              {entry.options.map((option) => (
+                <Option option={option} srSuffix={props.srSuffix} />
+              ))}
+            </div>
+          ) : (
+            <Option option={entry} srSuffix={props.srSuffix} />
+          ),
+        )}
         {props.extra && props.extra.length > 0 ? (
           <>
             <hr />

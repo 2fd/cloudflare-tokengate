@@ -15,15 +15,13 @@ export interface ConfirmText {
   name?: string;
 }
 
-export interface ConfirmDialogProps {
+interface ConfirmDialogBase {
   /** Id of the dialog (see `Dialog`); the confirm field gets `${id}-confirm`. */
   id: string;
   /** The question with the object and the count ("Delete Slack and its 3 consumer accesses?"). */
   title: Child;
   /** "This cannot be undone." plus what stops working. */
   description?: Child;
-  /** Where the confirm button posts. */
-  action: string;
   /** The confirm button: the outcome, without "…" ("Delete Slack"). */
   confirmLabel: string;
   /** Variant of the confirm button: `danger-solid` (default), or `primary` for a non-destructive confirm. */
@@ -34,8 +32,6 @@ export interface ConfirmDialogProps {
   affected?: readonly Child[];
   /** Type-to-confirm field, only for irreversible cascades. */
   confirmText?: ConfirmText;
-  /** Hidden fields of the form (`_csrf`, ids), one `input type="hidden"` each. */
-  hidden?: HiddenFields;
   /** Level of the title (see `Dialog`). */
   headingLevel?: HeadingLevel;
   /** More body content after the lists, before the confirm field (a `Callout` with an alternative). */
@@ -49,6 +45,36 @@ export interface ConfirmDialogProps {
   wide?: boolean;
   class?: string;
 }
+
+/** The dialog posts its own form. */
+interface ConfirmDialogOwnForm extends ConfirmDialogBase {
+  /** Where the confirm button posts. */
+  action: string;
+  /** Hidden fields of the form (`_csrf`, ids), one `input type="hidden"` each. */
+  hidden?: HiddenFields;
+  form?: never;
+  name?: never;
+  value?: never;
+  formnovalidate?: never;
+}
+
+/** The confirm button submits another form of the page (an approve form, a role change). */
+interface ConfirmDialogOuterForm extends ConfirmDialogBase {
+  /**
+   * Id of the outer form the confirm button submits (`form=`): the dialog renders no form of its
+   * own (see `Dialog.form`). The type-to-confirm field joins that form too.
+   */
+  form: string;
+  /** Name / value of the confirm submit, sent with the outer form. Default `confirm` / `1`. */
+  name?: string;
+  value?: string;
+  /** The confirm submit skips the outer form's browser validation (`formnovalidate`). */
+  formnovalidate?: boolean;
+  action?: never;
+  hidden?: never;
+}
+
+export type ConfirmDialogProps = ConfirmDialogOwnForm | ConfirmDialogOuterForm;
 
 /** Escapes a literal for the `pattern` attribute (compiled with the `v` flag). */
 function literalPattern(value: string): string {
@@ -70,13 +96,15 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   const hasBody =
     consequences.length > 0 || affected.length > 0 || props.children !== undefined || confirm;
   const cancelLabel = props.cancelLabel ?? 'Cancel';
+  const outer = props.form;
+  const target =
+    outer !== undefined ? { form: outer } : { action: props.action, hidden: props.hidden };
   return (
     <Dialog
       id={props.id}
       title={props.title}
       description={props.description}
-      action={props.action}
-      hidden={props.hidden}
+      {...target}
       headingLevel={props.headingLevel}
       wide={props.wide}
       open={props.open}
@@ -92,7 +120,14 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
               {cancelLabel}
             </DialogClose>
           )}
-          <Button variant={props.confirmVariant ?? 'danger-solid'} type="submit">
+          <Button
+            variant={props.confirmVariant ?? 'danger-solid'}
+            type="submit"
+            form={outer}
+            name={outer !== undefined ? (props.name ?? 'confirm') : undefined}
+            value={outer !== undefined ? (props.value ?? '1') : undefined}
+            formnovalidate={outer !== undefined ? props.formnovalidate : undefined}
+          >
             {props.confirmLabel}
           </Button>
         </>
@@ -133,6 +168,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
                 class="input mono"
                 type="text"
                 id={confirmId}
+                form={outer}
                 name={confirm.name ?? 'confirm_text'}
                 required
                 pattern={literalPattern(confirm.value)}

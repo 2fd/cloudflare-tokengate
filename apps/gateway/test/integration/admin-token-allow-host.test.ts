@@ -57,7 +57,7 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
         await adminGet(app, await session(role), '/admin/tokens/new?template=openai')
       ).text();
       const card =
-        /<details name="token-type" class="type-card" id="type-openai"[\s\S]*?<\/details>/.exec(
+        /<details class="type-card" name="token-type" id="type-openai"[\s\S]*?<\/details>/.exec(
           html,
         )?.[0] ?? '';
       expect(card, role).toContain('api.openai.com is not an allowed host.');
@@ -254,7 +254,7 @@ describe('I-SSRF-1: the GitHub uploads token when uploads.github.com is not allo
       await createUser({ email: 'owner@example.com', role: 'owner' });
       const html = await (await adminGet(app, viewer, '/admin/tokens/new?template=github')).text();
       const card =
-        /<details name="token-type" class="type-card" id="type-github"[\s\S]*?<\/details>/.exec(
+        /<details class="type-card" name="token-type" id="type-github"[\s\S]*?<\/details>/.exec(
           html,
         )?.[0] ?? '';
       expect(card).not.toContain('also_uploads');
@@ -307,7 +307,7 @@ describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
   it('an owner gets the box from the start, and one submit allows the host and saves', async () => {
     const owner = await session('owner');
     const id = await githubToken(owner);
-    const html = await (await adminGet(app, owner, `/admin/tokens/${id}`)).text();
+    const html = await (await adminGet(app, owner, `/admin/tokens/${id}?open=destination`)).text();
     const form =
       new RegExp(`action="/admin/tokens/${id}/destination"[\\s\\S]*?</form>`).exec(html)?.[0] ?? '';
     expect(form).toContain('id="f-destination-allow_host" name="allow_host" value="1"');
@@ -335,7 +335,10 @@ describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
   it('a non-owner gets the generated base URL pattern and no box', async () => {
     const owner = await session('owner');
     const id = await githubToken(owner);
-    const html = await (await adminGet(app, await session('admin'), `/admin/tokens/${id}`)).text();
+    const html = await (
+      await adminGet(app, await session('admin'), `/admin/tokens/${id}?open=destination`)
+    ).text();
+    expect(html).toContain(`action="/admin/tokens/${id}/destination"`);
     const pattern = /id="f-destination-base_url"[^>]*pattern="([^"]+)"/.exec(html)?.[1] ?? '';
     const re = new RegExp(`^(?:${pattern.replaceAll('&amp;', '&')})$`, 'v');
     expect(re.test('https://api.github.com')).toBe(true);

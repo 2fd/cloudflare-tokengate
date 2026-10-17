@@ -90,6 +90,13 @@ describe('live form contract', () => {
     expect(css).toContain('.lform:has([data-risk] input:checked) .if-risk{display:inline}');
     expect(css).toContain('.lform:has([data-risk] input:checked) .if-norisk{display:none}');
   });
+
+  it('a server-computed acceptance block shows without a risky option', () => {
+    const hide = css.indexOf('.lform .riskacc,.lform .if-risk{display:none}');
+    const always = css.indexOf('.lform .riskacc.always{display:grid}');
+    expect(hide).toBeGreaterThan(-1);
+    expect(always).toBeGreaterThan(hide);
+  });
 });
 
 function tokens(): Map<string, [string, string]> {

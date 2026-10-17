@@ -160,7 +160,7 @@ describe('key rotation flow', () => {
     const session = await ownerOf(replaced);
     const before = await (await adminGet(replaced, session, '/admin/tokens/keys')).text();
     expect(before).toContain('Key k1 is not the key that encrypted its secrets');
-    expect(before).toContain('changed</span>');
+    expect(before).toContain('Changed</span>');
     expect(before).toContain('Confirming also accepts the new check value');
     expect(before).not.toContain('still encrypted with an older key');
     expect(before).not.toContain('Fix the problems above first');
@@ -204,7 +204,7 @@ describe('the key check command', () => {
     expect(html).toContain('<code>pnpm keyring check</code>');
     expect(html).toContain('<code>AUTH_ACCESS_DEVELOPMENT</code>');
     expect(html).toContain('Active key k1. 1 key loaded. Every stored secret opens.');
-    expect(html).toContain('<caption id="keys-cap">Keys in the keyring</caption>');
+    expect(html).toContain('<caption class="vh">Keys in the keyring</caption>');
   });
 });
 
@@ -215,7 +215,7 @@ describe('re-encrypt control', () => {
     const html = await (await adminGet(noKey, await ownerOf(noKey), '/admin/tokens/keys')).text();
     expect(html).toContain('No encryption key is configured');
     expect(html).not.toContain('still encrypted with an older key');
-    expect(html).not.toContain('Ask an owner to re-encrypt');
+    expect(html).not.toContain('can re-encrypt the secrets');
     expect(html).not.toContain('action="/admin/tokens/keys/rewrap"');
   });
 
@@ -229,7 +229,7 @@ describe('re-encrypt control', () => {
     const html = await (await adminGet(rotated, session, '/admin/tokens/keys')).text();
     expect(html).toContain('still encrypted with an older key');
     expect(html).not.toContain('action="/admin/tokens/keys/rewrap"');
-    expect(html).toContain('Ask an owner to re-encrypt the secrets');
+    expect(html).toContain('Only owners can re-encrypt the secrets.');
   });
 
   it('does not offer re-encryption while a key used by credentials is missing', async () => {

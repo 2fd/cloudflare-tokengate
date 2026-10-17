@@ -1,6 +1,7 @@
 // Stylesheets the docs serve: the design system (@tokengate/ui) and the docs chrome. Both are text
 // modules (the gateway's wrangler.jsonc "rules"); pages link `asset.href`, which carries a content
-// hash. They live under /docs/static/, never /static/, which is the gateway's Workers Assets.
+// hash. They live under /docs/static/, never /static/, where the gateway serves the admin
+// stylesheets.
 import { cssAsset, uiCss } from '@tokengate/ui/css';
 import docsCssText from './styles/docs.css';
 

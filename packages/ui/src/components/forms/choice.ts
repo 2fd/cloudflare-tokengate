@@ -31,3 +31,14 @@ export function isChecked(option: ChoiceBase, value: string | readonly string[] 
   if (value === undefined) return false;
   return typeof value === 'string' ? option.value === value : value.includes(option.value);
 }
+
+/**
+ * The input id that an ErrorSummary entry for a choice group links to: the first option that is
+ * not disabled (a disabled input cannot take focus), under the group prefix (`${id}-N`).
+ */
+export function firstChoiceId(idPrefix: string, options: readonly ChoiceBase[]): string {
+  const index = options.findIndex((option) => !option.disabled);
+  const at = index < 0 ? 0 : index;
+  const option = options[at];
+  return `${idPrefix}-${option?.o ?? at + 1}`;
+}

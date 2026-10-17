@@ -1,19 +1,48 @@
-// Service tokens (A13): the list with the "Add a token" accordion, the standalone accordion, create,
-// the token page and its forms. The destination (base URL + injection) changes only on
-// /destination, together with the secret (I-CRED-2); /secret rotates with the stored destination;
-// template cards never read the destination from the form (I-SSRF-1). Submitted secrets are never
-// rendered back (I-CRED-1): a re-render carries a sealed draft (A13.6).
+// Service tokens (A13): the list, the Add token catalog, create, the token page and its forms.
+// The destination (base URL + injection) changes only on /destination, together with the secret
+// (I-CRED-2); /secret rotates with the stored destination; template cards never read the
+// destination from the form (I-SSRF-1). Submitted secrets are never rendered back (I-CRED-1): a
+// re-render carries a sealed draft (A13.6).
+import {
+  ActiveFilters,
+  Button,
+  Callout,
+  Cell,
+  CountLink,
+  Disclosure,
+  EmptyState as UiEmptyState,
+  Entity,
+  FilterSearch,
+  Filters,
+  LinkAction,
+  LogoStack,
+  Mask,
+  Mono,
+  PageHeader,
+  Panel,
+  QuickLinks,
+  Row,
+  RowHeader,
+  Slug,
+  Table,
+  Time,
+  Tray,
+  formatTime as uiFormatTime,
+} from '@tokengate/ui';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { App } from '../../app';
 import { upstreamHostAllowed } from '../../config';
 import { sealedKid } from '../../crypto/envelope';
 import { KID_PATTERN, type KeyringError, loadKeyring } from '../../crypto/keyring';
+import { listAuditEvents } from '../../db/audit';
+import type { GrantUsage } from '../../db/rollups';
 import { getService, listServices } from '../../db/services';
 import { getAllowedUpstreamHosts } from '../../db/settings';
 import type { Service } from '../../db/types';
 import { normalizeCredential, normalizeInjection, validateBaseUrl } from '../../policy/validate';
-import { EXPIRY_WARNING_MS } from '../../telemetry/dashboard';
-import { can } from '../auth/rbac';
+import { EXPIRY_WARNING_MS, trafficStats } from '../../telemetry/dashboard';
+import { loadTokenTraffic } from '../access-traffic';
+import { can, type Permission } from '../auth/rbac';
 import { type AccessEdge, loadConnections } from '../connections';
 import { type NoticeContext, type NoticeTable, resolveNotice } from '../notice';
 import { openCredentialDraft, sealCredentialDraft } from '../ops/credential-draft';
@@ -57,22 +86,18 @@ import {
   templateForService,
   templateIdFor,
 } from '../service-templates';
+import { consumerLogo } from '../views/access-visuals';
+import { AskSomeone, NotFound, notFoundText, StatusBadge } from '../views/components';
+import { formatCount } from '../views/format';
+import { LearnMore } from '../views/header';
 import {
-  type Alert,
-  AlertList,
-  AskSomeone,
-  type ChipProps,
-  ChipList,
-  DataTable,
-  EmptyState,
-  FilterChips,
-  NotFound,
-  Select,
-  StatusBadge,
-  Time,
-} from '../views/components';
-import { docsUrl } from '../views/docs';
-import { type CardsData, CUSTOM, type FailedCard, TokenTypeCards } from '../views/token-cards';
+  type CardsData,
+  CUSTOM,
+  type FailedCard,
+  KeyringGate,
+  TokenTypeCards,
+  vendor,
+} from '../views/token-cards';
 import {
   dateInput,
   draftHint,
@@ -93,15 +118,17 @@ import {
 } from '../views/token-forms';
 import {
   type BindingState,
+  daysUntil,
   LastUsed,
-  SecretBadge,
+  TokenHeader,
   TokenPage,
   type TokenPageData,
   type TokenPageState,
   type TokenAlso,
-  typeLabel,
   upstreamHost,
+  usableAccesses,
 } from '../views/token-page';
+import { plural, secretParts, templateLogo, typeLabel, upstreamShort } from '../views/token-ui';
 
 const FAILURE_STATUS: Record<OpFailureReason, ContentfulStatusCode> = {
   invalid: 400,
@@ -125,19 +152,24 @@ const TEMPLATE_CARD_FIELDS = new Set([
   'also_uploads',
 ]);
 
+/** Status quick links of the list, in their order. `expiring` includes expired secrets. */
 const STATUS_FILTERS = [
-  'credential_unreadable',
   'expiring',
+  'disabled',
   'no_credential',
+  'credential_unreadable',
   'outside_hosts',
 ] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
 
-const STATUS_FILTER_LABELS: Readonly<Record<StatusFilter, string>> = {
-  credential_unreadable: 'Secret does not open',
-  expiring: 'Secret expired or expiring',
-  no_credential: 'No secret',
-  outside_hosts: 'Not an allowed host',
+const STATUS_LINKS: Readonly<
+  Record<StatusFilter, { label: string; glyph: string; tone?: 'warn' | 'bad' }>
+> = {
+  expiring: { label: 'Expired or expiring', glyph: '⌛', tone: 'warn' },
+  disabled: { label: 'Disabled', glyph: '⏸' },
+  no_credential: { label: 'No secret', glyph: '–', tone: 'bad' },
+  credential_unreadable: { label: 'Secret does not open', glyph: '✕', tone: 'bad' },
+  outside_hosts: { label: 'Not an allowed host', glyph: '✕', tone: 'bad' },
 };
 
 export function registerTokensRoutes(app: App): void {
@@ -274,6 +306,7 @@ async function cardsData(c: AdminContext, tokens?: Service[]): Promise<CardsData
     tokens: list,
     allowlist,
     keyringError: keyring.ok ? null : keyring.error,
+    activeKid: keyring.ok ? keyring.keyring.activeKid : null,
     proxyOrigin: new URL(c.req.url).origin,
     today: todayUtc(deps.now()),
   };
@@ -287,9 +320,15 @@ const notFound = (c: AdminContext) =>
       section: 'tokens',
       subsection: 'tokens',
       status: 404,
-      breadcrumbs: [{ href: paths.tokens(), label: 'Service tokens' }],
+      header: (
+        <PageHeader
+          crumbs={[{ href: paths.tokens(), label: 'Service tokens' }, { label: 'Not found' }]}
+          title="Token not found"
+          description={notFoundText('token')}
+        />
+      ),
     },
-    () => <NotFound what="token" />,
+    () => <NotFound />,
   );
 
 /** The op's errors as UI copy (A7.3), with `secretLabel` naming the secret ("API key"). */
@@ -515,7 +554,15 @@ async function draftFor(
 // ---------------------------------------------------------------------------------------------
 // List
 
+/** Longest name or slug search kept (longer input is cut, never echoed beyond this). */
+const QUERY_MAX = 100;
+
 async function listPage(c: AdminContext) {
+  // `?open=add` opened the old "Add a token" accordion: writers go to the catalog, everyone else
+  // gets the list (not a 403 for an old link).
+  if (c.req.query('open') === 'add' && can(c.get('viewer').user.role, 'tokens:write')) {
+    return c.redirect(paths.tokenNew(), 302);
+  }
   const deps = c.get('deps');
   const now = deps.now();
   const [connections, cards] = await Promise.all([loadConnections(deps), cardsData(c)]);
@@ -528,186 +575,366 @@ async function listPage(c: AdminContext) {
   const rawKey = c.req.query('key');
   const key =
     rawKey !== undefined && KID_PATTERN.test(rawKey) && usedKids.has(rawKey) ? rawKey : null;
+  const query = (c.req.query('q') ?? '').trim().slice(0, QUERY_MAX);
   const allowlist = cards.allowlist;
-  const facts = (token: Service) => {
-    const unreadable = cards.keyringError !== null || connections.unreadableTokenIds.has(token.id);
+  const facts = (token: Service): TokenFacts => ({
+    unreadable: cards.keyringError !== null || connections.unreadableTokenIds.has(token.id),
     // A stored base URL that does not parse (written straight into D1) fails closed as outside.
-    const outside = storedHostOutside(token.base_url, allowlist);
-    return { unreadable, outside };
-  };
-  const matches = (token: Service) => {
+    outside: storedHostOutside(token.base_url, allowlist),
+  });
+  const hasStatus = (token: Service, filter: StatusFilter) => {
     const { unreadable, outside } = facts(token);
-    if (key !== null && sealedKid(token.credential_sealed) !== key) return false;
-    if (status === 'credential_unreadable') return token.credential_sealed !== null && unreadable;
-    if (status === 'no_credential') return token.credential_sealed === null;
-    if (status === 'outside_hosts') return outside;
-    if (status === 'expiring') {
-      return (
-        token.credential_sealed !== null &&
-        token.credential_expires_at !== null &&
-        token.credential_expires_at - now <= EXPIRY_WARNING_MS
-      );
+    switch (filter) {
+      case 'credential_unreadable':
+        return token.credential_sealed !== null && unreadable;
+      case 'no_credential':
+        return token.credential_sealed === null;
+      case 'outside_hosts':
+        return outside;
+      case 'disabled':
+        return !token.enabled;
+      case 'expiring':
+        return (
+          token.credential_sealed !== null &&
+          token.credential_expires_at !== null &&
+          token.credential_expires_at - now <= EXPIRY_WARNING_MS
+        );
     }
-    return true;
   };
-  const rows = tokens.filter(matches);
+  const needle = query.toLowerCase();
+  const inScope = (token: Service) =>
+    (key === null || sealedKid(token.credential_sealed) === key) &&
+    (needle === '' ||
+      token.name.toLowerCase().includes(needle) ||
+      token.slug.toLowerCase().includes(needle));
+  const scoped = tokens.filter(inScope);
+  const rows = status === null ? scoped : scoped.filter((token) => hasStatus(token, status));
   const byToken = new Map<string, AccessEdge[]>();
   for (const edge of connections.accesses) {
     const list = byToken.get(edge.grant.service_id) ?? [];
     list.push(edge);
     byToken.set(edge.grant.service_id, list);
   }
-  const done = null;
-  // `?open=add` opens the accordion (A7.1); a bare `#add` fragment never reaches the server.
-  // Deviation from A13.1: paths.tokens (WP0) has no `open` option yet, so a link built with
-  // `hash: 'add'` alone leaves it closed once tokens exist. WP5 item: add `open?: 'add'`.
-  const openAdd = c.req.query('open') === 'add';
+  const keepers = { key: key ?? undefined, q: query || undefined };
   return renderPage(
     c,
     {
       title: 'Service tokens',
       section: 'tokens',
       subsection: 'tokens',
-      notice: resolveNotice(LIST_NOTICES, c.req.query('notice'), done),
+      notice: resolveNotice(LIST_NOTICES, c.req.query('notice'), null),
+      header: (ctx) => (
+        <PageHeader
+          title="Service tokens"
+          count={tokens.length > 0 ? tokens.length : undefined}
+          description={
+            <>
+              Secrets of the upstream APIs that consumers call through tokengate. Loading a token
+              gives nobody access; consumer access is given separately.
+              <LearnMore path="concepts.md#grant" about="service tokens and consumer access" />
+            </>
+          }
+          actions={
+            ctx.can('tokens:write') && cards.keyringError === null && tokens.length > 0 ? (
+              <Button variant="primary" plus href={paths.tokenNew()}>
+                Add token
+              </Button>
+            ) : undefined
+          }
+        />
+      ),
     },
     (ctx) => {
       const canWrite = ctx.can('tokens:write');
       const empty = tokens.length === 0;
-      const filters = [
-        ...(status
-          ? [
-              {
-                label: STATUS_FILTER_LABELS[status],
-                removeHref: paths.tokens({ key: key ?? undefined }),
-              },
-            ]
-          : []),
-        ...(key
-          ? [{ label: `Key ${key}`, removeHref: paths.tokens({ status: status ?? undefined }) }]
-          : []),
-      ];
       return (
         <>
-          <p class="lead">
-            Secrets of the upstream APIs the gateway can call for consumers. Loading a token gives
-            nobody access; <a href={docsUrl('concepts.md#grant')}>consumer access</a> is granted
-            separately.
-          </p>
-          <ListAlerts ctx={ctx} tokens={tokens} facts={facts} keyringError={cards.keyringError} />
-          {canWrite ? (
-            <details id="add" class="add-token" open={empty || openAdd}>
-              <summary>{empty ? 'Add your first token' : 'Add a token'}</summary>
-              <TokenTypeCards ctx={ctx} data={cards} open={null} failed={null} />
-            </details>
-          ) : empty ? (
-            <EmptyState action={<AskSomeone permission="tokens:write" ctx={ctx} verb="add one" />}>
-              No service tokens yet.
-            </EmptyState>
-          ) : (
+          {!empty && !canWrite ? (
             <AskSomeone permission="tokens:write" ctx={ctx} verb="add a token" />
-          )}
-          {tokens.length > 10 ? (
-            <form
-              method="get"
-              action={paths.tokens()}
-              class="filters"
-              aria-label="Filter service tokens"
-            >
-              {key ? <input type="hidden" name="key" value={key} /> : null}
-              <Select
-                name="status"
-                label="Show"
-                value={status}
-                options={[
-                  { value: '', label: 'All tokens' },
-                  ...STATUS_FILTERS.map((value) => ({ value, label: STATUS_FILTER_LABELS[value] })),
-                ]}
-              />
-              <button type="submit" class="secondary">
-                Filter
-              </button>
-            </form>
           ) : null}
-          <FilterChips items={filters} clearHref={paths.tokens()} />
-          {empty ? null : (
-            <DataTable
-              id="tokens"
-              caption={`Service tokens (${rows.length})`}
-              rowHeader="token"
-              rows={rows}
-              empty={<p>No token matches these filters.</p>}
-              columns={[
-                {
-                  key: 'token',
-                  header: 'Token',
-                  render: (token) => (
-                    <>
-                      <a href={paths.token(token.id)}>{token.name}</a> <code>{token.slug}</code>
-                      <br />
-                      <span class="muted">{typeLabel(templateForService(token))}</span>
-                    </>
-                  ),
-                },
-                {
-                  key: 'upstream',
-                  header: 'Upstream',
-                  render: (token) => (
-                    <>
-                      {upstreamHost(token.base_url)}
-                      {facts(token).outside ? (
-                        <>
-                          {' '}
-                          <StatusBadge status="outside_hosts" />
-                        </>
-                      ) : null}
-                    </>
-                  ),
-                },
-                {
-                  key: 'secret',
-                  header: 'Secret',
-                  render: (token) => (
-                    <>
-                      <SecretBadge service={token} unreadable={facts(token).unreadable} now={now} />
-                      {token.credential_expires_at !== null ? (
-                        <>
-                          <br />
-                          <span class="muted">
-                            expires <Time ms={token.credential_expires_at} />
-                          </span>
-                        </>
-                      ) : null}
-                    </>
-                  ),
-                },
-                {
-                  key: 'used',
-                  header: 'Used by',
-                  render: (token) => <UsedBy token={token} edges={byToken.get(token.id) ?? []} />,
-                },
-                {
-                  key: 'last',
-                  header: 'Last used',
-                  render: (token) => (
-                    <LastUsed
-                      hour={lastUsedHour(byToken.get(token.id) ?? [])}
-                      now={now}
+          {cards.keyringError !== null ? <KeyringGate error={cards.keyringError} /> : null}
+          <ListAlerts
+            ctx={ctx}
+            tokens={tokens}
+            facts={facts}
+            keyringError={cards.keyringError}
+            edges={(token) => byToken.get(token.id) ?? []}
+            usage={
+              connections.usageAvailable && connections.sampleRate > 0 ? connections.usage : null
+            }
+          />
+          <Tray
+            id="tokens"
+            title={`Service tokens (${rows.length})`}
+            hideTitle
+            bar={
+              empty ? undefined : (
+                <>
+                  <QuickLinks
+                    label="Filter tokens by status"
+                    links={[
+                      {
+                        href: paths.tokens(keepers),
+                        label: 'All',
+                        count: scoped.length,
+                        current: status === null,
+                      },
+                      ...STATUS_FILTERS.flatMap((filter) => {
+                        const count = scoped.filter((token) => hasStatus(token, filter)).length;
+                        if (count === 0 && status !== filter) return [];
+                        const link = STATUS_LINKS[filter];
+                        return [
+                          {
+                            href: paths.tokens({ ...keepers, status: filter }),
+                            label: link.label,
+                            glyph: link.glyph,
+                            tone: link.tone,
+                            count,
+                            current: status === filter,
+                          },
+                        ];
+                      }),
+                    ]}
+                  />
+                  <Filters
+                    label="Find a token"
+                    action={paths.tokens()}
+                    hidden={{
+                      ...(status ? { status } : {}),
+                      ...(key ? { key } : {}),
+                    }}
+                  >
+                    <FilterSearch
+                      id="tok-q"
+                      label="Find a token by name or slug"
+                      value={query}
+                      maxlength={QUERY_MAX}
+                      placeholder="Name or slug, e.g. slack"
+                      suggestions={tokens.map((token) => token.slug)}
+                    />
+                  </Filters>
+                  {key || query ? (
+                    <ActiveFilters
+                      filters={[
+                        ...(key
+                          ? [
+                              {
+                                label: `Key ${key}`,
+                                href: paths.tokens({ status: status ?? undefined, q: keepers.q }),
+                              },
+                            ]
+                          : []),
+                        ...(query
+                          ? [
+                              {
+                                label: `Name or slug: ${query}`,
+                                href: paths.tokens({
+                                  status: status ?? undefined,
+                                  key: keepers.key,
+                                }),
+                              },
+                            ]
+                          : []),
+                      ]}
+                      clearHref={paths.tokens()}
+                      clearLabel="Clear filters"
+                    />
+                  ) : null}
+                </>
+              )
+            }
+            actions={
+              empty ? undefined : (
+                <LinkAction href={paths.access()} arrow>
+                  Open the connections map
+                </LinkAction>
+              )
+            }
+            footer={
+              empty ? undefined : (
+                <>
+                  <span>Last used: newest allowed request in the last 30 days.</span>
+                  {cards.activeKid ? (
+                    <span>
+                      New secrets are sealed with key <code>{cards.activeKid}</code> ·{' '}
+                      <a href={paths.tokenKeys()}>Encryption keys</a>
+                    </span>
+                  ) : null}
+                </>
+              )
+            }
+          >
+            {empty ? (
+              <Panel variant="pad">
+                <UiEmptyState
+                  title="No service tokens yet"
+                  icon="token"
+                  description="A service token holds the secret of one upstream API. Add one, then give a consumer access to it."
+                  actions={
+                    canWrite ? (
+                      cards.keyringError === null ? (
+                        <Button variant="primary" plus href={paths.tokenNew()}>
+                          Add a service token
+                        </Button>
+                      ) : undefined
+                    ) : (
+                      <AskSomeone permission="tokens:write" ctx={ctx} verb="add one" />
+                    )
+                  }
+                />
+              </Panel>
+            ) : (
+              <Panel variant="flush">
+                <Table
+                  id="tokens-table"
+                  labelledBy="tokens-h"
+                  caption={`Service tokens (${rows.length})`}
+                  stackable
+                  columns={[
+                    { label: 'Token' },
+                    { label: 'Secret' },
+                    { label: 'Used by' },
+                    { label: 'Last used' },
+                    { label: 'Status' },
+                  ]}
+                >
+                  {rows.map((token) => (
+                    <TokenRow
+                      token={token}
+                      facts={facts(token)}
+                      edges={byToken.get(token.id) ?? []}
+                      usage={connections.usage}
                       usageAvailable={connections.usageAvailable}
                       sampleRate={connections.sampleRate}
+                      now={now}
                     />
-                  ),
-                },
-                {
-                  key: 'status',
-                  header: 'Status',
-                  render: (token) => <StatusBadge status={token.enabled ? 'active' : 'disabled'} />,
-                },
-              ]}
-            />
-          )}
+                  ))}
+                </Table>
+                {rows.length === 0 ? (
+                  <UiEmptyState
+                    title="No token matches these filters."
+                    actions={
+                      <Button size="sm" href={paths.tokens()}>
+                        Show all tokens
+                      </Button>
+                    }
+                  />
+                ) : null}
+              </Panel>
+            )}
+          </Tray>
         </>
       );
     },
+  );
+}
+
+interface TokenFacts {
+  unreadable: boolean;
+  outside: boolean;
+}
+
+function TokenRow(props: {
+  token: Service;
+  facts: TokenFacts;
+  edges: AccessEdge[];
+  usage: ReadonlyMap<string, GrantUsage>;
+  usageAvailable: boolean;
+  sampleRate: number;
+  now: number;
+}) {
+  const { token, facts, edges, now } = props;
+  const template = templateForService(token);
+  const requests = edges.reduce(
+    (sum, edge) => sum + (props.usage.get(edge.grant.id)?.requests ?? 0),
+    0,
+  );
+  const recorded = props.usageAvailable && props.sampleRate > 0;
+  return (
+    <Row>
+      <RowHeader>
+        <Entity
+          logo={templateLogo(template, { disabled: !token.enabled })}
+          name={token.name}
+          href={paths.token(token.id)}
+          after={<Slug>{token.slug}</Slug>}
+          meta={
+            <>
+              {typeLabel(template)} · <Mono>{upstreamShort(token.base_url)}</Mono>
+              {facts.outside ? (
+                <>
+                  {' '}
+                  <StatusBadge status="outside_hosts" />
+                </>
+              ) : null}
+            </>
+          }
+        />
+      </RowHeader>
+      <Cell label="Secret" nowrap>
+        <SecretCell token={token} unreadable={facts.unreadable} now={now} />
+      </Cell>
+      <Cell label="Used by">
+        <UsedBy token={token} edges={edges} now={now} />
+      </Cell>
+      <Cell label="Last used">
+        <span class="ent-t">
+          <span>
+            <LastUsed
+              hour={lastUsedHour(edges)}
+              now={now}
+              usageAvailable={props.usageAvailable}
+              sampleRate={props.sampleRate}
+            />
+          </span>
+          {recorded && requests > 0 ? (
+            <span class="meta">{formatCount(requests)} req in 30 days</span>
+          ) : null}
+        </span>
+      </Cell>
+      <Cell label="Status">
+        <StatusBadge status={token.enabled ? 'active' : 'disabled'} />
+      </Cell>
+    </Row>
+  );
+}
+
+/** The masked secret and its expiry, or why there is none. */
+function SecretCell(props: { token: Service; unreadable: boolean; now: number }) {
+  const { token, now } = props;
+  if (token.credential_sealed === null) return <StatusBadge status="no_credential" />;
+  if (props.unreadable) return <StatusBadge status="credential_unreadable" />;
+  const parts = secretParts(token.credential_hint);
+  const expires = token.credential_expires_at;
+  return (
+    <span class="ent-t">
+      <span>
+        {parts.last4 ? (
+          <Mask last4={parts.last4} />
+        ) : (
+          <>
+            <Mask />
+            {parts.length !== null ? ` ${parts.length} characters` : ''}
+          </>
+        )}
+      </span>
+      {expires === null ? (
+        <span class="meta">Does not expire</span>
+      ) : expires <= now ? (
+        <span class="meta t-bad">
+          <span aria-hidden="true">✕ </span>Expired{' '}
+          <Time datetime={new Date(expires)} format="date" />
+        </span>
+      ) : expires - now <= EXPIRY_WARNING_MS ? (
+        <span class="meta t-warn">
+          <span aria-hidden="true">⌛ </span>Expires in {plural(daysUntil(expires, now), 'day')}
+        </span>
+      ) : (
+        <span class="meta">
+          Expires <Time datetime={new Date(expires)} format="date" />
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -718,35 +945,117 @@ function lastUsedHour(edges: readonly AccessEdge[]): number | null {
   return hours.length > 0 ? Math.max(...hours) : null;
 }
 
-function UsedBy(props: { token: Service; edges: AccessEdge[] }) {
-  if (props.edges.length === 0) return <span class="muted">0 consumers</span>;
-  const items: ChipProps[] = props.edges.map((edge) => {
-    const consumer = edge.consumer?.name ?? 'deleted consumer';
-    return {
-      href: paths.accessItem(edge.grant.id),
-      text: `${consumer} · ${edge.subject} · ${edge.context}`,
-      status: edge.status,
-      ...(edge.statusDetail ? { statusDetail: edge.statusDetail } : {}),
-      // The accessible name starts with the visible text (WCAG 2.5.3).
-      srText: `${consumer} · ${edge.subject} · ${edge.context}: can use ${props.token.name}, ${edge.statusDetail ?? edge.status}`,
-    };
-  });
+/** Consumer tiles, "2 consumers · 3 accesses" (a link to them), their names and what to watch. */
+function UsedBy(props: { token: Service; edges: AccessEdge[]; now: number }) {
+  const { token, edges } = props;
+  if (edges.length === 0) return <span class="muted">0 consumers</span>;
+  const consumers = new Map<string, AccessEdge['consumer']>();
+  for (const edge of edges) consumers.set(edge.grant.caller_provider_id, edge.consumer);
+  const usable = new Set(
+    usableAccesses(edges, props.now).map((edge) => edge.grant.caller_provider_id),
+  );
+  const count = token.enabled ? usable.size : 0;
+  const expired = edges.filter((edge) => edge.status === 'expired').length;
+  const risky = edges.some((edge) => edge.flags.some((flag) => flag.status === 'risk_accepted'));
+  const inactive = edges.find((edge) => edge.status === 'inactive');
+  const names = [...consumers.values()].map((consumer) => consumer?.name ?? 'deleted consumer');
   return (
-    <ChipList
-      label={`Consumers that can use ${props.token.name}`}
-      items={items}
-      max={3}
-      moreHref={paths.access({ token: props.token.id })}
-      moreText={`+${items.length - 3} more`}
+    <Entity
+      logoSlot={
+        <LogoStack
+          brands={[...consumers.values()]
+            .map((consumer) => {
+              // a disabled token: nobody can use it, so its consumers are dimmed too
+              const logo = consumerLogo(consumer);
+              if (token.enabled) return logo;
+              return typeof logo === 'string'
+                ? { brand: logo, disabled: true }
+                : { ...logo, disabled: true };
+            })
+            .slice(0, 4)}
+        />
+      }
+      name={
+        <CountLink href={paths.access({ token: token.id })} srSuffix={`can use ${token.name}`}>
+          {plural(count, 'consumer')}
+          {token.enabled ? '' : ' now'} · {plural(edges.length, 'access', 'accesses')}
+        </CountLink>
+      }
+      meta={
+        <>
+          {names.join(', ')}
+          {expired > 0 ? (
+            <>
+              {' · '}
+              <span class="t-bad">
+                <span aria-hidden="true">✕ </span>
+                {expired} expired
+              </span>
+            </>
+          ) : null}
+          {risky ? (
+            <>
+              {' · '}
+              <span class="t-warn">
+                <span aria-hidden="true">⚠ </span>Risk accepted
+              </span>
+            </>
+          ) : null}
+          {inactive ? (
+            <>
+              {' · '}
+              <span class="t-warn">
+                <span aria-hidden="true">⚠ </span>Inactive
+                {inactive.statusDetail ? `: ${inactive.statusDetail}` : ''}
+              </span>
+            </>
+          ) : null}
+        </>
+      }
     />
   );
 }
 
+interface ListProblem {
+  tone: 'bad' | 'warn';
+  title: string;
+  /** Inline text after the links. */
+  more?: string;
+  objects: Array<{ href: string; label: string }>;
+  fix?: { href: string; label: string; srSuffix?: string; permission: Permission };
+}
+
+/**
+ * What an expiring secret breaks, as the consequence: "acme/api made 51,200 calls through it in
+ * the last 30 days. After 21 Oct, they are refused." Without recorded calls, the plain advice.
+ */
+function expiryConsequence(
+  token: Service,
+  edges: readonly AccessEdge[],
+  usage: ReadonlyMap<string, GrantUsage> | null,
+  at: number,
+): string {
+  if (usage === null) return 'Replace it before then.';
+  const used = edges.filter((edge) => (usage.get(edge.grant.id)?.requests ?? 0) > 0);
+  const calls = used.reduce((sum, edge) => sum + (usage.get(edge.grant.id)?.requests ?? 0), 0);
+  if (calls === 0) return 'Replace it before then.';
+  const subjects = [...new Set(used.map((edge) => edge.subject))];
+  const who =
+    subjects.length <= 2
+      ? subjects.join(' and ')
+      : `${plural(subjects.length, 'repository', 'repositories')}`;
+  return `${who} made ${formatCount(calls)} ${calls === 1 ? 'call' : 'calls'} through ${token.name} in the last 30 days. After ${uiFormatTime(new Date(at), 'day')}, they are refused.`;
+}
+
+/** Problems of the listed tokens, one callout each; past 3, the rest behind a disclosure. */
 function ListAlerts(props: {
   ctx: ViewContext;
   tokens: Service[];
-  facts: (token: Service) => { unreadable: boolean; outside: boolean };
+  facts: (token: Service) => TokenFacts;
   keyringError: KeyringError | null;
+  edges: (token: Service) => AccessEdge[];
+  /** Allowed requests per access in the last 30 days; null when not recorded. */
+  usage: ReadonlyMap<string, GrantUsage> | null;
 }) {
   const { ctx, tokens, facts } = props;
   const now = ctx.now;
@@ -757,60 +1066,26 @@ function ListAlerts(props: {
         : paths.token(token.id, { hash }),
     label: token.name,
   });
-  const alerts: Alert[] = [];
-  if (props.keyringError !== null) {
-    alerts.push({
-      code: 'keyring_unavailable',
-      level: 'error',
-      title: 'Encryption keys are not loaded: no secret can be used or changed.',
-      detail: '',
-      objects: [{ href: paths.tokenKeys(), label: 'Encryption keys' }],
-    });
-  }
+  const problems: ListProblem[] = [];
   const unreadable =
     props.keyringError === null
       ? tokens.filter((token) => token.credential_sealed !== null && facts(token).unreadable)
       : [];
   if (unreadable.length > 0) {
-    alerts.push({
-      code: 'credential_malformed',
-      level: 'error',
+    problems.push({
+      tone: 'bad',
       title: `${unreadable.length === 1 ? '1 secret does' : `${unreadable.length} secrets do`} not open.`,
-      detail: 'Set them again under Change destination.',
+      more: 'Set them again under Change destination.',
       objects: unreadable.map(link('destination')),
-    });
-  }
-  const missing = tokens.filter((token) => token.credential_sealed === null);
-  if (missing.length > 0) {
-    alerts.push({
-      code: 'credential_missing_used',
-      level: 'error',
-      title: `${missing.length === 1 ? '1 token has' : `${missing.length} tokens have`} no secret.`,
-      detail: 'Set it under Destination; you will be asked to confirm the host.',
-      objects: missing.map(link('destination')),
     });
   }
   const unparsed = tokens.filter((token) => storedUpstreamHost(token.base_url) === null);
   if (unparsed.length > 0) {
-    alerts.push({
-      code: 'config_problem',
-      level: 'error',
+    problems.push({
+      tone: 'bad',
       title: `${unparsed.length === 1 ? '1 token has a base URL' : `${unparsed.length} tokens have base URLs`} that cannot be read, so requests through ${unparsed.length === 1 ? 'it' : 'them'} are refused.`,
-      detail: 'Set the destination again under Change destination.',
+      more: 'Set the destination again under Change destination.',
       objects: unparsed.map(link('destination')),
-    });
-  }
-  const outside = tokens.filter(
-    (token) => facts(token).outside && storedUpstreamHost(token.base_url) !== null,
-  );
-  if (outside.length > 0) {
-    alerts.push({
-      code: 'outside_hosts',
-      level: 'error',
-      title: `${outside.length === 1 ? '1 token points' : `${outside.length} tokens point`} at a host that is not allowed, so requests through ${outside.length === 1 ? 'it' : 'them'} are refused.`,
-      detail: '',
-      objects: outside.map((token) => ({ href: paths.token(token.id), label: token.name })),
-      fix: { href: paths.tokenHosts(), label: 'Open allowed hosts', permission: 'settings:write' },
     });
   }
   const sealed = tokens.filter(
@@ -821,30 +1096,107 @@ function ListAlerts(props: {
     const at = token.credential_expires_at ?? 0;
     return at > now && at - now <= EXPIRY_WARNING_MS;
   });
-  if (expired.length > 0) {
-    alerts.push({
-      code: 'credential_expired',
-      level: 'error',
-      title: `${expired.length === 1 ? '1 secret has' : `${expired.length} secrets have`} expired.`,
-      detail: 'Replace them on the token page.',
+  const replace = (token: Service) => ({
+    href: paths.token(token.id, { hash: 'secret' }),
+    label: 'Replace secret',
+    srSuffix: `of ${token.name}`,
+    permission: 'tokens:write' as const,
+  });
+  const [onlyExpired] = expired;
+  if (expired.length === 1 && onlyExpired) {
+    problems.push({
+      tone: 'bad',
+      title: `The secret of ${onlyExpired.name} expired on ${uiFormatTime(new Date(onlyExpired.credential_expires_at ?? 0), 'date')}.`,
+      more: 'Upstream calls through it fail until it is replaced.',
+      objects: [],
+      fix: replace(onlyExpired),
+    });
+  } else if (expired.length > 1) {
+    problems.push({
+      tone: 'bad',
+      title: `${expired.length} secrets have expired.`,
+      more: 'Replace them on the token page.',
       objects: expired.map(link('secret')),
     });
   }
-  if (expiring.length > 0) {
-    alerts.push({
-      code: 'credential_expiring',
-      level: 'warning',
-      title: `${expiring.length === 1 ? '1 secret expires' : `${expiring.length} secrets expire`} within 14 days.`,
-      detail: 'Replace them before then.',
+  const [onlyExpiring] = expiring;
+  if (expiring.length === 1 && onlyExpiring) {
+    const at = onlyExpiring.credential_expires_at ?? 0;
+    problems.push({
+      tone: 'warn',
+      title: `The secret of ${onlyExpiring.name} expires on ${uiFormatTime(new Date(at), 'date')} (in ${plural(daysUntil(at, now), 'day')}).`,
+      more: expiryConsequence(onlyExpiring, props.edges(onlyExpiring), props.usage, at),
+      objects: [],
+      fix: replace(onlyExpiring),
+    });
+  } else if (expiring.length > 1) {
+    problems.push({
+      tone: 'warn',
+      title: `${expiring.length} secrets expire within 14 days.`,
+      more: 'Replace them before then.',
       objects: expiring.map(link('secret')),
     });
   }
-  if (alerts.length === 0) return null;
+  // Warnings in the alert catalogue too (overviewAlerts), so the same tone here.
+  const missing = tokens.filter((token) => token.credential_sealed === null);
+  if (missing.length > 0) {
+    problems.push({
+      tone: 'warn',
+      title: `${missing.length === 1 ? '1 token has' : `${missing.length} tokens have`} no secret.`,
+      more: 'Set it under Destination; you will be asked to confirm the host.',
+      objects: missing.map(link('destination')),
+    });
+  }
+  const outside = tokens.filter(
+    (token) => facts(token).outside && storedUpstreamHost(token.base_url) !== null,
+  );
+  if (outside.length > 0) {
+    problems.push({
+      tone: 'warn',
+      title: `${outside.length === 1 ? '1 token points' : `${outside.length} tokens point`} at a host that is not allowed, so requests through ${outside.length === 1 ? 'it' : 'them'} are refused.`,
+      objects: outside.map((token) => ({ href: paths.token(token.id), label: token.name })),
+      fix: { href: paths.tokenHosts(), label: 'Open allowed hosts', permission: 'settings:write' },
+    });
+  }
+  if (problems.length === 0) return null;
+  const callout = (problem: ListProblem) => (
+    <Callout
+      tone={problem.tone}
+      title={problem.title}
+      more={
+        problem.objects.length > 0 || problem.more ? (
+          <>
+            {problem.objects.map((object, index) => (
+              <>
+                {index > 0 ? ' · ' : null}
+                <a href={object.href}>{object.label}</a>
+              </>
+            ))}
+            {problem.objects.length > 0 && problem.more ? '. ' : null}
+            {problem.more}
+          </>
+        ) : undefined
+      }
+      actions={
+        problem.fix && ctx.can(problem.fix.permission) ? (
+          <Button size="sm" href={problem.fix.href} srSuffix={problem.fix.srSuffix}>
+            {problem.fix.label}
+          </Button>
+        ) : undefined
+      }
+    />
+  );
+  const shown = problems.slice(0, 3);
+  const rest = problems.slice(3);
   return (
-    <section aria-labelledby="attention-h">
-      <h2 id="attention-h">Needs attention</h2>
-      <AlertList alerts={alerts} ctx={ctx} />
-    </section>
+    <>
+      {shown.map(callout)}
+      {rest.length > 0 ? (
+        <Disclosure summary={plural(rest.length, 'more problem')}>
+          <div class="stack-sm">{rest.map(callout)}</div>
+        </Disclosure>
+      ) : null}
+    </>
   );
 }
 
@@ -867,27 +1219,36 @@ async function renderNew(
   },
 ) {
   const cards = await cardsData(c);
+  const verify = o.failed?.state.verify ?? null;
+  const template = o.failed ? getServiceTemplate(o.failed.template) : null;
+  const who = template ? vendor(template) : 'The API';
   return renderPage(
     c,
     {
       title: 'Add a service token',
       section: 'tokens',
       subsection: 'tokens',
-      breadcrumbs: [
-        { href: paths.tokens(), label: 'Service tokens' },
-        { href: paths.tokenNew(), label: 'Add a token' },
-      ],
+      header: (
+        <PageHeader
+          crumbs={[{ href: paths.tokens(), label: 'Service tokens' }, { label: 'Add token' }]}
+          title="Add a service token"
+          description="Pick the API and paste its secret. tokengate checks the secret with the API before it stores it, so a typo never reaches your consumers."
+        />
+      ),
       errors: o.errors,
+      // A failed check says who rejected the secret, and that the draft spares a second paste.
+      errorSummary:
+        verify && !verify.passed
+          ? {
+              title: `${who} rejected the secret${verify.error ? `: ${verify.error}` : ''}. The token was not saved.`,
+              description: o.failed?.state.draft
+                ? 'Your secret is kept for 15 minutes, so you do not need to paste it again: check again, or save without a passing check.'
+                : undefined,
+            }
+          : undefined,
       status: o.status,
     },
-    (ctx) => (
-      <>
-        <TokenTypeCards ctx={ctx} data={cards} open={o.open} failed={o.failed} />
-        <p>
-          <a href={paths.tokens()}>Cancel</a>
-        </p>
-      </>
-    ),
+    (ctx) => <TokenTypeCards ctx={ctx} data={cards} open={o.open} failed={o.failed} />,
   );
 }
 
@@ -1137,15 +1498,33 @@ function hostOf(baseUrl: string): string | null {
 // ---------------------------------------------------------------------------------------------
 // Token page
 
+/** Who created the token: the actor of its `service.create` audit row (one indexed read). */
+async function tokenCreator(db: D1Database, serviceId: string): Promise<string | null> {
+  const row = await db
+    .prepare(
+      "SELECT actor_email FROM audit_log WHERE target_id = ? AND action = 'service.create' LIMIT 1",
+    )
+    .bind(serviceId)
+    .first<{ actor_email: string | null }>();
+  return row?.actor_email ?? null;
+}
+
+/** Events shown in the token page's rail history. */
+const HISTORY_EVENTS = 5;
+
 async function loadPage(c: AdminContext, service: Service): Promise<TokenPageData> {
   const deps = c.get('deps');
-  const [connections, allowlist, keyring, lastSet, tokens] = await Promise.all([
-    loadConnections(deps, { tokenId: service.id }),
-    getAllowedUpstreamHosts(deps.env.DB),
-    loadKeyring(deps.env),
-    lastSecretChange(deps.env.DB, service.id),
-    listServices(deps.env.DB),
-  ]);
+  const [connections, allowlist, keyring, lastSet, tokens, recent, creator, traffic] =
+    await Promise.all([
+      loadConnections(deps, { tokenId: service.id }),
+      getAllowedUpstreamHosts(deps.env.DB),
+      loadKeyring(deps.env),
+      lastSecretChange(deps.env.DB, service.id),
+      listServices(deps.env.DB),
+      listAuditEvents(deps.env.DB, { targetId: service.id, limit: HISTORY_EVENTS }),
+      tokenCreator(deps.env.DB, service.id),
+      loadTokenTraffic(deps),
+    ]);
   const binding: BindingState = keyring.ok
     ? await storedBinding(deps.env.DB, keyring.keyring, service)
     : { status: 'unknown' };
@@ -1158,9 +1537,16 @@ async function loadPage(c: AdminContext, service: Service): Promise<TokenPageDat
     allowlist,
     outside: storedHostOutside(service.base_url, allowlist),
     accesses: connections.accesses,
+    usage: connections.usage,
     usageAvailable: connections.usageAvailable,
     sampleRate: connections.sampleRate,
+    traffic:
+      traffic.available && connections.sampleRate > 0
+        ? (traffic.byToken.get(service.id) ?? trafficStats([]))
+        : null,
     lastSet,
+    creator,
+    recent,
     siblings,
     destinationFingerprint: await destinationFingerprint(service),
     tokens,
@@ -1189,10 +1575,7 @@ async function renderToken(
       title: service.name,
       section: 'tokens',
       subsection: 'tokens',
-      breadcrumbs: [
-        { href: paths.tokens(), label: 'Service tokens' },
-        { href: paths.token(service.id), label: service.name },
-      ],
+      header: (ctx) => <TokenHeader ctx={ctx} data={data} />,
       errors: o.errors,
       status: o.status,
       notice: o.withNotice

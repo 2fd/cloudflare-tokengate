@@ -132,7 +132,8 @@ describe('I-DEPLOY-2: docs are dev-only (the production entry cannot import them
       .join('\n');
     expect(config).toMatch(/^\s*"main": "src\/index\.ts",$/m);
     expect(config).not.toContain('dev.ts');
-    expect(packageJson.scripts.dev).toBe('wrangler dev src/dev.ts');
+    // Environment assignments may come first (CLOUDFLARE_CF_FETCH_ENABLED=false skips Request.cf).
+    expect(packageJson.scripts.dev).toMatch(/^(?:[A-Z_]+=\S+ )*wrangler dev src\/dev\.ts$/);
     for (const [name, script] of Object.entries(packageJson.scripts)) {
       if (name !== 'dev') expect(script, name).not.toContain('dev.ts');
     }

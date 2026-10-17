@@ -53,6 +53,17 @@ describe('RowPicker', () => {
     );
   });
 
+  it('marks the first enabled row invalid, the ErrorSummary link target', () => {
+    const options = [
+      { value: 'a', title: 'A', disabled: true },
+      { value: 'b', title: 'B' },
+    ];
+    const html = render(<RowPicker id="r" name="r" options={options} invalid />);
+    expect(html).toContain('<input type="radio" id="r-2" name="r" value="b" aria-invalid="true"/>');
+    expect(html.match(/aria-invalid/g)).toHaveLength(1);
+    expect(render(<RowPicker id="r" name="r" options={options} />)).not.toContain('aria-invalid');
+  });
+
   it('escapes titles', () => {
     expect(
       render(<RowPicker name="r" options={[{ value: 'a', title: '<b>', meta: '<i>' }]} />),

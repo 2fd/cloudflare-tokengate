@@ -3,6 +3,7 @@
 // its Remove box (applied at save, no extra submit) and all-blank rows are ignored, so adding or
 // removing rows never needs script. "Add 2 more rows" is a secondary submit placed after the
 // form's primary submit (AddRowsButton), so Enter still saves.
+import { Button } from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
 import { Checkbox } from './components';
 
@@ -56,17 +57,21 @@ export function RepeatingRows<K extends string>(props: {
   );
 }
 
-/** The secondary submit that re-renders the form with BLANK_ROWS more rows; writes nothing. */
+/**
+ * The secondary submit (a ui ghost button, for inline adds) that re-renders the form with
+ * BLANK_ROWS more rows; writes nothing. No browser validation: the rows may still be incomplete.
+ */
 export function AddRowsButton(props: { group: string }) {
   return (
-    <button
+    <Button
+      variant="ghost"
+      plus
       type="submit"
       name="_action"
       value={`add:${props.group}`}
       formnovalidate
-      class="secondary"
     >
       Add {BLANK_ROWS} more rows
-    </button>
+    </Button>
   );
 }
