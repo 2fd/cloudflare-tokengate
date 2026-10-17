@@ -1,4 +1,4 @@
-// The consumer access page (A14.5) on design D: who can use which token in which context (header
+// The issuer access rules page (A14.5) on design D: who can use which token in which context (header
 // relation line), how a call flows through its conditions, how to connect the job, what the access
 // allows and the risks it carries, overlapping accesses, a one-submit copy, the edit form and the
 // delete dialog; the rail holds its activity, history and IDs. Read-only parts are shown to every
@@ -38,7 +38,7 @@ import {
   ArrowRow,
 } from '@tokengate/ui';
 import { labelFor } from '../../db/claim-labels';
-import type { CallerProvider, ClaimLabel, Grant, Service } from '../../db/types';
+import type { CredentialAccessRule, ClaimLabel, IssuerAccessRule, Service } from '../../db/types';
 import type { IssuerProfile } from '../../identity/types';
 import type { WarningDetail } from '../../policy/validate';
 import type { AccessEdge } from '../connections';
@@ -81,9 +81,9 @@ export interface HistoryEntry {
 }
 
 export interface AccessPageModel {
-  grant: Grant;
+  grant: IssuerAccessRule;
   edge: AccessEdge;
-  consumer: CallerProvider;
+  consumer: CredentialAccessRule;
   profile: IssuerProfile;
   token: Service;
   tokens: Service[];
@@ -139,9 +139,9 @@ function InactiveCause(props: { edge: AccessEdge }) {
   const { edge } = props;
   if (edge.status !== 'inactive') return null;
   const reason = edge.statusDetail ?? '';
-  if (reason === 'consumer disabled' && edge.consumer) {
+  if (reason === 'credential access rule disabled' && edge.consumer) {
     return (
-      <Callout tone="warn" title="Inactive because the consumer is disabled:">
+      <Callout tone="warn" title="Inactive because the credential access rule is disabled:">
         <a href={paths.consumer(edge.consumer.id)}>{edge.consumer.name}</a>. Enable it on its page;
         this access then works again.
       </Callout>
@@ -153,8 +153,8 @@ function InactiveCause(props: { edge: AccessEdge }) {
         tone="warn"
         title={`Inactive because the ${reason.startsWith('token') ? '' : 'token’s '}${reason}:`}
       >
-        <a href={paths.token(edge.token.id)}>{edge.token.name}</a>. A token manager fixes it on the
-        token page.
+        <a href={paths.token(edge.token.id)}>{edge.token.name}</a>. A credential manager fixes it on
+        the token page.
       </Callout>
     );
   }
@@ -222,7 +222,7 @@ export function AccessHeader(props: { model: AccessPageModel; ctx: ViewContext }
       : null;
   return (
     <PageHeader
-      crumbs={[{ label: 'Consumer access', href: paths.access() }, { label: grant.name }]}
+      crumbs={[{ label: 'Issuer access rules', href: paths.access() }, { label: grant.name }]}
       identity={
         <Identity
           logo={consumerLogo(consumer)}
@@ -373,7 +373,7 @@ export function AccessPage(props: { model: AccessPageModel; ctx: ViewContext }) 
                 {
                   state: 'pass',
                   glyph: '',
-                  status: 'Consumer',
+                  status: 'Credential access rule',
                   title: consumer.name,
                   detail:
                     owners.length > 0 ? (
@@ -415,7 +415,7 @@ export function AccessPage(props: { model: AccessPageModel; ctx: ViewContext }) 
                 {
                   state: 'pass',
                   glyph: '',
-                  status: 'Token',
+                  status: 'Credential',
                   title: token.name,
                   detail: <Mono>{hostOf(token.base_url)}</Mono>,
                 },
@@ -474,7 +474,7 @@ export function AccessPage(props: { model: AccessPageModel; ctx: ViewContext }) 
           <Tray
             id="overlap"
             title="Also matched by"
-            description="These enabled accesses of the same consumer and token cover the same jobs. A call is allowed when any one of them matches; the request record names the oldest."
+            description="These enabled accesses of the same credential access rule and credential cover the same jobs. A call is allowed when any one of them matches; the request record names the oldest."
           >
             <Panel variant="flush">
               <ul class="con-list">
@@ -504,7 +504,7 @@ export function AccessPage(props: { model: AccessPageModel; ctx: ViewContext }) 
               <Disclosure
                 id="edit"
                 summary="Change this access"
-                hint="The same form as Give access, with consumer and token fixed."
+                hint="The same form as Give access, with credential access rule and credential fixed."
                 open={model.editOpen}
               >
                 <AccessForm model={model.edit} />
@@ -792,7 +792,7 @@ function CopySection(props: {
       </Tray>
     );
   }
-  // The placeholder names the consumer's first labelled organization or group (A7.8).
+  // The placeholder names the credential access rule's first labelled organization or group (A7.8).
   const firstOwner =
     pinOwnerValues(model.consumer, claims.owner)
       .map((value) => labelFor(model.labels, claims.owner, value))
@@ -869,7 +869,7 @@ function CopySection(props: {
             />
           </div>
           {tokenPicks ? (
-            <FieldSet id="f-copy-token_id" legend="Token" error={model.copy.error.token_id}>
+            <FieldSet id="f-copy-token_id" legend="Credential" error={model.copy.error.token_id}>
               <Picks
                 name="token_id"
                 value={model.copy.tokenId}
@@ -884,7 +884,7 @@ function CopySection(props: {
             <Select
               name="token_id"
               id="f-copy-token_id"
-              label="Token"
+              label="Credential"
               value={model.copy.tokenId}
               options={model.tokens.map((token) => ({
                 value: token.id,

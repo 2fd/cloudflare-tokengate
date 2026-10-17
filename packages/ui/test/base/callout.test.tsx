@@ -25,13 +25,13 @@ describe('Callout', () => {
         tone="warn"
         glyph="⌛"
         title="The secret of OpenAI expires on 21 Oct 2026."
-        more="Its 1 consumer access stops working then."
+        more="Its 1 issuer access rules stops working then."
         actions={<Button size="sm">Replace secret</Button>}
         class="x"
       />,
     );
     expect(html).toBe(
-      '<div class="callout warn x"><span class="gl" aria-hidden="true">⌛</span><div class="body"><p><b>The secret of OpenAI expires on 21 Oct 2026.</b></p><p class="more">Its 1 consumer access stops working then.</p></div><div class="acts"><button class="btn sm secondary" type="button">Replace secret</button></div></div>',
+      '<div class="callout warn x"><span class="gl" aria-hidden="true">⌛</span><div class="body"><p><b>The secret of OpenAI expires on 21 Oct 2026.</b></p><p class="more">Its 1 issuer access rules stops working then.</p></div><div class="acts"><button class="btn sm secondary" type="button">Replace secret</button></div></div>',
     );
   });
 
@@ -91,11 +91,11 @@ describe('AskSomeone', () => {
           link={{ href: 'mailto:priya@acme.dev', label: 'Email them this page' }}
           class="x"
         >
-          Only token managers can add tokens.
+          Only credential managers can add tokens.
         </AskSomeone>,
       ),
     ).toBe(
-      '<p class="ask x">Only token managers can add tokens. Ask <b>Priya Natarajan</b>, <b>Diego Ruiz</b> or <b>Maya Chen</b>. <a href="mailto:priya@acme.dev">Email them this page</a></p>',
+      '<p class="ask x">Only credential managers can add tokens. Ask <b>Priya Natarajan</b>, <b>Diego Ruiz</b> or <b>Maya Chen</b>. <a href="mailto:priya@acme.dev">Email them this page</a></p>',
     );
   });
 

@@ -23,13 +23,13 @@ import {
   Tray,
 } from '@tokengate/ui';
 import { useContext } from 'hono/jsx';
-// Service tokens › Allowed hosts (A13.4): the upstream host allowlist a token's base URL must
+// Credentials › Allowed hosts (A13.4): the upstream host allowlist a token's base URL must
 // match, on save and on every proxied request (I-SSRF-1). Owners edit it (settings:write) by
 // picking hosts the tokens and templates use, plus any others typed one per line. An empty stored
 // list would mean "any host", so the "Only" branch never writes one.
 import type { App } from '../../app';
 import { hostListed } from '../../config';
-import { listServices } from '../../db/services';
+import { listServices } from '../../db/credentials';
 import { getAdminHosts, UPSTREAM_HOSTS_KEY } from '../../db/settings';
 import { upstreamHostsFromValue } from '../../db/settings';
 import type { Service } from '../../db/types';
@@ -61,9 +61,9 @@ const NOTICES: NoticeTable = {
 };
 
 export function registerTokenHostsRoutes(app: App): void {
-  app.get('/admin/tokens/hosts', (c) => hostsPage(c, {}));
+  app.get('/admin/credentials/hosts', (c) => hostsPage(c, {}));
 
-  app.post('/admin/tokens/hosts', async (c) => {
+  app.post('/admin/credentials/hosts', async (c) => {
     const form = await formData(c);
     const submitted = {
       mode: text(form, 'mode') === 'list' ? ('list' as const) : ('any' as const),
@@ -170,7 +170,7 @@ async function hostsPage(
       header: (
         <PageHeader
           title="Allowed hosts"
-          description="Service tokens can only send secrets to these hosts. Checked when a token is saved and on every request."
+          description="Credentials can only send secrets to these hosts. Checked when a token is saved and on every request."
         />
       ),
       errors,
@@ -259,7 +259,7 @@ async function hostsPage(
                 id="outside-table"
                 labelledBy="outside-h"
                 caption="Tokens outside the allowed hosts"
-                columns={[{ label: 'Token' }, { label: 'Host' }]}
+                columns={[{ label: 'Credential' }, { label: 'Host' }]}
               >
                 {outside.map((token) => (
                   <Row>
@@ -304,7 +304,7 @@ async function hostsPage(
             <Reveal field={1} option={2}>
               <CheckboxGroup
                 name="host"
-                legend="Hosts used by tokens and token types"
+                legend="Hosts used by tokens and credential types"
                 conditional
                 error={errorOf('host')}
                 options={list.map((item) => ({

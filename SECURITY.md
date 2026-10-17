@@ -94,7 +94,7 @@ steps.
 1. Generate the keyring key outside Cloudflare and store a copy in your company vault. Losing it
    loses every stored credential ([key rotation](docs/operations/key-rotation.md)). Never use the
    development key from `.dev.vars.example`.
-2. Set `AUTH_ACCESS_TEAM_DOMAIN` and `AUTH_ACCESS_AUD` before you add services, and keep their exact
+2. Set `AUTH_ACCESS_TEAM_DOMAIN` and `AUTH_ACCESS_AUD` before you add credentials, and keep their exact
    values with the key. The key is bound to them: a later change makes every stored credential
    impossible to decrypt ([I-CRED-3](docs/threat-model.md#i-cred-3)).
 3. Serve the gateway on a custom domain and sign in there first. That hostname becomes the only admin
@@ -121,8 +121,8 @@ steps.
    ([zone settings](docs/operations/cloudflare-zone-settings.md)).
 10. Give every caller provider a tenant pin. The gateway requires one on shared issuers, also for
     the `generic` profile ([I-TEN-1](docs/threat-model.md#i-ten-1)) ([policies](docs/policies.md)).
-11. Write narrow grants: exact numeric IDs, `ref_protected exact true` on ref and environment
-    Conditions, no "pwn request" events, only `POST /` on webhook services with `path` Injection.
+11. Write narrow issuer_access_rules: exact numeric IDs, `ref_protected exact true` on ref and environment
+    Conditions, no "pwn request" events, only `POST /` on webhook credentials with `path` Injection.
     Do not acknowledge a save-time warning you do not understand ([policies](docs/policies.md)).
 12. Never grant an endpoint that returns the credential in its response body. Response bodies are
     not redacted ([threat model](docs/threat-model.md#credentials-and-responses)).

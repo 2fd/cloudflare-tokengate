@@ -227,7 +227,7 @@ describe('I-CRED-2: sealed credentials are bound to service id, base URL and inj
   });
 
   it.each([['ct'], ['wdek'], ['iv'], ['dek_iv'], ['ct', 'iv'], ['wdek', 'dek_iv']])(
-    'swapping %s between two services fails closed',
+    'swapping %s between two credentials fails closed',
     async (...fields) => {
       const { keyring, slack, openai } = await setup();
       const donor = JSON.parse(openai) as SealedFields;

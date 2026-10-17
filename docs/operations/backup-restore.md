@@ -9,7 +9,7 @@ configuration export, and the secrets that no backup holds. It is for platform e
 |---|---|---|
 | Keyring (`TOKENGATE_KEK` or `TOKENGATE_KEYRING`) | Worker secret | Only your vault. Cloudflare cannot return a secret's value |
 | Variables (`AUTH_*`) | Worker settings | Keep the exact values in your vault with the keyring: the keys are bound to them ([configuration](../configuration.md#login-binding)) |
-| Users, login identities, caller providers, services, sealed credentials, grants, settings (including the upstream host allowlist and the admin hosts), audit log | `DB` (`tokengate`) | Time Travel, `d1 export` |
+| Users, login identities, credential access rules, credentials, sealed credentials, issuer_access_rules, settings (including the upstream host allowlist and the admin hosts), audit log | `DB` (`tokengate`) | Time Travel, `d1 export` |
 | Access application and policy (who can reach `/admin`) | Cloudflare One | Keep a copy in your runbook ([zone settings](cloudflare-zone-settings.md#cloudflare-access)) |
 | Request log and rollups | `TELEMETRY_DB` (`tokengate-telemetry`) | Time Travel, `d1 export`; optional R2 archive |
 | Code and `wrangler.jsonc` | Your clone of the repository | Git |
@@ -43,7 +43,7 @@ To restore `DB` to a point in time:
 
 The restore overwrites the database in place. Every change after that time is lost, including:
 
-- Grants, services and caller providers you disabled after that time come back enabled. Disable them
+- Issuer access rules, credentials and credential access rules you disabled after that time come back enabled. Disable them
   again before you continue.
 - Users you suspended come back active, users you approved or rejected come back pending, demoted users get their old role back, and identities you
   unlinked with "Reset sign-in" are linked again. Anyone with such a user and a valid Access session
@@ -106,7 +106,7 @@ The "Export configuration" item of the account menu, at the bottom of the sideba
 (admins and owners, permission `config:export`),
 downloads `tokengate-export-<date>.json`. Each download writes a `config.export` audit event.
 
-The file is deterministic JSON (`schema_version` 2) with every caller provider, service (with its
+The file is deterministic JSON (`schema_version` 2) with every credential access rule, service (with its
 `template_id`), grant, claim display label and user (email, role, status), keyed by name or slug.
 It holds no credentials, no row ids and no secrets ([I-CRED-1](../threat-model.md#i-cred-1)); for
 each credential it has only the hint and timestamps.
@@ -114,7 +114,7 @@ Runtime settings are not included.
 
 Use it to review changes (diff two exports), to document the configuration, and as a manual rebuild
 guide. There is no import: to rebuild from it, create each item again in the admin UI and enter every
-Credential again. Keep caller provider audiences exactly as exported: callers request tokens for that
+Credential again. Keep credential access rule audiences exactly as exported: callers request tokens for that
 audience, and a different value fails with `401 audience_mismatch`.
 
 ## Rebuild in a new account
@@ -128,8 +128,8 @@ Use this when the Cloudflare account or both databases are lost.
    the keyring matches ([restore an export](#restore-an-export-into-a-new-database)).
 3. Run `pnpm run deploy`. If you loaded a `d1 export`, do the
    [checks after a restore](#checks-after-a-restore).
-4. If you have only a configuration export, recreate the caller providers with the same issuer and
-   audience, then services, then grants, and enter every credential again.
+4. If you have only a configuration export, recreate the credential access rules with the same issuer and
+   audience, then credentials, then issuer_access_rules, and enter every credential again.
 5. If the gateway URL changes, update every workflow that calls it, and the hostname of the Access
    application ([zone settings](cloudflare-zone-settings.md#cloudflare-access)). If the Access team
    changes, every user must be linked again: use "Reset sign-in" for each user, or
@@ -149,8 +149,8 @@ Use this when the Cloudflare account or both databases are lost.
    ([key rotation](key-rotation.md)).
 5. Settings > System status shows the database schema as "up to date".
 6. Users shows the owners you expect, and no user you had suspended is active.
-7. Grants, services and caller providers you disabled during an incident are still disabled.
-8. Users › Sign-in › "Admin hosts" and Service tokens › Allowed hosts list the hosts you expect. A restore brings back
+7. Issuer access rules, credentials and credential access rules you disabled during an incident are still disabled.
+8. Users › Sign-in › "Admin hosts" and Credentials › Allowed hosts list the hosts you expect. A restore brings back
    the lists of the restore point.
 9. On a service with a credential check, "Test credential" passes.
 10. A workflow call succeeds ([GitHub Actions](../callers/github-actions.md)).

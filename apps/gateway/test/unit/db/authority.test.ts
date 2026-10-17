@@ -42,7 +42,7 @@ async function actorFor(email: string, status: 'active' | 'suspended' = 'active'
 const insertService = (id: string) =>
   db
     .prepare(
-      `INSERT INTO services (id, slug, name, base_url, injection, created_at, updated_at)
+      `INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
        VALUES (?, ?, ?, 'https://api.example.com', '{"kind":"bearer"}', ?, ?)`,
     )
     .bind(id, id.toLowerCase().replace('_', '-'), id, T, T);
@@ -50,9 +50,9 @@ const insertService = (id: string) =>
 const insertConsumer = (id: string) =>
   db
     .prepare(
-      `INSERT INTO caller_providers (id, name, profile, issuer, jwks_uri, audience, allowed_algs,
+      `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
          max_token_age_seconds, created_at, updated_at)
-       VALUES (?, ?, 'generic', ?, 'https://issuer.example.com/jwks', 'tokengate:0123456789abcdef',
+       VALUES (?, (SELECT id FROM credentials ORDER BY id LIMIT 1), ?, 'generic', ?, 'https://issuer.example.com/jwks', 'tokengate:0123456789abcdef',
          '["RS256"]', 900, ?, ?)`,
     )
     .bind(id, id, `https://${id}.example.com`, T, T);
@@ -104,7 +104,7 @@ describe('I-SESS-1: the actor check, claim by claim', () => {
     expect(await passes(actor, [{ k: 'member', t: other, p: 'consumers:create' }])).toBe(false);
   });
 
-  it('token, consumer and token_reveal: an explicit row or an all-scope', async () => {
+  it('token, credential access rule and credential_reveal: an explicit row or an all-scope', async () => {
     const { user, actor } = await actorFor('a@example.com');
     await createTeam({
       name: 'Payments',
@@ -295,7 +295,7 @@ async function readWorld(): Promise<World> {
       'SELECT team_id AS teamId, service_id AS serviceId, level, reveal FROM team_tokens',
     ),
     teamConsumers: await all(
-      'SELECT team_id AS teamId, caller_provider_id AS consumerId, level FROM team_consumers',
+      'SELECT team_id AS teamId, credential_access_rule_id AS consumerId, level FROM team_consumers',
     ),
   };
 }

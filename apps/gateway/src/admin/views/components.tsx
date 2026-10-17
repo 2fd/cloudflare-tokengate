@@ -877,7 +877,7 @@ export function Time(props: { ms: number; relative?: boolean; now?: number }) {
 
 /**
  * Who can make a change the viewer cannot (ui AskSomeone), with the same wording on every page
- * (WCAG 3.2.4): "Only token managers can add service tokens. Ask A, B or C and 2 more." and one
+ * (WCAG 3.2.4): "Only credential managers can add credentials. Ask A, B or C and 2 more." and one
  * mailto link to all of them. The people are active users whose role holds `permission`, owners
  * last, at most 3 named (ViewContext.askers). Every role can already see these emails on Users,
  * so this discloses nothing new. `lead={false}` leaves out the first sentence, where the page
@@ -886,7 +886,7 @@ export function Time(props: { ms: number; relative?: boolean; now?: number }) {
 export function AskSomeone(props: {
   permission: Permission;
   ctx: ViewContext;
-  /** What the permission lets them do, after "can": "add a service token". */
+  /** What the permission lets them do, after "can": "add a credential". */
   verb?: string;
   lead?: boolean;
   /** Subject line of the email. */
@@ -923,9 +923,9 @@ export type NotFoundWhat = 'page' | 'token' | 'consumer' | 'access' | 'user' | '
 
 const NOT_FOUND_TEXT: Readonly<Record<NotFoundWhat, string>> = {
   page: 'There is no page at this address.',
-  token: 'There is no service token with this ID. It may have been deleted.',
-  consumer: 'There is no service consumer with this ID. It may have been deleted.',
-  access: 'There is no consumer access with this ID. It may have been deleted.',
+  token: 'There is no credential with this ID. It may have been deleted.',
+  consumer: 'There is no credential access rule with this ID. It may have been deleted.',
+  access: 'There is no issuer access rules with this ID. It may have been deleted.',
   user: 'There is no user with this ID. They may have been deleted.',
   request: 'There is no request record with this ID. It may have been purged by data retention.',
 };
@@ -944,13 +944,13 @@ const SECTION_LINKS: readonly LinkCard[] = [
   },
   {
     href: paths.tokens(),
-    title: 'Service tokens',
+    title: 'Credentials',
     description: 'Tokens, allowed hosts and encryption keys',
   },
   {
     href: paths.consumers(),
-    title: 'Service consumers',
-    description: 'Consumers and consumer access',
+    title: 'Credential access rules',
+    description: 'Consumers and issuer access rules',
   },
   { href: paths.users(), title: 'Users', description: 'People and sign-in' },
 ];

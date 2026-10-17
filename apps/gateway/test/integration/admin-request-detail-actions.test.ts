@@ -29,7 +29,7 @@ function record(overrides: Partial<RequestRecord>): RequestRecord {
     path: '/chat.postMessage',
     service_slug: 'slack',
     service_id: SVC,
-    caller_provider_id: null,
+    credential_access_rule_id: null,
     grant_id: null,
     claims_verified: 0,
     caller_subject: null,
@@ -103,13 +103,13 @@ describe('Request detail actions', () => {
     await env.TELEMETRY_DB.batch(insertRequestRecordsStatements(env.TELEMETRY_DB, [r]));
     for (const role of ['viewer', 'token_manager', 'access_manager', 'admin', 'owner'] as const) {
       const box = whatToDo(await detail(r, role));
-      expect(box, role).toContain(`href="/admin/tokens/${SVC}">Open token</a>`);
-      const fix = `href="/admin/tokens/${SVC}?open=destination#destination">Set the secret again</a>`;
+      expect(box, role).toContain(`href="/admin/credentials/${SVC}">Open token</a>`);
+      const fix = `href="/admin/credentials/${SVC}?open=destination#destination">Set the secret again</a>`;
       if (role === 'token_manager' || role === 'admin' || role === 'owner') {
         expect(box, role).toContain(fix);
       } else {
         expect(box, role).not.toContain(fix);
-        expect(box, role).toContain('Only token managers can set the secret again');
+        expect(box, role).toContain('Only credential managers can set the secret again');
       }
       expect(box, role).toContain('out-of-band source');
     }
@@ -142,16 +142,18 @@ describe('Request detail actions', () => {
     );
     const nf = whatToDo(await detail(notFound, 'owner'));
     expect(nf).toContain('href="/admin/requests?slug=typo-slug">Requests to this slug</a>');
-    expect(nf).toContain('href="/admin/tokens/new">Add a service token</a>');
+    expect(nf).toContain('href="/admin/credentials/new">Add a credential</a>');
     const un = await detail(unknown, 'owner');
-    expect(whatToDo(un)).toContain('href="/admin/consumers/new">Add a service consumer</a>');
+    expect(whatToDo(un)).toContain(
+      'href="/admin/credential-access-rules/new">Add a credential access rule</a>',
+    );
     expect(un).toContain('<code>https://ci.example.com</code>');
     expect(un).not.toMatch(/href="[^"]*ci\.example\.com/);
     expect(whatToDo(await detail(github, 'owner'))).toContain(
-      'href="/admin/consumers/new?type=github-actions">Add a service consumer</a>',
+      'href="/admin/credential-access-rules/new?type=github-actions">Add a credential access rule</a>',
     );
     expect(whatToDo(await detail(github, 'token_manager'))).toContain(
-      'Only access managers can add a service consumer',
+      'Only access managers can add a credential access rule',
     );
   });
 
@@ -189,9 +191,9 @@ describe('I-LOG-2: Give access from this request', () => {
       await adminGet(fixture.app, session, `/admin/requests/${denial?.id}`)
     ).text();
     expect(before).toContain(
-      `href="/admin/access/new?from_request=${denial?.id}">Give access from this request</a>`,
+      `href="/admin/issuer-access-rules/new?from_request=${denial?.id}">Give access from this request</a>`,
     );
-    await fixture.addGrant({ rules: [{ methods: ['POST'], path: '/other' }] });
+    await fixture.addIssuerAccessRule({ rules: [{ methods: ['POST'], path: '/other' }] });
     const after = await (
       await adminGet(fixture.app, session, `/admin/requests/${denial?.id}`)
     ).text();

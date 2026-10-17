@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Claims } from '../../../src/identity/types';
 import {
   type EvaluationInput,
-  evaluateGrants,
+  evaluateIssuerAccessRules,
   ruleMatches,
   TRACE_MAX_BYTES,
   traceJson,
@@ -10,7 +10,7 @@ import {
 import type { Condition, Rule, TraceEntry } from '../../../src/policy/types';
 import { genericProfile, githubProfile } from './fixtures';
 
-interface TestGrant {
+interface TestIssuerAccessRule {
   id: string;
   conditions: Condition[];
   rules: Rule[];
@@ -22,7 +22,11 @@ const anchor: Condition[] = [
 ];
 const postMessage: Rule = { methods: ['POST'], path: '/api/chat.postMessage' };
 
-function grant(id: string, extra: Condition[] = [], rules: Rule[] = [postMessage]): TestGrant {
+function grant(
+  id: string,
+  extra: Condition[] = [],
+  rules: Rule[] = [postMessage],
+): TestIssuerAccessRule {
   return { id, conditions: [...anchor, ...extra], rules };
 }
 
@@ -74,9 +78,9 @@ describe('ruleMatches', () => {
   });
 });
 
-describe('I-AUTHZ-1: evaluateGrants denies by default', () => {
-  it('denies with no grants', () => {
-    expect(evaluateGrants([], input())).toEqual({
+describe('I-AUTHZ-1: evaluateIssuerAccessRules denies by default', () => {
+  it('denies with no issuer_access_rules', () => {
+    expect(evaluateIssuerAccessRules([], input())).toEqual({
       decision: 'deny',
       code: 'no_matching_grant',
       trace: [],
@@ -84,13 +88,13 @@ describe('I-AUTHZ-1: evaluateGrants denies by default', () => {
   });
 
   it('allows the first matching grant and traces the ones before it', () => {
-    const grants = [
+    const issuer_access_rules = [
       grant('grt_a', [{ claim: 'ref', match: 'exact', values: ['refs/heads/prod'] }]),
       grant('grt_b', [], [{ methods: ['GET'], path: '/**' }]),
       grant('grt_c'),
       grant('grt_d'),
     ];
-    const decision = evaluateGrants(grants, input());
+    const decision = evaluateIssuerAccessRules(issuer_access_rules, input());
     expect(decision.decision).toBe('allow');
     if (decision.decision !== 'allow') return;
     expect(decision.grant.id).toBe('grt_c');
@@ -105,7 +109,7 @@ describe('I-AUTHZ-1: evaluateGrants denies by default', () => {
   });
 
   it('refuses a grant without conditions', () => {
-    const decision = evaluateGrants(
+    const decision = evaluateIssuerAccessRules(
       [{ id: 'grt_x', conditions: [], rules: [postMessage] }],
       input(),
     );
@@ -114,7 +118,7 @@ describe('I-AUTHZ-1: evaluateGrants denies by default', () => {
   });
 
   it('never echoes values of claims outside the reveal set', () => {
-    const decision = evaluateGrants(
+    const decision = evaluateIssuerAccessRules(
       [grant('grt_a', [{ claim: 'actor', match: 'exact', values: ['alice'] }])],
       input({ actor: 'mallory' }),
     );
@@ -126,11 +130,11 @@ describe('I-AUTHZ-3: untrusted events need an exact opt-in', () => {
   const pr = { event_name: 'pull_request_target' };
 
   it('trusted events need no event condition', () => {
-    expect(evaluateGrants([grant('grt_a')], input()).decision).toBe('allow');
+    expect(evaluateIssuerAccessRules([grant('grt_a')], input()).decision).toBe('allow');
   });
 
   it('denies untrusted events without an opt-in', () => {
-    const decision = evaluateGrants([grant('grt_a')], input(pr));
+    const decision = evaluateIssuerAccessRules([grant('grt_a')], input(pr));
     expect(decision).toMatchObject({ decision: 'deny', code: 'event_not_trusted' });
     expect(decision.trace[0]).toMatchObject({ result: 'event_not_trusted' });
     expect(decision.trace[0]?.detail).toContain('"pull_request_target"');
@@ -142,7 +146,7 @@ describe('I-AUTHZ-3: untrusted events need an exact opt-in', () => {
       match: 'exact',
       values: ['pull_request_target'],
     };
-    expect(evaluateGrants([grant('grt_a', [optIn])], input(pr)).decision).toBe('allow');
+    expect(evaluateIssuerAccessRules([grant('grt_a', [optIn])], input(pr)).decision).toBe('allow');
   });
 
   it.each<[string, Condition]>([
@@ -151,7 +155,7 @@ describe('I-AUTHZ-3: untrusted events need an exact opt-in', () => {
     ['negated exact', { claim: 'event_name', match: 'exact', values: ['push'], negate: true }],
     ['exact on another claim', { claim: 'event', match: 'exact', values: ['pull_request_target'] }],
   ])('does not count a %s as opt-in', (_name, condition) => {
-    const decision = evaluateGrants(
+    const decision = evaluateIssuerAccessRules(
       [grant('grt_a', [condition])],
       input({ ...pr, event: 'pull_request_target' }),
     );
@@ -161,18 +165,24 @@ describe('I-AUTHZ-3: untrusted events need an exact opt-in', () => {
   it('fails closed when the event claim is missing or not a string', () => {
     const missing = input();
     delete missing.claims.event_name;
-    expect(evaluateGrants([grant('grt_a')], missing)).toMatchObject({ decision: 'deny' });
-    expect(evaluateGrants([grant('grt_a')], input({ event_name: ['push'] }))).toMatchObject({
+    expect(evaluateIssuerAccessRules([grant('grt_a')], missing)).toMatchObject({
+      decision: 'deny',
+    });
+    expect(
+      evaluateIssuerAccessRules([grant('grt_a')], input({ event_name: ['push'] })),
+    ).toMatchObject({
       decision: 'deny',
     });
   });
 
   it('reports event_not_trusted only when fixing the event would allow the call', () => {
     const noRule = grant('grt_a', [], [{ methods: ['GET'], path: '/other' }]);
-    expect(evaluateGrants([noRule], input(pr))).toMatchObject({ code: 'no_matching_grant' });
+    expect(evaluateIssuerAccessRules([noRule], input(pr))).toMatchObject({
+      code: 'no_matching_grant',
+    });
 
     const conditionFails = grant('grt_b', [{ claim: 'ref', match: 'exact', values: ['x'] }]);
-    expect(evaluateGrants([conditionFails, grant('grt_c')], input(pr))).toMatchObject({
+    expect(evaluateIssuerAccessRules([conditionFails, grant('grt_c')], input(pr))).toMatchObject({
       code: 'event_not_trusted',
     });
   });
@@ -182,7 +192,7 @@ describe('I-AUTHZ-3: untrusted events need an exact opt-in', () => {
       profile: genericProfile,
       provider: { anchor_claims: ['repository_id'] },
     });
-    expect(evaluateGrants([grant('grt_a')], generic).decision).toBe('allow');
+    expect(evaluateIssuerAccessRules([grant('grt_a')], generic).decision).toBe('allow');
   });
 });
 
@@ -210,7 +220,7 @@ describe('ruleMatches: trailing slash and %2F', () => {
   });
 });
 
-describe('evaluateGrants: anchor rules at request time', () => {
+describe('evaluateIssuerAccessRules: anchor rules at request time', () => {
   it('skips a generic grant that no longer satisfies anchor_claims', () => {
     const emailOnly = {
       id: 'grt_email',
@@ -218,12 +228,12 @@ describe('evaluateGrants: anchor rules at request time', () => {
       rules: [postMessage],
     };
     const claims = { email: 'a@x.com', oid: 'o-1' };
-    const before = evaluateGrants(
+    const before = evaluateIssuerAccessRules(
       [emailOnly],
       input(claims, { profile: genericProfile, provider: { anchor_claims: ['email'] } }),
     );
     expect(before.decision).toBe('allow');
-    const after = evaluateGrants(
+    const after = evaluateIssuerAccessRules(
       [emailOnly],
       input(claims, { profile: genericProfile, provider: { anchor_claims: ['oid'] } }),
     );
@@ -232,7 +242,7 @@ describe('evaluateGrants: anchor rules at request time', () => {
       {
         grant_id: 'grt_email',
         result: 'invalid_grant',
-        detail: "grant does not satisfy the caller provider's anchor rules (I-AUTHZ-2)",
+        detail: "grant does not satisfy the credential access rule's anchor rules (I-AUTHZ-2)",
       },
     ]);
   });
@@ -248,7 +258,7 @@ describe('evaluateGrants: anchor rules at request time', () => {
       { claim: 'repository_owner_id', match: 'exact', values: ['1000'] },
       { claim: 'repository_id', match: 'glob', values: ['*'] },
     ];
-    const decision = evaluateGrants([negated, globbed], input());
+    const decision = evaluateIssuerAccessRules([negated, globbed], input());
     expect(decision.trace.map((t) => t.result)).toEqual(['invalid_grant', 'invalid_grant']);
   });
 });
@@ -295,7 +305,7 @@ describe('I-AUTHZ-1: stored data that bypassed validation fails closed', () => {
     ['invalid path glob', { methods: ['*'], path: '/*/*/*/*/*/*/*/*/*' }],
   ])('a malformed rule (%s) matches nothing and does not throw', (_name, rule) => {
     expect(ruleMatches(rule as Rule, 'GET', at('/x'))).toBe(false);
-    const decision = evaluateGrants(
+    const decision = evaluateIssuerAccessRules(
       [{ id: 'grt_a', conditions: anchor, rules: [rule as Rule] }],
       input({}, { method: 'GET', matchPath: '/x' }),
     );
@@ -308,15 +318,15 @@ describe('I-AUTHZ-1: stored data that bypassed validation fails closed', () => {
     ['empty values', { conditions: [{ ...anchor[0], values: [] }], rules: [postMessage] }],
     ['rules not a list', { conditions: anchor, rules: null }],
   ])('a malformed grant (%s) is skipped', (_name, shape) => {
-    const malformed = { id: 'grt_bad', ...(shape as object) } as TestGrant;
-    const decision = evaluateGrants([malformed, grant('grt_ok')], input());
+    const malformed = { id: 'grt_bad', ...(shape as object) } as TestIssuerAccessRule;
+    const decision = evaluateIssuerAccessRules([malformed, grant('grt_ok')], input());
     expect(decision).toMatchObject({ decision: 'allow', grant: { id: 'grt_ok' } });
     expect(decision.trace[0]?.result).not.toBe('matched');
   });
 
   it('an untrusted event never matches through a glob, even on a rule-matching grant', () => {
     const globOnly = grant('grt_a', [{ claim: 'event_name', match: 'glob', values: ['*'] }]);
-    const decision = evaluateGrants([globOnly], input({ event_name: 'workflow_run' }));
+    const decision = evaluateIssuerAccessRules([globOnly], input({ event_name: 'workflow_run' }));
     expect(decision).toMatchObject({ decision: 'deny', code: 'event_not_trusted' });
   });
 });
@@ -329,13 +339,16 @@ describe('I-LOG-1: traces never echo claims outside the reveal set', () => {
     ['glob', { claim: 'actor', match: 'glob', values: ['al*'] }],
     ['negated glob', { claim: 'actor', match: 'glob', values: ['S3*'], negate: true }],
   ])('%s condition', (_name, condition) => {
-    const decision = evaluateGrants([grant('grt_a', [condition])], input({ actor: secret }));
+    const decision = evaluateIssuerAccessRules(
+      [grant('grt_a', [condition])],
+      input({ actor: secret }),
+    );
     expect(decision.decision).toBe('deny');
     expect(traceJson(decision.trace)).not.toContain('S3CR3T');
   });
 
   it('event guard', () => {
-    const decision = evaluateGrants(
+    const decision = evaluateIssuerAccessRules(
       [grant('grt_a')],
       input({ event_name: secret }, { revealClaims: new Set() }),
     );

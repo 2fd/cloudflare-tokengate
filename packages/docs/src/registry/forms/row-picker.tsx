@@ -10,7 +10,7 @@ export const rowPicker: ComponentDoc = {
     'Existing values as a list of radio rows, most used first, with a logo and a usage count.',
   usage: {
     when: [
-      'Pick one of the values the server already knows: a consumer, a repository the consumer used before.',
+      'Pick one of the values the server already knows: a credential access rule, a repository the credential access rule used before.',
       'End with a generic row (“Another repository”) that reveals a free-text field.',
     ],
     whenNot: [
@@ -28,11 +28,11 @@ export const rowPicker: ComponentDoc = {
       description: 'Consumers of the install, most used first.',
       layout: 'stack',
       render: () => (
-        <FieldSet id="rp-consumer" legend="Consumer">
+        <FieldSet id="rp-consumer" legend="Credential access rule">
           <RowPicker name="rp-consumer" options={consumers} value="gha-acme" />
         </FieldSet>
       ),
-      code: `<FieldSet id="consumer" legend="Consumer">
+      code: `<FieldSet id="consumer" legend="Credential access rule">
   <RowPicker name="consumer" value="gha-acme" options={[
     { value: 'gha-acme', title: 'GitHub Actions (acme)', meta: 'most used · 6 accesses',
       logo: 'github' },
@@ -50,13 +50,13 @@ export const rowPicker: ComponentDoc = {
         <FieldSet
           id="rp-repo"
           legend="Repository"
-          hint="Repositories this consumer used before, most used first. The ID keeps working after a rename."
+          hint="Repositories this credential access rule used before, most used first. The ID keeps working after a rename."
         >
           <RowPicker name="rp-repo" options={repositories} value="89012345" />
         </FieldSet>
       ),
       code: `<FieldSet id="repo" legend="Repository"
-  hint="Repositories this consumer used before, most used first. The ID keeps working after a rename.">
+  hint="Repositories this credential access rule used before, most used first. The ID keeps working after a rename.">
   <RowPicker name="repo" value="89012345" options={[
     { value: '89012345', title: 'acme/api', mono: true, detail: '(89012345)', meta: '3 accesses' },
     …
@@ -104,20 +104,20 @@ export const rowPicker: ComponentDoc = {
       layout: 'stack',
       render: () => (
         <>
-          <FieldSet id="rp-or" legend="Consumer">
+          <FieldSet id="rp-or" legend="Credential access rule">
             <RowPicker name="rp-or" options={consumers.slice(0, 2)} />
           </FieldSet>
           <Or />
-          <Field id="rp-or-new" label="New consumer name">
+          <Field id="rp-or-new" label="New credential access rule name">
             <Input name="new_consumer" placeholder="GitHub Actions (platform)" />
           </Field>
         </>
       ),
-      code: `<FieldSet id="consumer" legend="Consumer">
+      code: `<FieldSet id="consumer" legend="Credential access rule">
   <RowPicker name="consumer" options={consumers} />
 </FieldSet>
 <Or />
-<Field id="new-consumer" label="New consumer name">
+<Field id="new-consumer" label="New credential access rule name">
   <Input name="new_consumer" placeholder="GitHub Actions (platform)" />
 </Field>`,
     },

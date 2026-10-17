@@ -1,11 +1,17 @@
 // Fixtures for admin ops tests: deps with injectable fetch/env, a test actor, fake upstream and
 // OIDC discovery endpoints, and seeders that go through the real ops.
 import { env } from 'cloudflare:workers';
-import { createCallerProvider } from '../../../../src/admin/ops/caller-providers';
-import { createGrant } from '../../../../src/admin/ops/grants';
-import { createService, type ServiceCreateInput } from '../../../../src/admin/ops/services';
+import { createCredentialAccessRule } from '../../../../src/admin/ops/credential-access-rules';
+import { createService, type ServiceCreateInput } from '../../../../src/admin/ops/credentials';
+import { createIssuerAccessRule } from '../../../../src/admin/ops/issuer_access_rules';
 import { auditFromRow } from '../../../../src/db/audit';
-import type { Actor, AuditEvent, CallerProvider, Grant } from '../../../../src/db/types';
+import { getCredentialAccessRule } from '../../../../src/db/credential-access-rules';
+import type {
+  Actor,
+  AuditEvent,
+  CredentialAccessRule,
+  IssuerAccessRule,
+} from '../../../../src/db/types';
 import type { Deps } from '../../../../src/deps';
 import type { AppEnv } from '../../../../src/env';
 import { toBase64 } from '../../../../src/lib/encoding';
@@ -83,10 +89,10 @@ export function opsDeps(
 /** Empties the control-plane tables touched by ops (storage is per test file). */
 export async function resetControlPlane(): Promise<void> {
   await env.DB.batch([
-    env.DB.prepare('DELETE FROM grants'),
+    env.DB.prepare('DELETE FROM issuer_access_rules'),
     env.DB.prepare('DELETE FROM claim_labels'),
-    env.DB.prepare('DELETE FROM services'),
-    env.DB.prepare('DELETE FROM caller_providers'),
+    env.DB.prepare('DELETE FROM credential_access_rules'),
+    env.DB.prepare('DELETE FROM credentials'),
     env.DB.prepare('DELETE FROM audit_log'),
   ]);
 }
@@ -108,7 +114,13 @@ export async function auditCount(): Promise<number> {
 
 /** Every text column of every control-plane row, for "secret appears nowhere" assertions. */
 export async function dumpControlPlane(): Promise<string> {
-  const tables = ['services', 'caller_providers', 'grants', 'audit_log', 'settings'];
+  const tables = [
+    'credentials',
+    'credential_access_rules',
+    'issuer_access_rules',
+    'audit_log',
+    'settings',
+  ];
   const dumps = await Promise.all(
     tables.map((table) => env.DB.prepare(`SELECT * FROM ${table}`).all()),
   );
@@ -131,19 +143,33 @@ export async function seedService(
   deps: Deps,
   overrides: Partial<ServiceCreateInput> = {},
 ): Promise<string> {
+  if (Object.keys(overrides).length === 0) {
+    const existing = await deps.env.DB.prepare(
+      "SELECT id FROM credentials WHERE slug = 'github'",
+    ).first<{ id: string }>();
+    if (existing) return existing.id;
+  }
   const result = await createService(deps, ACTOR, serviceInput(overrides), CONTEXT);
   if (!result.ok) throw new Error(`seedService: ${result.errors.join('; ')}`);
   return result.service.id;
 }
 
-export async function seedGithubProvider(deps: Deps): Promise<CallerProvider> {
-  const result = await createCallerProvider(deps, ACTOR, {
-    name: 'GitHub Actions',
+export async function seedGithubProvider(deps: Deps): Promise<CredentialAccessRule> {
+  const credential = await deps.env.DB.prepare(
+    'SELECT id FROM credentials ORDER BY created_at DESC LIMIT 1',
+  ).first<{ id: string }>();
+  const credentialId = credential?.id ?? (await seedService(deps));
+  const named = await deps.env.DB.prepare(
+    "SELECT id FROM credential_access_rules WHERE name = 'GitHub Actions'",
+  ).first();
+  const result = await createCredentialAccessRule(deps, ACTOR, {
+    credential_id: credentialId,
+    name: named ? `GitHub Actions (${credentialId})` : 'GitHub Actions',
     profile: 'github-actions',
     tenant_pin: [{ claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID] }],
   });
   if (!result.ok) throw new Error(`seedGithubProvider: ${result.errors.join('; ')}`);
-  return result.callerProvider;
+  return result.credentialAccessRule;
 }
 
 export function anchoredConditions() {
@@ -153,20 +179,30 @@ export function anchoredConditions() {
   ];
 }
 
-export async function seedGrant(
+export async function seedIssuerAccessRule(
   deps: Deps,
-  callerProviderId: string,
+  credentialAccessRuleId: string,
   serviceId: string,
   name = 'read repo',
-): Promise<Grant> {
-  const result = await createGrant(deps, ACTOR, {
+): Promise<IssuerAccessRule> {
+  const boundary = await getCredentialAccessRule(deps.env.DB, credentialAccessRuleId);
+  if (boundary && boundary.credential_id !== serviceId) {
+    const sibling = await createCredentialAccessRule(deps, ACTOR, {
+      ...boundary,
+      name: `${boundary.name} (${serviceId})`,
+      credential_id: serviceId,
+    });
+    if (!sibling.ok) throw new Error(sibling.errors.join('; '));
+    credentialAccessRuleId = sibling.credentialAccessRule.id;
+  }
+  const result = await createIssuerAccessRule(deps, ACTOR, {
     name,
-    caller_provider_id: callerProviderId,
+    credential_access_rule_id: credentialAccessRuleId,
     service_id: serviceId,
     conditions: anchoredConditions(),
     rules: [{ methods: ['GET'], path: '/repos/**' }],
   });
-  if (!result.ok) throw new Error(`seedGrant: ${result.errors.join('; ')}`);
+  if (!result.ok) throw new Error(`seedIssuerAccessRule: ${result.errors.join('; ')}`);
   return result.grant;
 }
 
@@ -193,4 +229,12 @@ export function racingDeps(deps: Deps, before: () => Promise<unknown>): Deps {
     },
   });
   return { ...deps, env: { ...deps.env, DB: racing } };
+}
+
+/** A credential for tests exercising rule validation rather than credential creation. */
+export async function testCredentialId(deps: Deps): Promise<string> {
+  const existing = await deps.env.DB.prepare(
+    'SELECT id FROM credentials ORDER BY created_at DESC, id LIMIT 1',
+  ).first<{ id: string }>();
+  return existing?.id ?? seedService(deps);
 }

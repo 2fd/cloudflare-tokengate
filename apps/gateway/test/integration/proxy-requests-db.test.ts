@@ -22,7 +22,7 @@ function record(n: number, overrides: Partial<RequestRecord> = {}): RequestRecor
     path: '/a',
     service_slug: 'echo',
     service_id: 'svc_1',
-    caller_provider_id: 'cpr_1',
+    credential_access_rule_id: 'cpr_1',
     grant_id: 'grt_1',
     claims_verified: 1,
     caller_subject: 's',

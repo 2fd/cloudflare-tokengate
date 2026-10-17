@@ -25,7 +25,7 @@ export const linkCards: ComponentDoc = {
       layout: 'stack',
       render: () => (
         <LinkCards
-          label="Consumer types"
+          label="Issuer types"
           cards={[
             {
               href: '?kind=github',
@@ -56,13 +56,13 @@ export const linkCards: ComponentDoc = {
           ]}
         />
       ),
-      code: `<LinkCards label="Consumer types" cards={[
-  { href: '/admin/consumers/new?kind=github', title: 'GitHub Actions', meta: '1 consumer',
+      code: `<LinkCards label="Issuer types" cards={[
+  { href: '/admin/credential-access-rules/new?kind=github', title: 'GitHub Actions', meta: '1 consumer',
     description: 'OIDC from token.actions.githubusercontent.com',
     logo: 'github' },
-  { href: '/admin/consumers/new?kind=gitlab', title: 'GitLab CI', … },
-  { href: '/admin/consumers/new?kind=buildkite', title: 'Buildkite', … },
-  { href: '/admin/consumers/new?kind=oidc', title: 'Other OIDC issuer', … },
+  { href: '/admin/credential-access-rules/new?kind=gitlab', title: 'GitLab CI', … },
+  { href: '/admin/credential-access-rules/new?kind=buildkite', title: 'Buildkite', … },
+  { href: '/admin/credential-access-rules/new?kind=oidc', title: 'Other OIDC issuer', … },
 ]} />`,
     },
     {
@@ -93,8 +93,8 @@ export const linkCards: ComponentDoc = {
         />
       ),
       code: `<LinkCards label="Token pages" cards={[
-  { href: '/admin/tokens/hosts', title: 'Allowed hosts', meta: '7 hosts', description: 'Where tokens may point.' },
-  { href: '/admin/tokens/keys', title: 'Encryption keys', description: 'The keys that seal stored secrets.' },
+  { href: '/admin/credentials/hosts', title: 'Allowed hosts', meta: '7 hosts', description: 'Where tokens may point.' },
+  { href: '/admin/credentials/keys', title: 'Encryption keys', description: 'The keys that seal stored secrets.' },
   { href: '/admin/settings/retention', title: 'Data retention', description: 'How long requests and audit events are kept.' },
 ]} />`,
     },

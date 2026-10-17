@@ -3,7 +3,14 @@
 import type { ProfileId } from '../identity/types';
 import { parseJson } from '../lib/json';
 import type { Condition, Injection, Rule, VerifyCheck } from '../policy/types';
-import type { CallerProvider, Grant, Role, Service, User, UserStatus } from './types';
+import type {
+  CredentialAccessRule,
+  IssuerAccessRule,
+  Role,
+  Service,
+  User,
+  UserStatus,
+} from './types';
 
 type Row = Record<string, unknown>;
 
@@ -35,8 +42,13 @@ export function userFromRow(row: Row): User {
   };
 }
 
-export function callerProviderFromRow(row: Row): CallerProvider {
+export function credentialAccessRuleFromRow(row: Row): CredentialAccessRule {
   return {
+    credential_id: str(row.credential_id),
+    conditions: (() => {
+      const parsed = parseJson(strOrNull(row.conditions));
+      return (Array.isArray(parsed) ? parsed : [null]) as Condition[];
+    })(),
     id: str(row.id),
     name: str(row.name),
     profile: str(row.profile) as ProfileId,
@@ -82,12 +94,12 @@ export function serviceFromRow(row: Row): Service {
   };
 }
 
-export function grantFromRow(row: Row): Grant {
+export function grantFromRow(row: Row): IssuerAccessRule {
   return {
     id: str(row.id),
     name: str(row.name),
     description: str(row.description),
-    caller_provider_id: str(row.caller_provider_id),
+    credential_access_rule_id: str(row.credential_access_rule_id),
     service_id: str(row.service_id),
     conditions: objectArray<Condition>(parseJson(strOrNull(row.conditions))),
     rules: objectArray<Rule>(parseJson(strOrNull(row.rules))),

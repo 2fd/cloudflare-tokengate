@@ -115,10 +115,10 @@ export async function sendCredentialExpiryNotices(deps: Deps): Promise<number> {
   const db = deps.env.DB;
   const now = deps.now();
   const horizon = now + Math.max(...EXPIRY_THRESHOLDS_DAYS) * DAY_MS;
-  const [{ results: services }, stored] = await Promise.all([
+  const [{ results: credentials }, stored] = await Promise.all([
     db
       .prepare(
-        `SELECT id, slug, credential_expires_at FROM services
+        `SELECT id, slug, credential_expires_at FROM credentials
          WHERE credential_sealed IS NOT NULL AND credential_expires_at IS NOT NULL
            AND credential_expires_at <= ?`,
       )
@@ -134,7 +134,7 @@ export async function sendCredentialExpiryNotices(deps: Deps): Promise<number> {
 
   const next: ExpiryNoticeState = {};
   const events: AuditEvent[] = [];
-  for (const service of services) {
+  for (const service of credentials) {
     const expiresAt = service.credential_expires_at;
     const crossed = EXPIRY_THRESHOLDS_DAYS.filter((days) => expiresAt - now <= days * DAY_MS);
     const prior = previous[service.id];
@@ -162,7 +162,7 @@ export async function sendCredentialExpiryNotices(deps: Deps): Promise<number> {
     );
   }
 
-  // Entries for services that left the horizon (rotated, deleted, expiry cleared) are dropped.
+  // Entries for credentials that left the horizon (rotated, deleted, expiry cleared) are dropped.
   const nextRaw = canonicalJson(next);
   if (events.length === 0 && nextRaw === canonicalJson(previous)) return 0;
   const guard = { sql: NOTICE_STATE_UNCHANGED, binds: [storedRaw] };

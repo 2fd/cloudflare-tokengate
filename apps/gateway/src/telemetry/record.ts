@@ -14,7 +14,7 @@ export const RECORD_TEXT_LIMITS = {
   path: 1024,
   service_slug: 64,
   service_id: 64,
-  caller_provider_id: 64,
+  credential_access_rule_id: 64,
   grant_id: 64,
   caller_subject: 256,
   caller_repository: 256,
@@ -55,7 +55,7 @@ export interface RequestRecordInput {
   /** Status returned to the caller. */
   status: number;
   serviceId: string | null;
-  callerProviderId: string | null;
+  credentialAccessRuleId: string | null;
   grantId: string | null;
   /** `iss` read from an unverified token; stored only when `caller` is null. */
   untrustedIss: string | null;
@@ -63,7 +63,7 @@ export interface RequestRecordInput {
   caller: {
     claims: Claims;
     display: CallerDisplay;
-    /** The profile's log allowlist for this caller provider (I-LOG-1). */
+    /** The profile's log allowlist for this credential access rule (I-LOG-1). */
     logClaims: readonly string[];
   } | null;
   /** Policy trace, for requests denied by authorization. */
@@ -90,7 +90,7 @@ export function buildRequestRecord(input: RequestRecordInput): RequestRecord {
     ),
     service_slug: text(input.slug, 'service_slug'),
     service_id: text(input.serviceId, 'service_id'),
-    caller_provider_id: text(input.callerProviderId, 'caller_provider_id'),
+    credential_access_rule_id: text(input.credentialAccessRuleId, 'credential_access_rule_id'),
     grant_id: text(input.grantId, 'grant_id'),
     claims_verified: caller ? 1 : 0,
     caller_subject: caller ? text(caller.display.subject || null, 'caller_subject') : null,

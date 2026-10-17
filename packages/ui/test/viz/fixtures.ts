@@ -169,7 +169,7 @@ export const accesses: MapAccess[] = [
     status: 'Inactive: token disabled',
     consumerLabel: 'Buildkite (acme) › pipeline deploy',
     operation: 'Post messages',
-    href: '/admin/access/acc_bk1',
+    href: '/admin/issuer-access-rules/acc_bk1',
   },
 ];
 
@@ -177,13 +177,13 @@ export const accesses: MapAccess[] = [
 export function atScale(): { consumers: MapConsumer[]; tokens: MapToken[]; accesses: MapAccess[] } {
   const many: MapConsumer[] = Array.from({ length: 14 }, (_, i) => ({
     id: `c${i}`,
-    name: `Consumer ${i}`,
+    name: `Credential access rule ${i}`,
     logo: { brand: 'github' },
     weight: 100 - i,
   }));
   const toks: MapToken[] = Array.from({ length: 9 }, (_, i) => ({
     id: `t${i}`,
-    name: `Token ${i}`,
+    name: `Credential ${i}`,
     logo: { brand: 'custom' },
     requests: 1000 - i * 100,
     denied: 0,
@@ -194,7 +194,7 @@ export function atScale(): { consumers: MapConsumer[]; tokens: MapToken[]; acces
   many.forEach((c, i) => {
     acc.push({ consumer: c.id, token: `t${i % 9}`, status: 'Active' });
   });
-  // the consumer in row 13 (outside the busiest 6) uses the quietest token
+  // the credential access rule in row 13 (outside the busiest 6) uses the quietest token
   acc.push({ consumer: 'c13', token: 't8', tone: 'warn', status: 'Expires in 2 days' });
   return { consumers: many, tokens: toks, accesses: acc };
 }

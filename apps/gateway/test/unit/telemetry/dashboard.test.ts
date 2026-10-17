@@ -104,7 +104,7 @@ async function insertService(
   expiresAt: number | null,
 ) {
   await env.DB.prepare(
-    `INSERT INTO services (id, slug, name, base_url, injection, credential_sealed, credential_expires_at, created_at, updated_at)
+    `INSERT INTO credentials (id, slug, name, base_url, injection, credential_sealed, credential_expires_at, created_at, updated_at)
      VALUES (?, ?, ?, 'https://api.example.com', '{"kind":"bearer"}', ?, ?, 0, 0)`,
   )
     .bind(id, slug, `${slug} API`, sealed, expiresAt)
@@ -127,10 +127,10 @@ beforeEach(async () => {
   resetSchemaStatusCacheForTests();
   await env.DB.batch([
     env.DB.prepare('DELETE FROM settings'),
-    env.DB.prepare('DELETE FROM grants'),
+    env.DB.prepare('DELETE FROM issuer_access_rules'),
     env.DB.prepare('DELETE FROM claim_labels'),
-    env.DB.prepare('DELETE FROM caller_providers'),
-    env.DB.prepare('DELETE FROM services'),
+    env.DB.prepare('DELETE FROM credential_access_rules'),
+    env.DB.prepare('DELETE FROM credentials'),
     env.DB.prepare('DELETE FROM user_identities'),
   ]);
   await env.TELEMETRY_DB.batch([
@@ -269,7 +269,7 @@ describe('loadOverview', () => {
 });
 
 describe('loadAlertData', () => {
-  it('flags services whose upstream rejects the credential (>= 5 and >= 50% in 15 minutes)', async () => {
+  it('flags credentials whose upstream rejects the credential (>= 5 and >= 50% in 15 minutes)', async () => {
     for (let i = 0; i < 5; i++)
       await insertRequest(NOW - 60_000 + i, { status: 401, upstream_status: 401 });
     for (let i = 0; i < 4; i++) await insertRequest(NOW - 50_000 + i, {});
@@ -298,10 +298,10 @@ describe('loadAlertData', () => {
     ]);
     const [alert] = overviewAlerts(data).filter((a) => a.code === 'upstream_auth');
     expect(alert?.title).toBe(
-      'The upstream rejected token alpha: 5 of 9 requests got 401/403 in 15 min.',
+      'The upstream rejected credential alpha: 5 of 9 requests got 401/403 in 15 min.',
     );
     expect(alert?.fix).toMatchObject({
-      href: '/admin/tokens/svc_A#secret',
+      href: '/admin/credentials/svc_A#secret',
       permission: 'tokens:write',
     });
     expect(alert?.objects).toContainEqual({
@@ -346,17 +346,17 @@ describe('loadAlertData', () => {
     const byCode = new Map(alerts.map((a) => [a.code, a]));
     // key_missing names the tokens that use the missing key, each as a link.
     expect(byCode.get('key_missing')?.title).toBe(
-      '1 token uses key k0, which the keyring no longer has: beta API.',
+      '1 credential uses key k0, which the keyring no longer has: beta API.',
     );
     expect(byCode.get('key_missing')?.objects).toContainEqual({
-      href: '/admin/tokens/svc_B',
+      href: '/admin/credentials/svc_B',
       label: 'beta API',
     });
     expect(byCode.get('credential_expiring')?.title).toBe(
       'The secret of alpha API expires on 16 Oct 2026 (in 3 days).',
     );
     expect(byCode.get('credential_malformed')?.fix).toMatchObject({
-      href: '/admin/tokens/svc_C?open=destination#destination',
+      href: '/admin/credentials/svc_C?open=destination#destination',
       permission: 'tokens:write',
     });
     expect(byCode.get('key_not_active')?.form).toEqual({ kind: 'rewrap', count: 1 });
@@ -387,37 +387,44 @@ describe('loadAlertData', () => {
     await insertService('svc_A', 'alpha', null, null);
     await insertService('svc_B', 'beta', null, null);
     await env.DB.prepare(
-      `INSERT INTO caller_providers (id, name, profile, issuer, jwks_uri, audience, allowed_algs,
+      `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
          max_token_age_seconds, tenant_pin, anchor_claims, enabled, created_at, updated_at)
-       VALUES ('cpr_A', 'gh', 'github-actions', 'https://iss.example', 'https://iss.example/jwks',
+       VALUES ('cpr_A', (SELECT id FROM credentials ORDER BY id LIMIT 1), 'gh', 'github-actions', 'https://iss.example', 'https://iss.example/jwks',
          'tokengate-test-audience', '["RS256"]', 300, '[]', '[]', 1, 0, 0)`,
     ).run();
     for (const [id, service, expires] of [
       ['grt_A', 'svc_A', NOW + 2 * DAY],
       ['grt_B', 'svc_B', NOW + 5 * DAY],
     ] as const) {
+      const boundaryId = `cpr_${service}`;
+      await env.DB.prepare(`INSERT INTO credential_access_rules
+        (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs, max_token_age_seconds, created_at, updated_at)
+        SELECT ?, ?, ?, profile, issuer, jwks_uri, audience, allowed_algs, max_token_age_seconds, 0, 0
+        FROM credential_access_rules WHERE id = 'cpr_A'`)
+        .bind(boundaryId, service, boundaryId)
+        .run();
       await env.DB.prepare(
-        `INSERT INTO grants (id, name, caller_provider_id, service_id, conditions, rules, enabled,
+        `INSERT INTO issuer_access_rules (id, name, credential_access_rule_id, service_id, conditions, rules, enabled,
            expires_at, created_at, updated_at)
-         VALUES (?, ?, 'cpr_A', ?, '[]', '[]', 1, ?, 0, 0)`,
+         VALUES (?, ?, ?, ?, '[]', '[]', 1, ?, 0, 0)`,
       )
-        .bind(id, `Access ${id}`, service, expires)
+        .bind(id, `Access ${id}`, boundaryId, service, expires)
         .run();
     }
     const alerts = overviewAlerts(await loadAlertData(deps()));
     const missing = alerts.filter((a) => a.code === 'credential_missing_used');
     expect(missing).toHaveLength(1);
     expect(missing[0]?.title).toBe(
-      '2 tokens have no secret, so their accesses cannot work: alpha API (1 access), beta API (1 access).',
+      '2 credentials have no secret, so their accesses cannot work: alpha API (1 access), beta API (1 access).',
     );
     const expiring = alerts.filter((a) => a.code === 'access_expiring');
     expect(expiring).toHaveLength(1);
     expect(expiring[0]?.objects.map((o) => o.href)).toEqual([
-      '/admin/access/grt_A',
-      '/admin/access/grt_B',
+      '/admin/issuer-access-rules/grt_A',
+      '/admin/issuer-access-rules/grt_B',
     ]);
     expect(expiring[0]?.fix).toMatchObject({
-      href: '/admin/access/grt_A?open=edit#edit',
+      href: '/admin/issuer-access-rules/grt_A?open=edit#edit',
       permission: 'access:write',
     });
   });
@@ -454,7 +461,7 @@ describe('loadAlertData: keyring key check values', () => {
     expect(first).toMatchObject({
       level: 'error',
       code: 'key_changed',
-      fix: { href: '/admin/tokens/keys#rewrap', permission: 'keyring:rewrap' },
+      fix: { href: '/admin/credentials/keys#rewrap', permission: 'keyring:rewrap' },
     });
     expect(first?.title).toContain('k1');
     expect(JSON.stringify(first)).not.toContain(KEK);

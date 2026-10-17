@@ -1,11 +1,12 @@
-// Markup rules of the consumer and access forms (WCAG 2.2 AA, A7.6, A16), checked on the real
+// Markup rules of the credential access rule and access forms (WCAG 2.2 AA, A7.6, A16), checked on the real
 // pages with HTMLRewriter: labelled controls, grouped radios, rendered describedby ids, one name
 // per branch, no native validation where a control can be hidden, and patterns that browsers
 // compile (`v` flag) and that accept their own placeholder.
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createCallerProvider } from '../../src/admin/ops/caller-providers';
+import { createCredentialAccessRule } from '../../src/admin/ops/credential-access-rules';
 import { adminGet, adminPost } from '../helpers/admin-auth';
 import { type ConsumersWorld, consumersWorld } from '../helpers/consumers';
+import { testCredentialId } from '../unit/admin/ops/helpers';
 import { ACTOR, seedGithubProvider, seedService } from '../unit/admin/ops/helpers';
 
 const VOID = new Set(['input', 'br', 'img', 'meta', 'link', 'hr', 'source', 'wbr', 'area', 'col']);
@@ -157,16 +158,18 @@ beforeEach(async () => {
 
 const session = () => world.sessions.access_manager;
 
-describe('consumer access markup (WCAG 2.2 AA)', () => {
+describe('issuer access rules markup (WCAG 2.2 AA)', () => {
   it('the form with nested consumers, tokens and the new-consumer branch', async () => {
-    const created = await createCallerProvider(world.app.deps, ACTOR, {
+    const created = await createCredentialAccessRule(world.app.deps, ACTOR, {
+      credential_id: await testCredentialId(world.app.deps),
       profile: 'gitlab-ci',
       issuer: 'https://gitlab.com',
       tenant_pin: [{ claim: 'namespace_id', match: 'exact', values: ['9'] }],
     });
     if (!created.ok) throw new Error(created.errors.join('; '));
     await seedGithubProvider(world.app.deps);
-    await createCallerProvider(world.app.deps, ACTOR, {
+    await createCredentialAccessRule(world.app.deps, ACTOR, {
+      credential_id: await testCredentialId(world.app.deps),
       profile: 'generic',
       issuer: 'https://idp.example.org',
       jwks_uri: 'https://idp.example.org/keys',
@@ -178,7 +181,9 @@ describe('consumer access markup (WCAG 2.2 AA)', () => {
       name: 'Other',
       base_url: 'https://api.openai.com/v1',
     });
-    const html = await (await adminGet(world.app, session(), '/admin/access/new')).text();
+    const html = await (
+      await adminGet(world.app, session(), '/admin/issuer-access-rules/new')
+    ).text();
     const nodes = await checkPage(html, 'access form');
     // The checks ran on real branches: prefixed fields, several of them hidden in reveals.
     expect(controls(nodes).length).toBeGreaterThan(40);
@@ -190,10 +195,10 @@ describe('consumer access markup (WCAG 2.2 AA)', () => {
     const provider = await seedGithubProvider(world.app.deps);
     const token = await seedService(world.app.deps);
     await checkPage(
-      await (await adminGet(world.app, session(), '/admin/access/new')).text(),
+      await (await adminGet(world.app, session(), '/admin/issuer-access-rules/new')).text(),
       'fixed form',
     );
-    const error = await adminPost(world.app, session(), '/admin/access', {
+    const error = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       consumer_id: provider.id,
       token_id: token,
       repository: 'acme/api',
@@ -229,7 +234,7 @@ describe('consumer access markup (WCAG 2.2 AA)', () => {
     const rows = await adminGet(
       world.app,
       session(),
-      `/admin/access/new?consumer=${provider.id}&mode=rows`,
+      `/admin/issuer-access-rules/new?consumer=${provider.id}&mode=rows`,
     );
     await checkPage(await rows.text(), 'rows editor');
   });
@@ -237,7 +242,7 @@ describe('consumer access markup (WCAG 2.2 AA)', () => {
   it('a risk to accept: the summary link lands on the invalid box', async () => {
     const provider = await seedGithubProvider(world.app.deps);
     const token = await seedService(world.app.deps);
-    const res = await adminPost(world.app, session(), '/admin/access', {
+    const res = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       consumer_id: provider.id,
       token_id: token,
       editor: 'rows',
@@ -261,13 +266,13 @@ describe('consumer access markup (WCAG 2.2 AA)', () => {
     expect(html).toContain('<div class="riskacc always" id="ga-risk"');
   });
 
-  it('the consumer list, add form and consumer page', async () => {
+  it('the credential access rule list, add form and consumer page', async () => {
     const provider = await seedGithubProvider(world.app.deps);
     await seedService(world.app.deps);
     for (const path of [
-      '/admin/consumers',
-      '/admin/consumers/new',
-      `/admin/consumers/${provider.id}`,
+      '/admin/credential-access-rules',
+      '/admin/credential-access-rules/new',
+      `/admin/credential-access-rules/${provider.id}`,
     ]) {
       await checkPage(await (await adminGet(world.app, session(), path)).text(), path);
     }
@@ -276,7 +281,7 @@ describe('consumer access markup (WCAG 2.2 AA)', () => {
   it('the matrix, the list and the access page', async () => {
     const provider = await seedGithubProvider(world.app.deps);
     const token = await seedService(world.app.deps);
-    const res = await adminPost(world.app, session(), '/admin/access', {
+    const res = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       consumer_id: provider.id,
       token_id: token,
       repository: 'acme/api (5)',
@@ -305,9 +310,9 @@ describe('consumer access markup (WCAG 2.2 AA)', () => {
       'rule.0.path': '/x',
       expires: 'never',
     };
-    const first = await adminPost(world.app, session(), '/admin/access', rows);
+    const first = await adminPost(world.app, session(), '/admin/issuer-access-rules', rows);
     const digest = /name="warnings_digest" value="([0-9a-f]+)"/.exec(await first.text())?.[1] ?? '';
-    const risky = await adminPost(world.app, session(), '/admin/access', {
+    const risky = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       ...rows,
       warnings_digest: digest,
       acknowledge_warnings: '1',
@@ -316,11 +321,11 @@ describe('consumer access markup (WCAG 2.2 AA)', () => {
     const riskyPage = await (await adminGet(world.app, session(), riskyPath)).text();
     expect(riskyPage).toContain('<div class="riskacc always" id="ga-risk"');
     for (const path of [
-      '/admin/access',
-      '/admin/access?view=list',
-      '/admin/access?view=matrix',
-      `/admin/access?token=${token}`,
-      `/admin/access/new?token=${token}`,
+      '/admin/issuer-access-rules',
+      '/admin/issuer-access-rules?view=list',
+      '/admin/issuer-access-rules?view=matrix',
+      `/admin/issuer-access-rules?token=${token}`,
+      `/admin/issuer-access-rules/new?token=${token}`,
       location.split('?')[0] ?? '',
       `${location.split('?')[0]}?open=edit`,
       riskyPath,

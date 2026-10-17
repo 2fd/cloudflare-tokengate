@@ -7,16 +7,16 @@ describe('FixedBar', () => {
     expect(
       render(
         <FixedBar
-          label="Token"
+          label="Credential"
           logo="slack"
           name="Slack"
           meta="/proxy/slack"
           status={<span class="badge ok">Secret set</span>}
-          change={{ href: '/admin/access/new', srSuffix: 'token' }}
+          change={{ href: '/admin/issuer-access-rules/new', srSuffix: 'token' }}
         />,
       ),
     ).toBe(
-      '<div class="fixedbar"><span class="lbl">Token</span><span class="logo sm lg-slack" aria-hidden="true">S</span><span class="grow"><b>Slack</b> <span class="meta mono">/proxy/slack</span></span><span class="badge ok">Secret set</span><a class="sm" href="/admin/access/new">Change<span class="vh"> token</span></a></div>',
+      '<div class="fixedbar"><span class="lbl">Credential</span><span class="logo sm lg-slack" aria-hidden="true">S</span><span class="grow"><b>Slack</b> <span class="meta mono">/proxy/slack</span></span><span class="badge ok">Secret set</span><a class="sm" href="/admin/issuer-access-rules/new">Change<span class="vh"> token</span></a></div>',
     );
   });
 
@@ -24,14 +24,14 @@ describe('FixedBar', () => {
     expect(
       render(
         <FixedBar
-          label="Consumer"
+          label="Credential access rule"
           name="GitHub Actions (acme)"
           class="x"
           change={{ href: '?', srSuffix: 'consumer', label: 'Pick another' }}
         />,
       ),
     ).toBe(
-      '<div class="fixedbar x"><span class="lbl">Consumer</span><span class="grow"><b>GitHub Actions (acme)</b></span><a class="sm" href="?">Pick another<span class="vh"> consumer</span></a></div>',
+      '<div class="fixedbar x"><span class="lbl">Credential access rule</span><span class="grow"><b>GitHub Actions (acme)</b></span><a class="sm" href="?">Pick another<span class="vh"> consumer</span></a></div>',
     );
   });
 });

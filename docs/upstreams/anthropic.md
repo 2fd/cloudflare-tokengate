@@ -4,7 +4,7 @@ This page shows admins how to set up an Anthropic service and shows workflow aut
 
 ## Service template
 
-In the admin UI, open **Service tokens**, select **Add a token** and open the **Anthropic API** card. Paste the API key and select **Check and save Anthropic**. Everything in the table comes from the template (`apps/gateway/src/admin/service-templates.ts`); the form does not ask for it. Name and slug are optional: when empty, the gateway uses `Anthropic` and the slug below, or the next free one (`anthropic-2`).
+In the admin UI, open **Credentials**, select **Add a token** and open the **Anthropic API** card. Paste the API key and select **Check and save Anthropic**. Everything in the table comes from the template (`apps/gateway/src/admin/service-templates.ts`); the form does not ask for it. Name and slug are optional: when empty, the gateway uses `Anthropic` and the slug below, or the next free one (`anthropic-2`).
 
 | Field | Template value |
 |---|---|
@@ -17,7 +17,7 @@ In the admin UI, open **Service tokens**, select **Add a token** and open the **
 | Suggested grant rule | `POST /v1/messages` |
 | Host for the upstream host allowlist | `api.anthropic.com` |
 
-If **Service tokens › Allowed hosts** is set and does not include `api.anthropic.com`, the card says so before you type anything. An owner ticks **Also allow api.anthropic.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
+If **Credentials › Allowed hosts** is set and does not include `api.anthropic.com`, the card says so before you type anything. An owner ticks **Also allow api.anthropic.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
 
 Reference: <https://docs.anthropic.com/en/api/overview>.
 

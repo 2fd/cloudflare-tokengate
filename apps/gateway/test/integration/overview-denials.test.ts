@@ -26,7 +26,7 @@ function record(ts: number, overrides: Partial<RequestRecord>): RequestRecord {
     path: '/chat.postMessage',
     service_slug: 'slack',
     service_id: 'svc_01JAAAAAAAAAAAAAAAAAAAAAAA',
-    caller_provider_id: 'cpr_01JAAAAAAAAAAAAAAAAAAAAAAA',
+    credential_access_rule_id: 'cpr_01JAAAAAAAAAAAAAAAAAAAAAAA',
     grant_id: null,
     claims_verified: 1,
     caller_subject: 'repo:acme/web:ref:refs/heads/main',
@@ -49,7 +49,7 @@ const unverified = (ts: number, iss: string): Partial<RequestRecord> => ({
   reason: 'issuer_unknown',
   status: 401,
   service_id: null,
-  caller_provider_id: null,
+  credential_access_rule_id: null,
   claims_verified: 0,
   caller_subject: null,
   caller_repository: null,
@@ -93,7 +93,7 @@ describe('I-LOG-2: Top denials', () => {
     // Two requests first; then the newest of the single ones.
     expect(rows).toEqual(['acme/web', 'acme/web', 'acme/api']);
     expect(html).toContain(`href="/admin/requests/${web[1]?.id}"`);
-    expect(html).toContain(`href="/admin/access/new?from_request=${web[1]?.id}"`);
+    expect(html).toContain(`href="/admin/issuer-access-rules/new?from_request=${web[1]?.id}"`);
     expect(html).toContain('Give access<span class="vh"> for acme/web on slack</span>');
     // The count links to exactly that group, and names it for screen readers.
     expect(html).toContain('>2<span class="vh"> denied requests from acme/web to slack</span></a>');
@@ -116,21 +116,21 @@ describe('I-LOG-2: Top denials', () => {
       'Unverified token</span><span class="ctx"><span class="sep" aria-hidden="true">· </span>from <code>https://evil.example/&quot;&gt;&lt;script&gt;</code>',
     );
     expect(html).not.toContain('from_request=');
-    expect(html).toContain('href="/admin/consumers/new">Add consumer');
+    expect(html).toContain('href="/admin/credential-access-rules/new">Add credential access rule');
     for (const href of html.matchAll(/href="([^"]*)"/g)) {
       expect(href[1]).not.toContain('evil');
     }
   });
 
-  it('prefills the consumer type only when the unverified issuer is exactly a built-in one', async () => {
+  it('prefills the credential access rule type only when the unverified issuer is exactly a built-in one', async () => {
     await insert([record(NOW - 1000, unverified(NOW - 1000, GITHUB_ISSUER))]);
     const app = createTestApp({ now: () => NOW });
     const html = denials(await (await adminGet(app, await loginAs(app, owner), '/admin')).text());
-    expect(html).toContain('href="/admin/consumers/new?type=github-actions"');
+    expect(html).toContain('href="/admin/credential-access-rules/new?type=github-actions"');
     await env.TELEMETRY_DB.prepare('DELETE FROM request_log').run();
     await insert([record(NOW - 1000, unverified(NOW - 1000, `${GITHUB_ISSUER}/`))]);
     const near = denials(await (await adminGet(app, await loginAs(app, owner), '/admin')).text());
-    expect(near).toContain('href="/admin/consumers/new">');
+    expect(near).toContain('href="/admin/credential-access-rules/new">');
     expect(near).not.toContain('?type=');
   });
 
@@ -138,8 +138,8 @@ describe('I-LOG-2: Top denials', () => {
     await insert([record(NOW - 1000, {}), record(NOW - 900, unverified(NOW - 900, GITHUB_ISSUER))]);
     const app = createTestApp({ now: () => NOW });
     const html = denials(await (await adminGet(app, await loginAs(app, viewer), '/admin')).text());
-    expect(html).not.toContain('/admin/access/new');
-    expect(html).not.toContain('/admin/consumers/new');
+    expect(html).not.toContain('/admin/issuer-access-rules/new');
+    expect(html).not.toContain('/admin/credential-access-rules/new');
     expect(html).toContain('See requests');
   });
 

@@ -4,12 +4,12 @@ import {
   type GithubPresetInput,
   GITLAB_CONTEXTS,
   type GitlabPresetInput,
-  githubGrantPreset,
-  gitlabGrantPreset,
+  githubIssuerAccessRulePreset,
+  gitlabIssuerAccessRulePreset,
   PROTECTABLE_CONTEXTS,
 } from '../../../src/policy/presets';
 import type { Rule } from '../../../src/policy/types';
-import { validateGrant } from '../../../src/policy/validate';
+import { validateIssuerAccessRule } from '../../../src/policy/validate';
 import { githubProfile, gitlabProfile, provider } from './fixtures';
 
 const base: GithubPresetInput = {
@@ -41,9 +41,9 @@ const PATTERNS: Record<string, string> = {
   any: '',
 };
 
-describe('githubGrantPreset', () => {
+describe('githubIssuerAccessRulePreset', () => {
   it('builds the branch preset', () => {
-    expect(githubGrantPreset(base)).toEqual({
+    expect(githubIssuerAccessRulePreset(base)).toEqual({
       conditions: [
         { claim: 'repository_owner_id', match: 'exact', values: ['1000'] },
         { claim: 'repository_id', match: 'exact', values: ['2000'] },
@@ -62,7 +62,11 @@ describe('githubGrantPreset', () => {
     ['tag', 'refs/tags/v*', ['push']],
     ['release', 'refs/tags/v*', ['release']],
   ] as const)('builds the %s preset', (context, ref, events) => {
-    const { conditions, errors } = githubGrantPreset({ ...base, context, pattern: 'v*' });
+    const { conditions, errors } = githubIssuerAccessRulePreset({
+      ...base,
+      context,
+      pattern: 'v*',
+    });
     expect(errors).toEqual([]);
     expect(conditions).toContainEqual({ claim: 'ref_type', match: 'exact', values: ['tag'] });
     expect(conditions).toContainEqual({ claim: 'ref', match: 'glob', values: [ref] });
@@ -70,7 +74,7 @@ describe('githubGrantPreset', () => {
   });
 
   it('builds the pull request preset with its risk, and no protection choice', () => {
-    const { conditions, risks } = githubGrantPreset({
+    const { conditions, risks } = githubIssuerAccessRulePreset({
       ...base,
       context: 'pull_request',
       requireProtectedRef: false,
@@ -86,28 +90,40 @@ describe('githubGrantPreset', () => {
   });
 
   it('builds the protected and any contexts', () => {
-    const protectedRefs = githubGrantPreset({ ...base, context: 'protected', pattern: '' });
+    const protectedRefs = githubIssuerAccessRulePreset({
+      ...base,
+      context: 'protected',
+      pattern: '',
+    });
     expect(protectedRefs.conditions).toEqual([
       { claim: 'repository_owner_id', match: 'exact', values: ['1000'] },
       { claim: 'repository_id', match: 'exact', values: ['2000'] },
       { claim: 'ref_protected', match: 'exact', values: ['true'] },
     ]);
     expect(protectedRefs.risks).toEqual([]);
-    const any = githubGrantPreset({ ...base, context: 'any', pattern: '' });
+    const any = githubIssuerAccessRulePreset({ ...base, context: 'any', pattern: '' });
     expect(any.conditions).toHaveLength(2);
     expect(any.risks).toEqual(['any_ref']);
     expect(any.warnings).toHaveLength(1);
   });
 
   it('uses exact environments and refuses a wildcard in them', () => {
-    const exact = githubGrantPreset({ ...base, context: 'environment', pattern: 'prod' });
+    const exact = githubIssuerAccessRulePreset({
+      ...base,
+      context: 'environment',
+      pattern: 'prod',
+    });
     expect(exact.conditions).toContainEqual({
       claim: 'environment',
       match: 'exact',
       values: ['prod'],
     });
     expect(exact.risks).toEqual([]);
-    const glob = githubGrantPreset({ ...base, context: 'environment', pattern: 'prod-*' });
+    const glob = githubIssuerAccessRulePreset({
+      ...base,
+      context: 'environment',
+      pattern: 'prod-*',
+    });
     expect(glob.errors).toEqual([
       {
         field: 'pattern',
@@ -117,14 +133,14 @@ describe('githubGrantPreset', () => {
   });
 
   it('marks unprotected refs as a risk', () => {
-    const result = githubGrantPreset({ ...base, requireProtectedRef: false });
+    const result = githubIssuerAccessRulePreset({ ...base, requireProtectedRef: false });
     expect(result.risks).toEqual(['unprotected_ref']);
     expect(result.warnings).toHaveLength(1);
   });
 
   it('adds the runner and workflow toggles', () => {
     const workflowRef = 'acme/infra/.github/workflows/deploy.yml@refs/heads/main';
-    const { conditions, errors } = githubGrantPreset({
+    const { conditions, errors } = githubIssuerAccessRulePreset({
       ...base,
       repositoryId: null,
       requireGithubHosted: true,
@@ -162,17 +178,17 @@ describe('githubGrantPreset', () => {
     ['double wildcard', { pattern: 'release/**' }, 'pattern'],
     ['whitespace', { pattern: 'my branch' }, 'pattern'],
   ])('reports %s on its field', (_name, patch, field) => {
-    const { errors } = githubGrantPreset({ ...base, ...patch });
+    const { errors } = githubIssuerAccessRulePreset({ ...base, ...patch });
     expect(errors.map((error) => error.field)).toContain(field);
   });
 
   it.each(GITHUB_CONTEXTS)('produces an access that passes validation (%s)', (context) => {
-    const { conditions, risks } = githubGrantPreset({
+    const { conditions, risks } = githubIssuerAccessRulePreset({
       ...base,
       context,
       pattern: PATTERNS[context] ?? '',
     });
-    const result = validateGrant({ conditions, rules }, githubProfile, provider());
+    const result = validateIssuerAccessRule({ conditions, rules }, githubProfile, provider());
     expect(result.errors).toEqual([]);
     // Every warning the validator finds is one of the risks the selection names.
     expect(result.warningDetails.map((detail) => detail.code)).toEqual(
@@ -186,13 +202,13 @@ describe('githubGrantPreset', () => {
   it.each(PROTECTABLE_CONTEXTS)(
     'unprotected %s carries exactly the unprotected_ref code in the validator too',
     (context) => {
-      const { conditions, risks } = githubGrantPreset({
+      const { conditions, risks } = githubIssuerAccessRulePreset({
         ...base,
         context: context as GithubPresetInput['context'],
         pattern: PATTERNS[context] ?? '',
         requireProtectedRef: false,
       });
-      const codes = validateGrant(
+      const codes = validateIssuerAccessRule(
         { conditions, rules },
         githubProfile,
         provider(),
@@ -203,11 +219,11 @@ describe('githubGrantPreset', () => {
   );
 });
 
-describe('githubGrantPreset ref patterns', () => {
+describe('githubIssuerAccessRulePreset ref patterns', () => {
   it.each(['branch', 'tag', 'release', 'pull_request'] as const)(
     'refuses a %s pattern that already has the refs/ prefix',
     (context) => {
-      const result = githubGrantPreset({ ...base, context, pattern: 'refs/heads/main' });
+      const result = githubIssuerAccessRulePreset({ ...base, context, pattern: 'refs/heads/main' });
       expect(result.errors[0]?.field).toBe('pattern');
       expect(result.errors[0]?.message).toMatch(/without the refs\//);
     },
@@ -215,7 +231,7 @@ describe('githubGrantPreset ref patterns', () => {
 
   it('never produces a glob event condition', () => {
     for (const context of GITHUB_CONTEXTS) {
-      const { conditions } = githubGrantPreset({
+      const { conditions } = githubIssuerAccessRulePreset({
         ...base,
         context,
         pattern: PATTERNS[context] ?? '',
@@ -226,7 +242,7 @@ describe('githubGrantPreset ref patterns', () => {
   });
 });
 
-describe('gitlabGrantPreset', () => {
+describe('gitlabIssuerAccessRulePreset', () => {
   const gitlab = () =>
     provider({
       profile: 'gitlab-ci',
@@ -235,7 +251,7 @@ describe('gitlabGrantPreset', () => {
     });
 
   it('builds bare GitLab refs with ref_type and leaves the pipeline source implicit', () => {
-    expect(gitlabGrantPreset(gitlabBase).conditions).toEqual([
+    expect(gitlabIssuerAccessRulePreset(gitlabBase).conditions).toEqual([
       { claim: 'namespace_id', match: 'exact', values: ['3000'] },
       { claim: 'project_id', match: 'exact', values: ['4000'] },
       { claim: 'ref_type', match: 'exact', values: ['branch'] },
@@ -246,7 +262,7 @@ describe('gitlabGrantPreset', () => {
 
   it('pins a pipeline configuration and refuses a wildcard in it', () => {
     const configRef = 'gitlab.com/acme-group/app//.gitlab-ci.yml@refs/heads/main';
-    const pinned = gitlabGrantPreset({ ...gitlabBase, projectId: null, configRef });
+    const pinned = gitlabIssuerAccessRulePreset({ ...gitlabBase, projectId: null, configRef });
     expect(pinned.errors).toEqual([]);
     expect(pinned.conditions).toContainEqual({
       claim: 'ci_config_ref_uri',
@@ -254,18 +270,20 @@ describe('gitlabGrantPreset', () => {
       values: [configRef],
     });
     expect(
-      gitlabGrantPreset({ ...gitlabBase, configRef: 'gitlab.com/acme/*//x.yml@refs/heads/main' })
-        .errors[0]?.field,
+      gitlabIssuerAccessRulePreset({
+        ...gitlabBase,
+        configRef: 'gitlab.com/acme/*//x.yml@refs/heads/main',
+      }).errors[0]?.field,
     ).toBe('workflow_ref');
   });
 
   it.each(GITLAB_CONTEXTS)('produces an access that passes validation (%s)', (context) => {
-    const { conditions } = gitlabGrantPreset({
+    const { conditions } = gitlabIssuerAccessRulePreset({
       ...gitlabBase,
       context,
       pattern: PATTERNS[context] ?? '',
     });
-    const result = validateGrant({ conditions, rules }, gitlabProfile, gitlab());
+    const result = validateIssuerAccessRule({ conditions, rules }, gitlabProfile, gitlab());
     expect(result.errors).toEqual([]);
     expect(result.warnings).toEqual([]);
   });

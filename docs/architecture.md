@@ -8,19 +8,19 @@ The code is the reference. Each section names the files that implement it. Invar
 
 tokengate is one Cloudflare Worker with two D1 databases. Each company deploys its own copy in its own Cloudflare account.
 
-![Components: a CI job calls the proxy pipeline with a caller token; the proxy reads one batch from D1 DB, fetches the caller provider issuer JWKS (cached), forwards to the upstream API with the credential injected, and writes request records to TELEMETRY_DB. The admin browser reaches the admin UI through Cloudflare Access, and the UI writes changes with their audit rows to DB. An hourly cron computes rollups and applies retention in TELEMETRY_DB.](diagrams/components.svg)
+![Components: a CI job calls the proxy pipeline with a caller token; the proxy reads one batch from D1 DB, fetches the credential access rule issuer JWKS (cached), forwards to the upstream API with the credential injected, and writes request records to TELEMETRY_DB. The admin browser reaches the admin UI through Cloudflare Access, and the UI writes changes with their audit rows to DB. An hourly cron computes rollups and applies retention in TELEMETRY_DB.](diagrams/components.svg)
 
 <sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
 | Component | Binding or route | Role |
 |---|---|---|
 | Proxy | `ANY /proxy/:slug`, `ANY /proxy/:slug/*` | Verifies the caller token, authorizes the request, injects the credential and forwards. |
-| Admin UI | `/admin/*` | Server-rendered pages in four sections: Monitoring (`/admin`), Service tokens (`/admin/tokens`), Service consumers (`/admin/consumers`, with consumer access at `/admin/access`) and Users (`/admin/users`), in a sidebar shell built from `@tokengate/ui` ([ADR 0022](adr/0022-admin-ui-on-design-system-d.md)); `apps/gateway/src/admin/paths.ts` builds every URL ([ADR 0019](adr/0019-admin-information-architecture.md)). Every request is authenticated by its Cloudflare Access JWT; there are no gateway sessions and no `/auth` routes ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). |
+| Admin UI | `/admin/*` | Server-rendered pages in four sections: Monitoring (`/admin`), Credentials (`/admin/credentials`), Credential access rules (`/admin/credential-access-rules`, with issuer access rules at `/admin/issuer-access-rules`) and Users (`/admin/users`), in a sidebar shell built from `@tokengate/ui` ([ADR 0022](adr/0022-admin-ui-on-design-system-d.md)); `apps/gateway/src/admin/paths.ts` builds every URL ([ADR 0019](adr/0019-admin-information-architecture.md)). Every request is authenticated by its Cloudflare Access JWT; there are no gateway sessions and no `/auth` routes ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). |
 | Health | `GET /healthz`, `GET /readyz` | Liveness without I/O; readiness as booleans only. See [observability.md](observability.md). |
 | Stylesheets | `GET /static/:file` | The admin stylesheets: `ui.css` of `@tokengate/ui` and `apps/gateway/src/admin/pages.css`, bundled as text and served by the Worker at a hashed URL (`apps/gateway/src/http/static.ts`, [ADR 0022](adr/0022-admin-ui-on-design-system-d.md)). Any other `/static` path is a 404. |
 | Cron | `scheduled`, `7 * * * *` | Rollups, retention purge, credential-expiry notices, heartbeat. |
 | Queue consumer | `queue`, binding `REQUEST_LOG_QUEUE` (optional) | Batches request records into `TELEMETRY_DB`. |
-| Control plane | D1 binding `DB` | Users, caller providers, services, grants, settings, audit log. |
+| Control plane | D1 binding `DB` | Users, credential access rules, credentials, issuer_access_rules, settings, audit log. |
 | Telemetry | D1 binding `TELEMETRY_DB` | Request log and hourly rollups. |
 | Archive | Pipelines binding `REQUEST_ARCHIVE` (optional) | Streams every request record to R2. |
 | Rate limiter | Rate limiting binding `PROXY_RATE_LIMITER` (optional) | Caps requests per grant. |
@@ -54,14 +54,14 @@ All bindings, variables and secrets are listed in [configuration.md](configurati
 | 1 | Create the request id (`req_<ULID>`) and start the clock. | `apps/gateway/src/lib/ids.ts` | — |
 | 2 | Check the method is in `PROXY_METHODS` (`GET HEAD POST PUT PATCH DELETE OPTIONS`). | `apps/gateway/src/policy/types.ts` | 405 `method_not_allowed` |
 | 3 | Extract the caller token from `x-tokengate-token`, or from `Authorization` with scheme `Bearer` or `token`. Accept only one distinct compact JWS ([I-TOK-2](threat-model.md#i-tok-2)). | `apps/gateway/src/proxy/caller-token.ts` | 400 `token_ambiguous`, 401 `token_malformed` |
-| 4 | Load the context in one D1 batch: the service by slug, enabled caller providers, matching grants, settings. If no token was found in step 3 and the service is enabled and uses `header` Injection, read the token from that header. Decode the token payload without verifying it. | `apps/gateway/src/db/proxy-context.ts` | 401 `token_missing`, 401 `token_malformed` |
-| 5 | Select the caller provider whose `issuer` equals the unverified `iss`. The `iss` is only a lookup key. Resolve its profile. | `apps/gateway/src/identity/profiles/index.ts` | 401 `issuer_unknown`, 503 `not_configured` (`profile_unknown`) |
-| 6 | Check the JWS header: `alg` is asymmetric and in the caller provider's list; `kid` is present and well-formed. | `apps/gateway/src/identity/jwt.ts` | 401 `token_malformed` |
+| 4 | Load the context in one D1 batch: the service by slug, enabled credential access rules, matching issuer_access_rules, settings. If no token was found in step 3 and the service is enabled and uses `header` Injection, read the token from that header. Decode the token payload without verifying it. | `apps/gateway/src/db/proxy-context.ts` | 401 `token_missing`, 401 `token_malformed` |
+| 5 | Select the credential access rule whose `issuer` equals the unverified `iss`. The `iss` is only a lookup key. Resolve its profile. | `apps/gateway/src/identity/profiles/index.ts` | 401 `issuer_unknown`, 503 `not_configured` (`profile_unknown`) |
+| 6 | Check the JWS header: `alg` is asymmetric and in the credential access rule's list; `kid` is present and well-formed. | `apps/gateway/src/identity/jwt.ts` | 401 `token_malformed` |
 | 7 | Verify signature and claims with jose: exact issuer, audience, max token age, required claims ([I-JWT-1](threat-model.md#i-jwt-1)). JWKS fetches are gated per `jwks_uri` ([I-JWT-2](threat-model.md#i-jwt-2)). | `apps/gateway/src/identity/jwt.ts` | 401 `signature_invalid`, `audience_mismatch`, `token_expired`, `token_too_old`, `claims_invalid`, `token_malformed`; 503 `jwks_unavailable` |
 | 8 | Check the tenant pin ([I-TEN-1](threat-model.md#i-ten-1)). From here on, the caller is verified and its allowlisted claims may be stored ([I-LOG-2](threat-model.md#i-log-2)). | `apps/gateway/src/identity/jwt.ts` | 401 `tenant_mismatch` |
 | 9 | Reveal whether the service exists. This happens only after step 8, so outsiders cannot list slugs. | `apps/gateway/src/proxy/handler.ts` | 404 `service_not_found` (`service_disabled` or `service_not_found`) |
 | 10 | Canonicalize the caller path. Reject traversal and encoded variants ([I-PATH-1](threat-model.md#i-path-1)). | `apps/gateway/src/proxy/path.ts` | 400 `path_invalid` |
-| 11 | Evaluate the grants of this caller provider: anchor rules, conditions, event guard, rules. Deny by default ([I-AUTHZ-1](threat-model.md#i-authz-1) to [I-AUTHZ-4](threat-model.md#i-authz-4)). | `apps/gateway/src/policy/evaluate.ts` | 403 `no_matching_grant`, 403 `event_not_trusted` |
+| 11 | Evaluate the issuer_access_rules of this credential access rule: anchor rules, conditions, event guard, rules. Deny by default ([I-AUTHZ-1](threat-model.md#i-authz-1) to [I-AUTHZ-4](threat-model.md#i-authz-4)). | `apps/gateway/src/policy/evaluate.ts` | 403 `no_matching_grant`, 403 `event_not_trusted` |
 | 12 | If `PROXY_RATE_LIMITER` is bound, call it with key `grant:<id>`. If the binding throws, the request continues. | `apps/gateway/src/proxy/handler.ts` | 429 `rate_limited` with `retry-after: 60` |
 | 13 | Open the credential. Load the keyring (keys bound to the login variables, [I-CRED-3](threat-model.md#i-cred-3)), re-validate the stored base URL ([I-SSRF-1](threat-model.md#i-ssrf-1)), check the stored injection is canonical, and decrypt with the AAD over service id, base URL and injection ([I-CRED-2](threat-model.md#i-cred-2)). | `apps/gateway/src/crypto/keyring.ts`, `apps/gateway/src/crypto/envelope.ts`, `apps/gateway/src/policy/validate.ts` | 503 `credential_unavailable` (`credential_missing`, `injection_invalid`, `credential_binding_mismatch`, `keyring_missing_key`, `sealed_malformed`); 503 `not_configured` (keyring error, `base_url_invalid`) |
 | 14 | Build the upstream URL and headers from an allowlist. Drop caller tokens and caller copies of the injected header or parameter ([I-TOK-1](threat-model.md#i-tok-1), [I-INJ-1](threat-model.md#i-inj-1)). Inject the credential. Fetch with `redirect: 'manual'` and a timeout that covers only the wait for headers. | `apps/gateway/src/proxy/path.ts`, `apps/gateway/src/proxy/forward.ts`, `apps/gateway/src/proxy/inject.ts`, `apps/gateway/src/proxy/headers.ts` | 400 `path_invalid` (`query_invalid`), 503 `credential_unavailable` (`credential_invalid`), 502 `upstream_unreachable`, 504 `upstream_timeout` |
@@ -126,10 +126,10 @@ Timestamps are integer milliseconds since the Unix epoch. IDs are `<prefix>_<ULI
 |---|---|---|
 | `users` | Users: email, role (`owner`, `admin`, `token_manager`, `access_manager`, `viewer`), status (`invited`, `pending`, `active`, `suspended`), invite expiry, last refused sign-in. | Triggers `users_last_owner_update` and `users_last_owner_delete` abort any change that removes the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). |
 | `user_identities` | Login identity `(login_provider, subject)` → User. | Created only by invite linking or bootstrap ([I-LINK-1](threat-model.md#i-link-1), [I-BOOT-1](threat-model.md#i-boot-1)). |
-| `caller_providers` | Issuer, `jwks_uri`, audience (16 chars or more), profile, allowed algorithms, max token age, tenant pin, anchor claims. | `profile` cannot change after creation. |
-| `services` | Slug, base URL, injection (canonical JSON), forwarded headers, timeout, sealed credential, hint, expiry, verify check, template. | `credential_sealed` is bound to `(id, base_url, injection)` ([I-CRED-2](threat-model.md#i-cred-2)). `template_id` is display data only and not part of the binding. |
-| `grants` | Caller provider, service, conditions (JSON), rules (JSON), enabled, expiry. | Partial index `grants_lookup` serves the proxy query. |
-| `claim_labels` | Display label per caller provider, claim and numeric ID, for example `repository_id` 987654321 → `acme/api`. | Display and form input only: policy evaluation never reads it. |
+| `credential_access_rules` | Credential, required identity filters, issuer, `jwks_uri`, audience (16 chars or more), profile, allowed algorithms, max token age, tenant pin, anchor claims. | `profile` and credential cannot change after creation. A boundary grants no access by itself. |
+| `credentials` | Slug, base URL, injection (canonical JSON), forwarded headers, timeout, sealed credential, hint, expiry, verify check, template. | `credential_sealed` is bound to `(id, base_url, injection)` ([I-CRED-2](threat-model.md#i-cred-2)). `template_id` is display data only and not part of the binding. |
+| `issuer_access_rules` | Credential access rule, credential, conditions (JSON), rules (JSON), enabled, expiry. | Partial index `grants_lookup` serves the proxy query. |
+| `claim_labels` | Display label per credential access rule, claim and numeric ID, for example `repository_id` 987654321 → `acme/api`. | Display and form input only: policy evaluation never reads it. |
 | `settings` | Key → JSON value. | Runtime settings and internal state (see below). |
 | `audit_log` | Audit events: actor, action, target, summary, redacted diff. | Diffs never contain secrets ([I-CRED-1](threat-model.md#i-cred-1)). |
 
@@ -152,17 +152,18 @@ Host lists: `allowed_upstream_hosts` ([upstream host allowlist](configuration.md
 ```mermaid
 erDiagram
   users ||--o{ user_identities : "signs in with"
-  caller_providers ||--o{ grants : "verifies callers for"
-  services ||--o{ grants : "is reached through"
+  credentials ||--o{ credential_access_rules : "limits access with"
+  credential_access_rules ||--o{ issuer_access_rules : "constrains"
+  credentials ||--o{ issuer_access_rules : "is reached through"
 ```
 
-A Service or caller provider that a grant references cannot be deleted. The admin UI lists the grants to delete first.
+A Service or credential access rule that a grant references cannot be deleted. The admin UI lists the issuer_access_rules to delete first.
 
 ### Telemetry: `TELEMETRY_DB` (`apps/gateway/migrations-telemetry/`)
 
 | Table | Content | Notes |
 |---|---|---|
-| `request_log` | One request record per proxied request that the pipeline recorded: outcome, reason, statuses, method, raw path, service, caller provider, grant, allowlisted claims, policy trace (authorization denials only), timings, weight, IP, user agent (verified callers only), colo. | `WITHOUT ROWID`, primary key is the request id. `claims_verified = 0` means all caller fields are empty ([I-LOG-2](threat-model.md#i-log-2)). |
+| `request_log` | One request record per proxied request that the pipeline recorded: outcome, reason, statuses, method, raw path, service, credential access rule, grant, allowlisted claims, policy trace (authorization denials only), timings, weight, IP, user agent (verified callers only), colo. | `WITHOUT ROWID`, primary key is the request id. `claims_verified = 0` means all caller fields are empty ([I-LOG-2](threat-model.md#i-log-2)). |
 | `request_rollup_hourly` | Hourly sums per `(hour, service_id, grant_id, outcome, status_class)`: weighted request count, upstream auth failures, duration sum and latency buckets. | `''` stands for an unknown service or grant. |
 
 ### Schema guard
@@ -204,7 +205,7 @@ apps/gateway/src/
     conditions.ts       Condition evaluation; fails closed on missing or non-scalar claims (I-AUTHZ-4).
     evaluate.ts         First matching grant wins; deny by default; anchors re-checked at request time (I-AUTHZ-1..4).
     glob.ts             Linear-time glob for rules and conditions; no RegExp.
-    validate.ts         Save-time validation of services, caller providers, grants (I-AUTHZ-2, I-TEN-1, I-SSRF-1, I-INJ-1).
+    validate.ts         Save-time validation of credentials, credential access rules, issuer_access_rules (I-AUTHZ-2, I-TEN-1, I-SSRF-1, I-INJ-1).
     presets.ts          GitHub Actions grant builder; produces plain conditions.
     types.ts            Condition, Rule, Injection, PROXY_METHODS.
   proxy/
@@ -217,9 +218,9 @@ apps/gateway/src/
     forward.ts          Outbound headers, fetch with redirect: 'manual', response filtering (I-REDIR-1, I-RESP-1).
   db/
     proxy-context.ts    The single per-request control-plane read (no caching).
-    services.ts         Services repository; only the credential statement writes base_url and injection (I-CRED-2).
-    caller-providers.ts Caller providers repository with SQL guards.
-    grants.ts           Grants repository with SQL guards.
+    credentials.ts         Services repository; only the credential statement writes base_url and injection (I-CRED-2).
+    credential-access-rules.ts Credential access rules repository with SQL guards.
+    issuer_access_rules.ts           Issuer access rules repository with SQL guards.
     users.ts            Users and identities; guarded linking and bootstrap; identity guard for admin writes (I-LINK-1, I-BOOT-1, I-SESS-1).
     audit.ts            Audit statements for the same batch as the change; audit.event log line (I-AUDIT-1).
     settings.ts         Settings defaults, bounds and state keys.
@@ -242,7 +243,7 @@ apps/gateway/src/
                         login resolution (resolve-login.ts), CSRF (csrf.ts), RBAC (rbac.ts), setup page (setup.tsx),
                         middleware (I-SESS-1, I-CSRF-1, I-LINK-1, I-BOOT-1, I-RBAC-1).
     ops/                Mutations; one change and one audit event per batch (I-AUDIT-1); credentials never in results (I-CRED-1).
-    routes/             Server-rendered pages (dashboard, services, caller providers, grants, requests, audit, users, settings).
+    routes/             Server-rendered pages (dashboard, credentials, credential access rules, issuer_access_rules, requests, audit, users, settings).
     views/              Shell (layout.tsx: the ui AppShell, sidebar, account menu), adapters over @tokengate/ui
                         (components.tsx), alerts, header helpers, formatting, reason texts. No client JavaScript.
     pages.css           Page-local styles of the admin, one block per section, ui tokens only (ADR 0022).
@@ -288,7 +289,7 @@ Tests run inside workerd with `@cloudflare/vitest-plugin` and real local D1 data
 
 - `apps/gateway/test/helpers/app.ts` builds the real app with an injected `fetch`, clock and collected `waitUntil` promises. The default `fetch` throws, so an unexpected outbound call fails the test.
 - `apps/gateway/test/helpers/jwt.ts` creates test issuers whose JWKS are served through the injected `fetch`.
-- `apps/gateway/test/helpers/proxy-fixtures.ts` seeds a caller provider, a service with a sealed credential and a grant, plus a fake upstream that records what it received.
+- `apps/gateway/test/helpers/proxy-fixtures.ts` seeds a credential access rule, a service with a sealed credential and a grant, plus a fake upstream that records what it received.
 - `apps/gateway/test/vectors/` holds fixed vectors: sealed credentials (`sealed.json`), paths, globs and conditions.
 - Every invariant ID is named in at least one test `describe()` name. `bash scripts/check-threat-ids.sh` checks this.
 
@@ -306,7 +307,7 @@ See [ADR 0003](adr/0003-cloudflare-workers-and-two-d1-databases.md).
 
 ## Why no policy caching
 
-The proxy reads the service, caller providers, grants and settings from D1 on every request, in one batch (`apps/gateway/src/db/proxy-context.ts`). Disabling a grant, service or caller provider therefore takes effect on the next request. There is no propagation delay to document or to wait for during an incident. The cost is one D1 round trip per request. See [ADR 0006](adr/0006-no-policy-caching.md).
+The proxy reads the service, credential access rules, issuer_access_rules and settings from D1 on every request, in one batch (`apps/gateway/src/db/proxy-context.ts`). Disabling a grant, service or credential access rule therefore takes effect on the next request. There is no propagation delay to document or to wait for during an incident. The cost is one D1 round trip per request. See [ADR 0006](adr/0006-no-policy-caching.md).
 
 Some data is cached per isolate. None of it decides authorization:
 

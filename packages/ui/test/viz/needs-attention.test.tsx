@@ -9,9 +9,9 @@ describe('NeedsAttention', () => {
         {
           level: 'warn',
           title: 'The secret of OpenAI expires on 21 Oct 2026 (in 6 days).',
-          body: 'Its 1 consumer access stops working then.',
+          body: 'Its 1 issuer access rules stops working then.',
           actions: (
-            <a class="btn sm secondary" href="/admin/tokens/openai/secret">
+            <a class="btn sm secondary" href="/admin/credentials/openai/secret">
               Replace secret
             </a>
           ),
@@ -30,7 +30,7 @@ describe('NeedsAttention', () => {
             hidden: { csrf: 'c5rf"<' },
             roles: [
               { value: 'viewer', label: 'Viewer' },
-              { value: 'token_manager', label: 'Token manager' },
+              { value: 'token_manager', label: 'Credential manager' },
             ],
             more: { href: '/admin/users/usr_sam', label: 'Owner or reject…' },
           },
@@ -59,7 +59,7 @@ describe('NeedsAttention', () => {
 
   it('renders title, body and the inline fix', () => {
     expect(html).toContain(
-      '<p class="att-t">The secret of OpenAI expires on 21 Oct 2026 (in 6 days).</p><p class="att-b">Its 1 consumer access stops working then.</p><div class="att-a"><a class="btn sm secondary" href="/admin/tokens/openai/secret">Replace secret</a></div>',
+      '<p class="att-t">The secret of OpenAI expires on 21 Oct 2026 (in 6 days).</p><p class="att-b">Its 1 issuer access rules stops working then.</p><div class="att-a"><a class="btn sm secondary" href="/admin/credentials/openai/secret">Replace secret</a></div>',
     );
     expect(html).toContain('<p class="att-t">Only one active owner.</p></li>');
   });
@@ -72,7 +72,7 @@ describe('NeedsAttention', () => {
       '<button class="btn sm secondary" type="submit" name="role" value="viewer"><span class="vh">Approve sam@acme.dev as </span>Viewer</button>',
     );
     expect(html).toContain(
-      'value="token_manager"><span class="vh">Approve sam@acme.dev as </span>Token manager</button>',
+      'value="token_manager"><span class="vh">Approve sam@acme.dev as </span>Credential manager</button>',
     );
     expect(html).toContain(
       '<a class="linkish" href="/admin/users/usr_sam">Owner or reject…</a></form>',

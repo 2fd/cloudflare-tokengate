@@ -1,11 +1,12 @@
-// Save-time validation of services, caller providers and grants (docs/policies.md, docs/concepts.md); pure, no I/O.
+// Save-time validation of credentials, credential access rules and issuer_access_rules (docs/policies.md, docs/concepts.md); pure, no I/O.
 // Enforces anchor rules (I-AUTHZ-2), tenant pins (I-TEN-1), algs/audience/token age (I-JWT-1),
 // base URLs (I-SSRF-1), injection and forward-header shapes (I-INJ-1) and credential hygiene.
 import { hostListed, upstreamHostAllowed } from '../config';
-import type { CallerProvider, Service } from '../db/types';
+import type { CredentialAccessRule, Service } from '../db/types';
 import type { IssuerProfile, ProfileId } from '../identity/types';
 import { canonicalJson } from '../lib/json';
 import { headerListed, NEVER_FORWARD, REQUEST_ALLOWLIST } from '../proxy/headers';
+import { conditionsWithin } from './boundaries';
 import { CLAIM_NAME_MAX_LENGTH, conditionShapeError, satisfiesAnchorRule } from './conditions';
 import { globError } from './glob';
 import {
@@ -18,7 +19,7 @@ import {
 } from './types';
 
 /**
- * JWS algorithms a caller provider may accept; never `none` or HMAC (I-JWT-1). Must equal
+ * JWS algorithms a credential access rule may accept; never `none` or HMAC (I-JWT-1). Must equal
  * VERIFIABLE_ALGS in src/identity/jwt.ts (asserted by test/unit/policy/algs.test.ts).
  */
 export const ALLOWED_ALGS = [
@@ -404,9 +405,9 @@ function verifyHeaderErrors(headers: unknown, injection: Injection | null): stri
 }
 
 // ---------------------------------------------------------------------------------------------
-// Caller providers
+// Credential access rules
 
-export interface CallerProviderInput {
+export interface CredentialAccessRuleInput {
   name: string;
   profile: ProfileId;
   issuer: string;
@@ -419,13 +420,13 @@ export interface CallerProviderInput {
 }
 
 /**
- * Validates a caller provider against its profile. `existing` is the stored row on update
+ * Validates a credential access rule against its profile. `existing` is the stored row on update
  * (the profile cannot change after creation).
  */
-export function validateCallerProvider(
-  input: CallerProviderInput,
+export function validateCredentialAccessRule(
+  input: CredentialAccessRuleInput,
   profile: IssuerProfile,
-  existing: CallerProvider | null,
+  existing: CredentialAccessRule | null,
 ): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -434,7 +435,7 @@ export function validateCallerProvider(
   if (nameError !== null) errors.push(`name ${nameError}`);
   if (input.profile !== profile.id) errors.push('profile does not match the selected profile');
   if (existing !== null && existing.profile !== input.profile) {
-    errors.push('profile cannot be changed after the caller provider is created');
+    errors.push('profile cannot be changed after the credential access rule is created');
   }
 
   // OpenID Connect Discovery 1.0 §3: issuer is https with no query or fragment.
@@ -499,7 +500,9 @@ export function validateCallerProvider(
     errors.push('anchor claims must be a list');
   } else if (profile.id === 'generic') {
     if (input.anchor_claims.length === 0 || input.anchor_claims.length > 8) {
-      errors.push('generic caller providers need 1-8 anchor claims (immutable identity claims)');
+      errors.push(
+        'generic credential access rules need 1-8 anchor claims (immutable identity claims)',
+      );
     }
     for (const claim of input.anchor_claims) {
       const claimError = requiredTextError(claim, CLAIM_NAME_MAX_LENGTH);
@@ -549,9 +552,9 @@ function audienceErrors(audience: unknown): string[] {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Grants
+// IssuerAccessRules
 
-export interface GrantInput {
+export interface IssuerAccessRuleInput {
   conditions: Condition[];
   rules: Rule[];
 }
@@ -576,26 +579,28 @@ export interface WarningDetail {
   message: string;
 }
 
-export interface GrantValidationResult extends ValidationResult {
+export interface IssuerAccessRuleValidationResult extends ValidationResult {
   /** The warnings with their codes, in the order of `warnings`. */
   warningDetails: WarningDetail[];
 }
 
 /**
  * Validates grant conditions and rules: shapes, anchor rules (I-AUTHZ-2), containment in the
- * caller provider's tenant pin, and warnings for risky patterns (docs/policies.md). `service`, when given,
+ * credential access rule's tenant pin, and warnings for risky patterns (docs/policies.md). `service`, when given,
  * adds warnings that depend on how the grant's service injects its credential.
  */
-export function validateGrant(
-  input: GrantInput,
+export function validateIssuerAccessRule(
+  input: IssuerAccessRuleInput,
   profile: IssuerProfile,
-  provider: CallerProvider,
+  provider: CredentialAccessRule,
   service: Pick<Service, 'injection'> | null = null,
-): GrantValidationResult {
+): IssuerAccessRuleValidationResult {
   const errors: string[] = [];
   const details: WarningDetail[] = [];
   if (profile.id !== provider.profile) {
-    errors.push(`profile ${profile.id} does not match the caller provider (${provider.profile})`);
+    errors.push(
+      `profile ${profile.id} does not match the credential access rule (${provider.profile})`,
+    );
   }
 
   const conditions: Condition[] = [];
@@ -629,12 +634,12 @@ export function validateGrant(
     const options = anchorRules.map((rule) => rule.join(' + ')).join('; or ');
     errors.push(
       options === ''
-        ? 'the caller provider defines no anchor claims, so no grant can be anchored'
+        ? 'the credential access rule defines no anchor claims, so no grant can be anchored'
         : `the grant must have exact, non-negated conditions on ${options} (I-AUTHZ-2)`,
     );
   }
 
-  // Values outside the tenant pin can never match; refusing them avoids grants that look
+  // Values outside the tenant pin can never match; refusing them avoids issuer_access_rules that look
   // broader than they are and catches owner IDs from the wrong organization.
   for (const claim of new Set(provider.tenant_pin.map((c) => c.claim))) {
     const allowed = tenantPinValues(provider.tenant_pin, claim);
@@ -642,12 +647,15 @@ export function validateGrant(
       const outside = condition.values.filter((value) => !allowed.has(value));
       if (outside.length > 0) {
         errors.push(
-          `${claim} values ${JSON.stringify(outside)} are outside the caller provider's tenant pin`,
+          `${claim} values ${JSON.stringify(outside)} are outside the credential access rule's tenant pin`,
         );
       }
     }
   }
 
+  if (!conditionsWithin(conditions, provider.conditions)) {
+    errors.push('Issuer access rule filters must stay within the credential access rule limits.');
+  }
   details.push(...grantWarnings(conditions, profile));
   if (service?.injection.kind === 'path' && Array.isArray(input.rules)) {
     details.push(...pathInjectionRuleWarnings(input.rules));

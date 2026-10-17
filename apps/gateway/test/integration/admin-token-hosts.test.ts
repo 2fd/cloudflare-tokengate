@@ -1,4 +1,4 @@
-// Service tokens › Allowed hosts (`/admin/tokens/hosts`): the upstream host allowlist (I-SSRF-1).
+// Credentials › Allowed hosts (`/admin/credentials/hosts`): the upstream host allowlist (I-SSRF-1).
 // Owners edit it (settings:write) by picking candidate hosts plus typed others.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -47,13 +47,13 @@ function hostBox(html: string, host: string): string {
   );
 }
 
-describe('I-SSRF-1: upstream host allowlist at /admin/tokens/hosts', () => {
+describe('I-SSRF-1: upstream host allowlist at /admin/credentials/hosts', () => {
   it('defaults to any host; owners get the mode choice and the candidate hosts', async () => {
-    const res = await adminGet(app, await sessionFor('owner'), '/admin/tokens/hosts');
+    const res = await adminGet(app, await sessionFor('owner'), '/admin/credentials/hosts');
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('<title>Allowed hosts – Service tokens – tokengate</title>');
-    expect(html).toContain('action="/admin/tokens/hosts"');
+    expect(html).toContain('<title>Allowed hosts – Credentials – tokengate</title>');
+    expect(html).toContain('action="/admin/credentials/hosts"');
     expect(html).toMatch(/name="mode" value="any" checked=""/);
     // Template hosts are candidates; none is checked while any host is allowed.
     expect(hostBox(html, 'slack.com')).not.toContain('checked');
@@ -74,11 +74,11 @@ describe('I-SSRF-1: upstream host allowlist at /admin/tokens/hosts', () => {
     await setUpstreamHosts(['api.github.com']);
     await createUser({ email: 'boss@example.com', role: 'owner' }, T0);
     const html = await (
-      await adminGet(app, await sessionFor('admin'), '/admin/tokens/hosts')
+      await adminGet(app, await sessionFor('admin'), '/admin/credentials/hosts')
     ).text();
     expect(html).toContain('<code>api.github.com</code>');
     expect(html).toContain('mailto:boss@example.com');
-    expect(html).not.toContain('action="/admin/tokens/hosts"');
+    expect(html).not.toContain('action="/admin/credentials/hosts"');
   });
 
   it('checks only hosts that the stored list contains literally, and keeps the others typed', async () => {
@@ -91,7 +91,7 @@ describe('I-SSRF-1: upstream host allowlist at /admin/tokens/hosts', () => {
       forward_headers: [],
     });
     await seedService(opsDeps(), { slug: 'gh', secret: 'ghp_0123456789abcdefghij' });
-    const html = await (await adminGet(app, owner, '/admin/tokens/hosts')).text();
+    const html = await (await adminGet(app, owner, '/admin/credentials/hosts')).text();
     expect(html).toMatch(/name="mode" value="list" checked=""/);
     expect(hostBox(html, 'api.github.com')).toContain('checked');
     // Covered by a wildcard: not checked, so a save never adds it silently.
@@ -105,30 +105,30 @@ describe('I-SSRF-1: upstream host allowlist at /admin/tokens/hosts', () => {
 
   it('owners save picked and typed hosts (a pasted URL becomes its host), then any host', async () => {
     const owner = await sessionFor('owner');
-    const save = await adminPost(app, owner, '/admin/tokens/hosts', {
+    const save = await adminPost(app, owner, '/admin/credentials/hosts', {
       mode: 'list',
       host: ['api.github.com'],
       other_hosts: 'https://API.Slack.com/api\n*.example.net',
     });
-    expect(save.headers.get('location')).toBe('/admin/tokens/hosts?notice=hosts_saved');
+    expect(save.headers.get('location')).toBe('/admin/credentials/hosts?notice=hosts_saved');
     expect(await getAllowedUpstreamHosts(env.DB)).toEqual([
       'api.github.com',
       'api.slack.com',
       '*.example.net',
     ]);
-    const any = await adminPost(app, owner, '/admin/tokens/hosts', {
+    const any = await adminPost(app, owner, '/admin/credentials/hosts', {
       mode: 'any',
       host: ['api.github.com'],
     });
-    expect(any.headers.get('location')).toBe('/admin/tokens/hosts?notice=hosts_saved');
+    expect(any.headers.get('location')).toBe('/admin/credentials/hosts?notice=hosts_saved');
     expect(await getAllowedUpstreamHosts(env.DB)).toBeNull();
-    const again = await adminPost(app, owner, '/admin/tokens/hosts', { mode: 'any' });
-    expect(again.headers.get('location')).toBe('/admin/tokens/hosts?notice=hosts_unchanged');
+    const again = await adminPost(app, owner, '/admin/credentials/hosts', { mode: 'any' });
+    expect(again.headers.get('location')).toBe('/admin/credentials/hosts?notice=hosts_unchanged');
     expect(await auditActions()).toEqual(['settings.upstream_hosts', 'settings.upstream_hosts']);
   });
 
   it('refuses "Only" with nothing chosen: an empty list would mean any host', async () => {
-    const res = await adminPost(app, await sessionFor('owner'), '/admin/tokens/hosts', {
+    const res = await adminPost(app, await sessionFor('owner'), '/admin/credentials/hosts', {
       mode: 'list',
       other_hosts: '  ',
     });
@@ -141,7 +141,7 @@ describe('I-SSRF-1: upstream host allowlist at /admin/tokens/hosts', () => {
   });
 
   it('refuses IPs, localhost and workers.dev with the line number, and keeps the input', async () => {
-    const res = await adminPost(app, await sessionFor('owner'), '/admin/tokens/hosts', {
+    const res = await adminPost(app, await sessionFor('owner'), '/admin/credentials/hosts', {
       mode: 'list',
       other_hosts: 'api.github.com\n10.0.0.1\nlocalhost\nx.workers.dev',
     });
@@ -160,7 +160,7 @@ describe('I-SSRF-1: upstream host allowlist at /admin/tokens/hosts', () => {
       "INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('allowed_upstream_hosts', '\"oops\"', 0, NULL)",
     ).run();
     const html = await (
-      await adminGet(app, await sessionFor('owner'), '/admin/tokens/hosts')
+      await adminGet(app, await sessionFor('owner'), '/admin/credentials/hosts')
     ).text();
     expect(html).toContain('The stored list is invalid, so every host is refused.');
   });
@@ -169,14 +169,14 @@ describe('I-SSRF-1: upstream host allowlist at /admin/tokens/hosts', () => {
     const owner = await sessionFor('owner');
     const id = await seedService(opsDeps(), { slug: 'gh', secret: 'ghp_0123456789abcdefghij' });
     await setUpstreamHosts(['only.example.com']);
-    const html = await (await adminGet(app, owner, '/admin/tokens/hosts')).text();
+    const html = await (await adminGet(app, owner, '/admin/credentials/hosts')).text();
     expect(html).toContain('<caption class="vh">Tokens outside the allowed hosts</caption>');
-    expect(html).toContain(`<a class="ent-n" href="/admin/tokens/${id}">GitHub</a>`);
+    expect(html).toContain(`<a class="ent-n" href="/admin/credentials/${id}">GitHub</a>`);
     expect(html).toContain('Used by GitHub, which is refused now. Check to allow.');
   });
 
   it('is forbidden for admins', async () => {
-    const res = await adminPost(app, await sessionFor('admin'), '/admin/tokens/hosts', {
+    const res = await adminPost(app, await sessionFor('admin'), '/admin/credentials/hosts', {
       mode: 'list',
       host: ['api.github.com'],
     });

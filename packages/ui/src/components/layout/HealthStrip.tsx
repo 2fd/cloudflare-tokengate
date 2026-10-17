@@ -19,7 +19,7 @@ export interface HealthStripProps {
   role?: 'alert' | null;
   /** What it means for the user: "Stored secrets cannot be opened, so every call fails." */
   children?: Child;
-  /** The one fix, usually a link: `<a href="/admin/tokens/keys">Fix encryption keys</a>`. */
+  /** The one fix, usually a link: `<a href="/admin/credentials/keys">Fix encryption keys</a>`. */
   action?: Child;
   class?: string;
 }

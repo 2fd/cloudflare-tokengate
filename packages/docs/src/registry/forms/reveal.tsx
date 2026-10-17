@@ -49,7 +49,7 @@ export const reveal: ComponentDoc = {
           </Reveal>
         </LiveForm>
       ),
-      code: `<LiveForm method="post" action="/admin/access">
+      code: `<LiveForm method="post" action="/admin/issuer-access-rules">
   <FieldSet id="repo" legend="Repository" live={2}>
     <RowPicker name="repo" options={repositories} value="89012345" />
   </FieldSet>

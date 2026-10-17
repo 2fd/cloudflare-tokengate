@@ -4,21 +4,21 @@
 // destination, so it never follows a repoint.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { rewrapCredentials } from '../../src/admin/ops/keyring';
 import {
   destinationFingerprint,
   openStoredCredential,
   setServiceCredential,
   testServiceCredential,
   updateServiceFields,
-} from '../../src/admin/ops/services';
+} from '../../src/admin/ops/credentials';
+import { rewrapCredentials } from '../../src/admin/ops/keyring';
 import { credentialAad, openCredential } from '../../src/crypto/envelope';
 import { loadKeyring } from '../../src/crypto/keyring';
 import {
   getService,
   serviceCredentialGuard,
   updateServiceCredentialStatement,
-} from '../../src/db/services';
+} from '../../src/db/credentials';
 import type { Service } from '../../src/db/types';
 import { resetAdminWorld } from '../fixtures/admin-forms';
 import { adminPost, createUser, loginAs } from '../helpers/admin-auth';
@@ -142,8 +142,11 @@ describe('I-CRED-2: setServiceCredential re-seals with the new AAD', () => {
 
 describe('I-CRED-2: rows edited in D1 fail closed', () => {
   it.each([
-    ['base_url', "UPDATE services SET base_url = 'https://evil.example.net' WHERE id = ?"],
-    ['injection', `UPDATE services SET injection = '{"kind":"query","param":"key"}' WHERE id = ?`],
+    ['base_url', "UPDATE credentials SET base_url = 'https://evil.example.net' WHERE id = ?"],
+    [
+      'injection',
+      `UPDATE credentials SET injection = '{"kind":"query","param":"key"}' WHERE id = ?`,
+    ],
   ])('an edited %s makes the credential unusable without any upstream call', async (_, sql) => {
     const network = fakeNetwork();
     const deps = opsDeps({ fetch: network.fetch });
@@ -172,7 +175,7 @@ describe('I-CRED-2: rows edited in D1 fail closed', () => {
     const a = await seedService(deps, { slug: 'a', secret: SECRET });
     const b = await seedService(deps, { slug: 'b', secret: 'other-secret-0123456789' });
     await env.DB.prepare(
-      'UPDATE services SET credential_sealed = (SELECT credential_sealed FROM services WHERE id = ?) WHERE id = ?',
+      'UPDATE credentials SET credential_sealed = (SELECT credential_sealed FROM credentials WHERE id = ?) WHERE id = ?',
     )
       .bind(a, b)
       .run();
@@ -195,9 +198,9 @@ describe('I-CRED-2: a sealed draft never follows a repoint or another token', ()
     const app = createTestApp({ fetch: network.fetch, env: { TOKENGATE_KEK: KEK_1 } });
     const a = await seedService(app.deps, { slug: 'a', secret: SECRET });
     const b = await seedService(app.deps, { slug: 'b', secret: SECRET });
-    await env.DB.prepare('UPDATE services SET verify = ?').bind(JSON.stringify(VERIFY)).run();
+    await env.DB.prepare('UPDATE credentials SET verify = ?').bind(JSON.stringify(VERIFY)).run();
     const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
-    const first = await adminPost(app, session, `/admin/tokens/${a}/secret`, {
+    const first = await adminPost(app, session, `/admin/credentials/${a}/secret`, {
       ...(await rotateFields(a)),
       credential: 'ghp_draftedSecret0123456789abcdefWXYZ',
     });
@@ -212,7 +215,7 @@ describe('I-CRED-2: a sealed draft never follows a repoint or another token', ()
   it("a draft made on one token's rotate form does not open on another token", async () => {
     const { network, app, session, b, draft, sent } = await world();
     const before = await stored(b);
-    const res = await adminPost(app, session, `/admin/tokens/${b}/secret`, {
+    const res = await adminPost(app, session, `/admin/credentials/${b}/secret`, {
       ...(await rotateFields(b)),
       credential_draft: draft,
       save_anyway: '1',
@@ -226,10 +229,12 @@ describe('I-CRED-2: a sealed draft never follows a repoint or another token', ()
   it('a D1 repoint after the re-render makes the draft refuse: nothing goes to the new host', async () => {
     const { network, app, session, a, draft } = await world();
     const loaded = await rotateFields(a);
-    await env.DB.prepare('UPDATE services SET base_url = ? WHERE id = ?').bind(ATTACKER, a).run();
+    await env.DB.prepare('UPDATE credentials SET base_url = ? WHERE id = ?')
+      .bind(ATTACKER, a)
+      .run();
     const before = await stored(a);
     // The form loaded before the repoint names the old destination: refused before the draft opens.
-    const stale = await adminPost(app, session, `/admin/tokens/${a}/secret`, {
+    const stale = await adminPost(app, session, `/admin/credentials/${a}/secret`, {
       ...loaded,
       credential_draft: draft,
       save_anyway: '1',
@@ -237,7 +242,7 @@ describe('I-CRED-2: a sealed draft never follows a repoint or another token', ()
     expect(stale.status).toBe(409);
     expect(await stale.text()).not.toContain('name="credential_draft"');
     // A form loaded after it: the draft is bound to the old destination and refuses.
-    const res = await adminPost(app, session, `/admin/tokens/${a}/secret`, {
+    const res = await adminPost(app, session, `/admin/credentials/${a}/secret`, {
       ...(await rotateFields(a)),
       credential_draft: draft,
       save_anyway: '1',
@@ -250,7 +255,7 @@ describe('I-CRED-2: a sealed draft never follows a repoint or another token', ()
   it('a rotate draft does not open on Change destination with another base URL', async () => {
     const { network, app, session, a, draft } = await world();
     const before = await stored(a);
-    const res = await adminPost(app, session, `/admin/tokens/${a}/destination`, {
+    const res = await adminPost(app, session, `/admin/credentials/${a}/destination`, {
       base_url: 'https://uploads.github.com',
       injection_kind: 'bearer',
       credential_draft: draft,

@@ -1,4 +1,4 @@
-// End-to-end proxy fixture: a real app over D1 with one caller provider (GitHub issuer by default),
+// End-to-end proxy fixture: a real app over D1 with one credential access rule (GitHub issuer by default),
 // one service with a sealed credential and one grant, plus a fake upstream that records what it
 // received. No network: issuer JWKS and upstream are served through the injected fetch.
 import { env } from 'cloudflare:workers';
@@ -52,19 +52,19 @@ export interface ServiceSeed {
   timeoutMs?: number;
 }
 
-export interface GrantSeed {
+export interface IssuerAccessRuleSeed {
   conditions?: Condition[];
   rules?: Rule[];
   enabled?: boolean;
   expiresAt?: number | null;
-  callerProviderId?: string;
+  credentialAccessRuleId?: string;
   serviceId?: string;
 }
 
 export interface ProxyFixtureOptions {
   service?: ServiceSeed;
   /** false: no grant is created. */
-  grant?: GrantSeed | false;
+  grant?: IssuerAccessRuleSeed | false;
   tenantPin?: Condition[];
   profile?: ProfileId;
   upstream?: UpstreamHandler;
@@ -93,7 +93,7 @@ export interface ProxyFixture {
   /** Settles background work and returns stored request records, newest first. */
   records(): Promise<RequestRecord[]>;
   addService(seed: ServiceSeed): Promise<{ id: string; slug: string }>;
-  addGrant(seed: GrantSeed): Promise<string>;
+  addIssuerAccessRule(seed: IssuerAccessRuleSeed): Promise<string>;
 }
 
 export const DEFAULT_CONDITIONS: Condition[] = [
@@ -108,9 +108,9 @@ export async function resetProxyState(): Promise<void> {
   resetJwksCacheForTests();
   resetPretrustBudgetForTests();
   await db().batch([
-    db().prepare('DELETE FROM grants'),
-    db().prepare('DELETE FROM services'),
-    db().prepare('DELETE FROM caller_providers'),
+    db().prepare('DELETE FROM issuer_access_rules'),
+    db().prepare('DELETE FROM credentials'),
+    db().prepare('DELETE FROM credential_access_rules'),
     db().prepare('DELETE FROM settings'),
   ]);
   await env.TELEMETRY_DB.prepare('DELETE FROM request_log').run();
@@ -150,29 +150,6 @@ export async function setupProxy(options: ProxyFixtureOptions = {}): Promise<Pro
 
   const providerId = newId('cpr', now, random);
   const profile = options.profile ?? 'github-actions';
-  await db()
-    .prepare(
-      `INSERT INTO caller_providers (id, name, profile, issuer, jwks_uri, audience, allowed_algs,
-         max_token_age_seconds, tenant_pin, anchor_claims, enabled, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 600, ?, '[]', 1, ?, ?)`,
-    )
-    .bind(
-      providerId,
-      'GitHub Actions',
-      profile,
-      issuer.issuer,
-      issuer.jwksUri,
-      TEST_AUDIENCE,
-      JSON.stringify([issuer.alg]),
-      JSON.stringify(
-        options.tenantPin ?? [
-          { claim: 'repository_owner_id', match: 'exact', values: [TEST_GITHUB_OWNER_ID] },
-        ],
-      ),
-      now,
-      now,
-    )
-    .run();
 
   const addService = async (seed: ServiceSeed) => {
     const id = newId('svc', clock.now(), random);
@@ -184,7 +161,7 @@ export async function setupProxy(options: ProxyFixtureOptions = {}): Promise<Pro
       secret === null ? null : await sealFor(app.deps.env, id, baseUrl, injectionJson, secret);
     await db()
       .prepare(
-        `INSERT INTO services (id, slug, name, base_url, injection, forward_headers, timeout_ms,
+        `INSERT INTO credentials (id, slug, name, base_url, injection, forward_headers, timeout_ms,
            credential_sealed, enabled, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
@@ -206,19 +183,32 @@ export async function setupProxy(options: ProxyFixtureOptions = {}): Promise<Pro
   };
 
   let grantSeq = 0;
-  const addGrant = async (seed: GrantSeed) => {
+  const addIssuerAccessRule = async (seed: IssuerAccessRuleSeed) => {
     const id = newId('grt', clock.now(), random);
     grantSeq++;
+    let boundaryId = seed.credentialAccessRuleId ?? providerId;
+    if (!seed.credentialAccessRuleId && seed.serviceId && seed.serviceId !== service.id) {
+      boundaryId = newId('cpr', clock.now(), random);
+      await db()
+        .prepare(`INSERT INTO credential_access_rules
+        (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
+         max_token_age_seconds, tenant_pin, anchor_claims, conditions, enabled, created_at, updated_at)
+        SELECT ?, ?, ?, profile, issuer, jwks_uri, audience, allowed_algs,
+         max_token_age_seconds, tenant_pin, anchor_claims, conditions, enabled, created_at, updated_at
+        FROM credential_access_rules WHERE id = ?`)
+        .bind(boundaryId, seed.serviceId, `Boundary ${boundaryId}`, providerId)
+        .run();
+    }
     await db()
       .prepare(
-        `INSERT INTO grants (id, name, caller_provider_id, service_id, conditions, rules, enabled,
+        `INSERT INTO issuer_access_rules (id, name, credential_access_rule_id, service_id, conditions, rules, enabled,
            expires_at, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         id,
         `grant ${grantSeq}`,
-        seed.callerProviderId ?? providerId,
+        boundaryId,
         seed.serviceId ?? service.id,
         JSON.stringify(seed.conditions ?? DEFAULT_CONDITIONS),
         JSON.stringify(seed.rules ?? DEFAULT_RULES),
@@ -232,7 +222,32 @@ export async function setupProxy(options: ProxyFixtureOptions = {}): Promise<Pro
   };
 
   const service = await addService(options.service ?? {});
-  const grantId = options.grant === false ? null : await addGrant(options.grant ?? {});
+  await db()
+    .prepare(
+      `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
+         max_token_age_seconds, tenant_pin, anchor_claims, enabled, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 600, ?, '[]', 1, ?, ?)`,
+    )
+    .bind(
+      providerId,
+      service.id,
+      'GitHub Actions',
+      profile,
+      issuer.issuer,
+      issuer.jwksUri,
+      TEST_AUDIENCE,
+      JSON.stringify([issuer.alg]),
+      JSON.stringify(
+        options.tenantPin ?? [
+          { claim: 'repository_owner_id', match: 'exact', values: [TEST_GITHUB_OWNER_ID] },
+        ],
+      ),
+      now,
+      now,
+    )
+    .run();
+
+  const grantId = options.grant === false ? null : await addIssuerAccessRule(options.grant ?? {});
 
   return {
     app,
@@ -261,7 +276,7 @@ export async function setupProxy(options: ProxyFixtureOptions = {}): Promise<Pro
       return listRequests(env.TELEMETRY_DB, { limit: 200 });
     },
     addService,
-    addGrant,
+    addIssuerAccessRule,
   };
 }
 

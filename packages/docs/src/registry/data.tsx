@@ -147,7 +147,7 @@ const TOKENS = [
 ] as const;
 
 const TOKEN_COLUMNS = [
-  { label: 'Token' },
+  { label: 'Credential' },
   { label: 'Used by' },
   { label: 'Requests 24 h', num: true },
   { label: 'Status' },
@@ -164,7 +164,7 @@ const REQUESTS = [
     repo: 'acme/web',
     token: 'slack',
     call: 'POST /chat.postMessage',
-    why: 'No consumer access allows this call',
+    why: 'No issuer access rules allows this call',
     ms: '9 ms',
   },
   {
@@ -273,9 +273,9 @@ const REASON_GROUPS: readonly FilterOptionGroup[] = (
     [
       'Access',
       [
-        ['no_matching_grant', 'No consumer access allows this call', 59],
-        ['grant_expired', 'Consumer access expired', 6],
-        ['grant_disabled', 'Consumer access disabled'],
+        ['no_matching_grant', 'No issuer access rules allows this call', 59],
+        ['grant_expired', 'Issuer access rules expired', 6],
+        ['grant_disabled', 'Issuer access rules disabled'],
         ['consumer_disabled', 'Consumer disabled'],
         ['repo_not_allowed', 'Repository not allowed', 9],
         ['branch_not_allowed', 'Branch not allowed', 5],
@@ -299,7 +299,7 @@ const REASON_GROUPS: readonly FilterOptionGroup[] = (
       ],
     ],
     [
-      'Token',
+      'Credential',
       [
         ['token_unknown', 'Unknown token', 8],
         ['token_disabled', 'Token disabled', 3],
@@ -383,7 +383,7 @@ export const data: readonly ComponentDoc[] = [
             description="Each token is a secret tokengate keeps for one upstream API."
             actions={
               <a class="btn sm secondary" href="#">
-                Open consumer access
+                Open issuer access rules
               </a>
             }
           >
@@ -417,24 +417,24 @@ export const data: readonly ComponentDoc[] = [
           </Tray>
         ),
         code: `<Tray id="all-tokens" title="All tokens" count={6} description="Each token is a secret tokengate keeps for one upstream API."
-  actions={<a class="btn sm secondary" href="/admin/access">Open consumer access</a>}>
+  actions={<a class="btn sm secondary" href="/admin/issuer-access-rules">Open issuer access rules</a>}>
   <Panel variant="flush">
     <Table labelledBy="all-tokens-h" stackable columns={[
-      { label: 'Token' }, { label: 'Used by' }, { label: 'Requests 24 h', num: true },
+      { label: 'Credential' }, { label: 'Used by' }, { label: 'Requests 24 h', num: true },
       { label: 'Status' }, { label: 'Last used' }, { label: 'Actions', act: true },
     ]}>
       {tokens.map((t) => (
         <Row highlight={t.slug === changed} id={\`token-\${t.slug}\`}>
           <RowHeader>
             <Entity logo={t.brand}
-              name={t.name} href={\`/admin/tokens/\${t.slug}\`} meta={\`/proxy/\${t.slug}\`} metaMono />
+              name={t.name} href={\`/admin/credentials/\${t.slug}\`} meta={\`/proxy/\${t.slug}\`} metaMono />
           </RowHeader>
           <Cell>{usedBy(t)}</Cell>
           <Cell label="Requests" num zero={t.requests === 0}>{fmt(t.requests)}</Cell>
           <Cell label="Status"><Badge tone="ok" glyph="✓">Active</Badge></Cell>
           <Cell label="Last used"><Time datetime={t.lastUsed}>{ago(t.lastUsed)}</Time></Cell>
           <Cell act>
-            <a class="btn sm secondary" href={\`/admin/access/new?token=\${t.slug}\`}>
+            <a class="btn sm secondary" href={\`/admin/issuer-access-rules/new?token=\${t.slug}\`}>
               Give access<span class="vh"> to {t.name}</span>
             </a>
           </Cell>
@@ -511,8 +511,8 @@ export const data: readonly ComponentDoc[] = [
                       name="acme/web → Slack"
                       meta={
                         <>
-                          <span class="t-bad">✕ No consumer access allows this call</span> · GitHub
-                          Actions (acme)
+                          <span class="t-bad">✕ No issuer access rules allows this call</span> ·
+                          GitHub Actions (acme)
                         </>
                       }
                     />
@@ -549,7 +549,9 @@ export const data: readonly ComponentDoc[] = [
                   <Cell label="Last seen">
                     <Time datetime="2026-10-15T14:01Z">2 min ago</Time>
                   </Cell>
-                  <Cell act>{rowButton('Add consumer', 'for https://gitlab.example.org')}</Cell>
+                  <Cell act>
+                    {rowButton('Add credential access rule', 'for https://gitlab.example.org')}
+                  </Cell>
                 </Row>
               </Table>
             </Panel>
@@ -560,13 +562,13 @@ export const data: readonly ComponentDoc[] = [
   <Row>
     <RowHeader>
       <Entity logo="github" logoSize="sm" name="acme/web → Slack"
-        meta={<><span class="t-bad">✕ No consumer access allows this call</span> · GitHub Actions (acme)</>} />
+        meta={<><span class="t-bad">✕ No issuer access rules allows this call</span> · GitHub Actions (acme)</>} />
     </RowHeader>
     <Cell label="Requests" num>
       <CountLink href="/admin/requests?outcome=denied&token=slack&repo=acme/web" tone="bad" srSuffix="denied requests">38</CountLink>
     </Cell>
     <Cell label="Last seen"><Time datetime="2026-10-15T13:59Z">4 min ago</Time></Cell>
-    <Cell act><a class="btn sm secondary" href="/admin/access/new?from_request=req_01JB8Z5K">Give access<span class="vh"> for acme/web on Slack</span></a></Cell>
+    <Cell act><a class="btn sm secondary" href="/admin/issuer-access-rules/new?from_request=req_01JB8Z5K">Give access<span class="vh"> for acme/web on Slack</span></a></Cell>
   </Row>
 </Table>`,
       },
@@ -645,7 +647,7 @@ export const data: readonly ComponentDoc[] = [
         ),
         code: `<Entity logoSlot={<Avatar name="Maya Chen" size="md" />} name="maya@acme.dev" href="/admin/users/maya"
   after={<Badge tone="outline">You</Badge>} meta="Maya Chen" />
-<Entity logo="slack" name="Slack" href="/admin/tokens/slack"
+<Entity logo="slack" name="Slack" href="/admin/credentials/slack"
   after={<span class="slug">slack</span>} meta={<>Slack Web API · <span class="mono">slack.com/api</span></>} />
 <Entity name="GitHub Actions (acme)" meta="org acme (1234567)" />`,
       },
@@ -671,7 +673,7 @@ export const data: readonly ComponentDoc[] = [
       {
         title: 'Group rows',
         description:
-          'GroupRow puts a header between rows that share a consumer or a repository, on the panel-sub band, with one ghost action. It spans every column (colspan) and heads its row group.',
+          'GroupRow puts a header between rows that share a credential access rule or a repository, on the panel-sub band, with one ghost action. It spans every column (colspan) and heads its row group.',
         layout: 'stack',
         render: () => (
           <Panel variant="flush">
@@ -1046,14 +1048,14 @@ export const data: readonly ComponentDoc[] = [
                   suggestions={['acme/api', 'acme/web', 'acme/infra', 'platform/deploy-tools']}
                 />
                 <AddFilter
-                  label="Token"
+                  label="Credential"
                   open
                   srSuffix="requests"
                   options={TOKEN_OPTIONS}
                   extra={[{ href: '?token=none', label: 'No token chosen', count: 182 }]}
                 />
                 <AddFilter
-                  label="Consumer"
+                  label="Credential access rule"
                   srSuffix="requests"
                   options={[
                     {
@@ -1083,12 +1085,12 @@ export const data: readonly ComponentDoc[] = [
   <Filters label="Filter requests" action="/admin/requests" hidden={{ outcome: 'denied' }} submitLabel="Apply">
     <FilterSearch id="rq-q" label="Search requests" value={query} placeholder="Path, repository or request ID"
       suggestions={['acme/api', 'acme/web', 'acme/infra', 'platform/deploy-tools']} />
-    <AddFilter label="Token" srSuffix="requests" options={[
+    <AddFilter label="Credential" srSuffix="requests" options={[
       { href: '?token=openai', label: 'OpenAI', logo: 'openai', count: '3,902' },
       { href: '?token=slack', label: 'Slack', logo: 'slack', count: '2,140' },
       …
     ]} extra={[{ href: '?token=none', label: 'No token chosen', count: 182 }]} />
-    <AddFilter label="Consumer" srSuffix="requests" options={consumers} />
+    <AddFilter label="Credential access rule" srSuffix="requests" options={consumers} />
   </Filters>
 }>
   <Panel variant="flush"><Table label="Requests, newest first" dense stackable columns={columns}>…</Table></Panel>
@@ -1119,7 +1121,7 @@ export const data: readonly ComponentDoc[] = [
                     },
                     {
                       href: '?reason=no_matching_grant',
-                      label: 'No consumer access allows this call',
+                      label: 'No issuer access rules allows this call',
                       slug: 'no_matching_grant',
                       count: 59,
                     },
@@ -1143,7 +1145,7 @@ export const data: readonly ComponentDoc[] = [
         ),
         code: `<AddFilter label="Reason" srSuffix="requests" options={[
   { href: '?reason=issuer_unknown', label: 'Unknown issuer', slug: 'issuer_unknown', count: 182 },
-  { href: '?reason=no_matching_grant', label: 'No consumer access allows this call', slug: 'no_matching_grant', count: 59 },
+  { href: '?reason=no_matching_grant', label: 'No issuer access rules allows this call', slug: 'no_matching_grant', count: 59 },
   { href: '?reason=upstream_5xx', label: 'Upstream error', slug: 'upstream_5xx', count: 12 },
 ]} />`,
       },
@@ -1257,11 +1259,11 @@ export const data: readonly ComponentDoc[] = [
     …
   ] },
   { group: 'Access', options: [
-    { href: '?reason=no_matching_grant', label: 'No consumer access allows this call', slug: 'no_matching_grant', count: 59 },
+    { href: '?reason=no_matching_grant', label: 'No issuer access rules allows this call', slug: 'no_matching_grant', count: 59 },
     …
   ] },
   { group: 'Request', options: […] },
-  { group: 'Token', options: […] },
+  { group: 'Credential', options: […] },
   { group: 'Upstream', options: […] },
 ]} />`,
       },
@@ -1321,7 +1323,7 @@ export const data: readonly ComponentDoc[] = [
   { label: 'Outcome: Denied', href: '?token=slack' },
   { label: 'Token: Slack', href: '?outcome=denied' },
 ]} />
-<ActiveFilters lead="Filters" label="Filters on the map" filters={[{ label: 'Token: Slack', href: '/admin/access' }]} />`,
+<ActiveFilters lead="Filters" label="Filters on the map" filters={[{ label: 'Token: Slack', href: '/admin/issuer-access-rules' }]} />`,
       },
     ],
     props: [
@@ -1557,9 +1559,9 @@ export const data: readonly ComponentDoc[] = [
           />
         ),
         code: `<QuickLinks label="Filter tokens by status" links={[
-  { href: '/admin/tokens', label: 'All', count: 6, current: true },
-  { href: '/admin/tokens?status=expiring', label: 'Expiring', count: 1, tone: 'warn', glyph: '⌛' },
-  { href: '/admin/tokens?status=disabled', label: 'Disabled', count: 1, glyph: '⏸' },
+  { href: '/admin/credentials', label: 'All', count: 6, current: true },
+  { href: '/admin/credentials?status=expiring', label: 'Expiring', count: 1, tone: 'warn', glyph: '⌛' },
+  { href: '/admin/credentials?status=disabled', label: 'Disabled', count: 1, glyph: '⏸' },
 ]} />`,
       },
       {
@@ -1583,7 +1585,7 @@ export const data: readonly ComponentDoc[] = [
       {
         title: 'With a lead and no current link',
         description:
-          'Problem filters on Consumer access: a lead text names the row; none is current until one is picked.',
+          'Problem filters on Issuer access rules: a lead text names the row; none is current until one is picked.',
         render: () => (
           <QuickLinks
             label="Needs attention (example)"
@@ -1607,20 +1609,20 @@ export const data: readonly ComponentDoc[] = [
         title: 'Focus switch without counts on All',
         render: () => (
           <QuickLinks
-            label="Focus on a consumer (example)"
+            label="Focus on a credential access rule (example)"
             links={[
-              { href: '#', label: 'All consumers', current: true },
+              { href: '#', label: 'All credential access rules', current: true },
               { href: '#', label: 'GitHub Actions (acme)', count: 6 },
               { href: '#', label: 'GitLab CI (platform)', count: 2 },
               { href: '#', label: 'Buildkite (acme)', count: 1 },
             ]}
           />
         ),
-        code: `<QuickLinks label="Focus on a consumer" links={[
-  { href: '/admin/access', label: 'All consumers', current: true },
-  { href: '/admin/access?focus=github-acme', label: 'GitHub Actions (acme)', count: 6 },
-  { href: '/admin/access?focus=gitlab-platform', label: 'GitLab CI (platform)', count: 2 },
-  { href: '/admin/access?focus=buildkite-acme', label: 'Buildkite (acme)', count: 1 },
+        code: `<QuickLinks label="Focus on a credential access rule" links={[
+  { href: '/admin/issuer-access-rules', label: 'All credential access rules', current: true },
+  { href: '/admin/issuer-access-rules?focus=github-acme', label: 'GitHub Actions (acme)', count: 6 },
+  { href: '/admin/issuer-access-rules?focus=gitlab-platform', label: 'GitLab CI (platform)', count: 2 },
+  { href: '/admin/issuer-access-rules?focus=buildkite-acme', label: 'Buildkite (acme)', count: 1 },
 ]} />`,
       },
     ],
@@ -1821,17 +1823,17 @@ export const data: readonly ComponentDoc[] = [
           'The table keeps its header (scroll={false}, no rows) so the shape of the list stays visible; the empty state follows in the same panel.',
         layout: 'stack',
         render: () => (
-          <Tray id="ex-empty" title="Consumer access" count={0}>
+          <Tray id="ex-empty" title="Issuer access rules" count={0}>
             <Panel variant="flush">
               <Table
                 scroll={false}
-                caption="Consumer access"
+                caption="Issuer access rules"
                 columns={[{ label: 'Consumer → token' }, { label: 'Status' }, { label: 'Expires' }]}
               />
               <EmptyState
                 icon="consumer"
-                title="No consumer can use a token yet"
-                description="Give a consumer access to a token so its CI jobs can call the API through tokengate."
+                title="No workload can use a token yet"
+                description="Add issuer access rule to a token so its CI jobs can call the API through tokengate."
                 actions={
                   <>
                     <a class="btn primary" href="#">
@@ -1844,14 +1846,14 @@ export const data: readonly ComponentDoc[] = [
             </Panel>
           </Tray>
         ),
-        code: `<Tray id="access" title="Consumer access" count={0}>
+        code: `<Tray id="access" title="Issuer access rules" count={0}>
   <Panel variant="flush">
-    <Table scroll={false} caption="Consumer access"
+    <Table scroll={false} caption="Issuer access rules"
       columns={[{ label: 'Consumer → token' }, { label: 'Status' }, { label: 'Expires' }]} />
     <EmptyState icon="consumer"
-      title="No consumer can use a token yet"
-      description="Give a consumer access to a token so its CI jobs can call the API through tokengate."
-      actions={<><a class="btn primary" href="/admin/access/new">Give access</a><a href="/docs/access">How access works</a></>} />
+      title="No workload can use a token yet"
+      description="Add issuer access rule to a token so its CI jobs can call the API through tokengate."
+      actions={<><a class="btn primary" href="/admin/issuer-access-rules/new">Give access</a><a href="/docs/access">How access works</a></>} />
   </Panel>
 </Tray>`,
       },
@@ -1998,7 +2000,7 @@ export const data: readonly ComponentDoc[] = [
                   <RailKeyValue
                     items={[
                       {
-                        label: 'Token ID',
+                        label: 'Credential ID',
                         value: 'svc_01JB8Z5K2Q7W3N4M6P8R9T7Q2M',
                         mono: true,
                         copyable: true,
@@ -2023,7 +2025,7 @@ export const data: readonly ComponentDoc[] = [
   <Tray id="details" title="Details">
     <Panel>
       <RailKeyValue items={[
-        { label: 'Token ID', value: 'svc_01JB8Z5K2Q7W3N4M6P8R9T7Q2M', mono: true, copyable: true },
+        { label: 'Credential ID', value: 'svc_01JB8Z5K2Q7W3N4M6P8R9T7Q2M', mono: true, copyable: true },
         { label: 'Slug', value: 'slack', mono: true },
         { label: 'Created', value: '3 Oct 2026', note: 'by Priya Natarajan' },
         { label: 'Updated', value: 'Today 09:12', note: 'by Maya Chen' },
@@ -2042,7 +2044,7 @@ export const data: readonly ComponentDoc[] = [
             <RailKeyValue
               items={[
                 {
-                  label: 'Token ID',
+                  label: 'Credential ID',
                   value: 'svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C',
                   mono: true,
                   copyable: true,
@@ -2177,8 +2179,8 @@ export const data: readonly ComponentDoc[] = [
         code: `<Secret last4="9fQa" facts="Bot token · 51 characters"
   meta={<>Set 3 Oct 2026 by Priya Natarajan · does not expire · sealed with key <code>k2</code></>}
   actions={<>
-    <a class="btn secondary" href="/admin/tokens/slack/secret">Replace secret</a>
-    <form method="post" action="/admin/tokens/slack/test"><button class="btn secondary">Test</button></form>
+    <a class="btn secondary" href="/admin/credentials/slack/secret">Replace secret</a>
+    <form method="post" action="/admin/credentials/slack/test"><button class="btn secondary">Test</button></form>
   </>} />`,
       },
       {
@@ -2320,7 +2322,7 @@ export const data: readonly ComponentDoc[] = [
     <FeedItem avatar={<span class="avatar" aria-hidden="true">PN</span>}
       time={<Time datetime="2026-10-15T13:02Z" format="clock" />}
       meta={<><code>service.update</code><a href="?target=slack-legacy">History</a></>}>
-      <a href="?actor=priya">Priya Natarajan</a> disabled the token <a href="/admin/tokens/slack-legacy">Slack (legacy)</a>.
+      <a href="?actor=priya">Priya Natarajan</a> disabled the token <a href="/admin/credentials/slack-legacy">Slack (legacy)</a>.
     </FeedItem>
     <FeedItem avatar={…} time={<Time datetime="2026-10-15T11:47Z" format="clock" />}
       meta={<><code>grant.update</code><a href="?target=a5">History</a></>}
@@ -2330,7 +2332,7 @@ export const data: readonly ComponentDoc[] = [
             rows={[{ field: 'Expires', before: '16 Oct 2026', after: '14 Nov 2026' }]} /></div>
         </details>
       }>
-      <a href="?actor=diego">Diego Ruiz</a> extended <a href="/admin/access/a5">acme/infra → GitHub</a> to 14 Nov 2026.
+      <a href="?actor=diego">Diego Ruiz</a> extended <a href="/admin/issuer-access-rules/a5">acme/infra → GitHub</a> to 14 Nov 2026.
     </FeedItem>
   </Feed>
   <FeedDay>2 Oct</FeedDay>
@@ -2382,7 +2384,7 @@ export const data: readonly ComponentDoc[] = [
     <Feed compact>
       <FeedItem avatar={<span class="avatar" aria-hidden="true">MC</span>}
         time={<Time datetime="2026-10-15T09:12Z" format="clock" />}>
-        <b>Maya Chen</b> gave <a href="/admin/access/a1">acme/api</a> access
+        <b>Maya Chen</b> gave <a href="/admin/issuer-access-rules/a1">acme/api</a> access
       </FeedItem>
       <FeedItem avatar={<span class="avatar" aria-hidden="true">PN</span>}
         time={<Time datetime="2026-10-03T14:20Z" format="day" />}>

@@ -72,26 +72,26 @@ function adminSections(
       ]),
     },
     {
-      label: 'Service tokens',
+      label: 'Credentials',
       href: '#',
       icon: <Icon name="token" />,
       count: counts ? 6 : undefined,
       open: open === 'tokens',
       items: sub([
-        ['Tokens', '?p=tokens'],
+        ['Credentials', '?p=tokens'],
         ['Allowed hosts', '?p=hosts'],
         ['Encryption keys', '?p=keys'],
       ]),
     },
     {
-      label: 'Service consumers',
+      label: 'Credential access rules',
       href: '#',
       icon: <Icon name="consumer" />,
       count: counts ? 3 : undefined,
       open: open === 'consumers',
       items: sub([
-        ['Consumers', '?p=consumers'],
-        ['Consumer access', '?p=access'],
+        ['Credential access rules', '?p=consumers'],
+        ['Issuer access rules', '?p=access'],
       ]),
     },
     {
@@ -129,9 +129,9 @@ function SlackRow(props: { name: string; meta: string; logo: 'github' | 'gitlab'
 const SECTIONS_CODE = `// one data structure for every page: only open and current change
 const sections = [
   { label: 'Monitoring', href: '/admin', icon: <Icon name="monitoring" />, items: [...] },
-  { label: 'Service tokens', href: '/admin/tokens', icon: <Icon name="token" />, count: 6,
-    open: true, items: [{ label: 'Tokens', href: '/admin/tokens', current: true }, ...] },
-  { label: 'Service consumers', href: '/admin/consumers', icon: <Icon name="consumer" />, count: 3, items: [...] },
+  { label: 'Credentials', href: '/admin/credentials', icon: <Icon name="token" />, count: 6,
+    open: true, items: [{ label: 'Credentials', href: '/admin/credentials', current: true }, ...] },
+  { label: 'Credential access rules', href: '/admin/credential-access-rules', icon: <Icon name="consumer" />, count: 3, items: [...] },
   { label: 'Users', href: '/admin/users', icon: <Icon name="users" />,
     pill: { label: '1 pending', srSuffix: ': a person needs your decision' }, items: [...] },
 ];`;
@@ -187,7 +187,7 @@ const appShell: ComponentDoc = {
         >
           <Page>
             <PageHeader
-              title="Service tokens"
+              title="Credentials"
               count={6}
               description="Secrets of the upstream APIs that consumers call through tokengate."
               actions={
@@ -195,7 +195,7 @@ const appShell: ComponentDoc = {
                   <span class="plus" aria-hidden="true">
                     +
                   </span>
-                  Add token
+                  Add credential
                 </a>
               }
             />
@@ -222,7 +222,7 @@ const appShell: ComponentDoc = {
   }
 >
   <Page>
-    <PageHeader title="Service tokens" count={6} description="…" actions={…} />
+    <PageHeader title="Credentials" count={6} description="…" actions={…} />
   </Page>
 </AppShell>`,
     },
@@ -260,7 +260,7 @@ const appShell: ComponentDoc = {
         >
           <Page>
             <PageHeader
-              crumbs={[{ label: 'Service tokens', href: '#' }, { label: 'Encryption keys' }]}
+              crumbs={[{ label: 'Credentials', href: '#' }, { label: 'Encryption keys' }]}
               crumbsLabel="Breadcrumb (example 1)"
               title="Encryption keys"
               description="Keys that seal the stored secrets. tokengate keeps the old keys until every secret is sealed with the new one."
@@ -274,7 +274,7 @@ const appShell: ComponentDoc = {
   nav={<SideNav label="Sections" sections={sections} />}
   account={account}
   banner={
-    <HealthStrip title="Keyring unavailable." action={<a href="/admin/tokens/keys">Fix encryption keys</a>}>
+    <HealthStrip title="Keyring unavailable." action={<a href="/admin/credentials/keys">Fix encryption keys</a>}>
       Stored secrets cannot be opened, so every call fails.
     </HealthStrip>
   }
@@ -283,9 +283,9 @@ const appShell: ComponentDoc = {
 </AppShell>`,
     },
     {
-      title: 'Empty install, token manager',
+      title: 'Empty install, credential manager',
       description:
-        'No counts and no pill; the health line reads “Healthy · 1 note” and links to Health. The token manager’s account menu has no Export configuration.',
+        'No counts and no pill; the health line reads “Healthy · 1 note” and links to Health. The credential manager’s account menu has no Export configuration.',
       layout: 'frame',
       render: () => (
         <AppShell
@@ -304,7 +304,7 @@ const appShell: ComponentDoc = {
             />
           }
           account={
-            <AccountMenu id="ex-acct-3" name="Priya Natarajan" role="Token manager">
+            <AccountMenu id="ex-acct-3" name="Priya Natarajan" role="Credential manager">
               <MenuItem href="/docs">Docs</MenuItem>
               <MenuSeparator />
               <MenuItem action="#">Sign out</MenuItem>
@@ -314,7 +314,7 @@ const appShell: ComponentDoc = {
           <Page>
             <PageHeader
               title="Overview"
-              description="Get started: load a token, add a consumer, then give it access."
+              description="Get started: load a token, add a credential access rule, then give it access."
             />
           </Page>
         </AppShell>
@@ -324,7 +324,7 @@ const appShell: ComponentDoc = {
   health={<HealthLine href="/admin#ov-health" srSuffix=". Open Overview, Health">Healthy · 1 note</HealthLine>}
   nav={<SideNav label="Sections" sections={sectionsWithoutCounts} />}
   account={
-    <AccountMenu id="acct" name="Priya Natarajan" role="Token manager">
+    <AccountMenu id="acct" name="Priya Natarajan" role="Credential manager">
       <MenuItem href="/docs">Docs</MenuItem>
       <MenuSeparator />
       <MenuItem action="/admin/logout">Sign out</MenuItem>
@@ -353,18 +353,18 @@ const appShell: ComponentDoc = {
         >
           <Page>
             <PageHeader
-              crumbs={[{ label: 'Service tokens', href: '#' }, { label: 'Slack' }]}
+              crumbs={[{ label: 'Credentials', href: '#' }, { label: 'Slack' }]}
               crumbsLabel="Breadcrumb (deeper page example)"
               title="Slack"
             />
           </Page>
         </AppShell>
       ),
-      code: `// /admin/tokens/slack: Tokens holds the page, it is not the page
+      code: `// /admin/credentials/slack: Tokens holds the page, it is not the page
 const sections = [
   …,
-  { label: 'Service tokens', href: '/admin/tokens', icon: <Icon name="token" />, count: 6, open: true,
-    items: [{ label: 'Tokens', href: '/admin/tokens', current: 'true' }, …] },
+  { label: 'Credentials', href: '/admin/credentials', icon: <Icon name="token" />, count: 6, open: true,
+    items: [{ label: 'Credentials', href: '/admin/credentials', current: 'true' }, …] },
   …,
 ];
 
@@ -412,7 +412,7 @@ const sections = [
   title="Keyring unavailable."
   role={null}
   srPrefix="Error:"
-  action={<a href="/admin/tokens/keys">Fix encryption keys</a>}
+  action={<a href="/admin/credentials/keys">Fix encryption keys</a>}
 >
   Stored secrets cannot be opened, so every call fails.
 </HealthStrip>`,
@@ -698,10 +698,10 @@ const menu: ComponentDoc = {
   Slack actions<span aria-hidden="true">▾</span>
 </button>
 <Menu id="slack-actions">
-  <MenuItem href="/admin/tokens/slack/test">Test the secret</MenuItem>
+  <MenuItem href="/admin/credentials/slack/test">Test the secret</MenuItem>
   <MenuItem href="/admin/requests?token=slack">Open requests</MenuItem>
   <MenuSeparator />
-  <MenuItem action="/admin/tokens/svc_01JB8Y2K…/enabled" name="enabled" value="0"
+  <MenuItem action="/admin/credentials/svc_01JB8Y2K…/enabled" name="enabled" value="0"
     hidden={{ _csrf: csrf }}>
     Disable Slack
   </MenuItem>
@@ -724,7 +724,7 @@ const menu: ComponentDoc = {
               hidden={{ _csrf: 'csrf-token' }}
               srPrefix="Make diego@acme.dev"
               keyFact="Reads only"
-              detail="− service tokens, consumer access, export"
+              detail="− credentials, issuer access rules, export"
             >
               Viewer
             </MenuItem>
@@ -735,9 +735,9 @@ const menu: ComponentDoc = {
               hidden={{ _csrf: 'csrf-token' }}
               srPrefix="Make diego@acme.dev"
               keyFact="Loads keys"
-              detail="− consumer access, export"
+              detail="− issuer access rules, export"
             >
-              Token manager
+              Credential manager
             </MenuItem>
             <MenuItem
               dialog="ex-dlg-owner"
@@ -781,7 +781,7 @@ const menu: ComponentDoc = {
   <MenuHeader end="now Admin">Change the role of <b>diego@acme.dev</b></MenuHeader>
   <MenuItem action="/admin/users/usr_diego" name="role" value="viewer" hidden={{ _csrf: csrf }}
     srPrefix="Make diego@acme.dev" keyFact="Reads only"
-    detail="− service tokens, consumer access, export">Viewer</MenuItem>
+    detail="− credentials, issuer access rules, export">Viewer</MenuItem>
   …
   <MenuItem dialog="dlg-owner-usr_diego" srPrefix="Make diego@acme.dev" keyFact="Everything"
     detail="People, sign-in and settings too. You confirm in a dialog.">Owner…</MenuItem>
@@ -944,7 +944,7 @@ const page: ComponentDoc = {
       render: () => (
         <Page>
           <PageHeader
-            title="Consumer access"
+            title="Issuer access rules"
             count={9}
             description="Who can use which token, and from which jobs."
           />
@@ -961,7 +961,7 @@ const page: ComponentDoc = {
         </Page>
       ),
       code: `<Page>
-  <PageHeader title="Consumer access" count={9} description="Who can use which token, and from which jobs." />
+  <PageHeader title="Issuer access rules" count={9} description="Who can use which token, and from which jobs." />
   <Tray id="all-accesses" title="All accesses" count={9} description="Newest first.">
     <Panel variant="pad">…</Panel>
   </Tray>
@@ -1009,12 +1009,13 @@ const pageHeader: ComponentDoc = {
       layout: 'frame',
       render: () => (
         <PageHeader
-          title="Service tokens"
+          title="Credentials"
           count={6}
           description={
             <>
               Secrets of the upstream APIs that consumers call through tokengate. Loading a token
-              gives nobody access; consumer access is given separately. <a href="#">Learn more</a>
+              gives nobody access; issuer access rules is given separately.{' '}
+              <a href="#">Learn more</a>
             </>
           }
           actions={
@@ -1022,16 +1023,16 @@ const pageHeader: ComponentDoc = {
               <span class="plus" aria-hidden="true">
                 +
               </span>
-              Add token
+              Add credential
             </a>
           }
         />
       ),
       code: `<PageHeader
-  title="Service tokens"
+  title="Credentials"
   count={6}
   description={<>Secrets of the upstream APIs that consumers call through tokengate. … <a href="/docs/tokens">Learn more</a></>}
-  actions={<a class="btn primary" href="/admin/tokens/new"><span class="plus" aria-hidden="true">+</span>Add token</a>}
+  actions={<a class="btn primary" href="/admin/credentials/new"><span class="plus" aria-hidden="true">+</span>Add credential</a>}
 />`,
     },
     {
@@ -1041,7 +1042,7 @@ const pageHeader: ComponentDoc = {
       layout: 'frame',
       render: () => (
         <PageHeader
-          crumbs={[{ label: 'Service tokens', href: '#' }, { label: 'Slack' }]}
+          crumbs={[{ label: 'Credentials', href: '#' }, { label: 'Slack' }]}
           crumbsLabel="Breadcrumb (example 2)"
           identity={
             <Identity
@@ -1054,7 +1055,7 @@ const pageHeader: ComponentDoc = {
               }
               type="Slack Web API"
               slug="slack"
-              entityId={{ value: 'svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C', kind: 'Token' }}
+              entityId={{ value: 'svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C', kind: 'Credential' }}
               facts={['Created 3 Oct 2026']}
             />
           }
@@ -1102,7 +1103,7 @@ const pageHeader: ComponentDoc = {
         </PageHeader>
       ),
       code: `<PageHeader
-  crumbs={[{ label: 'Service tokens', href: '/admin/tokens' }, { label: 'Slack' }]}
+  crumbs={[{ label: 'Credentials', href: '/admin/credentials' }, { label: 'Slack' }]}
   identity={
     <Identity
       logo="slack"
@@ -1110,7 +1111,7 @@ const pageHeader: ComponentDoc = {
       status={<Badge tone="ok" glyph="✓">Active</Badge>}
       type="Slack Web API"
       slug="slack"
-      entityId={{ value: 'svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C', kind: 'Token' }}
+      entityId={{ value: 'svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C', kind: 'Credential' }}
       facts={['Created 3 Oct 2026']}
     />
   }
@@ -1314,7 +1315,7 @@ const pageHeader: ComponentDoc = {
           name: 'entityId',
           type: '{ value: string; kind: string }',
           description:
-            'Full ID in an IdChip; kind ("Token") makes its tooltip and screen reader name "Token ID".',
+            'Full ID in an IdChip; kind ("Credential") makes its tooltip and screen reader name "Credential ID".',
         },
         {
           name: 'facts',
@@ -1335,7 +1336,7 @@ const pageHeader: ComponentDoc = {
   accessibility: [
     'One H1 per page: the list title, or the name inside Identity (with its status badge).',
     'The breadcrumb is a nav named “Breadcrumb”; the last item has aria-current="page".',
-    'The ID chip’s kind (“Token ID”) is read before the chip; the chip itself holds only the ID, so selecting it copies only the ID.',
+    'The ID chip’s kind (“Credential ID”) is read before the chip; the chip itself holds only the ID, so selecting it copies only the ID.',
   ],
   do: [
     'Name the first crumb after the list page the object belongs to.',
@@ -1397,10 +1398,10 @@ const tabs: ComponentDoc = {
       code: `<Tabs
   label="Consumer views"
   items={[
-    { label: 'Overview', href: '/admin/consumers/github-acme', current: true },
-    { label: 'Access', href: '/admin/consumers/github-acme/access', count: 6 },
-    { label: 'Requests', href: '/admin/consumers/github-acme/requests' },
-    { label: 'Trust settings', href: '/admin/consumers/github-acme/trust' },
+    { label: 'Overview', href: '/admin/credential-access-rules/github-acme', current: true },
+    { label: 'Access', href: '/admin/credential-access-rules/github-acme/access', count: 6 },
+    { label: 'Requests', href: '/admin/credential-access-rules/github-acme/requests' },
+    { label: 'Trust settings', href: '/admin/credential-access-rules/github-acme/trust' },
   ]}
 />`,
     },
@@ -1560,7 +1561,7 @@ const tray: ComponentDoc = {
           description="Each token is a secret tokengate keeps for one upstream API."
           actions={
             <a class="btn sm secondary" href="#">
-              Open consumer access
+              Open issuer access rules
             </a>
           }
         >
@@ -1574,7 +1575,7 @@ const tray: ComponentDoc = {
       ),
       code: `<Tray id="all-tokens" title="All tokens" count={6}
   description="Each token is a secret tokengate keeps for one upstream API."
-  actions={<a class="btn sm secondary" href="/admin/access">Open consumer access</a>}>
+  actions={<a class="btn sm secondary" href="/admin/issuer-access-rules">Open issuer access rules</a>}>
   <Panel variant="pad">…</Panel>
   <Panel variant="pad">…</Panel>
 </Tray>`,
@@ -1722,7 +1723,7 @@ const dangerZone: ComponentDoc = {
         <>
           <DangerZone id="ex-dz-1">
             <DangerRow
-              title="Disable token"
+              title="Disable credential"
               description="2 consumers lose access until you enable it again. Nothing is deleted."
               action={
                 <form method="post" action="#">
@@ -1734,7 +1735,7 @@ const dangerZone: ComponentDoc = {
               }
             />
             <DangerRow
-              title="Delete Slack and its 3 consumer accesses"
+              title="Delete Slack and its 3 issuer access rules"
               description="The secret and the accesses are removed. This cannot be undone."
               action={
                 <DialogTrigger dialog="ex-dz-dlg" variant="danger">
@@ -1745,28 +1746,28 @@ const dangerZone: ComponentDoc = {
           </DangerZone>
           <ConfirmDialog
             id="ex-dz-dlg"
-            title="Delete Slack and its 3 consumer accesses?"
+            title="Delete Slack and its 3 issuer access rules?"
             description="This cannot be undone. Calls through /proxy/slack fail from the next request."
             action="#"
             confirmLabel="Delete Slack"
-            consequences={['The secret •••• 9fQa is erased.', '3 consumer accesses are deleted.']}
-            confirmText={{ value: 'slack', hint: 'The slug of this token, in lower case.' }}
+            consequences={['The secret •••• 9fQa is erased.', '3 issuer access rules are deleted.']}
+            confirmText={{ value: 'slack', hint: 'The slug of this credential, in lower case.' }}
           />
         </>
       ),
       code: `<DangerZone id="danger">
   <DangerRow
-    title="Disable token"
+    title="Disable credential"
     description="2 consumers lose access until you enable it again. Nothing is deleted."
     action={
-      <form method="post" action="/admin/tokens/svc_01JB8Y2K…/enabled">
+      <form method="post" action="/admin/credentials/svc_01JB8Y2K…/enabled">
         <input type="hidden" name="enabled" value="0" />
         <button class="btn secondary" type="submit">Disable Slack</button>
       </form>
     }
   />
   <DangerRow
-    title="Delete Slack and its 3 consumer accesses"
+    title="Delete Slack and its 3 issuer access rules"
     description="The secret and the accesses are removed. This cannot be undone."
     action={<DialogTrigger dialog="dlg-del" variant="danger">Delete Slack…</DialogTrigger>}
   />
@@ -1881,7 +1882,9 @@ const detailLayout: ComponentDoc = {
   summary:
     'The body of a detail page: the main column of trays plus a 20rem right rail from 80rem; below that the rail drops under the main column.',
   usage: {
-    when: ['Detail pages (a token, a consumer, an access, a person), after the page header.'],
+    when: [
+      'Detail pages (a token, a credential access rule, an access, a person), after the page header.',
+    ],
     whenNot: ['Form pages: their summary rail comes with the form layout.', 'List pages.'],
   },
   examples: [
@@ -1899,7 +1902,7 @@ const detailLayout: ComponentDoc = {
                     {/* dl.rkv: RailKeyValue of the data group */}
                     <dl class="rkv">
                       <div>
-                        <dt>Token ID</dt>
+                        <dt>Credential ID</dt>
                         <dd class="mono copyable">svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C</dd>
                       </div>
                       <div>
@@ -1971,7 +1974,7 @@ const detailLayout: ComponentDoc = {
             </Tray>
             <DangerZone id="ex-dl-danger">
               <DangerRow
-                title="Disable token"
+                title="Disable credential"
                 description="2 consumers lose access until you enable it again."
                 action={
                   <button class="btn secondary" type="button">
@@ -2067,7 +2070,7 @@ const dialog: ComponentDoc = {
           </DialogTrigger>
           <ConfirmDialog
             id="ex-dlg-1"
-            title="Delete Slack and its 3 consumer accesses?"
+            title="Delete Slack and its 3 issuer access rules?"
             description={
               <>
                 This cannot be undone. The secret is destroyed, and from the next request these jobs
@@ -2095,7 +2098,7 @@ const dialog: ComponentDoc = {
             ]}
             confirmText={{
               value: 'slack',
-              hint: 'The slug of this token, in lower case.',
+              hint: 'The slug of this credential, in lower case.',
               name: 'confirm_slug',
             }}
             hidden={{ with_accesses: '1' }}
@@ -2118,12 +2121,12 @@ const dialog: ComponentDoc = {
       code: `<DialogTrigger dialog="dlg-del" variant="danger">Delete Slack…</DialogTrigger>
 <ConfirmDialog
   id="dlg-del"
-  title="Delete Slack and its 3 consumer accesses?"
+  title="Delete Slack and its 3 issuer access rules?"
   description={<>This cannot be undone. … get <code>404</code> from <code>/proxy/slack</code>:</>}
-  action="/admin/tokens/svc_01JB8Y2K…/delete"
+  action="/admin/credentials/svc_01JB8Y2K…/delete"
   confirmLabel="Delete Slack"
   affected={accesses.map((a) => <>…logo, name link, meta…</>)}
-  confirmText={{ value: 'slack', hint: 'The slug of this token, in lower case.', name: 'confirm_slug' }}
+  confirmText={{ value: 'slack', hint: 'The slug of this credential, in lower case.', name: 'confirm_slug' }}
   hidden={{ _csrf: csrf, with_accesses: '1' }}
 >
   <Callout more="2,140 requests used Slack in the last 24 hours. …" /> {/* base group */}
@@ -2138,7 +2141,7 @@ const dialog: ComponentDoc = {
           id="ex-dlg-2"
           open
           cancelHref="#"
-          title="Delete Slack and its 3 consumer accesses?"
+          title="Delete Slack and its 3 issuer access rules?"
           description="Calls through /proxy/slack fail at once. You cannot undo this."
           action="#"
           confirmLabel="Delete Slack"
@@ -2147,7 +2150,7 @@ const dialog: ComponentDoc = {
               The secret <span class="mask">•••• 9fQa</span> is erased.
             </>,
             <>
-              <a href="#">3 consumer accesses</a> are deleted: acme/api, acme/web,
+              <a href="#">3 issuer access rules</a> are deleted: acme/api, acme/web,
               platform/deploy-tools.
             </>,
             '2,140 requests in the last 24 hours used it.',
@@ -2158,14 +2161,14 @@ const dialog: ComponentDoc = {
       code: `<ConfirmDialog
   id="dlg-del"
   open
-  cancelHref="/admin/tokens/slack"
-  title="Delete Slack and its 3 consumer accesses?"
+  cancelHref="/admin/credentials/slack"
+  title="Delete Slack and its 3 issuer access rules?"
   description="Calls through /proxy/slack fail at once. You cannot undo this."
-  action="/admin/tokens/svc_01JB8Y2K…/delete"
+  action="/admin/credentials/svc_01JB8Y2K…/delete"
   confirmLabel="Delete Slack"
   consequences={[
     <>The secret <span class="mask">•••• 9fQa</span> is erased.</>,
-    <><a href="/admin/access?token=slack">3 consumer accesses</a> are deleted: acme/api, acme/web, platform/deploy-tools.</>,
+    <><a href="/admin/issuer-access-rules?token=slack">3 issuer access rules</a> are deleted: acme/api, acme/web, platform/deploy-tools.</>,
     '2,140 requests in the last 24 hours used it.',
   ]}
   confirmText={{ value: 'slack' }}
@@ -2210,7 +2213,7 @@ const dialog: ComponentDoc = {
   wide
   title="Rename GitHub Actions (acme)"
   description="Lists and the audit log show the new name. Accesses keep working."
-  action="/admin/consumers/github-acme/name"
+  action="/admin/credential-access-rules/github-acme/name"
   footer={<><DialogClose dialog="dlg-rename" /><button class="btn primary" type="submit">Rename</button></>}
 >
   <div class="field"><label for="dlg-rename-name">Name</label><input class="input" id="dlg-rename-name" name="name" value="GitHub Actions (acme)" required /></div>
@@ -2465,7 +2468,7 @@ const dialog: ComponentDoc = {
     'The type-to-confirm field is required with a literal pattern, and its hint is wired with aria-describedby. The server checks it again.',
   ],
   do: [
-    'Put the object and the count in the title (“Delete Slack and its 3 consumer accesses?”).',
+    'Put the object and the count in the title (“Delete Slack and its 3 issuer access rules?”).',
     'List what is lost, with links, before the confirm button.',
     'Offer the reversible alternative (Disable) inside the dialog.',
   ],

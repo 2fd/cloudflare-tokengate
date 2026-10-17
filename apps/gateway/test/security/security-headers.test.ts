@@ -24,7 +24,7 @@ describe('I-DEPLOY-1: security headers and host pinning', () => {
     expect(CONTENT_SECURITY_POLICY).not.toContain('script-src');
   });
 
-  it.each(['/admin', '/admin/tokens', '/admin/nope'])(
+  it.each(['/admin', '/admin/credentials', '/admin/nope'])(
     'sets headers and no-store on %s',
     async (path) => {
       const app = createTestApp();
@@ -72,7 +72,7 @@ describe('I-DEPLOY-1: security headers and host pinning', () => {
     await withAdminHosts(['admin.example.com']);
     const app = createTestApp();
     for (const origin of ['https://tokengate.acme.workers.dev', 'https://gw.test']) {
-      for (const path of ['/admin', '/admin/tokens', '/admin/users/x']) {
+      for (const path of ['/admin', '/admin/credentials', '/admin/users/x']) {
         const res = await app.request(path, { origin, redirect: 'manual' });
         expect(res.status, `${origin}${path}`).toBe(404);
         expectBrowserHeaders(res);
@@ -107,7 +107,7 @@ describe('I-DEPLOY-1: security headers and host pinning', () => {
     await withAdminHosts(['admin.example.com']);
     // Hono routes on the decoded path, so `/%61dmin` reaches the admin pages.
     const app = createTestApp();
-    for (const path of ['/%61dmin', '/%61dmin/services', '/%41dmin/../%61dmin/users']) {
+    for (const path of ['/%61dmin', '/%61dmin/credentials', '/%41dmin/../%61dmin/users']) {
       const res = await app.request(path, {
         origin: 'https://tokengate.acme.workers.dev',
         redirect: 'manual',

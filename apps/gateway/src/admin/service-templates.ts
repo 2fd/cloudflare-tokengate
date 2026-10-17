@@ -1,4 +1,4 @@
-// The token types of the "Add a token" accordion and the operation presets of consumer access. A
+// The credential types of the "Add a credential" accordion and the operation presets of issuer access rules. A
 // template card posts only the secret and display fields: base URL, injection, headers, timeout and
 // check come from here, never from the form (I-SSRF-1). Every template is checked by
 // test/unit/admin/ops/service-templates.test.ts against validateBaseUrl, validateServiceFields, the
@@ -54,7 +54,7 @@ export interface ServiceTemplate {
   timeout_ms: number;
   verify: VerifyCheck | null;
   /**
-   * Named operation sets that consumer access offers as checkboxes, `default` ones checked. A path
+   * Named operation sets that issuer access rules offers as checkboxes, `default` ones checked. A path
    * may contain REPO_PLACEHOLDER, replaced by the repository on submit (presetRules).
    */
   operation_presets: OperationPreset[];
@@ -158,7 +158,7 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
     operation_presets: [preset('send', 'Send messages', true, ['POST', '/'])],
     docs_url: 'https://discord.com/developers/docs/resources/webhook#execute-webhook',
     notes:
-      'Grant only POST /: GET and PATCH on the webhook URL return the token in the response body.',
+      'Allow only POST /: GET and PATCH on the webhook URL return the token in the response body.',
   },
   {
     id: 'openai',
@@ -230,7 +230,7 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
     injection: { kind: 'bearer' },
     forward_headers: ['x-github-api-version'],
     timeout_ms: 60_000,
-    // /rate_limit needs no permissions, works with every token type and returns the token expiry
+    // /rate_limit needs no permissions, works with every credential type and returns the token expiry
     // header. https://docs.github.com/en/rest/rate-limit/rate-limit
     verify: { method: 'GET', path: '/rate_limit', expect_status: 200 },
     operation_presets: [

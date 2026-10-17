@@ -10,7 +10,7 @@
     { "name": "path", "type": "string", "required": true },
     { "name": "service_slug", "type": "string", "required": false },
     { "name": "service_id", "type": "string", "required": false },
-    { "name": "caller_provider_id", "type": "string", "required": false },
+    { "name": "credential_access_rule_id", "type": "string", "required": false },
     { "name": "grant_id", "type": "string", "required": false },
     { "name": "claims_verified", "type": "int32", "required": true },
     { "name": "caller_subject", "type": "string", "required": false },

@@ -23,7 +23,10 @@ export interface User {
   last_refused_subject: string | null;
 }
 
-export interface CallerProvider {
+export interface CredentialAccessRule {
+  credential_id: string;
+  /** Mandatory filters; access rules may only narrow them. */
+  conditions: Condition[];
   id: string;
   name: string;
   profile: ProfileId;
@@ -39,7 +42,7 @@ export interface CallerProvider {
   updated_at: number;
 }
 
-export interface Service {
+export interface Credential {
   id: string;
   slug: string;
   name: string;
@@ -65,11 +68,14 @@ export interface Service {
   updated_at: number;
 }
 
-export interface Grant {
+/** Historical internal name; the persisted domain entity is Credential. */
+export type Service = Credential;
+
+export interface IssuerAccessRule {
   id: string;
   name: string;
   description: string;
-  caller_provider_id: string;
+  credential_access_rule_id: string;
   service_id: string;
   conditions: Condition[];
   rules: Rule[];
@@ -108,11 +114,11 @@ export interface Actor {
 export type LabelledClaim = 'repository_owner_id' | 'repository_id' | 'namespace_id' | 'project_id';
 
 /**
- * Human label for one numeric claim value, per caller provider, e.g. repository_id 987654321 →
+ * Human label for one numeric claim value, per credential access rule, e.g. repository_id 987654321 →
  * "acme/api". Display and form derivation only: policy evaluation never reads it.
  */
 export interface ClaimLabel {
-  caller_provider_id: string;
+  credential_access_rule_id: string;
   claim: LabelledClaim;
   value: string;
   label: string;

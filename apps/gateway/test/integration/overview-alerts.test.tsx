@@ -44,8 +44,8 @@ const ALL_CODES: readonly AlertCode[] = [
 function base(): AlertData {
   return {
     now: NOW,
-    services: [],
-    grants: [],
+    credentials: [],
+    issuer_access_rules: [],
     sealedKids: [],
     keyring: {
       ok: true,
@@ -75,7 +75,11 @@ function base(): AlertData {
   };
 }
 
-const service = (id: string, name: string, extra: Partial<AlertData['services'][number]> = {}) => ({
+const service = (
+  id: string,
+  name: string,
+  extra: Partial<AlertData['credentials'][number]> = {},
+) => ({
   id,
   slug: name.toLowerCase(),
   name,
@@ -110,18 +114,18 @@ function catalogue(): AlertData[] {
   };
   const keys: AlertData = {
     ...base(),
-    services: [
+    credentials: [
       service('svc_A', 'Alpha', { credential_expires_at: NOW - DAY }),
       service('svc_B', 'Beta', { credential_expires_at: NOW + 3 * DAY }),
       service('svc_C', 'Gamma', { has_credential: false }),
       service('svc_D', 'Delta', { base_url: 'https://evil.example.net' }),
     ],
-    grants: [
+    issuer_access_rules: [
       {
         id: 'grt_A',
         name: 'Gamma for acme/api',
         service_id: 'svc_C',
-        caller_provider_id: 'cpr_A',
+        credential_access_rule_id: 'cpr_A',
         enabled: true,
         expires_at: NOW + 2 * DAY,
       },
@@ -241,7 +245,7 @@ describe('the alert catalogue', () => {
               expect(out, alert.code).toContain('class="ask"');
             }
           }
-          const rewrap = out.includes('action="/admin/tokens/keys/rewrap"');
+          const rewrap = out.includes('action="/admin/credentials/keys/rewrap"');
           expect(rewrap, alert.code).toBe(
             alert.form?.kind === 'rewrap' && can(role, 'keyring:rewrap'),
           );
@@ -260,7 +264,7 @@ describe('the alert catalogue', () => {
   it('groups same-code alerts into one item and puts items after the eighth in a details', () => {
     const many: AlertData = {
       ...base(),
-      services: Array.from({ length: 7 }, (_, i) =>
+      credentials: Array.from({ length: 7 }, (_, i) =>
         service(`svc_${i}`, `Token${i}`, {
           credential_expires_at: NOW - DAY,
           base_url: 'https://elsewhere.example.org',

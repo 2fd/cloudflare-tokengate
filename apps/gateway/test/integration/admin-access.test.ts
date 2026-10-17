@@ -1,10 +1,10 @@
-// Consumer access pages through the real app: RBAC, the structured form with preselected consumer
+// Issuer access rules pages through the real app: RBAC, the structured form with preselected consumer
 // and token, field errors, rows editor and anchors (I-AUTHZ-2), edit, toggle and delete, list
 // filters, prefill from a verified request (I-LOG-2), statuses and escaping.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { getGrant, listGrants } from '../../src/db/grants';
-import type { CallerProvider } from '../../src/db/types';
+import { getIssuerAccessRule, listIssuerAccessRules } from '../../src/db/issuer_access_rules';
+import type { CredentialAccessRule } from '../../src/db/types';
 import { adminGet, adminPost } from '../helpers/admin-auth';
 import {
   auditActions,
@@ -23,18 +23,18 @@ import {
   OWNER_ID,
   REPOSITORY_ID,
   seedGithubProvider,
-  seedGrant,
+  seedIssuerAccessRule,
   seedService,
 } from '../unit/admin/ops/helpers';
 
 let world: ConsumersWorld;
-let provider: CallerProvider;
+let provider: CredentialAccessRule;
 let serviceId: string;
 
 beforeEach(async () => {
   world = await consumersWorld();
-  provider = await seedGithubProvider(world.app.deps);
   serviceId = await seedService(world.app.deps);
+  provider = await seedGithubProvider(world.app.deps);
 });
 
 const admin = () => world.sessions.admin;
@@ -57,24 +57,30 @@ async function grantAudit(): Promise<string[]> {
   return (await auditActions()).filter((action) => action.startsWith('grant.'));
 }
 
-describe('consumer access: viewer and token manager', () => {
+describe('issuer access rules: viewer and credential manager', () => {
   it('can read the matrix, the list and an access but change nothing', async () => {
-    const grant = await seedGrant(world.app.deps, provider.id, serviceId, 'deploy');
+    const grant = await seedIssuerAccessRule(world.app.deps, provider.id, serviceId, 'deploy');
     for (const session of [world.sessions.viewer, world.sessions.token_manager]) {
-      const matrix = await (await adminGet(world.app, session, '/admin/access')).text();
-      expect(matrix).toContain('Which consumer jobs can use which service token');
-      expect(matrix).not.toContain('Give a consumer access');
-      const page = await (await adminGet(world.app, session, `/admin/access/${grant.id}`)).text();
+      const matrix = await (
+        await adminGet(world.app, session, '/admin/issuer-access-rules')
+      ).text();
+      expect(matrix).toContain('Which credential access rule jobs can use which credential');
+      expect(matrix).not.toContain('Add issuer access rule');
+      const page = await (
+        await adminGet(world.app, session, `/admin/issuer-access-rules/${grant.id}`)
+      ).text();
       expect(page).toContain('deploy');
       expect(page).not.toContain('Change this access');
       expect(page).not.toContain('Create copy');
-      expect((await adminGet(world.app, session, '/admin/access/new')).status).toBe(403);
+      expect((await adminGet(world.app, session, '/admin/issuer-access-rules/new')).status).toBe(
+        403,
+      );
       for (const path of [
-        '/admin/access',
-        `/admin/access/${grant.id}`,
-        `/admin/access/${grant.id}/copy`,
-        `/admin/access/${grant.id}/toggle`,
-        `/admin/access/${grant.id}/delete`,
+        '/admin/issuer-access-rules',
+        `/admin/issuer-access-rules/${grant.id}`,
+        `/admin/issuer-access-rules/${grant.id}/copy`,
+        `/admin/issuer-access-rules/${grant.id}/toggle`,
+        `/admin/issuer-access-rules/${grant.id}/delete`,
       ]) {
         const res = await adminPost(world.app, session, path, {
           ...structured(),
@@ -85,13 +91,13 @@ describe('consumer access: viewer and token manager', () => {
       }
     }
     expect(await grantAudit()).toEqual(['grant.create']);
-    expect((await getGrant(env.DB, grant.id))?.enabled).toBe(true);
+    expect((await getIssuerAccessRule(env.DB, grant.id))?.enabled).toBe(true);
   });
 });
 
-describe('consumer access: the form', () => {
-  it('fixes the only consumer and token, and shows the template operations', async () => {
-    const res = await adminGet(world.app, admin(), '/admin/access/new');
+describe('issuer access rules: the form', () => {
+  it('fixes the only credential access rule and credential, and shows the template operations', async () => {
+    const res = await adminGet(world.app, admin(), '/admin/issuer-access-rules/new');
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(inputValue(html, 'consumer_id')).toBe(provider.id);
@@ -103,7 +109,7 @@ describe('consumer access: the form', () => {
     expect(html).toMatch(/name="op" value="read-repo" checked/);
     expect(html).toMatch(/name="context" value="environment" checked/);
     expect(html).toMatch(/name="ref_protection" value="protected" checked/);
-    // The only consumer and token are fixed and visible: the repository carries the A7.8 pattern,
+    // The only credential access rule and credential are fixed and visible: the repository carries the A7.8 pattern,
     // but not required: a workflow pin under More constraints may stand in for it.
     expect(html).toMatch(/name="repository"[^>]*pattern="/);
     expect(html).not.toMatch(/name="repository"[^>]*required/);
@@ -114,17 +120,21 @@ describe('consumer access: the form', () => {
 
   it('shows the repository label in the operation once the repository is known', async () => {
     await seedLabel(provider.id, 'repository_id', REPOSITORY_ID, 'acme/api');
-    const html = await (await adminGet(world.app, admin(), '/admin/access/new')).text();
-    // The consumer's only repository is prefilled.
+    const html = await (
+      await adminGet(world.app, admin(), '/admin/issuer-access-rules/new')
+    ).text();
+    // The credential access rule's only repository is prefilled.
     expect(inputValue(html, 'repository')).toBe(`acme/api (${REPOSITORY_ID})`);
     expect(html).toContain(`<option value="acme/api (${REPOSITORY_ID})">`);
   });
 
   it('creates an access in one submit: derived name, label, literal rule, one audit row', async () => {
-    const res = await adminPost(world.app, admin(), '/admin/access', structured());
+    const res = await adminPost(world.app, admin(), '/admin/issuer-access-rules', structured());
     expect(res.status).toBe(303);
-    expect(locationOf(res)).toMatch(/^\/admin\/access\/grt_[0-9A-Z]{26}\?notice=created$/);
-    const grant = await getGrant(env.DB, idFromLocation(locationOf(res)));
+    expect(locationOf(res)).toMatch(
+      /^\/admin\/issuer-access-rules\/grt_[0-9A-Z]{26}\?notice=created$/,
+    );
+    const grant = await getIssuerAccessRule(env.DB, idFromLocation(locationOf(res)));
     expect(grant).toMatchObject({
       name: 'GitHub for acme/api (branch main)',
       enabled: true,
@@ -155,12 +165,12 @@ describe('consumer access: the form', () => {
     const res = await adminPost(
       world.app,
       admin(),
-      '/admin/access',
+      '/admin/issuer-access-rules',
       structured({ repository: 'acme/api', branch: '*', op: [] }),
     );
     expect(res.status).toBe(422);
     const html = await res.text();
-    expect(html).toContain('<title>Error: Give a consumer access');
+    expect(html).toContain('<title>Error: Add issuer access rule');
     expect(html).toContain('href="#f-repository"');
     expect(html).toContain('Add the numeric ID after the name, like acme/api (987654321).');
     expect(html).toContain('gh api repos/acme/api --jq');
@@ -171,36 +181,43 @@ describe('consumer access: the form', () => {
   });
 
   it('asks to choose an operation when none is chosen', async () => {
-    const res = await adminPost(world.app, admin(), '/admin/access', structured({ op: [] }));
+    const res = await adminPost(
+      world.app,
+      admin(),
+      '/admin/issuer-access-rules',
+      structured({ op: [] }),
+    );
     expect(res.status).toBe(422);
     expect(await res.text()).toContain('Choose at least one operation.');
   });
 
-  it('adds an unknown organization in the same submit (new_owner)', async () => {
+  it('refuses to widen an organization boundary while granting access', async () => {
     await seedLabel(provider.id, 'repository_owner_id', OWNER_ID, 'acme');
     const first = await adminPost(
       world.app,
       admin(),
-      '/admin/access',
+      '/admin/issuer-access-rules',
       structured({ repository: 'acme-x/api (5)' }),
     );
     expect(first.status).toBe(422);
     const html = await first.text();
-    expect(html).toContain('acme-x is not an organization of this consumer yet.');
-    expect(html).toContain('Add organization acme-x to this consumer');
-    expect(html).toContain('href="#f-new_owner"');
+    expect(html).toContain('acme-x is not an organization of this credential access rule yet.');
+    expect(html).toContain('Ask a credential administrator');
+    expect(html).toContain('href="#f-repository"');
     const second = await adminPost(
       world.app,
       admin(),
-      '/admin/access',
+      '/admin/issuer-access-rules',
       structured({ repository: 'acme-x/api (5)', new_owner: 'acme-x (7654321)' }),
     );
-    expect(second.status).toBe(303);
-    expect((await auditActions()).slice(-2)).toEqual(['caller_provider.update', 'grant.create']);
-    const consumer = await env.DB.prepare('SELECT tenant_pin FROM caller_providers WHERE id = ?')
+    expect(second.status).toBe(422);
+    expect((await auditActions()).slice(-1)).not.toContain('grant.create');
+    const consumer = await env.DB.prepare(
+      'SELECT tenant_pin FROM credential_access_rules WHERE id = ?',
+    )
       .bind(provider.id)
       .first<{ tenant_pin: string }>();
-    expect(JSON.parse(consumer?.tenant_pin ?? '[]')[0].values).toEqual([OWNER_ID, '7654321']);
+    expect(JSON.parse(consumer?.tenant_pin ?? '[]')[0].values).toEqual([OWNER_ID]);
   });
 
   it('expires on a chosen day at the next 00:00 UTC, and refuses a past day', async () => {
@@ -208,16 +225,16 @@ describe('consumer access: the form', () => {
     const res = await adminPost(
       world.app,
       admin(),
-      '/admin/access',
+      '/admin/issuer-access-rules',
       structured({ expires: 'date', expires_on: day }),
     );
     expect(res.status).toBe(303);
-    const grant = await getGrant(env.DB, idFromLocation(locationOf(res)));
+    const grant = await getIssuerAccessRule(env.DB, idFromLocation(locationOf(res)));
     expect(grant?.expires_at).toBe(Date.parse(`${day}T00:00:00Z`) + 86_400_000);
     const past = await adminPost(
       world.app,
       admin(),
-      '/admin/access',
+      '/admin/issuer-access-rules',
       structured({ expires: 'date', expires_on: '2001-01-01' }),
     );
     expect(past.status).toBe(422);
@@ -225,7 +242,7 @@ describe('consumer access: the form', () => {
   });
 
   it('converts the structured input to rows without losing it, then saves rows', async () => {
-    const rows = await adminPost(world.app, admin(), '/admin/access', {
+    const rows = await adminPost(world.app, admin(), '/admin/issuer-access-rules', {
       ...structured({ context: 'environment', environment: 'production' }),
       _action: 'rows',
     });
@@ -236,7 +253,7 @@ describe('consumer access: the form', () => {
     expect(html).toContain(`value="${REPOSITORY_ID}"`);
     expect(await grantAudit()).toEqual([]);
 
-    const unanchored = await adminPost(world.app, admin(), '/admin/access', {
+    const unanchored = await adminPost(world.app, admin(), '/admin/issuer-access-rules', {
       consumer_id: provider.id,
       token_id: serviceId,
       editor: 'rows',
@@ -252,7 +269,7 @@ describe('consumer access: the form', () => {
     expect(body).toContain('I-AUTHZ-2');
     expect(body).toContain('href="#f-cond-0-values"');
     // Read repository contents needs a repository label; rows mode has none.
-    const saved = await adminPost(world.app, admin(), '/admin/access', {
+    const saved = await adminPost(world.app, admin(), '/admin/issuer-access-rules', {
       consumer_id: provider.id,
       token_id: serviceId,
       editor: 'rows',
@@ -267,7 +284,7 @@ describe('consumer access: the form', () => {
       expires: 'never',
     });
     expect(saved.status).toBe(303);
-    const grant = await getGrant(env.DB, idFromLocation(locationOf(saved)));
+    const grant = await getIssuerAccessRule(env.DB, idFromLocation(locationOf(saved)));
     expect(grant?.conditions[1]).toEqual({
       claim: 'repository_id',
       match: 'exact',
@@ -278,13 +295,13 @@ describe('consumer access: the form', () => {
 
   it('saves a workflow pin without a repository: every repository of the organization', async () => {
     const workflow = 'acme/infra/.github/workflows/deploy.yml@refs/heads/main';
-    const res = await adminPost(world.app, admin(), '/admin/access', {
+    const res = await adminPost(world.app, admin(), '/admin/issuer-access-rules', {
       ...structured({ repository: '', workflow_ref: workflow, op: [] }),
       'rule.0.m': 'GET',
       'rule.0.path': '/repos/acme/**',
     });
     expect(res.status).toBe(303);
-    const grant = await getGrant(env.DB, idFromLocation(locationOf(res)));
+    const grant = await getIssuerAccessRule(env.DB, idFromLocation(locationOf(res)));
     expect(grant?.conditions).toContainEqual({
       claim: 'repository_owner_id',
       match: 'exact',
@@ -299,7 +316,7 @@ describe('consumer access: the form', () => {
   });
 
   it('adds two more rows on request without writing anything', async () => {
-    const res = await adminPost(world.app, admin(), '/admin/access', {
+    const res = await adminPost(world.app, admin(), '/admin/issuer-access-rules', {
       ...structured(),
       _action: 'add:rule',
     });
@@ -311,20 +328,24 @@ describe('consumer access: the form', () => {
   });
 
   it('points to the missing token when none exists', async () => {
-    await env.DB.prepare('DELETE FROM services').run();
-    const html = await (await adminGet(world.app, admin(), '/admin/access/new')).text();
-    expect(html).toContain('A token manager must add a service token first.');
+    await env.DB.prepare('DELETE FROM credentials').run();
+    const html = await (
+      await adminGet(world.app, admin(), '/admin/issuer-access-rules/new')
+    ).text();
+    expect(html).toContain('A credential manager must add a credential first.');
   });
 });
 
-describe('consumer access: the page', () => {
+describe('issuer access rules: the page', () => {
   it('shows the summary, the event line, the exact conditions and the status', async () => {
     await seedLabel(provider.id, 'repository_id', REPOSITORY_ID, 'acme/api');
-    const grant = await seedGrant(world.app.deps, provider.id, serviceId, 'read repo');
-    const html = await (await adminGet(world.app, admin(), `/admin/access/${grant.id}`)).text();
+    const grant = await seedIssuerAccessRule(world.app.deps, provider.id, serviceId, 'read repo');
+    const html = await (
+      await adminGet(world.app, admin(), `/admin/issuer-access-rules/${grant.id}`)
+    ).text();
     expect(html).toContain('<h1>read repo <span class="badge');
-    expect(html).toContain(`href="/admin/consumers/${provider.id}"`);
-    expect(html).toContain(`href="/admin/access?repository=${REPOSITORY_ID}"`);
+    expect(html).toContain(`href="/admin/credential-access-rules/${provider.id}"`);
+    expect(html).toContain(`href="/admin/issuer-access-rules?repository=${REPOSITORY_ID}"`);
     expect(html).toContain('any ref');
     expect(html).toContain('Events accepted (event_name)');
     expect(html).toContain('repository_owner_id exact 4242');
@@ -334,33 +355,37 @@ describe('consumer access: the page', () => {
   });
 
   it('edits the context, re-deriving a derived name; an unchanged save writes nothing', async () => {
-    const created = await adminPost(world.app, admin(), '/admin/access', structured());
+    const created = await adminPost(world.app, admin(), '/admin/issuer-access-rules', structured());
     const id = idFromLocation(locationOf(created));
-    const grant = await getGrant(env.DB, id);
+    const grant = await getIssuerAccessRule(env.DB, id);
     if (!grant) throw new Error('missing');
-    const page = await (await adminGet(world.app, admin(), `/admin/access/${id}?open=edit`)).text();
+    const page = await (
+      await adminGet(world.app, admin(), `/admin/issuer-access-rules/${id}?open=edit`)
+    ).text();
     expect(page).toMatch(/<details class="disc" id="edit" open/);
     expect(page).toMatch(/name="context" value="branch" checked/);
     // Never expires: no "Keep" card repeating "Never"; Never is preselected.
     expect(page).toMatch(/name="expires" value="never" checked/);
     expect(page).not.toContain('value="keep"');
-    const same = await adminPost(world.app, admin(), `/admin/access/${id}`, {
+    const same = await adminPost(world.app, admin(), `/admin/issuer-access-rules/${id}`, {
       ...structured({ expires: 'keep' }),
       intent: 'save',
       expected_updated_at: String(grant.updated_at),
     });
     expect(same.status).toBe(303);
-    expect(locationOf(same)).toBe(`/admin/access/${id}?notice=unchanged`);
-    const changed = await adminPost(world.app, admin(), `/admin/access/${id}`, {
+    expect(locationOf(same)).toBe(`/admin/issuer-access-rules/${id}?notice=unchanged`);
+    const changed = await adminPost(world.app, admin(), `/admin/issuer-access-rules/${id}`, {
       ...structured({ context: 'environment', environment: 'production', expires: 'keep' }),
       intent: 'save',
       expected_updated_at: String(grant.updated_at),
     });
     expect(changed.status).toBe(303);
-    expect(locationOf(changed)).toBe(`/admin/access/${id}?notice=updated`);
-    expect((await getGrant(env.DB, id))?.name).toBe('GitHub for acme/api (environment production)');
+    expect(locationOf(changed)).toBe(`/admin/issuer-access-rules/${id}?notice=updated`);
+    expect((await getIssuerAccessRule(env.DB, id))?.name).toBe(
+      'GitHub for acme/api (environment production)',
+    );
     expect(await grantAudit()).toEqual(['grant.create', 'grant.update']);
-    const stale = await adminPost(world.app, admin(), `/admin/access/${id}`, {
+    const stale = await adminPost(world.app, admin(), `/admin/issuer-access-rules/${id}`, {
       ...structured({ expires: 'keep' }),
       intent: 'save',
       expected_updated_at: String(grant.updated_at),
@@ -369,32 +394,34 @@ describe('consumer access: the page', () => {
   });
 
   it('a renamed access keeps its name on edit; rename is its own form', async () => {
-    const created = await adminPost(world.app, admin(), '/admin/access', structured());
+    const created = await adminPost(world.app, admin(), '/admin/issuer-access-rules', structured());
     const id = idFromLocation(locationOf(created));
-    const renamed = await adminPost(world.app, admin(), `/admin/access/${id}`, {
+    const renamed = await adminPost(world.app, admin(), `/admin/issuer-access-rules/${id}`, {
       intent: 'rename',
       name: 'Deploys <b>bold</b>',
       description: 'ticket 42',
     });
-    expect(locationOf(renamed)).toBe(`/admin/access/${id}?notice=renamed`);
-    await adminPost(world.app, admin(), `/admin/access/${id}`, {
+    expect(locationOf(renamed)).toBe(`/admin/issuer-access-rules/${id}?notice=renamed`);
+    await adminPost(world.app, admin(), `/admin/issuer-access-rules/${id}`, {
       ...structured({ branch: 'release/*', expires: 'keep' }),
       intent: 'save',
     });
-    expect((await getGrant(env.DB, id))?.name).toBe('Deploys <b>bold</b>');
-    const html = await (await adminGet(world.app, admin(), `/admin/access/${id}`)).text();
+    expect((await getIssuerAccessRule(env.DB, id))?.name).toBe('Deploys <b>bold</b>');
+    const html = await (
+      await adminGet(world.app, admin(), `/admin/issuer-access-rules/${id}`)
+    ).text();
     expect(html).toContain('Deploys &lt;b&gt;bold&lt;/b&gt;');
     expect(html).not.toContain('Deploys <b>bold</b>');
   });
 
   it('a label change through a save is audited and named in the notice', async () => {
-    const created = await adminPost(world.app, admin(), '/admin/access', structured());
+    const created = await adminPost(world.app, admin(), '/admin/issuer-access-rules', structured());
     const id = idFromLocation(locationOf(created));
-    const res = await adminPost(world.app, admin(), `/admin/access/${id}`, {
+    const res = await adminPost(world.app, admin(), `/admin/issuer-access-rules/${id}`, {
       ...structured({ repository: `acme/api-renamed (${REPOSITORY_ID})`, expires: 'keep' }),
       intent: 'save',
     });
-    expect(locationOf(res)).toBe(`/admin/access/${id}?notice=label_changed`);
+    expect(locationOf(res)).toBe(`/admin/issuer-access-rules/${id}?notice=label_changed`);
     expect(await lastAudit('grant.update')).toMatchObject({
       labels: {
         before: { [`repository_id:${REPOSITORY_ID}`]: 'acme/api' },
@@ -404,24 +431,43 @@ describe('consumer access: the page', () => {
   });
 
   it('disables with an Undo from the list, and deletes only through the dialog', async () => {
-    const grant = await seedGrant(world.app.deps, provider.id, serviceId);
-    const off = await adminPost(world.app, admin(), `/admin/access/${grant.id}/toggle`, {
-      enabled: '0',
-      _return: 'list',
-    });
-    expect(locationOf(off)).toBe('/admin/access?view=list&notice=disabled');
-    const back = await adminPost(world.app, admin(), `/admin/access/${grant.id}/toggle`, {
-      enabled: '1',
-      _return: 'detail',
-    });
-    expect(locationOf(back)).toBe(`/admin/access/${grant.id}?notice=enabled`);
-    const unconfirmed = await adminPost(world.app, admin(), `/admin/access/${grant.id}/delete`);
+    const grant = await seedIssuerAccessRule(world.app.deps, provider.id, serviceId);
+    const off = await adminPost(
+      world.app,
+      admin(),
+      `/admin/issuer-access-rules/${grant.id}/toggle`,
+      {
+        enabled: '0',
+        _return: 'list',
+      },
+    );
+    expect(locationOf(off)).toBe('/admin/issuer-access-rules?view=list&notice=disabled');
+    const back = await adminPost(
+      world.app,
+      admin(),
+      `/admin/issuer-access-rules/${grant.id}/toggle`,
+      {
+        enabled: '1',
+        _return: 'detail',
+      },
+    );
+    expect(locationOf(back)).toBe(`/admin/issuer-access-rules/${grant.id}?notice=enabled`);
+    const unconfirmed = await adminPost(
+      world.app,
+      admin(),
+      `/admin/issuer-access-rules/${grant.id}/delete`,
+    );
     expect(unconfirmed.status).toBe(400);
-    const deleted = await adminPost(world.app, admin(), `/admin/access/${grant.id}/delete`, {
-      confirm: '1',
-    });
-    expect(locationOf(deleted)).toBe('/admin/access?notice=deleted');
-    expect(await getGrant(env.DB, grant.id)).toBeNull();
+    const deleted = await adminPost(
+      world.app,
+      admin(),
+      `/admin/issuer-access-rules/${grant.id}/delete`,
+      {
+        confirm: '1',
+      },
+    );
+    expect(locationOf(deleted)).toBe('/admin/issuer-access-rules?notice=deleted');
+    expect(await getIssuerAccessRule(env.DB, grant.id)).toBeNull();
     expect(await grantAudit()).toEqual([
       'grant.create',
       'grant.disable',
@@ -431,52 +477,66 @@ describe('consumer access: the page', () => {
   });
 
   it('shows Expired and the inactive cause as words', async () => {
-    const grant = await seedGrant(world.app.deps, provider.id, serviceId);
-    await env.DB.prepare('UPDATE grants SET expires_at = ? WHERE id = ?')
+    const grant = await seedIssuerAccessRule(world.app.deps, provider.id, serviceId);
+    await env.DB.prepare('UPDATE issuer_access_rules SET expires_at = ? WHERE id = ?')
       .bind(Date.now() - 1000, grant.id)
       .run();
     expect(
-      await (await adminGet(world.app, admin(), `/admin/access/${grant.id}`)).text(),
+      await (await adminGet(world.app, admin(), `/admin/issuer-access-rules/${grant.id}`)).text(),
     ).toContain('Expired');
-    await env.DB.prepare('UPDATE grants SET expires_at = NULL WHERE id = ?').bind(grant.id).run();
-    await env.DB.prepare('UPDATE caller_providers SET enabled = 0 WHERE id = ?')
+    await env.DB.prepare('UPDATE issuer_access_rules SET expires_at = NULL WHERE id = ?')
+      .bind(grant.id)
+      .run();
+    await env.DB.prepare('UPDATE credential_access_rules SET enabled = 0 WHERE id = ?')
       .bind(provider.id)
       .run();
-    const html = await (await adminGet(world.app, admin(), `/admin/access/${grant.id}`)).text();
-    expect(html).toContain('Inactive: consumer disabled');
-    expect(html).toContain('Inactive because the consumer is disabled');
+    const html = await (
+      await adminGet(world.app, admin(), `/admin/issuer-access-rules/${grant.id}`)
+    ).text();
+    expect(html).toContain('Inactive: credential access rule disabled');
+    expect(html).toContain('Inactive because the credential access rule is disabled');
   });
 
   it('answers 404 for unknown ids', async () => {
-    expect((await adminGet(world.app, admin(), '/admin/access/grt_missing')).status).toBe(404);
     expect(
-      (await adminPost(world.app, admin(), '/admin/access/grt_missing', { intent: 'save' })).status,
+      (await adminGet(world.app, admin(), '/admin/issuer-access-rules/grt_missing')).status,
+    ).toBe(404);
+    expect(
+      (
+        await adminPost(world.app, admin(), '/admin/issuer-access-rules/grt_missing', {
+          intent: 'save',
+        })
+      ).status,
     ).toBe(404);
   });
 });
 
-describe('consumer access: list and filters', () => {
-  it('filters by consumer and token, ignores unknown ids with a note, and says when nothing matches', async () => {
+describe('issuer access rules: list and filters', () => {
+  it('filters by credential access rule and credential, ignores unknown ids with a note, and says when nothing matches', async () => {
     const otherService = await seedService(world.app.deps, { slug: 'other', name: 'Other' });
-    await seedGrant(world.app.deps, provider.id, serviceId, 'one');
-    await seedGrant(world.app.deps, provider.id, otherService, 'two');
+    await seedIssuerAccessRule(world.app.deps, provider.id, serviceId, 'one');
+    await seedIssuerAccessRule(world.app.deps, provider.id, otherService, 'two');
     const list = await (
-      await adminGet(world.app, admin(), `/admin/access?view=list&token=${serviceId}`)
+      await adminGet(world.app, admin(), `/admin/issuer-access-rules?view=list&token=${serviceId}`)
     ).text();
     expect(list).toContain('Disable<span class="vh"> one</span>');
     expect(list).not.toContain('Disable<span class="vh"> two</span>');
     const unknown = await (
-      await adminGet(world.app, admin(), '/admin/access?consumer=cpr_gone')
+      await adminGet(world.app, admin(), '/admin/issuer-access-rules?consumer=cpr_gone')
     ).text();
     expect(unknown).toContain('That consumer no longer exists.');
     const none = await (
-      await adminGet(world.app, admin(), '/admin/access?view=list&repository=nothing-here')
+      await adminGet(
+        world.app,
+        admin(),
+        '/admin/issuer-access-rules?view=list&repository=nothing-here',
+      )
     ).text();
-    expect(none).toContain('No consumer access matches these filters.');
+    expect(none).toContain('No issuer access rules matches these filters.');
     expect(none).toContain('Clear filters');
-    expect((await adminGet(world.app, admin(), '/admin/access?status=bogus&view=x')).status).toBe(
-      200,
-    );
+    expect(
+      (await adminGet(world.app, admin(), '/admin/issuer-access-rules?status=bogus&view=x')).status,
+    ).toBe(200);
   });
 });
 
@@ -497,7 +557,7 @@ describe('I-LOG-2: give access from a request, verified records only', () => {
       requestRecord({
         id,
         service_id: serviceId,
-        caller_provider_id: provider.id,
+        credential_access_rule_id: provider.id,
         caller_claims: JSON.stringify(claims),
         ...overrides,
       }),
@@ -514,7 +574,7 @@ describe('I-LOG-2: give access from a request, verified records only', () => {
       await adminGet(
         world.app,
         admin(),
-        '/admin/access/new?from_request=req_01JTESTREQUEST00000000000B',
+        '/admin/issuer-access-rules/new?from_request=req_01JTESTREQUEST00000000000B',
       )
     ).text();
     expect(html).toContain('Prefilled from request');
@@ -535,7 +595,7 @@ describe('I-LOG-2: give access from a request, verified records only', () => {
         await adminGet(
           world.app,
           admin(),
-          '/admin/access/new?from_request=req_01JTESTREQUEST00000000000C',
+          '/admin/issuer-access-rules/new?from_request=req_01JTESTREQUEST00000000000C',
         )
       ).text();
       expect(html).toContain('No operation was prefilled');
@@ -552,7 +612,7 @@ describe('I-LOG-2: give access from a request, verified records only', () => {
       await adminGet(
         world.app,
         admin(),
-        '/admin/access/new?from_request=req_01JTESTREQUEST00000000000D',
+        '/admin/issuer-access-rules/new?from_request=req_01JTESTREQUEST00000000000D',
       )
     ).text();
     expect(html).toContain('name="editor" value="rows"');
@@ -564,13 +624,13 @@ describe('I-LOG-2: give access from a request, verified records only', () => {
   it.each<[string, Record<string, unknown>]>([
     ['an unverified record', { claims_verified: 0 }],
     ['another reason', { reason: 'service_disabled' }],
-    ['a deleted consumer', { caller_provider_id: 'cpr_gone' }],
+    ['a deleted credential access rule', { credential_access_rule_id: 'cpr_gone' }],
   ])('refuses %s with 400', async (_name, overrides) => {
     await record('req_01JTESTREQUEST00000000000E', overrides);
     const res = await adminGet(
       world.app,
       admin(),
-      '/admin/access/new?from_request=req_01JTESTREQUEST00000000000E',
+      '/admin/issuer-access-rules/new?from_request=req_01JTESTREQUEST00000000000E',
     );
     expect(res.status).toBe(400);
     const html = await res.text();
@@ -579,50 +639,54 @@ describe('I-LOG-2: give access from a request, verified records only', () => {
   });
 });
 
-describe('consumer access: design D pages', () => {
+describe('issuer access rules: design D pages', () => {
   it('draws the connections map and the access list, with the view switch and quick links', async () => {
-    const grant = await seedGrant(world.app.deps, provider.id, serviceId, 'one');
-    const html = await (await adminGet(world.app, admin(), '/admin/access')).text();
-    expect(html).toContain('<h1>Consumer access<span class="count">1</span></h1>');
+    const grant = await seedIssuerAccessRule(world.app.deps, provider.id, serviceId, 'one');
+    const html = await (await adminGet(world.app, admin(), '/admin/issuer-access-rules')).text();
+    expect(html).toContain('<h1>Issuer access rules<span class="count">1</span></h1>');
     expect(html).toContain('<div class="cmap" id="cmap" role="group"');
     expect(html).toContain('<section class="tray" id="al" aria-labelledby="al-h">');
-    expect(html).toMatch(/<a href="\/admin\/access" aria-current="page">Map<\/a>/);
+    expect(html).toMatch(/<a href="\/admin\/issuer-access-rules" aria-current="page">Map<\/a>/);
     expect(html).toContain('<nav class="qlinks" aria-label="Accesses that need attention">');
-    expect(html).toContain(`href="/admin/access/${grant.id}"`);
+    expect(html).toContain(`href="/admin/issuer-access-rules/${grant.id}"`);
     // The header has the one primary; the access list rows have the one-click Disable.
     expect(html.match(/class="btn primary/g)).toHaveLength(1);
     expect(html).toContain('Disable<span class="vh"> one</span>');
   });
 
   it('names the token in the header when filtered by it, and follows a focused consumer', async () => {
-    await seedGrant(world.app.deps, provider.id, serviceId, 'one');
+    await seedIssuerAccessRule(world.app.deps, provider.id, serviceId, 'one');
     const byToken = await (
-      await adminGet(world.app, admin(), `/admin/access?token=${serviceId}`)
+      await adminGet(world.app, admin(), `/admin/issuer-access-rules?token=${serviceId}`)
     ).text();
     expect(byToken).toContain('<b>1 consumer</b> can use');
-    expect(byToken).toContain(`href="/admin/access/new?token=${serviceId}"`);
-    expect(byToken).toContain('Give a consumer access to GitHub');
+    expect(byToken).toContain(`href="/admin/issuer-access-rules/new?token=${serviceId}"`);
+    expect(byToken).toContain('Add issuer access rule to GitHub');
     expect(byToken).toContain('id="al-h">Accesses to GitHub');
     const focused = await (
-      await adminGet(world.app, admin(), `/admin/access?focus=${provider.id}`)
+      await adminGet(world.app, admin(), `/admin/issuer-access-rules?focus=${provider.id}`)
     ).text();
     expect(focused).toContain(`id="al-h">Accesses of ${provider.name}`);
     expect(focused).toContain('Everything else is dimmed.');
-    const gone = await (await adminGet(world.app, admin(), '/admin/access?focus=cpr_gone')).text();
+    const gone = await (
+      await adminGet(world.app, admin(), '/admin/issuer-access-rules?focus=cpr_gone')
+    ).text();
     expect(gone).toContain('That consumer no longer exists.');
   });
 
   it('filters expired accesses (a status of its own)', async () => {
-    const grant = await seedGrant(world.app.deps, provider.id, serviceId, 'old');
-    const html = await (await adminGet(world.app, admin(), '/admin/access?status=expired')).text();
-    expect(html).toContain('No consumer access matches these filters.');
-    await env.DB.prepare('UPDATE grants SET expires_at = ? WHERE id = ?')
+    const grant = await seedIssuerAccessRule(world.app.deps, provider.id, serviceId, 'old');
+    const html = await (
+      await adminGet(world.app, admin(), '/admin/issuer-access-rules?status=expired')
+    ).text();
+    expect(html).toContain('No issuer access rules matches these filters.');
+    await env.DB.prepare('UPDATE issuer_access_rules SET expires_at = ? WHERE id = ?')
       .bind(Date.now() - 1000, grant.id)
       .run();
     const expired = await (
-      await adminGet(world.app, admin(), '/admin/access?status=expired')
+      await adminGet(world.app, admin(), '/admin/issuer-access-rules?status=expired')
     ).text();
-    expect(expired).toContain(`href="/admin/access/${grant.id}"`);
+    expect(expired).toContain(`href="/admin/issuer-access-rules/${grant.id}"`);
     expect(expired).toMatch(
       /aria-current="true"><span class="g" aria-hidden="true">✕<\/span>Expired/,
     );
@@ -631,19 +695,23 @@ describe('consumer access: design D pages', () => {
   it('opens from a token page with the token fixed in the header and the bar', async () => {
     await seedService(world.app.deps, { slug: 'other', name: 'Other' });
     const html = await (
-      await adminGet(world.app, admin(), `/admin/access/new?token=${serviceId}`)
+      await adminGet(world.app, admin(), `/admin/issuer-access-rules/new?token=${serviceId}`)
     ).text();
-    expect(html).toContain('<h1>Give a consumer access to GitHub</h1>');
-    expect(html).toContain(`<li><a href="/admin/tokens/${serviceId}">GitHub</a></li>`);
-    expect(html).toContain('<div class="fixedbar"><span class="lbl">Token</span>');
-    expect(html).toContain(`<a class="btn secondary" href="/admin/tokens/${serviceId}">Cancel</a>`);
+    expect(html).toContain('<h1>Add issuer access rule to GitHub</h1>');
+    expect(html).toContain(`<li><a href="/admin/credentials/${serviceId}">GitHub</a></li>`);
+    expect(html).toContain('<div class="fixedbar"><span class="lbl">Credential</span>');
+    expect(html).toContain(
+      `<a class="btn secondary" href="/admin/credentials/${serviceId}">Cancel</a>`,
+    );
     expect(html).toContain('<aside class="rail" id="ga-sum" aria-labelledby="ga-sum-h">');
   });
 
   it('picks a known repository, or saves the one typed under "Another repository"', async () => {
     await seedLabel(provider.id, 'repository_id', REPOSITORY_ID, 'acme/api');
     await seedLabel(provider.id, 'repository_id', '5', 'acme/web');
-    const form = await (await adminGet(world.app, admin(), '/admin/access/new')).text();
+    const form = await (
+      await adminGet(world.app, admin(), '/admin/issuer-access-rules/new')
+    ).text();
     // Two known repositories: rows to pick, none checked, plus "Another repository".
     expect(form).toContain('<fieldset class="field sf3" id="f-repository-pick"');
     expect(form).toContain('name="repository" value=""');
@@ -652,11 +720,11 @@ describe('consumer access: design D pages', () => {
     const res = await adminPost(
       world.app,
       admin(),
-      '/admin/access',
+      '/admin/issuer-access-rules',
       structured({ repository: '', repository_other: 'acme/infra (6)' }),
     );
     expect(res.status).toBe(303);
-    const grant = await getGrant(env.DB, idFromLocation(locationOf(res)));
+    const grant = await getIssuerAccessRule(env.DB, idFromLocation(locationOf(res)));
     expect(grant?.conditions).toContainEqual({
       claim: 'repository_id',
       match: 'exact',
@@ -669,7 +737,7 @@ describe('consumer access: design D pages', () => {
       requestRecord({
         id: 'req_01JTESTREQUEST00000000000F',
         service_id: serviceId,
-        caller_provider_id: provider.id,
+        credential_access_rule_id: provider.id,
         path: '/repos/acme/app/contents',
         caller_claims: JSON.stringify({
           repository: 'acme/app',
@@ -686,7 +754,7 @@ describe('consumer access: design D pages', () => {
       await adminGet(
         world.app,
         admin(),
-        '/admin/access/new?from_request=req_01JTESTREQUEST00000000000F',
+        '/admin/issuer-access-rules/new?from_request=req_01JTESTREQUEST00000000000F',
       )
     ).text();
     expect(html).toContain('<h1>Allow this call from acme/app</h1>');
@@ -699,12 +767,14 @@ describe('consumer access: design D pages', () => {
 
   it('copies to a repository typed under "Another…"', async () => {
     await seedLabel(provider.id, 'repository_id', REPOSITORY_ID, 'acme/api');
-    const created = await adminPost(world.app, admin(), '/admin/access', structured());
+    const created = await adminPost(world.app, admin(), '/admin/issuer-access-rules', structured());
     const id = idFromLocation(locationOf(created));
-    const page = await (await adminGet(world.app, admin(), `/admin/access/${id}`)).text();
+    const page = await (
+      await adminGet(world.app, admin(), `/admin/issuer-access-rules/${id}`)
+    ).text();
     expect(page).toMatch(/name="repository" value="acme\/api \(987654321\)" checked/);
     expect(page).toContain('<div class="ga-copy-other subbox">');
-    const res = await adminPost(world.app, admin(), `/admin/access/${id}/copy`, {
+    const res = await adminPost(world.app, admin(), `/admin/issuer-access-rules/${id}/copy`, {
       repository: '',
       repository_other: 'acme/web (987654322)',
       token_id: serviceId,
@@ -714,21 +784,21 @@ describe('consumer access: design D pages', () => {
   });
 });
 
-describe('consumer access: escaping', () => {
+describe('issuer access rules: escaping', () => {
   it('escapes labels and names in the matrix, the list, the form and the page', async () => {
     await seedLabel(provider.id, 'repository_id', REPOSITORY_ID, '<script>x</script>');
-    const grant = await seedGrant(world.app.deps, provider.id, serviceId, '<img src=x>');
+    const grant = await seedIssuerAccessRule(world.app.deps, provider.id, serviceId, '<img src=x>');
     for (const path of [
-      '/admin/access',
-      '/admin/access?view=list',
-      '/admin/access/new',
-      `/admin/access/${grant.id}`,
-      `/admin/consumers/${provider.id}`,
+      '/admin/issuer-access-rules',
+      '/admin/issuer-access-rules?view=list',
+      '/admin/issuer-access-rules/new',
+      `/admin/issuer-access-rules/${grant.id}`,
+      `/admin/credential-access-rules/${provider.id}`,
     ]) {
       const html = await (await adminGet(world.app, admin(), path)).text();
       expect(html, path).not.toContain('<script>x</script>');
       expect(html, path).not.toContain('<img src=x>');
     }
-    expect(await listGrants(env.DB)).toHaveLength(1);
+    expect(await listIssuerAccessRules(env.DB)).toHaveLength(1);
   });
 });

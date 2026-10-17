@@ -1,14 +1,17 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  createGrant,
-  deleteGrant,
-  duplicateGrant,
-  setGrantEnabled,
-  updateGrant,
-} from '../../../../src/admin/ops/grants';
-import { getGrant, insertGrantStatement } from '../../../../src/db/grants';
-import type { CallerProvider } from '../../../../src/db/types';
+  createIssuerAccessRule,
+  deleteIssuerAccessRule,
+  duplicateIssuerAccessRule,
+  setIssuerAccessRuleEnabled,
+  updateIssuerAccessRule,
+} from '../../../../src/admin/ops/issuer_access_rules';
+import {
+  getIssuerAccessRule,
+  insertIssuerAccessRuleStatement,
+} from '../../../../src/db/issuer_access_rules';
+import type { CredentialAccessRule } from '../../../../src/db/types';
 import {
   ACTOR,
   anchoredConditions,
@@ -18,7 +21,7 @@ import {
   opsDeps,
   resetControlPlane,
   seedGithubProvider,
-  seedGrant,
+  seedIssuerAccessRule,
   seedService,
 } from './helpers';
 
@@ -26,21 +29,21 @@ const RULES = [{ methods: ['GET' as const], path: '/repos/**' }];
 const BRANCH_GLOB = { claim: 'ref', match: 'glob' as const, values: ['refs/heads/*'] };
 
 let deps: ReturnType<typeof opsDeps>;
-let provider: CallerProvider;
+let provider: CredentialAccessRule;
 let serviceId: string;
 
 beforeEach(async () => {
   await resetControlPlane();
   deps = opsDeps();
-  provider = await seedGithubProvider(deps);
   serviceId = await seedService(deps);
+  provider = await seedGithubProvider(deps);
 });
 
-describe('createGrant', () => {
+describe('createIssuerAccessRule', () => {
   it('stores a valid grant with normalized conditions and one audit row', async () => {
-    const result = await createGrant(deps, ACTOR, {
+    const result = await createIssuerAccessRule(deps, ACTOR, {
       name: ' deploy ',
-      caller_provider_id: provider.id,
+      credential_access_rule_id: provider.id,
       service_id: serviceId,
       conditions: [
         ...anchoredConditions(),
@@ -50,7 +53,7 @@ describe('createGrant', () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const stored = await getGrant(env.DB, result.grant.id);
+    const stored = await getIssuerAccessRule(env.DB, result.grant.id);
     expect(stored).toEqual(result.grant);
     expect(stored).toMatchObject({
       name: 'deploy',
@@ -69,9 +72,9 @@ describe('createGrant', () => {
 
   it('rejects a grant without anchor conditions (I-AUTHZ-2)', async () => {
     const before = await auditCount();
-    const result = await createGrant(deps, ACTOR, {
+    const result = await createIssuerAccessRule(deps, ACTOR, {
       name: 'too broad',
-      caller_provider_id: provider.id,
+      credential_access_rule_id: provider.id,
       service_id: serviceId,
       conditions: [{ claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID] }],
       rules: RULES,
@@ -83,9 +86,9 @@ describe('createGrant', () => {
   });
 
   it('rejects owner IDs outside the tenant pin', async () => {
-    const result = await createGrant(deps, ACTOR, {
+    const result = await createIssuerAccessRule(deps, ACTOR, {
       name: 'other org',
-      caller_provider_id: provider.id,
+      credential_access_rule_id: provider.id,
       service_id: serviceId,
       conditions: [
         { claim: 'repository_owner_id', match: 'exact', values: ['9999'] },
@@ -99,17 +102,20 @@ describe('createGrant', () => {
   it('requires acknowledgement of warnings and records them in the audit row', async () => {
     const input = {
       name: 'branches',
-      caller_provider_id: provider.id,
+      credential_access_rule_id: provider.id,
       service_id: serviceId,
       conditions: [...anchoredConditions(), BRANCH_GLOB],
       rules: RULES,
     };
-    const first = await createGrant(deps, ACTOR, input);
+    const first = await createIssuerAccessRule(deps, ACTOR, input);
     expect(first).toMatchObject({ ok: false, reason: 'acknowledgement_required' });
     if (first.ok) return;
     expect(first.warnings.join()).toMatch(/ref_protected/);
 
-    const second = await createGrant(deps, ACTOR, { ...input, acknowledge_warnings: true });
+    const second = await createIssuerAccessRule(deps, ACTOR, {
+      ...input,
+      acknowledge_warnings: true,
+    });
     expect(second.ok).toBe(true);
     if (!second.ok) return;
     const [audit] = await auditRows(second.grant.id);
@@ -124,14 +130,15 @@ describe('createGrant', () => {
       injection: { kind: 'path' },
       forward_headers: [],
     });
+    const webhookBoundary = await seedGithubProvider(deps);
     const input = {
       name: 'notify',
-      caller_provider_id: provider.id,
+      credential_access_rule_id: webhookBoundary.id,
       service_id: webhookId,
       conditions: anchoredConditions(),
     };
     for (const methods of [['GET'], ['*'], ['POST', 'PATCH']] as const) {
-      const result = await createGrant(deps, ACTOR, {
+      const result = await createIssuerAccessRule(deps, ACTOR, {
         ...input,
         rules: [{ methods: [...methods], path: '/' }],
       });
@@ -143,26 +150,27 @@ describe('createGrant', () => {
       expect(result.warnings.join()).toMatch(/URL path.*allow only POST/);
     }
     const before = await auditCount();
-    const post = await createGrant(deps, ACTOR, {
+    const post = await createIssuerAccessRule(deps, ACTOR, {
       ...input,
       rules: [{ methods: ['POST'], path: '/' }],
     });
     expect(post).toMatchObject({ ok: true, warnings: [] });
     expect(await auditCount()).toBe(before + 1);
 
-    // Bearer services are not affected.
-    const bearer = await createGrant(deps, ACTOR, {
+    // Bearer credentials are not affected.
+    const bearer = await createIssuerAccessRule(deps, ACTOR, {
       ...input,
       service_id: serviceId,
+      credential_access_rule_id: provider.id,
       rules: RULES,
     });
     expect(bearer).toMatchObject({ ok: true, warnings: [] });
   });
 
   it('rejects unknown references, bad names and past expiry', async () => {
-    const result = await createGrant(deps, ACTOR, {
+    const result = await createIssuerAccessRule(deps, ACTOR, {
       name: '',
-      caller_provider_id: 'cpr_missing',
+      credential_access_rule_id: 'cpr_missing',
       service_id: 'svc_missing',
       conditions: anchoredConditions(),
       rules: RULES,
@@ -172,8 +180,8 @@ describe('createGrant', () => {
     if (result.ok) return;
     expect(result.errors).toEqual(
       expect.arrayContaining([
-        'caller provider not found',
-        'service not found',
+        'credential access rule not found',
+        'credential not found',
         'name is required',
         'expiry must be in the future',
       ]),
@@ -181,10 +189,10 @@ describe('createGrant', () => {
   });
 });
 
-describe('updateGrant', () => {
+describe('updateIssuerAccessRule', () => {
   it('updates content, re-validates, and audits changed fields', async () => {
-    const grant = await seedGrant(deps, provider.id, serviceId);
-    const result = await updateGrant(deps, ACTOR, grant.id, {
+    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId);
+    const result = await updateIssuerAccessRule(deps, ACTOR, grant.id, {
       rules: [{ methods: ['GET', 'POST'], path: '/repos/**' }],
     });
     expect(result.ok).toBe(true);
@@ -197,78 +205,78 @@ describe('updateGrant', () => {
     });
   });
 
-  it('cannot move a grant to another caller provider or service', async () => {
-    const grant = await seedGrant(deps, provider.id, serviceId);
-    const result = await updateGrant(deps, ACTOR, grant.id, {
+  it('cannot move a grant to another credential access rule or service', async () => {
+    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId);
+    const result = await updateIssuerAccessRule(deps, ACTOR, grant.id, {
       service_id: 'svc_other',
     } as never);
     expect(result).toMatchObject({ ok: false, reason: 'invalid' });
   });
 
   it('refuses a save from a form opened at an older version', async () => {
-    const grant = await seedGrant(deps, provider.id, serviceId);
-    const first = await updateGrant(deps, ACTOR, grant.id, {
+    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId);
+    const first = await updateIssuerAccessRule(deps, ACTOR, grant.id, {
       name: 'first',
       expected_updated_at: grant.updated_at,
     });
     expect(first.ok).toBe(true);
     const before = await auditCount();
-    const stale = await updateGrant(deps, ACTOR, grant.id, {
+    const stale = await updateIssuerAccessRule(deps, ACTOR, grant.id, {
       name: 'second',
       expected_updated_at: grant.updated_at,
     });
     expect(stale).toMatchObject({ ok: false, reason: 'conflict' });
     if (stale.ok) return;
     expect(stale.errors.join()).toContain('changed by someone else since you opened this page');
-    expect((await getGrant(env.DB, grant.id))?.name).toBe('first');
+    expect((await getIssuerAccessRule(env.DB, grant.id))?.name).toBe('first');
     expect(await auditCount()).toBe(before);
   });
 
   it('refuses invalid content without writing', async () => {
-    const grant = await seedGrant(deps, provider.id, serviceId);
+    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId);
     const before = await auditCount();
-    const result = await updateGrant(deps, ACTOR, grant.id, { conditions: [] });
+    const result = await updateIssuerAccessRule(deps, ACTOR, grant.id, { conditions: [] });
     expect(result).toMatchObject({ ok: false, reason: 'invalid' });
-    expect(await getGrant(env.DB, grant.id)).toEqual(grant);
+    expect(await getIssuerAccessRule(env.DB, grant.id)).toEqual(grant);
     expect(await auditCount()).toBe(before);
   });
 });
 
-describe('setGrantEnabled', () => {
+describe('setIssuerAccessRuleEnabled', () => {
   it('always disables, even when the grant no longer validates', async () => {
-    const grant = await seedGrant(deps, provider.id, serviceId);
+    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId);
     // Narrow the tenant pin outside the ops (they refuse it while the grant is enabled), so the
     // existing grant's owner ID falls outside it.
     await env.DB.prepare(
-      `UPDATE caller_providers SET tenant_pin = '[{"claim":"repository_owner_id","match":"exact","values":["1"]}]',
+      `UPDATE credential_access_rules SET tenant_pin = '[{"claim":"repository_owner_id","match":"exact","values":["1"]}]',
          updated_at = updated_at + 1 WHERE id = ?`,
     )
       .bind(provider.id)
       .run();
 
-    const disabled = await updateGrant(deps, ACTOR, grant.id, { enabled: false });
+    const disabled = await updateIssuerAccessRule(deps, ACTOR, grant.id, { enabled: false });
     expect(disabled.ok).toBe(true);
-    expect((await getGrant(env.DB, grant.id))?.enabled).toBe(false);
+    expect((await getIssuerAccessRule(env.DB, grant.id))?.enabled).toBe(false);
     expect((await auditRows(grant.id)).at(-1)?.action).toBe('grant.disable');
 
-    const enabled = await setGrantEnabled(deps, ACTOR, grant.id, true);
+    const enabled = await setIssuerAccessRuleEnabled(deps, ACTOR, grant.id, true);
     expect(enabled).toMatchObject({ ok: false, reason: 'invalid' });
-    expect((await getGrant(env.DB, grant.id))?.enabled).toBe(false);
+    expect((await getIssuerAccessRule(env.DB, grant.id))?.enabled).toBe(false);
   });
 
   it('enables a valid grant', async () => {
-    const grant = await seedGrant(deps, provider.id, serviceId);
-    await setGrantEnabled(deps, ACTOR, grant.id, false);
-    const result = await setGrantEnabled(deps, ACTOR, grant.id, true);
+    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId);
+    await setIssuerAccessRuleEnabled(deps, ACTOR, grant.id, false);
+    const result = await setIssuerAccessRuleEnabled(deps, ACTOR, grant.id, true);
     expect(result.ok).toBe(true);
     expect((await auditRows(grant.id)).at(-1)?.action).toBe('grant.enable');
   });
 });
 
-describe('duplicateGrant', () => {
+describe('duplicateIssuerAccessRule', () => {
   it('creates an enabled copy referencing the source', async () => {
-    const grant = await seedGrant(deps, provider.id, serviceId, 'deploy');
-    const result = await duplicateGrant(deps, ACTOR, grant.id);
+    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId, 'deploy');
+    const result = await duplicateIssuerAccessRule(deps, ACTOR, grant.id);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.grant).toMatchObject({
@@ -284,8 +292,8 @@ describe('duplicateGrant', () => {
   });
 
   it('copies to another repository with its label, validated against the target', async () => {
-    const grant = await seedGrant(deps, provider.id, serviceId, 'deploy');
-    const result = await duplicateGrant(deps, ACTOR, grant.id, {
+    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId, 'deploy');
+    const result = await duplicateIssuerAccessRule(deps, ACTOR, grant.id, {
       conditions: [
         { claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID] },
         { claim: 'repository_id', match: 'exact', values: ['111'] },
@@ -301,9 +309,9 @@ describe('duplicateGrant', () => {
   });
 
   it('refuses a copy whose warnings nobody accepted, writing nothing', async () => {
-    const grant = await seedGrant(deps, provider.id, serviceId, 'deploy');
+    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId, 'deploy');
     const before = (await auditRows()).length;
-    const result = await duplicateGrant(deps, ACTOR, grant.id, {
+    const result = await duplicateIssuerAccessRule(deps, ACTOR, grant.id, {
       conditions: [
         ...grant.conditions,
         { claim: 'ref', match: 'glob', values: ['refs/heads/main'] },
@@ -314,25 +322,27 @@ describe('duplicateGrant', () => {
   });
 });
 
-describe('deleteGrant', () => {
+describe('deleteIssuerAccessRule', () => {
   it('deletes with the full grant in the audit row', async () => {
-    const grant = await seedGrant(deps, provider.id, serviceId);
-    expect(await deleteGrant(deps, ACTOR, grant.id)).toEqual({ ok: true });
-    expect(await getGrant(env.DB, grant.id)).toBeNull();
+    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId);
+    expect(await deleteIssuerAccessRule(deps, ACTOR, grant.id)).toEqual({ ok: true });
+    expect(await getIssuerAccessRule(env.DB, grant.id)).toBeNull();
     expect((await auditRows(grant.id)).at(-1)?.diff?.before).toEqual(grant);
-    expect(await deleteGrant(deps, ACTOR, grant.id)).toMatchObject({ reason: 'not_found' });
+    expect(await deleteIssuerAccessRule(deps, ACTOR, grant.id)).toMatchObject({
+      reason: 'not_found',
+    });
   });
 });
 
 describe('guarded insert', () => {
   it('writes nothing when the guard does not hold', async () => {
-    const statement = insertGrantStatement(
+    const statement = insertIssuerAccessRuleStatement(
       env.DB,
       {
         id: 'grt_guarded',
         name: 'n',
         description: '',
-        caller_provider_id: provider.id,
+        credential_access_rule_id: provider.id,
         service_id: serviceId,
         conditions: anchoredConditions(),
         rules: RULES,
@@ -342,13 +352,13 @@ describe('guarded insert', () => {
         created_at: 1,
       },
       {
-        sql: 'EXISTS (SELECT 1 FROM caller_providers WHERE id = ? AND updated_at = ?)',
+        sql: 'EXISTS (SELECT 1 FROM credential_access_rules WHERE id = ? AND updated_at = ?)',
         binds: [provider.id, -1],
       },
     );
     const result = await statement.run();
     expect(result.meta.changes).toBe(0);
-    expect(await getGrant(env.DB, 'grt_guarded')).toBeNull();
+    expect(await getIssuerAccessRule(env.DB, 'grt_guarded')).toBeNull();
   });
 });
 
@@ -361,9 +371,9 @@ describe('labels, accepted risks and in-memory consumers', () => {
     ).results;
 
   it('writes the typed labels in the create batch and records them and the risks in the audit', async () => {
-    const result = await createGrant(deps, ACTOR, {
+    const result = await createIssuerAccessRule(deps, ACTOR, {
       name: 'labelled',
-      caller_provider_id: provider.id,
+      credential_access_rule_id: provider.id,
       service_id: serviceId,
       conditions: anchoredConditions(),
       rules: RULES,
@@ -386,14 +396,16 @@ describe('labels, accepted risks and in-memory consumers', () => {
   });
 
   it('a save that only changes a label is one grant.update with the label diff', async () => {
-    const grant = await seedGrant(deps, provider.id, serviceId);
+    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId);
     const label = { claim: 'repository_id' as const, value: '987654321', label: 'acme/api' };
-    expect((await updateGrant(deps, ACTOR, grant.id, { labels: [label] })).ok).toBe(true);
-    const renamed = await updateGrant(deps, ACTOR, grant.id, {
+    expect((await updateIssuerAccessRule(deps, ACTOR, grant.id, { labels: [label] })).ok).toBe(
+      true,
+    );
+    const renamed = await updateIssuerAccessRule(deps, ACTOR, grant.id, {
       labels: [{ ...label, label: 'acme/api-renamed' }],
     });
     expect(renamed).toMatchObject({ ok: true, changed: true, labelsChanged: true });
-    const unchanged = await updateGrant(deps, ACTOR, grant.id, {
+    const unchanged = await updateIssuerAccessRule(deps, ACTOR, grant.id, {
       labels: [{ ...label, label: 'acme/api-renamed' }],
     });
     expect(unchanged).toMatchObject({ ok: true, changed: false });
@@ -402,9 +414,9 @@ describe('labels, accepted risks and in-memory consumers', () => {
   });
 
   it('refuses labels that are not numeric IDs of a labelled claim', async () => {
-    const result = await createGrant(deps, ACTOR, {
+    const result = await createIssuerAccessRule(deps, ACTOR, {
       name: 'bad label',
-      caller_provider_id: provider.id,
+      credential_access_rule_id: provider.id,
       service_id: serviceId,
       conditions: anchoredConditions(),
       rules: RULES,
@@ -414,9 +426,9 @@ describe('labels, accepted risks and in-memory consumers', () => {
     expect(await labelRows()).toEqual([]);
   });
 
-  it('checkGrant validates against an in-memory consumer without reading or writing it', async () => {
-    const { checkGrant } = await import('../../../../src/admin/ops/grants');
-    const pending: CallerProvider = {
+  it('checkIssuerAccessRule validates against an in-memory consumer without reading or writing it', async () => {
+    const { checkIssuerAccessRule } = await import('../../../../src/admin/ops/issuer_access_rules');
+    const pending: CredentialAccessRule = {
       ...provider,
       id: 'cpr_new',
       tenant_pin: [{ claim: 'repository_owner_id', match: 'exact', values: ['555'] }],
@@ -432,14 +444,14 @@ describe('labels, accepted risks and in-memory consumers', () => {
       enabled: true,
       expires_at: null,
     };
-    const ok = await checkGrant(deps, 'cpr_new', serviceId, values, {
+    const ok = await checkIssuerAccessRule(deps, 'cpr_new', serviceId, values, {
       expiryChanged: false,
       acknowledged: true,
       provider: pending,
     });
     expect(ok.ok).toBe(true);
     // The stored consumer pins another organization, so the same values fail against it.
-    const stored = await checkGrant(deps, provider.id, serviceId, values, {
+    const stored = await checkIssuerAccessRule(deps, provider.id, serviceId, values, {
       expiryChanged: false,
       acknowledged: true,
     });

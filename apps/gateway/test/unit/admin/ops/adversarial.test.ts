@@ -3,20 +3,29 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  createCallerProvider,
-  setCallerProviderEnabled,
-  updateCallerProvider,
-} from '../../../../src/admin/ops/caller-providers';
-import { createGrant, setGrantEnabled, updateGrant } from '../../../../src/admin/ops/grants';
+  createCredentialAccessRule,
+  setCredentialAccessRuleEnabled,
+  updateCredentialAccessRule,
+} from '../../../../src/admin/ops/credential-access-rules';
 import {
   createService,
   deleteService,
   updateServiceFields,
-} from '../../../../src/admin/ops/services';
+} from '../../../../src/admin/ops/credentials';
+import {
+  createIssuerAccessRule,
+  setIssuerAccessRuleEnabled,
+  updateIssuerAccessRule,
+} from '../../../../src/admin/ops/issuer_access_rules';
 import { maskSecret, runVerifyCheck } from '../../../../src/admin/ops/verify';
-import { getCallerProvider } from '../../../../src/db/caller-providers';
-import { getGrant, grantVersionGuard, updateGrantStatement } from '../../../../src/db/grants';
-import { getService } from '../../../../src/db/services';
+import { getCredentialAccessRule } from '../../../../src/db/credential-access-rules';
+import { getService } from '../../../../src/db/credentials';
+import {
+  getIssuerAccessRule,
+  grantVersionGuard,
+  updateIssuerAccessRuleStatement,
+} from '../../../../src/db/issuer_access_rules';
+import { testCredentialId } from './helpers';
 import {
   ACTOR,
   auditCount,
@@ -27,7 +36,7 @@ import {
   racingDeps,
   resetControlPlane,
   seedGithubProvider,
-  seedGrant,
+  seedIssuerAccessRule,
   seedService,
   serviceInput,
 } from './helpers';
@@ -37,26 +46,30 @@ const ACME_ISSUER = 'https://idp.acme.example';
 beforeEach(resetControlPlane);
 
 describe('revocation never depends on validation', () => {
-  it('disables a caller provider whose stored row no longer validates', async () => {
+  it('disables a credential access rule whose stored row no longer validates', async () => {
     const deps = opsDeps();
     const provider = await seedGithubProvider(deps);
     // Out of range for github-actions (max 900 s): e.g. written by an older version or by hand.
-    await env.DB.prepare('UPDATE caller_providers SET max_token_age_seconds = 3600 WHERE id = ?')
+    await env.DB.prepare(
+      'UPDATE credential_access_rules SET max_token_age_seconds = 3600 WHERE id = ?',
+    )
       .bind(provider.id)
       .run();
-    const result = await setCallerProviderEnabled(deps, ACTOR, provider.id, false);
+    const result = await setCredentialAccessRuleEnabled(deps, ACTOR, provider.id, false);
     expect(result.ok).toBe(true);
-    expect((await getCallerProvider(env.DB, provider.id))?.enabled).toBe(false);
-    expect((await auditRows(provider.id)).at(-1)?.action).toBe('caller_provider.disable');
+    expect((await getCredentialAccessRule(env.DB, provider.id))?.enabled).toBe(false);
+    expect((await auditRows(provider.id)).at(-1)?.action).toBe('credential_access_rule.disable');
     // Enabling it again validates and is refused.
-    const enabled = await setCallerProviderEnabled(deps, ACTOR, provider.id, true);
+    const enabled = await setCredentialAccessRuleEnabled(deps, ACTOR, provider.id, true);
     expect(enabled).toMatchObject({ ok: false, reason: 'invalid' });
   });
 
   it('disables a service whose stored row no longer validates', async () => {
     const deps = opsDeps();
     const id = await seedService(deps);
-    await env.DB.prepare(`UPDATE services SET forward_headers = '["Authorization"]' WHERE id = ?`)
+    await env.DB.prepare(
+      `UPDATE credentials SET forward_headers = '["Authorization"]' WHERE id = ?`,
+    )
       .bind(id)
       .run();
     const result = await updateServiceFields(deps, ACTOR, id, { enabled: false });
@@ -76,13 +89,13 @@ describe('optimistic concurrency holds within one millisecond', () => {
     const deps = opsDeps({ now: () => now });
     const provider = await seedGithubProvider(deps);
     const serviceId = await seedService(deps);
-    const grant = await seedGrant(deps, provider.id, serviceId);
-    const snapshot = await getGrant(env.DB, grant.id);
+    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId);
+    const snapshot = await getIssuerAccessRule(env.DB, grant.id);
     if (!snapshot) throw new Error('grant missing');
 
-    expect((await setGrantEnabled(deps, ACTOR, grant.id, false)).ok).toBe(true);
+    expect((await setIssuerAccessRuleEnabled(deps, ACTOR, grant.id, false)).ok).toBe(true);
     // An edit based on the snapshot (still enabled) must not re-enable the grant.
-    const stale = updateGrantStatement(
+    const stale = updateIssuerAccessRuleStatement(
       env.DB,
       grant.id,
       { ...snapshot, name: 'stale edit' },
@@ -90,7 +103,7 @@ describe('optimistic concurrency holds within one millisecond', () => {
       grantVersionGuard(snapshot),
     );
     expect((await stale.run()).meta.changes).toBe(0);
-    expect((await getGrant(env.DB, grant.id))?.enabled).toBe(false);
+    expect((await getIssuerAccessRule(env.DB, grant.id))?.enabled).toBe(false);
   });
 
   it('returns the stored version so the next op can use it as a guard', async () => {
@@ -98,13 +111,13 @@ describe('optimistic concurrency holds within one millisecond', () => {
     const deps = opsDeps({ now: () => now });
     const provider = await seedGithubProvider(deps);
     const serviceId = await seedService(deps);
-    const grant = await seedGrant(deps, provider.id, serviceId);
-    const first = await updateGrant(deps, ACTOR, grant.id, { name: 'one' });
-    const second = await updateGrant(deps, ACTOR, grant.id, { name: 'two' });
+    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId);
+    const first = await updateIssuerAccessRule(deps, ACTOR, grant.id, { name: 'one' });
+    const second = await updateIssuerAccessRule(deps, ACTOR, grant.id, { name: 'two' });
     expect(first.ok && second.ok).toBe(true);
     if (!first.ok || !second.ok) return;
     expect(second.grant.updated_at).toBeGreaterThan(first.grant.updated_at);
-    expect(await getGrant(env.DB, grant.id)).toEqual(second.grant);
+    expect(await getIssuerAccessRule(env.DB, grant.id)).toEqual(second.grant);
   });
 });
 
@@ -115,7 +128,8 @@ describe('read-then-write races are decided in SQL', () => {
       'https://idp2.acme.example': 'https://idp2.acme.example/keys',
     });
     const deps = opsDeps({ fetch: network.fetch });
-    const created = await createCallerProvider(deps, ACTOR, {
+    const created = await createCredentialAccessRule(deps, ACTOR, {
+      credential_id: await testCredentialId(deps),
       name: 'Acme',
       profile: 'generic',
       issuer: ACME_ISSUER,
@@ -123,9 +137,9 @@ describe('read-then-write races are decided in SQL', () => {
     });
     if (!created.ok) throw new Error(created.errors.join());
     const serviceId = await seedService(deps);
-    const grant = await createGrant(deps, ACTOR, {
+    const grant = await createIssuerAccessRule(deps, ACTOR, {
       name: 'ci',
-      caller_provider_id: created.callerProvider.id,
+      credential_access_rule_id: created.credentialAccessRule.id,
       service_id: serviceId,
       conditions: [{ claim: 'sub', match: 'exact', values: ['ci-bot'] }],
       rules: [{ methods: ['GET'], path: '/**' }],
@@ -136,13 +150,22 @@ describe('read-then-write races are decided in SQL', () => {
 
     const audits = await auditCount();
     const racing = racingDeps(deps, () =>
-      env.DB.prepare('UPDATE grants SET enabled = 1 WHERE id = ?').bind(grant.grant.id).run(),
+      env.DB.prepare('UPDATE issuer_access_rules SET enabled = 1 WHERE id = ?')
+        .bind(grant.grant.id)
+        .run(),
     );
-    const result = await updateCallerProvider(racing, ACTOR, created.callerProvider.id, {
-      issuer: 'https://idp2.acme.example',
-    });
+    const result = await updateCredentialAccessRule(
+      racing,
+      ACTOR,
+      created.credentialAccessRule.id,
+      {
+        issuer: 'https://idp2.acme.example',
+      },
+    );
     expect(result).toMatchObject({ ok: false, reason: 'confirmation_required' });
-    expect((await getCallerProvider(env.DB, created.callerProvider.id))?.issuer).toBe(ACME_ISSUER);
+    expect((await getCredentialAccessRule(env.DB, created.credentialAccessRule.id))?.issuer).toBe(
+      ACME_ISSUER,
+    );
     expect(await auditCount()).toBe(audits);
   });
 
@@ -151,7 +174,9 @@ describe('read-then-write races are decided in SQL', () => {
     const provider = await seedGithubProvider(deps);
     const serviceId = await seedService(deps);
     const audits = await auditCount();
-    const racing = racingDeps(deps, () => seedGrant(deps, provider.id, serviceId, 'late'));
+    const racing = racingDeps(deps, () =>
+      seedIssuerAccessRule(deps, provider.id, serviceId, 'late'),
+    );
     const result = await deleteService(racing, ACTOR, serviceId);
     expect(result).toMatchObject({ ok: false, reason: 'conflict' });
     expect(await getService(env.DB, serviceId)).not.toBeNull();
@@ -173,7 +198,7 @@ describe('input hardening', () => {
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const row = await env.DB.prepare('SELECT verify FROM services WHERE id = ?')
+    const row = await env.DB.prepare('SELECT verify FROM credentials WHERE id = ?')
       .bind(result.service.id)
       .first<{ verify: string }>();
     expect(JSON.parse(row?.verify ?? 'null')).toEqual({
@@ -200,11 +225,11 @@ describe('input hardening', () => {
     );
     const provider = await seedGithubProvider(deps);
     await expect(
-      updateCallerProvider(deps, ACTOR, provider.id, { audience: null as never }),
+      updateCredentialAccessRule(deps, ACTOR, provider.id, { audience: null as never }),
     ).resolves.toMatchObject({ ok: false, reason: 'invalid' });
-    const grant = await seedGrant(deps, provider.id, id);
+    const grant = await seedIssuerAccessRule(deps, provider.id, id);
     await expect(
-      updateGrant(deps, ACTOR, grant.id, { name: ['x'] as never }),
+      updateIssuerAccessRule(deps, ACTOR, grant.id, { name: ['x'] as never }),
     ).resolves.toMatchObject({ ok: false, reason: 'invalid' });
   });
 });

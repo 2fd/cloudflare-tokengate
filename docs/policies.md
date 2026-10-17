@@ -1,7 +1,7 @@
 # Policies
 
-This page explains how the gateway decides whether a caller may make a request: caller providers,
-tenant pins, grants, conditions and rules. It is for admins who write grants and for security reviewers.
+This page explains how the gateway decides whether a caller may make a request: credential access rules,
+tenant pins, issuer_access_rules, conditions and rules. It is for admins who write issuer_access_rules and for security reviewers.
 
 The code is the reference: `apps/gateway/src/policy/` (evaluation and validation), `apps/gateway/src/identity/profiles/` (what each
 platform is trusted for), `apps/gateway/src/policy/presets.ts` and `apps/gateway/src/admin/consumer-access.ts` (the structured access
@@ -11,23 +11,23 @@ form) and `apps/gateway/src/admin/grant-text.ts` (the text format of the "Exact 
 
 Every proxied request goes through these checks, in this order (`apps/gateway/src/proxy/handler.ts`):
 
-1. The token's `iss` selects an enabled caller provider. The token is not trusted yet.
+1. The token's `iss` selects an enabled credential access rule. The token is not trusted yet.
 2. The token is verified: signature, issuer, audience, algorithm, age and required claims
    ([I-JWT-1](threat-model.md#i-jwt-1)).
-3. The caller provider's tenant pin must hold ([I-TEN-1](threat-model.md#i-ten-1)). Until it holds, nothing
+3. The credential access rule's tenant pin must hold ([I-TEN-1](threat-model.md#i-ten-1)). Until it holds, nothing
    about the caller is stored, and the caller cannot learn whether the service exists.
 4. The service must exist and be enabled.
 5. The path is canonicalized ([I-PATH-1](threat-model.md#i-path-1)).
-6. The service's grants for this caller provider are evaluated in creation order. The first grant that
+6. The service's issuer_access_rules for this credential access rule are evaluated in creation order. The first grant that
    matches allows the request. If none matches, the request is denied ([I-AUTHZ-1](threat-model.md#i-authz-1)).
 
-Grants are allow-only. There is no deny rule, so the order of grants changes only which grant the
+Issuer access rules are allow-only. There is no deny rule, so the order of issuer_access_rules changes only which grant the
 request log names. Nothing is cached: enabling, disabling, editing, deleting or expiring a grant,
-service or caller provider takes effect on the next request.
+service or credential access rule takes effect on the next request.
 
 A grant matches when all of these hold:
 
-![Grant evaluation: for each candidate grant (enabled, not expired, in created_at order) check the anchor rule, all conditions, the event guard and that some rule matches the method and path; the first grant that passes every check allows the request. Any failed check moves to the next grant; when no grant is left the answer is 403.](diagrams/grant-evaluation.svg)
+![IssuerAccessRule evaluation: for each candidate grant (enabled, not expired, in created_at order) check the anchor rule, all conditions, the event guard and that some rule matches the method and path; the first grant that passes every check allows the request. Any failed check moves to the next grant; when no grant is left the answer is 403.](diagrams/grant-evaluation.svg)
 
 <sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
@@ -36,19 +36,19 @@ request gets `403 no_matching_grant`. The request log stores a trace with one li
 `invalid_grant`, `condition_failed`, `event_not_trusted` or `no_rule`, plus the first failing check. See
 [errors.md](errors.md#no_matching_grant).
 
-## Caller providers and profiles
+## Credential access rules and profiles
 
-A caller provider trusts one token issuer. Its profile holds what the code knows about that platform.
+A credential access rule trusts one token issuer. Its profile holds what the code knows about that platform.
 
 | Profile | Default issuer | Event claim | Trusted events | Tenant pin claims | Anchor rules |
 |---|---|---|---|---|---|
 | `github-actions` | `https://token.actions.githubusercontent.com` | `event_name` | `push`, `workflow_dispatch`, `schedule`, `release` | `repository_owner_id`, `enterprise_id` | `repository_owner_id` + `repository_id`, or `repository_owner_id` + `job_workflow_ref` |
 | `gitlab-ci` | `https://gitlab.com` | `pipeline_source` | `push`, `web`, `schedule`, `api`, `trigger` | `namespace_id` | `namespace_id` + `project_id`, or `namespace_id` + `ci_config_ref_uri` |
-| `generic` | none | none | none (no event guard) | any claim | any one of the caller provider's anchor claims |
+| `generic` | none | none | none (no event guard) | any claim | any one of the credential access rule's anchor claims |
 
 Other fixed rules:
 
-- The profile cannot change after the caller provider is created.
+- The profile cannot change after the credential access rule is created.
 - An issuer on `token.actions.githubusercontent.com` or `gitlab.com` must use the matching profile.
   Under `generic`, neither the tenant pin rules nor the event guard would apply.
 - The token must carry these claims, or it is refused with `claims_invalid`:
@@ -65,11 +65,11 @@ Claim references: [GitHub OIDC claims](https://docs.github.com/en/actions/refere
 
 ## Tenant pin
 
-The tenant pin limits a caller provider to your organization. It is checked before any grant
+The tenant pin limits a credential access rule to your organization. It is checked before any grant
 ([I-TEN-1](threat-model.md#i-ten-1)). A token that fails it gets `401 tenant_mismatch`.
 
-- In the admin UI it is the consumer's "Organizations" (GitHub), "Groups" (GitLab) or "Tenant pin"
-  (generic) on the consumer page:
+- In the admin UI it is the credential access rule's "Organizations" (GitHub), "Groups" (GitLab) or "Tenant pin"
+  (generic) on the credential access rule page:
   - GitHub Actions: organizations as `name (ID)` (`repository_owner_id`), and the "Enterprise ID" under
     Advanced trust settings (`enterprise_id`).
   - GitLab CI: groups as `path (ID)` (`namespace_id`).
@@ -79,29 +79,26 @@ The tenant pin limits a caller provider to your organization. It is checked befo
 - A pin is required for the shared issuers `https://token.actions.githubusercontent.com` and
   `https://gitlab.com`, whatever the profile: anyone on those platforms can mint a token. An empty pin on a
   shared issuer fails closed at request time too.
-- A `generic` caller provider without a pin is allowed, with a warning. Leave it empty only if the issuer
+- A `generic` credential access rule without a pin is allowed, with a warning. Leave it empty only if the issuer
   signs tokens for your company alone.
 - The admin UI requires at least one organization or group for every GitHub and GitLab consumer, also
   for GitHub Enterprise issuers and self-managed GitLab, and accepts only numeric IDs in their pins. An
-  organization or group that enabled accesses use cannot be removed: the consumer page names them.
+  organization or group can be removed; accesses outside the remaining limits immediately stop authorizing.
 - Use numeric IDs. Names such as `repository_owner` can be renamed and registered again by someone else.
 - A grant cannot list a value outside the pin for a pinned claim, for example an organization ID from
   another organization. Saving such a grant fails.
 
-Changing a caller provider's anchor claims or tenant pin is refused while an enabled grant would no longer
-be valid under the new values. The error lists those grants; edit or disable them first. The check is
-enforced in SQL, so a grant enabled at the same moment makes the change fail with a conflict.
+Changing anchor claims is refused while it would leave an enabled issuer access rule unanchored. Changes to organization restrictions and additional boundary filters take effect immediately; existing accesses outside the new limits stop authorizing requests.
 
-## Grants
+## Issuer access rules
 
-A grant connects one caller provider to one service. It has:
+An issuer access rule connects a credential boundary to the same credential. It contains identity conditions (all must match), allowed methods and paths (any operation may match), an optional expiry and an enabled flag. It cannot grant access outside its boundary.
 
-- **Conditions** (all must match): tests on the verified token claims.
-- **Rules** (any may match): the methods and paths it allows on the service.
-- **Expires (UTC, optional)**: after this time the grant stops matching.
-- An enabled flag. A disabled grant never matches.
+Credential managers define **Credential Access Rules** first: choose a credential and issuer, set its verification settings, restrict the organization, and add required identity filters. For example, GitHub organization ID `1234567` plus `environment exact production` permits access to repositories in that organization only in production. A boundary grants no access by itself.
 
-Limits: 1–32 conditions and 1–50 rules per grant.
+Access managers then create **Issuer Access Rules** with narrower filters and allowed operations. Every required filter must be preserved or demonstrably narrowed. Exact values may narrow a glob; otherwise keep the boundary pattern unchanged and add more constraints. Limits are checked when saving, enabling and on every request. Access managers cannot widen a boundary from the access form.
+
+Limits: 1–32 conditions and 1–50 operation rules per issuer access rule.
 
 ### Condition syntax
 
@@ -211,7 +208,7 @@ Workflow pins (`job_workflow_ref`, `ci_config_ref_uri`) are names, not immutable
 the repository or project path. If the repository or project that holds the pinned file is renamed,
 transferred or deleted, anyone who can create one with the same path in the tenant takes over every grant
 pinned to it. Prefer `repository_id` or `project_id` when you can, protect the pinned repository or project,
-and disable or update its grants before you rename, transfer or delete it. `job_workflow_sha` or
+and disable or update its issuer_access_rules before you rename, transfer or delete it. `job_workflow_sha` or
 `ci_config_sha` as an extra exact condition pins the file content, at the cost of updating the grant after
 every commit on the pinned ref. It does not pin the repository or project: a recreated one that pushes the
 same commit still supplies its own variables, environments and runners. See
@@ -221,8 +218,8 @@ same commit still supplies its own variables, environments and runners. See
 - For `github-actions`: `repository_owner_id` plus `repository_id`, or `repository_owner_id` plus a
   `job_workflow_ref` pin.
 - For `gitlab-ci`: `namespace_id` plus `project_id`, or `namespace_id` plus `ci_config_ref_uri`.
-- For `generic`: an exact condition on any one of the caller provider's "Anchor claims" (1–8 claims set
-  on the caller provider).
+- For `generic`: an exact condition on any one of the credential access rule's "Anchor claims" (1–8 claims set
+  on the credential access rule).
 
 The anchor check runs when the grant is saved and again on every request. A stored grant that no longer
 satisfies an anchor rule is skipped with the trace result `invalid_grant`.
@@ -254,7 +251,7 @@ excludes trusted events it does not list.
 
 ## Structured access form
 
-For GitHub Actions and GitLab CI consumers, the form "Give a consumer access" builds the conditions
+For GitHub Actions and GitLab CI consumers, the form "Give an issuer access rule" builds the conditions
 from a few choices (`apps/gateway/src/admin/consumer-access.ts`, `apps/gateway/src/policy/presets.ts`). The result is an ordinary
 condition set, validated like any other ([I-AUTHZ-2](threat-model.md#i-authz-2)). "Write conditions by
 hand" converts the input to rows without losing it. An access is edited with the form it was made with
@@ -262,16 +259,16 @@ when its conditions rebuild exactly; otherwise the edit form opens the rows edit
 
 | Input | Generated condition |
 |---|---|
-| Repository `acme/api (89012345)` | `repository_id exact 89012345`, and `repository_owner_id exact <ID of acme>` from the consumer's organizations |
+| Repository `acme/api (89012345)` | `repository_id exact 89012345`, and `repository_owner_id exact <ID of acme>` from the credential access rule's organizations |
 | Project `acme-group/app (4567890)` (GitLab) | `project_id exact 4567890`, and `namespace_id exact <ID of acme-group>` |
 | Only protected branches and tags (default) | `ref_protected exact true` |
 | More constraints › Workflow pin | `job_workflow_ref exact <owner/repo/path@ref>` (GitLab: `ci_config_ref_uri`) |
 | More constraints › Only GitHub-hosted runners | `runner_environment exact github-hosted` |
 
 The organization (GitHub: the first path segment) or group (GitLab: every segment but the last) of the
-repository must be one of the consumer's. Its name is matched against the display labels of the
-consumer's organizations, without regard to case. For a new organization the form asks for its ID and
-adds it to the consumer in the same submit.
+repository must be one of the credential access rule's. Its name is matched against the display labels of the
+credential access rule's organizations, without regard to case. For a new organization the form
+refuses the access until a credential manager updates the boundary.
 
 "When" adds the context. `<name>` is the input of the chosen card, without `refs/heads/` or
 `refs/tags/`. A branch, tag or PR base can end in `*` (`release/*`) but cannot start with `*` or contain
@@ -354,7 +351,7 @@ accepted is in [Risks and their acceptance](#risks-and-their-acceptance). The ac
 | `pull_request` | GitHub `pull_request` is opted in | `pull_request` jobs run the code proposed in the pull request |
 | `untrusted_event` | Another untrusted event is opted in | The access accepts an event that is refused by default |
 | `path_injection_non_post` | The token uses `path` injection and the access allows a method other than `POST` | Webhook APIs such as Discord return the credential in the response body for `GET` and `PATCH` on the webhook URL, and response bodies are not redacted |
-| `any_ref` | The choice "Any branch, tag or environment", or GitHub or GitLab conditions that constrain no ref, environment, protection, commit or event (computed by the admin UI, not by `validateGrant`) | Anyone with write access to the repository gets the token |
+| `any_ref` | The choice "Any branch, tag or environment", or GitHub or GitLab conditions that constrain no ref, environment, protection, commit or event (computed by the admin UI, not by `validateIssuerAccessRule`) | Anyone with write access to the repository gets the token |
 
 About `ref_protected`: GitHub reports a ref as protected only when branch protections or rulesets are
 configured for it (see `GITHUB_REF_PROTECTED` in
@@ -367,7 +364,7 @@ protected-refs choice.
 
 On a request record denied with `no_matching_grant` or `event_not_trusted`, access managers, admins and
 owners see "Give this caller access" when the token was verified ([I-LOG-2](threat-model.md#i-log-2)).
-The form refuses to prefill if the consumer or the token no longer exists.
+The form refuses to prefill if the credential access rule or the token no longer exists.
 
 - GitHub and GitLab: the repository (`<repository> (<repository_id>)`, GitLab `project_path` and
   `project_id`), the context (environment when the token has one, else branch or tag from `ref`; the
@@ -401,7 +398,7 @@ POST /chat.postMessage
 ```
 
 To allow pushes only, write `event_name exact push`. To also allow jobs that deploy to the
-`production` environment, create a second grant on the same caller provider and service. Grants
+`production` environment, create a second grant on the same credential access rule and service. Issuer access rules
 combine with OR; conditions in one grant combine with AND:
 
 ```text
@@ -458,7 +455,7 @@ ref_protected exact true
 pipeline_source exact push, web, schedule
 ```
 
-Generic issuer whose caller provider has the anchor claim `project_id` (the claim names depend on the
+Generic issuer whose credential access rule has the anchor claim `project_id` (the claim names depend on the
 issuer; pick a claim that never changes for the workload, not a per-run ID):
 
 ```text
@@ -489,7 +486,7 @@ project_id exact 0189f3c2-6a4e-4b8e-9d0a-3f1c2b7e5a10
   on a path also allows any method the upstream accepts through body override on that path.
 - **Response bodies pass through.** If an upstream endpoint returns the credential in its body, every
   caller whose grant reaches that endpoint receives it, and it keeps working after the grant is revoked.
-  For webhook services with `path` injection (Slack, Discord), allow only `POST /`. See
+  For webhook credentials with `path` injection (Slack, Discord), allow only `POST /`. See
   [threat-model.md](threat-model.md#credentials-and-responses).
 - **GitLab merge request pipelines.** In merge request pipelines, `project_id` and `project_path` can
   describe the source project. Opt in to `merge_request_event` only with care.

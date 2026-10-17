@@ -33,25 +33,25 @@ function captureConsole(): () => string {
 async function rebind(fx: ProxyFixture, baseUrl: string, injectionJson: string): Promise<void> {
   const sealed = await sealFor(fx.app.deps.env, fx.serviceId, baseUrl, injectionJson, TEST_SECRET);
   await env.DB.prepare(
-    'UPDATE services SET base_url = ?, injection = ?, credential_sealed = ? WHERE id = ?',
+    'UPDATE credentials SET base_url = ?, injection = ?, credential_sealed = ? WHERE id = ?',
   )
     .bind(baseUrl, injectionJson, sealed, fx.serviceId)
     .run();
 }
 
 describe('proxy: authorization scope', () => {
-  it("a grant of another caller provider on the same service does not apply to this provider's callers", async () => {
+  it("a grant of another credential access rule on the same service does not apply to this provider's callers", async () => {
     const fx = await setupProxy({ grant: false });
     const otherProvider = newId('cpr', fx.clock.now(), (n) => new Uint8Array(n).fill(1));
     await env.DB.prepare(
-      `INSERT INTO caller_providers (id, name, profile, issuer, jwks_uri, audience, allowed_algs,
+      `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
          max_token_age_seconds, tenant_pin, anchor_claims, enabled, created_at, updated_at)
-       VALUES (?, 'other', 'generic', 'https://ci.example.org', 'https://ci.example.org/jwks', ?,
+       VALUES (?, (SELECT id FROM credentials ORDER BY id LIMIT 1), 'other', 'generic', 'https://ci.example.org', 'https://ci.example.org/jwks', ?,
          '["RS256"]', 600, '[]', '["sub"]', 1, 0, 0)`,
     )
       .bind(otherProvider, TEST_AUDIENCE)
       .run();
-    await fx.addGrant({ callerProviderId: otherProvider });
+    await fx.addIssuerAccessRule({ credentialAccessRuleId: otherProvider });
     const response = await fx.call('/a');
     expect(response.status).toBe(403);
     expect(errorOf(response)).toBe('no_matching_grant');
@@ -187,7 +187,7 @@ describe('proxy: failing dependencies', () => {
   it('upstream failure logs carry no URL, so a path-injected secret is not logged', async () => {
     const fx = await setupProxy({
       service: {
-        baseUrl: 'https://hooks.upstream.test/services',
+        baseUrl: 'https://hooks.upstream.test/credentials',
         injection: { kind: 'path' },
         secret: 'T000/B000/XYZ123secret',
       },

@@ -4,7 +4,7 @@ This page shows admins how to set up an OpenAI service and shows workflow author
 
 ## Service template
 
-In the admin UI, open **Service tokens**, select **Add a token** and open the **OpenAI API** card. Paste the API key and select **Check and save OpenAI**. Everything in the table comes from the template (`apps/gateway/src/admin/service-templates.ts`); the form does not ask for it. Name and slug are optional: when empty, the gateway uses `OpenAI` and the slug below, or the next free one (`openai-2`).
+In the admin UI, open **Credentials**, select **Add a token** and open the **OpenAI API** card. Paste the API key and select **Check and save OpenAI**. Everything in the table comes from the template (`apps/gateway/src/admin/service-templates.ts`); the form does not ask for it. Name and slug are optional: when empty, the gateway uses `OpenAI` and the slug below, or the next free one (`openai-2`).
 
 | Field | Template value |
 |---|---|
@@ -17,7 +17,7 @@ In the admin UI, open **Service tokens**, select **Add a token** and open the **
 | Suggested grant rules | `POST /responses`, `POST /chat/completions`, `GET /models` |
 | Host for the upstream host allowlist | `api.openai.com` |
 
-If **Service tokens › Allowed hosts** is set and does not include `api.openai.com`, the card says so before you type anything. An owner ticks **Also allow api.openai.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
+If **Credentials › Allowed hosts** is set and does not include `api.openai.com`, the card says so before you type anything. An owner ticks **Also allow api.openai.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
 
 Use a project API key (`sk-proj-REDACTED`). Reference: <https://platform.openai.com/docs/api-reference/authentication>.
 

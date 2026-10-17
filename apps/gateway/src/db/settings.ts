@@ -74,7 +74,7 @@ function parseJsonOrNull(raw: string): unknown {
 }
 
 /**
- * Upstream host allowlist (I-SSRF-1), edited by owners in Service tokens › Allowed hosts. Stored as a JSON array of
+ * Upstream host allowlist (I-SSRF-1), edited by owners in Credentials › Allowed hosts. Stored as a JSON array of
  * lowercased entries (exact host or `*.<domain>`), or null for "any public https host".
  */
 export const UPSTREAM_HOSTS_KEY = 'allowed_upstream_hosts';
@@ -262,7 +262,7 @@ export function recordKeyCheckValueStatement(
        WHERE CASE WHEN json_valid(settings.value)
                   THEN COALESCE(json_extract(settings.value, '$."' || ?1 || '"') = ?2, 1)
                   ELSE 1 END
-          OR NOT EXISTS (SELECT 1 FROM services WHERE id <> ?4 AND
+          OR NOT EXISTS (SELECT 1 FROM credentials WHERE id <> ?4 AND
                CASE WHEN json_valid(credential_sealed) THEN json_extract(credential_sealed, '$.kid') END = ?1)`,
     )
     .bind(kid, kcv, now, serviceId);

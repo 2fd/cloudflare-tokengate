@@ -18,7 +18,7 @@ import {
   GITLAB_ISSUER,
   githubClaims,
   gitlabClaims,
-  testCallerProvider,
+  testCredentialAccessRule,
 } from '../../helpers/jwt';
 
 beforeEach(() => resetJwksCacheForTests());
@@ -101,7 +101,7 @@ describe('verifyCallerToken', () => {
     const clock = createClock();
     const issuer = await createTestIssuer({ now: clock.now });
     const claims = githubClaims();
-    const provider = testCallerProvider(issuer);
+    const provider = testCredentialAccessRule(issuer);
     const result = await verifyCallerToken(
       await issuer.sign(claims),
       provider,
@@ -125,7 +125,7 @@ describe('verifyCallerToken', () => {
     const issuer = await createTestIssuer({ issuer: GITLAB_ISSUER, now: clock.now });
     const result = await verifyCallerToken(
       await issuer.sign(gitlabClaims()),
-      testCallerProvider(issuer),
+      testCredentialAccessRule(issuer),
       PROFILES['gitlab-ci'],
       { fetch: issuer.fetch, now: clock.now },
     );
@@ -139,7 +139,7 @@ describe('verifyCallerToken', () => {
       alg: 'ES256',
       now: clock.now,
     });
-    const provider = testCallerProvider(issuer, { anchor_claims: ['organization_id'] });
+    const provider = testCredentialAccessRule(issuer, { anchor_claims: ['organization_id'] });
     const token = await issuer.sign({
       sub: 'org:acme',
       organization_id: 'o1',
@@ -157,7 +157,7 @@ describe('verifyCallerToken', () => {
     const issuer = await createTestIssuer({ now: clock.now });
     const token = await issuer.sign(githubClaims());
     const deps = { fetch: issuer.fetch, now: clock.now };
-    const provider = testCallerProvider(issuer);
+    const provider = testCredentialAccessRule(issuer);
     expect((await verifyCallerToken(token, provider, PROFILES['github-actions'], deps)).ok).toBe(
       true,
     );
@@ -173,7 +173,7 @@ describe('verifyCallerToken', () => {
     vi.setSystemTime(Date.UTC(2026, 9, 13, 12));
     const clock = createClock();
     const issuer = await createTestIssuer({ now: clock.now });
-    const provider = testCallerProvider(issuer);
+    const provider = testCredentialAccessRule(issuer);
     const deps = { fetch: issuer.fetch, now: clock.now };
     const profile = PROFILES['github-actions'];
 
@@ -192,7 +192,7 @@ describe('verifyCallerToken', () => {
   it('reports jwks_unavailable for an unusable jwks_uri', async () => {
     const clock = createClock();
     const issuer = await createTestIssuer({ now: clock.now });
-    const provider = testCallerProvider(issuer, { jwks_uri: 'not a url' });
+    const provider = testCredentialAccessRule(issuer, { jwks_uri: 'not a url' });
     const result = await verifyCallerToken(
       await issuer.sign(githubClaims()),
       provider,
@@ -207,7 +207,7 @@ describe('verifyCallerToken', () => {
     const issuer = await createTestIssuer({ now: clock.now });
     const result = await verifyCallerToken(
       await issuer.sign(githubClaims()),
-      testCallerProvider(issuer),
+      testCredentialAccessRule(issuer),
       PROFILES['github-actions'],
       { fetch: async () => new Response('<html>'), now: clock.now },
     );
@@ -220,7 +220,7 @@ describe('verifyCallerToken', () => {
     for (const token of ['', 'a.b.c', 'x'.repeat(100_000), '\u0000.\u0000.\u0000']) {
       const result = await verifyCallerToken(
         token,
-        testCallerProvider(issuer),
+        testCredentialAccessRule(issuer),
         PROFILES['github-actions'],
         { fetch: issuer.fetch, now: clock.now },
       );
@@ -232,13 +232,13 @@ describe('verifyCallerToken', () => {
 
 describe('buildCallerIdentity', () => {
   const issuer = { issuer: GITHUB_ISSUER, jwksUri: `${GITHUB_ISSUER}/.well-known/jwks` };
-  const provider = testCallerProvider(issuer);
+  const provider = testCredentialAccessRule(issuer);
 
   it('carries the raw verified claims, profile and jti', () => {
     const claims = githubClaims({ jti: 'jti-1' });
     const identity = buildCallerIdentity(provider, PROFILES['github-actions'], claims);
     expect(identity).toEqual({
-      callerProviderId: provider.id,
+      credentialAccessRuleId: provider.id,
       profile: 'github-actions',
       claims,
       display: PROFILES['github-actions'].display(claims),

@@ -1,8 +1,8 @@
-// "Connect your jobs": the copy-ready CI configuration of a consumer, with its audience, this
+// "Connect your jobs": the copy-ready CI configuration of a credential access rule, with its audience, this
 // gateway's origin and the real token slugs of its accesses (A14.2, A14.5). The snippet is plain
 // text in a focusable ui CodeBlock that selects as a whole (user-select: all), so no script is needed.
 import { CodeBlock } from '@tokengate/ui';
-import type { CallerProvider } from '../../db/types';
+import type { CredentialAccessRule } from '../../db/types';
 import type { Rule } from '../../policy/types';
 
 // GitHub Actions expression syntax, not template literals.
@@ -35,9 +35,9 @@ export function snippetCall(rules: readonly Rule[]): { method: string; path: str
   return { method: get ? 'GET' : (rule.methods[0] ?? 'GET'), path: rule.path };
 }
 
-/** The snippet text. `slugs` are the token slugs this consumer (or access) can use. */
+/** The snippet text. `slugs` are the token slugs this credential access rule (or access) can use. */
 export function snippetText(
-  consumer: Pick<CallerProvider, 'profile' | 'audience'>,
+  consumer: Pick<CredentialAccessRule, 'profile' | 'audience'>,
   origin: string,
   slugs: readonly string[],
   environment?: string | null,
@@ -78,7 +78,7 @@ ${more.replace(/^ {2}/, '')}`;
 }
 
 export function ConsumerSnippet(props: {
-  consumer: Pick<CallerProvider, 'profile' | 'audience'>;
+  consumer: Pick<CredentialAccessRule, 'profile' | 'audience'>;
   origin: string;
   slugs: readonly string[];
   environment?: string | null;
@@ -93,7 +93,7 @@ export function ConsumerSnippet(props: {
       <p class="hint">
         Audience <code>{props.consumer.audience}</code>. Gateway <code>{props.origin}</code>.
         {props.slugs.length === 0 ? (
-          <> Replace &lt;token-slug&gt; once this consumer can use a token.</>
+          <> Replace &lt;token-slug&gt; once this credential access rule can use a token.</>
         ) : null}
       </p>
     </>

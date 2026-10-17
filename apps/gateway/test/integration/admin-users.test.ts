@@ -136,7 +136,7 @@ describe('GET /admin/users', () => {
     expect(map).toContain('<a class="node cnode" href="/admin/users?role=admin">');
     expect(map).toContain('<span class="nl">Diego Ruiz</span>');
     expect(map).toContain('<svg class="wires"');
-    expect(map).toContain('<b>Admin:</b> service tokens, consumer access, export.');
+    expect(map).toContain('<b>Admin:</b> credentials, issuer access rules, export.');
     // Without decisions or the single-owner note there is no column to sit beside.
     await createUser({ email: 'o2@example.com', role: 'owner' }, T0);
     expect(await page(await sessionFor('owner'))).not.toContain('id="roles-map"');
@@ -395,7 +395,7 @@ describe('POST /admin/users (invite)', () => {
     expect(await auditActions()).toEqual(['user.invite']);
     const html = await follow(session, res);
     expect(html).toContain(
-      'Invited new.person@example.com as Token manager until 20 Oct 2026, 12:00 UTC. Nothing was sent.',
+      'Invited new.person@example.com as Credential manager until 20 Oct 2026, 12:00 UTC. Nothing was sent.',
     );
     expect(html).toContain('href="mailto:new.person@example.com?subject=');
     expect(html).toContain('Email new.person@example.com the sign-in link');
@@ -538,7 +538,7 @@ describe('POST /admin/users (invite)', () => {
     });
     expect(res.status).toBe(400);
     expect(await res.text()).toContain(
-      'Choose one of: Viewer, Token manager, Access manager, Admin, Owner.',
+      'Choose one of: Viewer, Credential manager, Access manager, Admin, Owner.',
     );
   });
 

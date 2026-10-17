@@ -43,7 +43,7 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
   it('a blocked card shows owners a required checkbox and others who to ask, before any typing', async () => {
     const owner = await session('owner');
     const ownerHtml = await (
-      await adminGet(app, owner, '/admin/tokens/new?template=openai')
+      await adminGet(app, owner, '/admin/credentials/new?template=openai')
     ).text();
     expect(ownerHtml).toContain(
       'api.openai.com · project API key sk-proj-… · api.openai.com is not an allowed host',
@@ -54,7 +54,7 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
 
     for (const role of ['token_manager', 'admin'] as const) {
       const html = await (
-        await adminGet(app, await session(role), '/admin/tokens/new?template=openai')
+        await adminGet(app, await session(role), '/admin/credentials/new?template=openai')
       ).text();
       const card =
         /<details class="type-card" name="token-type" id="type-openai"[\s\S]*?<\/details>/.exec(
@@ -83,7 +83,7 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
   it('a repeat for a covered host is a no-op without an allowlist row', async () => {
     const owner = await session('owner');
     await setUpstreamHosts(['api.github.com', 'api.openai.com']);
-    const res = await adminPost(app, owner, '/admin/tokens', {
+    const res = await adminPost(app, owner, '/admin/credentials', {
       template: 'openai',
       credential: 'sk-proj-repeat0123456789abcdefghij',
       allow_host: 'api.openai.com',
@@ -95,7 +95,7 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
 
   it('a value that is not the card host is a field error, with nothing written or sent', async () => {
     const owner = await session('owner');
-    const res = await adminPost(app, owner, '/admin/tokens', {
+    const res = await adminPost(app, owner, '/admin/credentials', {
       template: 'openai',
       credential: 'sk-proj-mismatch0123456789abcdefgh',
       allow_host: 'evil.example',
@@ -108,7 +108,7 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
   });
 
   it('without the box an owner is told to tick it, before anything is sent', async () => {
-    const res = await adminPost(app, await session('owner'), '/admin/tokens', {
+    const res = await adminPost(app, await session('owner'), '/admin/credentials', {
       template: 'openai',
       credential: 'sk-proj-nobox0123456789abcdefghijk',
     });
@@ -122,7 +122,7 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
   it.each(['token_manager', 'admin'] as const)(
     '%s posting allow_host is refused and nothing changes',
     async (role) => {
-      const res = await adminPost(app, await session(role), '/admin/tokens', {
+      const res = await adminPost(app, await session(role), '/admin/credentials', {
         template: 'openai',
         credential: 'sk-proj-refused0123456789abcdefghi',
         allow_host: 'api.openai.com',
@@ -135,7 +135,7 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
 
   it('says the host was added when the token itself then fails', async () => {
     const owner = await session('owner');
-    const res = await adminPost(app, owner, '/admin/tokens', {
+    const res = await adminPost(app, owner, '/admin/credentials', {
       template: 'custom',
       base_url: 'https://api.example.com',
       injection_kind: 'bearer',
@@ -154,7 +154,7 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
   it('the custom base URL pattern comes from the list for non-owners and compiles with the v flag', async () => {
     await setUpstreamHosts(['api.github.com', '*.slack.com']);
     const html = await (
-      await adminGet(app, await session('admin'), '/admin/tokens/new?template=custom')
+      await adminGet(app, await session('admin'), '/admin/credentials/new?template=custom')
     ).text();
     const pattern = /id="f-custom-base_url"[^>]*pattern="([^"]+)"/.exec(html)?.[1] ?? '';
     const decoded = pattern.replaceAll('&amp;', '&').replaceAll('&quot;', '"');
@@ -163,7 +163,7 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
     expect(re.test('https://hooks.slack.com/services')).toBe(true);
     expect(re.test('https://evil.example.com')).toBe(false);
     const ownerHtml = await (
-      await adminGet(app, await session('owner'), '/admin/tokens/new?template=custom')
+      await adminGet(app, await session('owner'), '/admin/credentials/new?template=custom')
     ).text();
     expect(ownerHtml).not.toMatch(/id="f-custom-base_url"[^>]*pattern=/);
     expect(ownerHtml).toContain('name="allow_host" value="1"');
@@ -173,13 +173,13 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
     const owner = await session('owner');
     const id = /svc_[0-9A-Z]{26}/.exec(
       (
-        await adminPost(app, owner, '/admin/tokens', {
+        await adminPost(app, owner, '/admin/credentials', {
           template: 'github',
           credential: 'ghp_destination0123456789abcdefghijkl',
         })
       ).headers.get('location') ?? '',
     )?.[0];
-    const path = `/admin/tokens/${id}/destination`;
+    const path = `/admin/credentials/${id}/destination`;
     const stale = await adminPost(app, owner, path, {
       base_url: 'https://api.example.com',
       injection_kind: 'bearer',
@@ -204,7 +204,7 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
     // No stored secret: the host must be confirmed first (I-CRED-2), and that is checked first.
     const id = await seedService(app.deps, { slug: 'bare' });
     const sent = network.calls.length;
-    const res = await adminPost(app, owner, `/admin/tokens/${id}/destination`, {
+    const res = await adminPost(app, owner, `/admin/credentials/${id}/destination`, {
       base_url: 'https://api.example.com',
       injection_kind: 'bearer',
       credential: 'ghp_destination0123456789abcdefghijkl',
@@ -223,12 +223,14 @@ describe('I-SSRF-1: the GitHub uploads token when uploads.github.com is not allo
 
   it('an owner gets one box that adds the uploads token and allows its host in the same submit', async () => {
     const owner = await session('owner');
-    const html = await (await adminGet(app, owner, '/admin/tokens/new?template=github')).text();
+    const html = await (
+      await adminGet(app, owner, '/admin/credentials/new?template=github')
+    ).text();
     expect(html).toMatch(
       /<input type="checkbox" id="f-github-also_uploads" name="allow_host" value="uploads.github.com"/,
     );
     expect(html).toContain('and allow uploads.github.com in Allowed hosts');
-    const res = await adminPost(app, owner, '/admin/tokens', {
+    const res = await adminPost(app, owner, '/admin/credentials', {
       template: 'github',
       credential: GH,
       allow_host: 'uploads.github.com',
@@ -252,7 +254,9 @@ describe('I-SSRF-1: the GitHub uploads token when uploads.github.com is not allo
     async (role) => {
       const viewer = await session(role);
       await createUser({ email: 'owner@example.com', role: 'owner' });
-      const html = await (await adminGet(app, viewer, '/admin/tokens/new?template=github')).text();
+      const html = await (
+        await adminGet(app, viewer, '/admin/credentials/new?template=github')
+      ).text();
       const card =
         /<details class="type-card" name="token-type" id="type-github"[\s\S]*?<\/details>/.exec(
           html,
@@ -260,7 +264,7 @@ describe('I-SSRF-1: the GitHub uploads token when uploads.github.com is not allo
       expect(card).not.toContain('also_uploads');
       expect(card).toContain('uploads.github.com is not an allowed host');
       expect(card).toContain('mailto:owner@example.com');
-      const res = await adminPost(app, viewer, '/admin/tokens', {
+      const res = await adminPost(app, viewer, '/admin/credentials', {
         template: 'github',
         credential: GH,
         also_uploads: '1',
@@ -274,7 +278,7 @@ describe('I-SSRF-1: the GitHub uploads token when uploads.github.com is not allo
 
   it('the token page names why the uploads token was not created', async () => {
     const owner = await session('owner');
-    const res = await adminPost(app, owner, '/admin/tokens', {
+    const res = await adminPost(app, owner, '/admin/credentials', {
       template: 'github',
       credential: GH,
     });
@@ -296,7 +300,7 @@ describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
   async function githubToken(owner: Awaited<ReturnType<typeof session>>) {
     return /svc_[0-9A-Z]{26}/.exec(
       (
-        await adminPost(app, owner, '/admin/tokens', {
+        await adminPost(app, owner, '/admin/credentials', {
           template: 'github',
           credential: 'ghp_destination0123456789abcdefghijkl',
         })
@@ -307,12 +311,16 @@ describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
   it('an owner gets the box from the start, and one submit allows the host and saves', async () => {
     const owner = await session('owner');
     const id = await githubToken(owner);
-    const html = await (await adminGet(app, owner, `/admin/tokens/${id}?open=destination`)).text();
+    const html = await (
+      await adminGet(app, owner, `/admin/credentials/${id}?open=destination`)
+    ).text();
     const form =
-      new RegExp(`action="/admin/tokens/${id}/destination"[\\s\\S]*?</form>`).exec(html)?.[0] ?? '';
+      new RegExp(`action="/admin/credentials/${id}/destination"[\\s\\S]*?</form>`).exec(
+        html,
+      )?.[0] ?? '';
     expect(form).toContain('id="f-destination-allow_host" name="allow_host" value="1"');
     expect(form).not.toMatch(/id="f-destination-base_url"[^>]*pattern=/);
-    const res = await adminPost(app, owner, `/admin/tokens/${id}/destination`, {
+    const res = await adminPost(app, owner, `/admin/credentials/${id}/destination`, {
       base_url: 'https://api.example.com',
       injection_kind: 'bearer',
       credential: 'ghp_destination0123456789abcdefghijkl',
@@ -321,7 +329,7 @@ describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
     expect(res.status).toBe(303);
     expect(await getAllowedUpstreamHosts(env.DB)).toEqual(['api.github.com', 'api.example.com']);
     // A box ticked for a covered host changes nothing.
-    const again = await adminPost(app, owner, `/admin/tokens/${id}/destination`, {
+    const again = await adminPost(app, owner, `/admin/credentials/${id}/destination`, {
       base_url: 'https://api.github.com',
       injection_kind: 'bearer',
       credential: 'ghp_destination0123456789abcdefghijkl',
@@ -336,9 +344,9 @@ describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
     const owner = await session('owner');
     const id = await githubToken(owner);
     const html = await (
-      await adminGet(app, await session('admin'), `/admin/tokens/${id}?open=destination`)
+      await adminGet(app, await session('admin'), `/admin/credentials/${id}?open=destination`)
     ).text();
-    expect(html).toContain(`action="/admin/tokens/${id}/destination"`);
+    expect(html).toContain(`action="/admin/credentials/${id}/destination"`);
     const pattern = /id="f-destination-base_url"[^>]*pattern="([^"]+)"/.exec(html)?.[1] ?? '';
     const re = new RegExp(`^(?:${pattern.replaceAll('&amp;', '&')})$`, 'v');
     expect(re.test('https://api.github.com')).toBe(true);
@@ -349,11 +357,16 @@ describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
   it('format and allowlist errors come back together, format first', async () => {
     const owner = await session('owner');
     const id = await githubToken(owner);
-    const res = await adminPost(app, await session('admin'), `/admin/tokens/${id}/destination`, {
-      base_url: 'https://blocked.example.com',
-      injection_kind: 'header',
-      credential: 'ghp_destination0123456789abcdefghijkl',
-    });
+    const res = await adminPost(
+      app,
+      await session('admin'),
+      `/admin/credentials/${id}/destination`,
+      {
+        base_url: 'https://blocked.example.com',
+        injection_kind: 'header',
+        credential: 'ghp_destination0123456789abcdefghijkl',
+      },
+    );
     expect(res.status).toBe(400);
     const html = await res.text();
     const header = html.indexOf('Enter the header name in lower case, like x-api-key');
@@ -369,7 +382,7 @@ describe('A7.4: create reports every check that sends nothing in one re-render',
     const admin = await session('admin');
     await seedService(app.deps, { slug: 'foo' });
     const audited = (await actions()).length;
-    const res = await adminPost(app, admin, '/admin/tokens', {
+    const res = await adminPost(app, admin, '/admin/credentials', {
       template: 'custom',
       base_url: 'http://foo.example.com',
       injection_kind: 'header',

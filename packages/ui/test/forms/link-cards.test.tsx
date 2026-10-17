@@ -7,10 +7,10 @@ describe('LinkCards', () => {
     expect(
       render(
         <LinkCards
-          label="Token types"
+          label="Credential types"
           cards={[
             {
-              href: '/admin/tokens/new?type=slack',
+              href: '/admin/credentials/new?type=slack',
               title: 'Slack Web API',
               meta: '2 tokens',
               description: 'slack.com/api · bot token',
@@ -20,7 +20,7 @@ describe('LinkCards', () => {
         />,
       ),
     ).toBe(
-      '<ul class="tcards plain" aria-label="Token types"><li><a class="tcard" href="/admin/tokens/new?type=slack"><span class="logo lg-slack" aria-hidden="true">S</span><span class="t">Slack Web API<span class="faint"> · 2 tokens</span></span><span class="d">slack.com/api · bot token</span><span class="go" aria-hidden="true">›</span></a></li></ul>',
+      '<ul class="tcards plain" aria-label="Credential types"><li><a class="tcard" href="/admin/credentials/new?type=slack"><span class="logo lg-slack" aria-hidden="true">S</span><span class="t">Slack Web API<span class="faint"> · 2 tokens</span></span><span class="d">slack.com/api · bot token</span><span class="go" aria-hidden="true">›</span></a></li></ul>',
     );
   });
 

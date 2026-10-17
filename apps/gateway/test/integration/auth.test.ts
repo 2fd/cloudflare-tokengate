@@ -37,7 +37,7 @@ const NO_ACCESS = { AUTH_ACCESS_TEAM_DOMAIN: '', AUTH_ACCESS_AUD: '' };
 describe('setup page', () => {
   it('explains Access setup when no login is configured', async () => {
     const app = createAdminTestApp({ env: NO_ACCESS, routes: stubAdminPages });
-    const res = await app.request('/admin/tokens');
+    const res = await app.request('/admin/credentials');
     expect(res.status).toBe(503);
     const html = await res.text();
     expect(html).toContain('Set up sign-in');
@@ -76,7 +76,7 @@ describe('Cloudflare Access login', () => {
     const access = await testAccess();
     const app = accessApp();
     const jwt = await access.sign({ sub: 'access-user-1', email: 'ops@acme.com', name: 'Ops' });
-    const res = await app.request('/admin/tokens', { headers: { [ACCESS_JWT_HEADER]: jwt } });
+    const res = await app.request('/admin/credentials', { headers: { [ACCESS_JWT_HEADER]: jwt } });
     expect(res.status).toBe(200);
     expect(await res.text()).toBe('ok owner');
     const identity = await env.DB.prepare(
@@ -164,13 +164,13 @@ describe('Cloudflare Access login', () => {
     // Same browser (cookie), another person's JWT: the JWT decides.
     const swapped = await adminGet(app, o, '/admin', { [ACCESS_JWT_HEADER]: v.assertion });
     expect(await swapped.text()).toBe('ok viewer');
-    // Without a JWT the cookie alone grants nothing.
+    // Without a JWT the cookie alone issuer_access_rules nothing.
     const bare = await app.request('/admin', { headers: { cookie: o.cookie } });
     expect(bare.status).toBe(401);
   });
 
   it.each([
-    ['service token (no email)', { sub: '', common_name: 'client-id.access' }, {}],
+    ['credential (no email)', { sub: '', common_name: 'client-id.access' }, {}],
     ['wrong audience', { sub: 'u', email: 'ops@acme.com' }, { aud: 'b'.repeat(64) }],
     [
       'wrong issuer',
@@ -203,7 +203,7 @@ describe('Cloudflare Access login', () => {
   it('rejects a request without the Access header', async () => {
     const app = accessApp();
     expect((await app.request('/admin')).status).toBe(401);
-    expect((await adminPost(app, null, '/admin/tokens', {})).status).toBe(401);
+    expect((await adminPost(app, null, '/admin/credentials', {})).status).toBe(401);
   });
 
   it('answers 503 when the Access certs cannot be fetched', async () => {
@@ -321,21 +321,24 @@ describe('admin middleware', () => {
       loginAs(app, owner),
     ]);
 
-    expect((await adminGet(app, v, '/admin/tokens/svc_1')).status).toBe(200);
-    expect((await adminGet(app, v, '/admin/tokens/new')).status).toBe(403);
-    expect((await adminPost(app, v, '/admin/tokens')).status).toBe(403);
-    expect((await adminPost(app, a, '/admin/tokens')).status).toBe(200);
+    expect((await adminGet(app, v, '/admin/credentials/svc_1')).status).toBe(200);
+    expect((await adminGet(app, v, '/admin/credentials/new')).status).toBe(403);
+    expect((await adminPost(app, v, '/admin/credentials')).status).toBe(403);
+    expect((await adminPost(app, a, '/admin/credentials')).status).toBe(200);
     expect((await adminPost(app, a, '/admin/users')).status).toBe(403);
-    expect((await adminPost(app, a, '/admin/tokens/keys/rewrap')).status).toBe(403);
+    expect((await adminPost(app, a, '/admin/credentials/keys/rewrap')).status).toBe(403);
     expect((await adminPost(app, o, '/admin/users')).status).toBe(200);
-    expect((await adminPost(app, o, '/admin/tokens/keys/rewrap')).status).toBe(200);
+    expect((await adminPost(app, o, '/admin/credentials/keys/rewrap')).status).toBe(200);
   });
 
   it('serves HEAD through the GET route permission', async () => {
     const app = createAdminTestApp({ routes: stubAdminPages });
     const viewer = await createUser({ email: 'v@example.com', role: 'viewer' });
     const session = await loginAs(app, viewer);
-    const res = await app.request('/admin/tokens', { method: 'HEAD', headers: session.headers });
+    const res = await app.request('/admin/credentials', {
+      method: 'HEAD',
+      headers: session.headers,
+    });
     expect(res.status).toBe(200);
   });
 
@@ -383,7 +386,7 @@ describe('admin middleware', () => {
     const app = createAdminTestApp({ routes: stubAdminPages });
     const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
     for (const method of ['PUT', 'PATCH', 'DELETE']) {
-      const res = await app.request('/admin/tokens/svc_1', {
+      const res = await app.request('/admin/credentials/svc_1', {
         method,
         headers: {
           ...session.headers,
@@ -399,7 +402,7 @@ describe('admin middleware', () => {
   it('formData keeps repeated fields as arrays and has no prototype', async () => {
     const app = createAdminTestApp({
       routes: (a) =>
-        a.post('/admin/tokens', async (c) => {
+        a.post('/admin/credentials', async (c) => {
           const form = await formData(c);
           return c.json({
             nullPrototype: Object.getPrototypeOf(form) === null,
@@ -410,7 +413,7 @@ describe('admin middleware', () => {
         }),
     });
     const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
-    const res = await adminPost(app, session, '/admin/tokens', {
+    const res = await adminPost(app, session, '/admin/credentials', {
       tags: ['a', 'b'],
       ['__proto__']: ['x', 'y'],
     });

@@ -81,9 +81,9 @@ export async function loadScope(db: D1Database, userId: string): Promise<AdminSc
       .bind(userId),
     db
       .prepare(
-        `SELECT x.caller_provider_id, MAX(x.level) AS level ${ACTIVE_MEMBER}
+        `SELECT x.credential_access_rule_id, MAX(x.level) AS level ${ACTIVE_MEMBER}
          JOIN team_consumers x ON x.team_id = m.team_id WHERE m.user_id = ?
-         GROUP BY x.caller_provider_id`,
+         GROUP BY x.credential_access_rule_id`,
       )
       .bind(userId),
   ]);
@@ -101,7 +101,8 @@ export async function loadScope(db: D1Database, userId: string): Promise<AdminSc
   const consumerRows = new Map<string, { level: Level; reveal: boolean }>();
   for (const row of consumers?.results ?? []) {
     const level = levelOrZero(row.level);
-    if (level !== 0) consumerRows.set(String(row.caller_provider_id), { level, reveal: false });
+    if (level !== 0)
+      consumerRows.set(String(row.credential_access_rule_id), { level, reveal: false });
   }
   return {
     userId,
@@ -178,10 +179,10 @@ const unset = (value: string | null): value is null => value === null || value =
  */
 export function recordVisible(
   scope: AdminScope,
-  record: { service_id: string | null; caller_provider_id: string | null },
+  record: { service_id: string | null; credential_access_rule_id: string | null },
 ): boolean {
   if (isGlobalViewer(scope)) return true;
-  const consumer = record.caller_provider_id;
+  const consumer = record.credential_access_rule_id;
   if (unset(consumer) || !holds(scope, { kind: 'consumer', id: consumer, need: 'view' })) {
     return false;
   }

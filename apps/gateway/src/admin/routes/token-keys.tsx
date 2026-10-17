@@ -18,12 +18,12 @@ import {
   Tray,
   ZeroState,
 } from '@tokengate/ui';
-// Service tokens › Encryption keys (A13.5): key ids and check values (KCVs) of the loaded keyring,
+// Credentials › Encryption keys (A13.5): key ids and check values (KCVs) of the loaded keyring,
 // the secrets sealed with each, problems with their fix, and re-encryption with the active key
 // (keyring:rewrap). Shows key ids and check values only, never key material (I-CFG-1).
 import type { App } from '../../app';
 import { sealedKid } from '../../crypto/envelope';
-import { listServices } from '../../db/services';
+import { listServices } from '../../db/credentials';
 import type { Service } from '../../db/types';
 import { keyringHealth } from '../../health';
 import { type NoticeTable, resolveNotice } from '../notice';
@@ -54,9 +54,9 @@ const NOTICES: NoticeTable = {
 };
 
 export function registerTokenKeysRoutes(app: App): void {
-  app.get('/admin/tokens/keys', (c) => keysPage(c, {}));
+  app.get('/admin/credentials/keys', (c) => keysPage(c, {}));
 
-  app.post('/admin/tokens/keys/rewrap', async (c) => {
+  app.post('/admin/credentials/keys/rewrap', async (c) => {
     const form = await formData(c);
     const result = await rewrapCredentials(c.get('deps'), adminActor(c));
     if (!result.ok) {
@@ -73,7 +73,7 @@ export function registerTokenKeysRoutes(app: App): void {
           : result.rewrapped > 0
             ? 'rewrapped'
             : 'rewrap_none';
-    const back = returnPath('POST /admin/tokens/keys/rewrap', form._return);
+    const back = returnPath('POST /admin/credentials/keys/rewrap', form._return);
     return redirectWithNotice(c, back, notice);
   });
 }
@@ -419,7 +419,7 @@ function RewrapDialog(props: RewrapProps) {
           ? 'Every stored secret is opened and sealed again with the active key. Confirming also accepts the new check value of the changed key, if every secret under it opens. Nothing changes otherwise.'
           : 'Every stored secret is opened and sealed again with the active key. Consumers keep working.'
       }
-      action="/admin/tokens/keys/rewrap"
+      action="/admin/credentials/keys/rewrap"
       hidden={props.ctx.hidden({ _return: 'detail', confirm: '1' })}
       confirmLabel="Re-encrypt"
       confirmVariant="primary"

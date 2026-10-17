@@ -1,6 +1,6 @@
-// Admin pages: consumer access (grants). The connections map, the matrix and the access list show
+// Admin pages: issuer access rules (issuer_access_rules). The connections map, the matrix and the access list show
 // which consumers can use which tokens; the structured form builds the conditions and rules
-// (consumer-access.ts) and every save goes through ops/grants.ts (validateGrant: anchors
+// (consumer-access.ts) and every save goes through ops/issuer_access_rules.ts (validateIssuerAccessRule: anchors
 // I-AUTHZ-2, tenant pin containment, event guard I-AUTHZ-3; audit I-AUDIT-1). Risks are accepted
 // by the selection that causes them, or by ticking a box bound to a digest of exactly the risks
 // shown (A7.7). Autocomplete reads only control-plane data; a request record prefills the form
@@ -36,7 +36,7 @@ import type { App } from '../../app';
 import { sha256Hex } from '../../crypto/hash';
 import { listAuditEvents } from '../../db/audit';
 import { labelFor, parseIdWithLabel } from '../../db/claim-labels';
-import { getGrant } from '../../db/grants';
+import { getIssuerAccessRule } from '../../db/issuer_access_rules';
 import { getRequest } from '../../db/requests';
 import {
   consumerAccessShapes,
@@ -45,22 +45,22 @@ import {
   rulePathSuggestions,
   tokenAccessShapes,
 } from '../../db/suggestions';
-import type { CallerProvider, ClaimLabel, Grant, Service } from '../../db/types';
+import type { CredentialAccessRule, ClaimLabel, IssuerAccessRule, Service } from '../../db/types';
 import { getProfile, PROFILES } from '../../identity/profiles';
 import type { IssuerProfile, ProfileId } from '../../identity/types';
 import { parseJson } from '../../lib/json';
 import { claimText } from '../../policy/conditions';
 import type { Condition, Rule } from '../../policy/types';
 import {
-  validateCallerProvider,
-  validateGrant,
+  validateCredentialAccessRule,
+  validateIssuerAccessRule,
   type WarningCode,
   type WarningDetail,
 } from '../../policy/validate';
 import { loadTokenTraffic, type TokenTraffic } from '../access-traffic';
 import { type AccessEdge, type Connections, loadConnections } from '../connections';
 import {
-  accessFormFromGrant,
+  accessFormFromIssuerAccessRule,
   anchorClaims,
   accessWarningDetails,
   blankJobsForm,
@@ -97,16 +97,16 @@ import {
   createOrMergeConsumer,
   pinValues,
   tenantClaimOf,
-} from '../ops/caller-providers';
+} from '../ops/credential-access-rules';
 import {
-  checkGrant,
-  createGrant,
-  deleteGrant,
-  duplicateGrant,
-  type GrantLabel,
-  setGrantEnabled,
-  updateGrant,
-} from '../ops/grants';
+  checkIssuerAccessRule,
+  createIssuerAccessRule,
+  deleteIssuerAccessRule,
+  duplicateIssuerAccessRule,
+  type IssuerAccessRuleLabel,
+  setIssuerAccessRuleEnabled,
+  updateIssuerAccessRule,
+} from '../ops/issuer_access_rules';
 import type { FieldError, OpFailure } from '../ops/shared';
 import { paths, returnPath } from '../paths';
 import {
@@ -187,22 +187,22 @@ const MAX_CARDS = 6;
 const MAP_ROWS = 7;
 
 export function registerAccessRoutes(app: App): void {
-  app.get('/admin/access', listPage);
-  app.get('/admin/access/new', newPage);
-  app.post('/admin/access', create);
-  app.get('/admin/access/:id', detailPage);
-  app.post('/admin/access/:id', update);
-  app.post('/admin/access/:id/copy', copy);
-  app.post('/admin/access/:id/toggle', toggle);
-  app.post('/admin/access/:id/delete', remove);
+  app.get('/admin/issuer-access-rules', listPage);
+  app.get('/admin/issuer-access-rules/new', newPage);
+  app.post('/admin/issuer-access-rules', create);
+  app.get('/admin/issuer-access-rules/:id', detailPage);
+  app.post('/admin/issuer-access-rules/:id', update);
+  app.post('/admin/issuer-access-rules/:id/copy', copy);
+  app.post('/admin/issuer-access-rules/:id/toggle', toggle);
+  app.post('/admin/issuer-access-rules/:id/delete', remove);
 }
 
 // ---------------------------------------------------------------------------------------------
 // Notices
 
 interface AccessNoticeData {
-  grant: Grant | null;
-  consumer: CallerProvider | null;
+  grant: IssuerAccessRule | null;
+  consumer: CredentialAccessRule | null;
 }
 
 const NOTICES: NoticeTable<NoticeContext & AccessNoticeData> = {
@@ -247,15 +247,15 @@ const NOTICES: NoticeTable<NoticeContext & AccessNoticeData> = {
     text: `Consumer ${consumer?.name ?? ''} created. Now give it access to a token.${consumerRisks(consumer)}`,
   }),
   tenant_added: ({ consumer }) => ({
-    text: `Added to ${consumer?.name ?? 'the consumer'}. Now give it access to a token.`,
+    text: `Added to ${consumer?.name ?? 'the credential access rule'}. Now give it access to a token.`,
   }),
 };
 
-/** " Risk: …" for each standing warning of a consumer (a generic one without a pin), or "". */
-function consumerRisks(consumer: CallerProvider | null): string {
+/** " Risk: …" for each standing warning of a credential access rule (a generic one without a pin), or "". */
+function consumerRisks(consumer: CredentialAccessRule | null): string {
   const profile = consumer ? getProfile(consumer.profile) : null;
   if (!consumer || !profile) return '';
-  return validateCallerProvider(consumer, profile, consumer)
+  return validateCredentialAccessRule(consumer, profile, consumer)
     .warnings.map((warning) => ` Risk: ${warning}.`)
     .join('');
 }
@@ -322,13 +322,13 @@ async function listPage(c: AdminContext) {
   return renderPage(
     c,
     {
-      title: 'Consumer access',
+      title: 'Issuer access rules',
       section: 'consumers',
       subsection: 'access',
       notice: notice(c, { grant: null, consumer: null }),
       header: (ctx) => (
         <PageHeader
-          title="Consumer access"
+          title="Issuer access rules"
           count={anyFilter ? `${filtered.length} of ${total}` : total}
           description={
             <ListDescription
@@ -350,7 +350,7 @@ async function listPage(c: AdminContext) {
                   token: q.tokenId || undefined,
                 })}
               >
-                {token ? `Give a consumer access to ${token.name}` : 'Give a consumer access'}
+                {token ? `Add issuer access rule to ${token.name}` : 'Add issuer access rule'}
               </Button>
             ) : undefined
           }
@@ -388,7 +388,7 @@ function ListDescription(props: {
 }) {
   const { q, token, filtered, traffic } = props;
   if (token) {
-    const consumers = new Set(filtered.map((edge) => edge.grant.caller_provider_id)).size;
+    const consumers = new Set(filtered.map((edge) => edge.grant.credential_access_rule_id)).size;
     const requests = traffic.byToken.get(token.id)?.requests ?? 0;
     return (
       <>
@@ -403,11 +403,11 @@ function ListDescription(props: {
   }
   return (
     <>
-      Which consumer jobs can use which service token, and for what.
+      Which credential access rule jobs can use which credential, and for what.
       {q.view === 'matrix' && props.canWrite
         ? ' Select + in a row to give the same jobs another token.'
         : null}
-      <LearnMore path="concepts.md#consumer-access" about="consumer access" />
+      <LearnMore path="concepts.md#consumer-access" about="issuer access rules" />
     </>
   );
 }
@@ -428,7 +428,7 @@ function listHref(q: ListQuery, change: Partial<Parameters<typeof paths.access>[
 function ListFilters(props: {
   connections: Connections;
   q: ListQuery;
-  consumer: CallerProvider | null;
+  consumer: CredentialAccessRule | null;
   token: Service | null;
 }) {
   const { connections, q } = props;
@@ -464,7 +464,7 @@ function ListFilters(props: {
   return (
     <>
       <Filters
-        label="Filter consumer access"
+        label="Filter issuer access rules"
         action={paths.access()}
         hidden={Object.fromEntries(
           Object.entries({
@@ -488,19 +488,19 @@ function ListFilters(props: {
         />
         {props.consumer ? null : (
           <AddFilter
-            label="Consumer"
+            label="Credential access rule"
             options={connections.consumers.map((consumer) => ({
               href: listHref(q, { consumer: consumer.id }),
               label: consumer.name,
               logo: consumerLogo(consumer),
-              count: count((edge) => edge.grant.caller_provider_id === consumer.id),
+              count: count((edge) => edge.grant.credential_access_rule_id === consumer.id),
             }))}
             srSuffix="accesses"
           />
         )}
         {props.token ? null : (
           <AddFilter
-            label="Token"
+            label="Credential"
             options={connections.tokens.map((token) => ({
               href: listHref(q, { token: token.id }),
               label: token.name,
@@ -575,11 +575,11 @@ function ListFilters(props: {
 function filterAccesses(connections: Connections, q: ListQuery): AccessEdge[] {
   const needle = q.repository.toLowerCase();
   return connections.accesses.filter((edge) => {
-    if (q.consumerId && edge.grant.caller_provider_id !== q.consumerId) return false;
+    if (q.consumerId && edge.grant.credential_access_rule_id !== q.consumerId) return false;
     if (q.tokenId && edge.grant.service_id !== q.tokenId) return false;
     if (needle) {
       const labels = connections.labels.filter(
-        (l) => l.caller_provider_id === edge.grant.caller_provider_id,
+        (l) => l.credential_access_rule_id === edge.grant.credential_access_rule_id,
       );
       const anchors = anchorsOf(edge, labels);
       const hit = anchors.some(
@@ -623,15 +623,15 @@ function ListBody(props: {
     return (
       <UiEmptyState
         headingLevel={2}
-        title="A token manager must add a service token first."
-        description="Consumer access lets the jobs of a service consumer use a service token."
+        title="A credential manager must add a credential first."
+        description="Issuer access rules lets the jobs of a credential access rule use a credential."
         actions={
           ctx.can('tokens:write') ? (
             <Button variant="primary" plus href={paths.tokenNew()}>
-              Add token
+              Add credential
             </Button>
           ) : (
-            <AskSomeone permission="tokens:write" ctx={ctx} verb="add a service token" />
+            <AskSomeone permission="tokens:write" ctx={ctx} verb="add a credential" />
           )
         }
       />
@@ -644,12 +644,12 @@ function ListBody(props: {
         title="No consumer yet."
         description={
           canWrite
-            ? 'Give a consumer access: the form adds the consumer in the same step.'
+            ? 'Add issuer access rule: the form adds the credential access rule in the same step.'
             : undefined
         }
         actions={
           canWrite ? undefined : (
-            <AskSomeone permission="access:write" ctx={ctx} verb="add a service consumer" />
+            <AskSomeone permission="access:write" ctx={ctx} verb="add a credential access rule" />
           )
         }
       />
@@ -684,7 +684,7 @@ function ListBody(props: {
     ctx.now,
   );
   const focusEdges = focus
-    ? connections.accesses.filter((edge) => edge.grant.caller_provider_id === focus.id)
+    ? connections.accesses.filter((edge) => edge.grant.credential_access_rule_id === focus.id)
     : [];
   return (
     <>
@@ -704,7 +704,7 @@ function ListBody(props: {
       >
         {connections.accesses.length === 0 ? (
           <Panel variant="pad">
-            <ZeroState>No consumer can use any token yet.</ZeroState>
+            <ZeroState>No workload can use any token yet.</ZeroState>
           </Panel>
         ) : null}
         <ConnectionsMap
@@ -730,7 +730,9 @@ function ListBody(props: {
       </Tray>
       <AccessListTray
         connections={connections}
-        edges={focus ? filtered.filter((e) => e.grant.caller_provider_id === focus.id) : filtered}
+        edges={
+          focus ? filtered.filter((e) => e.grant.credential_access_rule_id === focus.id) : filtered
+        }
         title={
           focus ? `Accesses of ${focus.name}` : token ? `Accesses to ${token.name}` : 'All accesses'
         }
@@ -760,7 +762,7 @@ function MatrixView(props: {
   const canWrite = ctx.can('access:write');
   // The nodes the map grouped as "+ N more": the same busiest-first rule as ConnectionsMap.
   const count = (id: string) =>
-    connections.accesses.filter((edge) => edge.grant.caller_provider_id === id).length;
+    connections.accesses.filter((edge) => edge.grant.credential_access_rule_id === id).length;
   const restConsumers = q.rest.consumers
     ? groupedRest(
         [...connections.consumers].sort((a, b) => count(b.id) - count(a.id)),
@@ -779,7 +781,7 @@ function MatrixView(props: {
     : null;
   const edges = filtered.filter(
     (edge) =>
-      (!restConsumers || restConsumers.has(edge.grant.caller_provider_id)) &&
+      (!restConsumers || restConsumers.has(edge.grant.credential_access_rule_id)) &&
       (!restTokens || restTokens.has(edge.grant.service_id)),
   );
   const filteredConsumers = props.anyFilter && !q.consumerId;
@@ -790,7 +792,8 @@ function MatrixView(props: {
         (consumer) =>
           (!q.consumerId || consumer.id === q.consumerId) &&
           (!restConsumers || restConsumers.has(consumer.id)) &&
-          (!filteredConsumers || edges.some((e) => e.grant.caller_provider_id === consumer.id)),
+          (!filteredConsumers ||
+            edges.some((e) => e.grant.credential_access_rule_id === consumer.id)),
       ),
       tokens: connections.tokens.filter(
         (token) =>
@@ -829,7 +832,7 @@ function MatrixView(props: {
             ? 'Connections to the other tokens'
             : 'Connections'
       }
-      description="Rows: consumer › repository. Columns: tokens, busiest first. Each cell is one consumer access."
+      description="Rows: consumer › repository. Columns: tokens, busiest first. Each cell is one issuer access rule."
       actions={props.segmented}
       footer={
         <>
@@ -855,13 +858,13 @@ function MatrixView(props: {
     >
       {connections.accesses.length === 0 ? (
         <Panel variant="pad">
-          <ZeroState>No consumer can use any token yet.</ZeroState>
+          <ZeroState>No workload can use any token yet.</ZeroState>
         </Panel>
       ) : null}
       {props.anyFilter && edges.length === 0 ? (
         <Panel variant="pad">
           <UiEmptyState
-            title="No consumer access matches these filters."
+            title="No issuer access rules matches these filters."
             actions={<Button href={paths.access({ view: 'matrix' })}>Clear filters</Button>}
           />
         </Panel>
@@ -886,19 +889,20 @@ function AccessListTray(props: {
   const { connections, ctx } = props;
   const canWrite = ctx.can('access:write');
   const total = (consumerId: string) =>
-    connections.accesses.filter((edge) => edge.grant.caller_provider_id === consumerId).length;
+    connections.accesses.filter((edge) => edge.grant.credential_access_rule_id === consumerId)
+      .length;
   const rows = [...props.edges].sort(
     (a, b) =>
-      total(b.grant.caller_provider_id) - total(a.grant.caller_provider_id) ||
+      total(b.grant.credential_access_rule_id) - total(a.grant.credential_access_rule_id) ||
       (a.consumer?.name ?? '').localeCompare(b.consumer?.name ?? '') ||
       a.subject.localeCompare(b.subject) ||
       (a.token?.name ?? '').localeCompare(b.token?.name ?? ''),
   );
   const groups = new Map<string, AccessEdge[]>();
   for (const edge of rows) {
-    const list = groups.get(edge.grant.caller_provider_id) ?? [];
+    const list = groups.get(edge.grant.credential_access_rule_id) ?? [];
     list.push(edge);
-    groups.set(edge.grant.caller_provider_id, list);
+    groups.set(edge.grant.credential_access_rule_id, list);
   }
   const columns = [
     { label: 'Jobs → token · operations' },
@@ -917,7 +921,7 @@ function AccessListTray(props: {
             : [...groups.entries()].map(([consumerId, edges]) => {
                 const consumer = edges[0]?.consumer ?? null;
                 const all = connections.accesses.filter(
-                  (edge) => edge.grant.caller_provider_id === consumerId,
+                  (edge) => edge.grant.credential_access_rule_id === consumerId,
                 ).length;
                 return (
                   <>
@@ -926,7 +930,7 @@ function AccessListTray(props: {
                         logo={consumerLogo(consumer)}
                         logoSize="sm"
                         href={consumer ? paths.consumer(consumer.id) : undefined}
-                        name={consumer?.name ?? 'Deleted consumer'}
+                        name={consumer?.name ?? 'Deleted credential access rule'}
                         after={
                           <span class="meta">
                             {edges.length === all
@@ -946,11 +950,11 @@ function AccessListTray(props: {
         {empty ? (
           props.anyFilter ? (
             <UiEmptyState
-              title="No consumer access matches these filters."
+              title="No issuer access rules matches these filters."
               actions={<Button href={props.clearHref}>Clear filters</Button>}
             />
           ) : (
-            <UiEmptyState title="No consumer can use any token yet." />
+            <UiEmptyState title="No workload can use any token yet." />
           )
         ) : null}
       </Panel>
@@ -975,7 +979,7 @@ function RowAction(props: { edge: AccessEdge; ctx: ViewContext }) {
       </Button>
     );
   }
-  if (edge.status === 'inactive' && edge.statusDetail === 'token disabled' && edge.token) {
+  if (edge.status === 'inactive' && edge.statusDetail === 'credential disabled' && edge.token) {
     return (
       <Button size="sm" href={paths.token(edge.token.id)} srSuffix={edge.token.name}>
         Open token
@@ -1026,7 +1030,7 @@ function AccessListRow(props: { edge: AccessEdge; connections: Connections; ctx:
             ),
           }}
           token={{
-            name: edge.token?.name ?? 'Deleted token',
+            name: edge.token?.name ?? 'Deleted credential',
             logo: tokenLogo(edge.token),
             context: operationsText(edge),
           }}
@@ -1071,7 +1075,7 @@ function AccessListRow(props: { edge: AccessEdge; connections: Connections; ctx:
 
 interface FormData {
   connections: Connections;
-  consumers: CallerProvider[];
+  consumers: CredentialAccessRule[];
   tokens: Service[];
 }
 
@@ -1096,7 +1100,7 @@ interface FormSeed {
   fields: Fields | null;
   consumerId: string;
   tokenId: string;
-  /** `consumer=new` was asked for: the consumer fieldset is the add form. */
+  /** `consumer=new` was asked for: the credential access rule fieldset is the add form. */
   consumerView: 'fixed' | 'new' | 'auto';
   tokenView: 'fixed' | 'auto';
   /** Prefilled "Which jobs" of the chosen consumer (copy, from_request, repository). */
@@ -1110,12 +1114,12 @@ interface FormSeed {
   /** The repository's organization or group to add (new_owner), for the chosen branch. */
   unknownOwner?: string | null;
   hidden?: Record<string, string>;
-  /** The prefill query (`copy`, `repository`) that "Change token" keeps. */
+  /** The prefill query (`copy`, `repository`) that "Change credential" keeps. */
   prefill?: { copy?: string; repository?: string };
 }
 
 /**
- * The consumer a plain "Give a consumer access" preselects (input rule 2: the most used value):
+ * The credential access rule a plain "Add issuer access rule" preselects (input rule 2: the most used value):
  * the enabled consumer with the most accesses, when one has strictly more than every other.
  */
 function mostUsedConsumer(data: FormData): string {
@@ -1129,11 +1133,12 @@ function mostUsedConsumer(data: FormData): string {
 }
 
 function labelsOf(connections: Connections, consumerId: string): ClaimLabel[] {
-  return connections.labels.filter((label) => label.caller_provider_id === consumerId);
+  return connections.labels.filter((label) => label.credential_access_rule_id === consumerId);
 }
 
 function grantCount(connections: Connections, consumerId: string): number {
-  return connections.accesses.filter((edge) => edge.grant.caller_provider_id === consumerId).length;
+  return connections.accesses.filter((edge) => edge.grant.credential_access_rule_id === consumerId)
+    .length;
 }
 
 /** Accesses per repository ID of one consumer. */
@@ -1146,7 +1151,7 @@ function repositoryUse(
   const use = new Map<string, number>();
   if (claims === null) return use;
   for (const edge of connections.accesses) {
-    if (edge.grant.caller_provider_id !== consumerId) continue;
+    if (edge.grant.credential_access_rule_id !== consumerId) continue;
     for (const c of edge.grant.conditions) {
       if (c.claim !== claims.repository) continue;
       for (const value of c.values) use.set(value, (use.get(value) ?? 0) + 1);
@@ -1189,12 +1194,12 @@ function repositoryCounts(
   );
 }
 
-/** A consumer built in memory from the add fields, for validation before anything is written. */
+/** A credential access rule built in memory from the add fields, for validation before anything is written. */
 function pendingConsumer(
   input: ConsumerInput | null,
   type: ProfileId,
-  existing: readonly CallerProvider[],
-): CallerProvider {
+  existing: readonly CredentialAccessRule[],
+): CredentialAccessRule {
   const profile = PROFILES[type];
   const claim = tenantClaimOf(type);
   const issuer = input ? consumerIssuer(input) : (profile.defaults.issuer ?? '');
@@ -1219,6 +1224,8 @@ function pendingConsumer(
     pin.push({ claim: input.pin.claim, match: 'exact', values: [input.pin.value] });
   }
   return {
+    credential_id: input?.credential_id ?? '',
+    conditions: input?.conditions ?? [],
     id: match?.id ?? 'cpr_new',
     name: match?.name ?? profile.label,
     profile: type,
@@ -1237,7 +1244,7 @@ function pendingConsumer(
 
 function pendingLabels(
   input: ConsumerInput | null,
-  provider: CallerProvider,
+  provider: CredentialAccessRule,
   connections: Connections,
 ): ClaimLabel[] {
   const claim = tenantClaimOf(provider.profile);
@@ -1253,7 +1260,7 @@ function pendingLabels(
 async function consumerBranch(
   c: AdminContext,
   data: FormData,
-  provider: CallerProvider,
+  provider: CredentialAccessRule,
   prefix: string,
   seed: FormSeed,
   selected: boolean,
@@ -1395,7 +1402,7 @@ async function buildFormModel(
       kind: 'fixed',
       branch,
       changeHref: consumers.length > 1 ? paths.accessNew(queryBase) : null,
-      newHref: paths.accessNew({ ...queryBase, consumer: 'new' }),
+      newHref: null,
     };
   } else if (consumers.length <= MAX_CARDS) {
     const branches: ConsumerBranch[] = [];
@@ -1536,18 +1543,18 @@ async function renderForm(
   const plainHeader = (
     <PageHeader
       crumbs={[
-        { label: 'Consumer access', href: paths.access() },
-        { label: 'Give a consumer access' },
+        { label: 'Issuer access rules', href: paths.access() },
+        { label: 'Add issuer access rule' },
       ]}
-      title="Give a consumer access"
-      description="Choose a consumer, the jobs, and what they may call. Everything is preset; change only what differs."
+      title="Add issuer access rule"
+      description="Choose a credential access rule, the jobs, and what they may call. Everything is preset; change only what differs."
     />
   );
   if (data.tokens.length === 0) {
     return renderPage(
       c,
       {
-        title: 'Give a consumer access',
+        title: 'Add issuer access rule',
         section: 'consumers',
         subsection: 'access',
         status: options.status ?? 200,
@@ -1556,15 +1563,15 @@ async function renderForm(
       (ctx) => (
         <UiEmptyState
           headingLevel={2}
-          title="A token manager must add a service token first."
-          description="Consumer access lets the jobs of a service consumer use a service token."
+          title="A credential manager must add a credential first."
+          description="Issuer access rules lets the jobs of a credential access rule use a credential."
           actions={
             ctx.can('tokens:write') ? (
               <Button variant="primary" plus href={paths.tokenNew()}>
-                Add token
+                Add credential
               </Button>
             ) : (
-              <AskSomeone permission="tokens:write" ctx={ctx} verb="add a service token" />
+              <AskSomeone permission="tokens:write" ctx={ctx} verb="add a credential" />
             )
           }
         />
@@ -1587,7 +1594,7 @@ async function renderForm(
           { label: 'Give access' },
         ]}
         title={`Allow this call from ${request.repository ?? consumer?.name ?? 'this caller'}`}
-        description="Creates a consumer access that lets exactly this caller make exactly this call."
+        description="Creates an issuer access rule that lets exactly this caller make exactly this call."
       />
     );
     entry = { cancelHref: paths.request(request.id), cancelLabel: 'Back to the request', request };
@@ -1595,11 +1602,11 @@ async function renderForm(
     header = (
       <PageHeader
         crumbs={[
-          { label: 'Service tokens', href: paths.tokens() },
+          { label: 'Credentials', href: paths.tokens() },
           { label: fixedToken.name, href: paths.token(fixedToken.id) },
-          { label: 'Give a consumer access' },
+          { label: 'Add issuer access rule' },
         ]}
-        title={`Give a consumer access to ${fixedToken.name}`}
+        title={`Add issuer access rule to ${fixedToken.name}`}
         description={`Choose which jobs can call ${fixedToken.name} and what they may do. Everything is preset; change only what differs.`}
       />
     );
@@ -1609,7 +1616,7 @@ async function renderForm(
   return renderPage(
     c,
     {
-      title: 'Give a consumer access',
+      title: 'Add issuer access rule',
       section: 'consumers',
       subsection: 'access',
       errors: seed.errors,
@@ -1628,7 +1635,7 @@ async function renderForm(
 }
 
 // ---------------------------------------------------------------------------------------------
-// GET /admin/access/new
+// GET /admin/issuer-access-rules/new
 
 async function newPage(c: AdminContext) {
   const data = await loadFormData(c);
@@ -1638,16 +1645,17 @@ async function newPage(c: AdminContext) {
   let consumerId = query('consumer');
   // Only an explicit `?token=` fixes the token; a copy's token is preselected among the choices.
   const explicitToken = query('token');
-  let tokenId = explicitToken;
+  let tokenId =
+    explicitToken || data.consumers.find((rule) => rule.id === consumerId)?.credential_id || '';
   let jobs: JobsForm | null = null;
   let ops: OpsForm | null = null;
   let banner: Child | null = null;
   let hidden: Record<string, string> = {};
   const copyId = query('copy');
   if (copyId) {
-    const source = await getGrant(c.get('deps').env.DB, copyId);
+    const source = await getIssuerAccessRule(c.get('deps').env.DB, copyId);
     const sourceConsumer = source
-      ? data.consumers.find((p) => p.id === source.caller_provider_id)
+      ? data.consumers.find((p) => p.id === source.credential_access_rule_id)
       : undefined;
     const profile = sourceConsumer ? getProfile(sourceConsumer.profile) : null;
     if (source && sourceConsumer && profile) {
@@ -1655,7 +1663,7 @@ async function newPage(c: AdminContext) {
       tokenId = tokenId || source.service_id;
       hidden = { copy: source.id };
       const labels = labelsOf(data.connections, sourceConsumer.id);
-      jobs = accessFormFromGrant(source, profile, labels);
+      jobs = accessFormFromIssuerAccessRule(source, profile, labels);
       const repository = prefillRepository(query('repository'), profile, labels);
       const retargeted = repository !== null && retarget(jobs, profile, repository);
       const target = data.tokens.find((token) => token.id === tokenId);
@@ -1796,7 +1804,7 @@ function retarget(
 }
 
 function repositoryLabelOf(
-  grant: Pick<Grant, 'conditions'>,
+  grant: Pick<IssuerAccessRule, 'conditions'>,
   labels: readonly ClaimLabel[],
   profile: Pick<IssuerProfile, 'id'>,
 ): string | null {
@@ -1908,7 +1916,7 @@ async function placeholderRisks(
       repositoryLabel: parsed.repository?.label ?? null,
       prefix: opsPrefix,
     }).rules ?? [];
-  const validation = validateGrant(
+  const validation = validateIssuerAccessRule(
     { conditions: parsed.conditions, rules },
     profile,
     provider,
@@ -1926,8 +1934,8 @@ async function prefillFromRequest(c: AdminContext, data: FormData, requestId: st
   const deps = c.get('deps');
   const record = await getRequest(deps.env.TELEMETRY_DB, requestId);
   const claims = record ? parseJson(record.caller_claims) : null;
-  const provider = record?.caller_provider_id
-    ? data.consumers.find((p) => p.id === record.caller_provider_id)
+  const provider = record?.credential_access_rule_id
+    ? data.consumers.find((p) => p.id === record.credential_access_rule_id)
     : undefined;
   const token = record?.service_id
     ? data.tokens.find((t) => t.id === record.service_id)
@@ -1953,13 +1961,13 @@ async function prefillFromRequest(c: AdminContext, data: FormData, requestId: st
           {
             field: null,
             message:
-              'This request cannot prefill the form. Only requests that were denied with “no matching access” or “event not trusted”, whose token was verified, and whose consumer and token still exist can.',
+              'This request cannot prefill the form. Only requests that were denied with “no matching access” or “event not trusted”, whose token was verified, and whose credential access rule and credential still exist can.',
           },
         ],
       },
       () => (
         <p>
-          <Button href={paths.accessNew()}>Give a consumer access from scratch</Button>
+          <Button href={paths.accessNew()}>Add issuer access rule from scratch</Button>
         </p>
       ),
     );
@@ -2027,7 +2035,7 @@ async function prefillFromRequest(c: AdminContext, data: FormData, requestId: st
 /** Structured "Which jobs" values from a verified request's claims, or rows for other events. */
 function jobsFromClaims(
   profile: IssuerProfile,
-  provider: CallerProvider,
+  provider: CredentialAccessRule,
   claims: Record<string, unknown>,
   reason: string | null,
 ): JobsForm {
@@ -2086,7 +2094,7 @@ const PREFILL_EXTRA_CLAIMS: Record<string, string[]> = {
 /** Exact conditions on the first anchor rule the stored claims satisfy, plus ref/event/environment. */
 function prefillConditions(
   profile: IssuerProfile,
-  provider: CallerProvider,
+  provider: CredentialAccessRule,
   claims: Record<string, unknown>,
 ): Condition[] {
   const anchorRules = profile.anchorRules(provider);
@@ -2144,14 +2152,14 @@ interface Risks {
 type Evaluation =
   | {
       ok: true;
-      provider: CallerProvider;
+      provider: CredentialAccessRule;
       profile: IssuerProfile;
       token: Service;
       consumerInput: ConsumerInput | null;
       jobs: JobsForm;
       conditions: Condition[];
       rules: Rule[];
-      labels: GrantLabel[];
+      labels: IssuerAccessRuleLabel[];
       newOwner: { id: string; label: string } | null;
       /** Field name prefix of the chosen consumer branch. */
       prefix: string;
@@ -2167,7 +2175,7 @@ function chosenBranch(
   data: FormData,
   seed: FormSeed,
 ):
-  | { provider: CallerProvider; prefix: string; consumerInput: ConsumerInput | null }
+  | { provider: CredentialAccessRule; prefix: string; consumerInput: ConsumerInput | null }
   | { error: FieldError }
   | null {
   const fields = seed.fields;
@@ -2177,7 +2185,10 @@ function chosenBranch(
     const parsed = parseConsumerForm(form, 'new.');
     if (!parsed.ok)
       return {
-        error: parsed.errors[0] ?? { field: 'new.type', message: 'Choose a consumer type.' },
+        error: parsed.errors[0] ?? {
+          field: 'new.type',
+          message: 'Choose a credential access rule type.',
+        },
       };
     const type = parsed.input.profile;
     return {
@@ -2196,19 +2207,19 @@ async function evaluateForm(
   c: AdminContext,
   data: FormData,
   seed: FormSeed,
-  editing: Grant | null,
+  editing: IssuerAccessRule | null,
 ): Promise<Evaluation> {
   const deps = c.get('deps');
   const errors: FieldError[] = [];
   const fields = seed.fields;
   let consumerErrors: FieldError[] = [];
   let branch: {
-    provider: CallerProvider;
+    provider: CredentialAccessRule;
     prefix: string;
     consumerInput: ConsumerInput | null;
   } | null = null;
   if (editing) {
-    const provider = data.consumers.find((p) => p.id === editing.caller_provider_id);
+    const provider = data.consumers.find((p) => p.id === editing.credential_access_rule_id);
     if (provider) branch = { provider, prefix: '', consumerInput: null };
   } else {
     const chosen = chosenBranch(data, seed);
@@ -2220,18 +2231,31 @@ async function evaluateForm(
     } else branch = chosen;
   }
   if (!branch && consumerErrors.length === 0) {
-    errors.push({ field: 'consumer_id', message: 'Choose a consumer.' });
+    errors.push({ field: 'consumer_id', message: 'Choose a credential access rule.' });
   }
   const tokenId = editing ? editing.service_id : seed.tokenId;
   const token = data.tokens.find((item) => item.id === tokenId) ?? null;
-  if (!token) errors.push({ field: 'token_id', message: 'Choose a token.' });
+  if (!token) errors.push({ field: 'token_id', message: 'Choose a credential.' });
   if (!branch || !token)
     return { ok: false, errors: [...consumerErrors, ...errors], unknownOwner: null };
+  if (branch.consumerInput || branch.provider.credential_id !== token.id) {
+    return {
+      ok: false,
+      errors: [
+        {
+          field: 'consumer_id',
+          message:
+            'Choose an existing credential access rule for this credential. A credential administrator must create its limits first.',
+        },
+      ],
+      unknownOwner: null,
+    };
+  }
   const profile = getProfile(branch.provider.profile);
   if (!profile)
     return {
       ok: false,
-      errors: [{ field: null, message: 'The consumer has an unknown type.' }],
+      errors: [{ field: null, message: 'The credential access rule has an unknown type.' }],
       unknownOwner: null,
     };
 
@@ -2287,26 +2311,21 @@ async function evaluateForm(
     return { ok: false, errors, unknownOwner: parsedJobs.unknownOwner };
   }
 
-  // The consumer the access is checked against: with the new organization when one is added.
-  let provider = branch.provider;
-  let checkLabels = labels;
-  const claims = anchorClaims(profile);
-  if (parsedJobs.newOwner && claims) {
-    provider = {
-      ...provider,
-      tenant_pin: [
-        ...provider.tenant_pin.filter((c) => c.claim !== claims.owner),
+  // The credential access rule the access is checked against: with the new organization when one is added.
+  const provider = branch.provider;
+  const checkLabels = labels;
+  if (parsedJobs.newOwner)
+    return {
+      ok: false,
+      errors: [
         {
-          claim: claims.owner,
-          match: 'exact',
-          values: [...pinValues(provider.tenant_pin, claims.owner), parsedJobs.newOwner.id],
+          field: null,
+          message:
+            'This organization is outside the credential access rule. Ask a credential administrator to change the boundary.',
         },
       ],
+      unknownOwner: null,
     };
-    checkLabels = withTypedLabels(labels, provider.id, [
-      { claim: claims.owner, value: parsedJobs.newOwner.id, label: parsedJobs.newOwner.label },
-    ]);
-  }
   const nameLabels = withTypedLabels(checkLabels, provider.id, parsedJobs.labels);
   const derivedName = deriveAccessName(token.name, parsedJobs.conditions, nameLabels);
   let name = derivedName;
@@ -2314,7 +2333,7 @@ async function evaluateForm(
     const storedDerived = deriveAccessName(token.name, editing.conditions, labels);
     name = editing.name === storedDerived ? derivedName : editing.name;
   }
-  const checked = await checkGrant(
+  const checked = await checkIssuerAccessRule(
     deps,
     provider.id,
     token.id,
@@ -2384,7 +2403,7 @@ async function risksOf(
   return { codes: [...codes].sort(), messages, digest: await sha256Hex(JSON.stringify(sorted)) };
 }
 
-/** The input a validateGrant error belongs to. */
+/** The input a validateIssuerAccessRule error belongs to. */
 function grantErrorField(message: string, jobs: JobsForm, prefix: string): string | null {
   if (
     message.includes('I-AUTHZ-2') ||
@@ -2401,10 +2420,10 @@ function grantErrorField(message: string, jobs: JobsForm, prefix: string): strin
 
 function grantErrorMessage(message: string): string {
   if (message.includes('I-AUTHZ-2')) {
-    return `Each access needs exact, non-negated conditions on the consumer's anchor claims: ${message.replace(/^the grant must have /, '')}`;
+    return `Each access needs exact, non-negated conditions on the credential access rule's anchor claims: ${message.replace(/^the grant must have /, '')}`;
   }
-  if (message.includes("outside the caller provider's tenant pin")) {
-    return `${message.replace("outside the caller provider's tenant pin", 'are not organizations or groups of this consumer')}. Add them to the consumer first.`;
+  if (message.includes("outside the credential access rule's tenant pin")) {
+    return `${message.replace("outside the credential access rule's tenant pin", 'are not organizations or groups of this credential access rule')}. Add them to the credential access rule first.`;
   }
   return message;
 }
@@ -2467,7 +2486,7 @@ async function acceptance(
 }
 
 // ---------------------------------------------------------------------------------------------
-// POST /admin/access
+// POST /admin/issuer-access-rules
 
 function seedFromFields(data: FormData, fields: Fields): FormSeed {
   const consumerId = text(fields, 'consumer_id');
@@ -2524,9 +2543,9 @@ async function create(c: AdminContext) {
     );
   }
 
-  // Step 4: the consumer (new, or merged) and a new organization, each its own audited change.
+  // Step 4: the credential access rule (new, or merged) and a new organization, each its own audited change.
   let providerId = evaluation.provider.id;
-  let savedConsumer: CallerProvider | null = null;
+  let savedConsumer: CredentialAccessRule | null = null;
   if (evaluation.consumerInput) {
     const consumerForm = readConsumerForm(fields, 'new.');
     const created = await createOrMergeConsumer(deps, actor, evaluation.consumerInput);
@@ -2538,8 +2557,8 @@ async function create(c: AdminContext) {
         { status: failureStatus(created) },
       );
     }
-    providerId = created.callerProvider.id;
-    savedConsumer = created.callerProvider;
+    providerId = created.credentialAccessRule.id;
+    savedConsumer = created.credentialAccessRule;
   }
   if (evaluation.newOwner) {
     const claim = tenantClaimOf(evaluation.profile.id);
@@ -2568,9 +2587,9 @@ async function create(c: AdminContext) {
       }
     }
   }
-  const result = await createGrant(deps, actor, {
+  const result = await createIssuerAccessRule(deps, actor, {
     name: evaluation.name,
-    caller_provider_id: providerId,
+    credential_access_rule_id: providerId,
     service_id: evaluation.token.id,
     conditions: evaluation.conditions,
     rules: evaluation.rules,
@@ -2580,7 +2599,7 @@ async function create(c: AdminContext) {
     labels: evaluation.labels,
   });
   if (result.ok) return redirectWithNotice(c, paths.accessItem(result.grant.id), 'created');
-  // Step 6: the consumer may already be saved; keep everything and preselect it.
+  // Step 6: the credential access rule may already be saved; keep everything and preselect it.
   const reloaded = savedConsumer ? await loadFormData(c) : data;
   return renderForm(
     c,
@@ -2596,7 +2615,7 @@ async function create(c: AdminContext) {
   );
 }
 
-function savedNote(consumer: CallerProvider): FieldError {
+function savedNote(consumer: CredentialAccessRule): FieldError {
   return {
     field: null,
     message: `Consumer ${consumer.name} was saved; the access was not. Fix the errors and save again.`,
@@ -2604,13 +2623,13 @@ function savedNote(consumer: CallerProvider): FieldError {
 }
 
 /**
- * After an inline consumer create succeeded and the access failed: the new consumer is fixed, and
+ * After an inline consumer create succeeded and the access failed: the new credential access rule is fixed, and
  * the access values move from the `new.<type>.` branch to the unprefixed one, so nothing is lost.
  */
 function seedAfterConsumerSaved(
   seed: FormSeed,
   providerId: string,
-  saved: CallerProvider | null,
+  saved: CredentialAccessRule | null,
 ): FormSeed {
   if (!saved || !seed.fields) return seed;
   const prefix = `new.${saved.profile}.`;
@@ -2635,10 +2654,10 @@ function failureStatus(failure: OpFailure): 409 | 422 {
 
 async function loadAccess(c: AdminContext, data?: FormData) {
   const deps = c.get('deps');
-  const grant = await getGrant(deps.env.DB, c.req.param('id') ?? '');
+  const grant = await getIssuerAccessRule(deps.env.DB, c.req.param('id') ?? '');
   if (!grant) return null;
   const formData_ = data ?? (await loadFormData(c));
-  const consumer = formData_.consumers.find((p) => p.id === grant.caller_provider_id);
+  const consumer = formData_.consumers.find((p) => p.id === grant.credential_access_rule_id);
   const token = formData_.tokens.find((t) => t.id === grant.service_id);
   const profile = consumer ? getProfile(consumer.profile) : null;
   const edge = formData_.connections.accesses.find((item) => item.grant.id === grant.id);
@@ -2674,7 +2693,7 @@ async function renderAccessPage(c: AdminContext, loaded: LoadedAccess, state: Pa
   const { grant, consumer, token, profile, edge, data } = loaded;
   const deps = c.get('deps');
   const labels = labelsOf(data.connections, consumer.id);
-  const validation = validateGrant(
+  const validation = validateIssuerAccessRule(
     { conditions: grant.conditions, rules: grant.rules },
     profile,
     consumer,
@@ -2685,7 +2704,7 @@ async function renderAccessPage(c: AdminContext, loaded: LoadedAccess, state: Pa
     (other) =>
       other.grant.id !== grant.id &&
       other.grant.enabled &&
-      other.grant.caller_provider_id === consumer.id &&
+      other.grant.credential_access_rule_id === consumer.id &&
       other.grant.service_id === token.id &&
       anchorsOf(other, labels).some(
         (anchor) => overlapKeys.has(anchor.key) && !anchor.key.startsWith('custom:'),
@@ -2694,7 +2713,7 @@ async function renderAccessPage(c: AdminContext, loaded: LoadedAccess, state: Pa
   const template = templateForService(token);
   const sets = ruleSetsOf(await tokenAccessShapes(deps.env.DB, token.id));
   const editing = state.edit;
-  const editJobs = editing?.fields ? null : accessFormFromGrant(grant, profile, labels);
+  const editJobs = editing?.fields ? null : accessFormFromIssuerAccessRule(grant, profile, labels);
   const editSeed: FormSeed = {
     fields: editing?.fields ?? null,
     consumerId: consumer.id,
@@ -2845,7 +2864,7 @@ async function update(c: AdminContext) {
   if (intent === 'rename') {
     const name = text(fields, 'name');
     const description = text(fields, 'description');
-    const result = await updateGrant(deps, actor, grant.id, {
+    const result = await updateIssuerAccessRule(deps, actor, grant.id, {
       name,
       description,
       expected_updated_at: version,
@@ -2878,7 +2897,7 @@ async function update(c: AdminContext) {
   }
   const seed: FormSeed = {
     fields,
-    consumerId: grant.caller_provider_id,
+    consumerId: grant.credential_access_rule_id,
     tokenId: grant.service_id,
     consumerView: 'fixed',
     tokenView: 'fixed',
@@ -2902,7 +2921,7 @@ async function update(c: AdminContext) {
   if (evaluation.newOwner) {
     const claim = tenantClaimOf(evaluation.profile.id);
     if (claim) {
-      const added = await addTenantValue(deps, actor, grant.caller_provider_id, {
+      const added = await addTenantValue(deps, actor, grant.credential_access_rule_id, {
         claim,
         entries: [{ value: evaluation.newOwner.id, label: evaluation.newOwner.label }],
       });
@@ -2919,7 +2938,7 @@ async function update(c: AdminContext) {
       }
     }
   }
-  const result = await updateGrant(deps, actor, grant.id, {
+  const result = await updateIssuerAccessRule(deps, actor, grant.id, {
     name: evaluation.name,
     conditions: evaluation.conditions,
     rules: evaluation.rules,
@@ -2969,7 +2988,7 @@ async function copy(c: AdminContext) {
     copy: { repository: repositoryRaw, tokenId, errors },
     status: 422,
   });
-  if (!target) return renderAccessPage(c, loaded, state({ token_id: 'Choose a token.' }));
+  if (!target) return renderAccessPage(c, loaded, state({ token_id: 'Choose a credential.' }));
   const parsed = parseRepositoryInput(repositoryRaw, profile, labels);
   if (!parsed.ok) return renderAccessPage(c, loaded, state({ repository: parsed.message }));
   const sourceRepository = repositoryLabelOf(grant, labels, profile);
@@ -2988,7 +3007,7 @@ async function copy(c: AdminContext) {
       state({ repository: 'Choose another repository or token.' }),
     );
   }
-  const jobs = accessFormFromGrant(grant, profile, labels);
+  const jobs = accessFormFromIssuerAccessRule(grant, profile, labels);
   const sameSource = sameOperationSource(target, sourceToken);
   const sets = ruleSetsOf(await tokenAccessShapes(deps.env.DB, target.id));
   const ops = opsFormFromRules(grant.rules, templateForService(target), sets, sourceRepository);
@@ -3060,7 +3079,7 @@ async function copy(c: AdminContext) {
   }
   const sourceCodes = new Set<WarningCode>(
     accessWarningDetails(
-      validateGrant(
+      validateIssuerAccessRule(
         { conditions: grant.conditions, rules: grant.rules },
         profile,
         consumer,
@@ -3090,7 +3109,7 @@ async function copy(c: AdminContext) {
       { status: 422, banner },
     );
   }
-  const result = await duplicateGrant(deps, adminActor(c), grant.id, {
+  const result = await duplicateIssuerAccessRule(deps, adminActor(c), grant.id, {
     service_id: target.id,
     conditions: evaluation.conditions,
     rules: evaluation.rules,
@@ -3115,9 +3134,9 @@ async function toggle(c: AdminContext) {
   const id = c.req.param('id') ?? '';
   const form = await formData(c);
   const enabled = flag(form, 'enabled');
-  const result = await setGrantEnabled(c.get('deps'), adminActor(c), id, enabled);
+  const result = await setIssuerAccessRuleEnabled(c.get('deps'), adminActor(c), id, enabled);
   if (result.ok) {
-    const back = returnPath('POST /admin/access/:id/toggle', form._return, { id });
+    const back = returnPath('POST /admin/issuer-access-rules/:id/toggle', form._return, { id });
     return redirectWithNotice(c, back, enabled ? 'enabled' : 'disabled');
   }
   return rerenderDetail(c, result);
@@ -3133,7 +3152,11 @@ async function remove(c: AdminContext) {
       status: 400,
     });
   }
-  const result = await deleteGrant(c.get('deps'), adminActor(c), c.req.param('id') ?? '');
+  const result = await deleteIssuerAccessRule(
+    c.get('deps'),
+    adminActor(c),
+    c.req.param('id') ?? '',
+  );
   if (result.ok) return redirectWithNotice(c, paths.access(), 'deleted');
   return rerenderDetail(c, result);
 }
@@ -3151,14 +3174,14 @@ function notFound(c: AdminContext) {
   return renderPage(
     c,
     {
-      title: 'Consumer access not found',
+      title: 'Issuer access rules not found',
       section: 'consumers',
       subsection: 'access',
       status: 404,
       header: (
         <PageHeader
-          crumbs={[{ href: paths.access(), label: 'Consumer access' }, { label: 'Not found' }]}
-          title="Consumer access not found"
+          crumbs={[{ href: paths.access(), label: 'Issuer access rules' }, { label: 'Not found' }]}
+          title="Issuer access rules not found"
           description={notFoundText('access')}
         />
       ),

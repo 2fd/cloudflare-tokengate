@@ -64,7 +64,9 @@ describe('I-AUTHZ-1: deny by default; revocation is effective on the next reques
   it('disabling the grant denies the next request', async () => {
     const fx = await setupProxy();
     expect((await fx.call('/a')).status).toBe(200);
-    await env.DB.prepare('UPDATE grants SET enabled = 0 WHERE id = ?').bind(fx.grantId).run();
+    await env.DB.prepare('UPDATE issuer_access_rules SET enabled = 0 WHERE id = ?')
+      .bind(fx.grantId)
+      .run();
     const response = await fx.call('/a');
     expect(response.status).toBe(403);
     expect(errorOf(response)).toBe('no_matching_grant');
@@ -72,19 +74,23 @@ describe('I-AUTHZ-1: deny by default; revocation is effective on the next reques
 
   it('an expired grant does not apply', async () => {
     const fx = await setupProxy({ grant: false });
-    await fx.addGrant({ expiresAt: fx.clock.now() + 1000 });
+    await fx.addIssuerAccessRule({ expiresAt: fx.clock.now() + 1000 });
     expect((await fx.call('/a')).status).toBe(200);
     fx.clock.advance(1000);
     expect((await fx.call('/a')).status).toBe(403);
   });
 
-  it('disabling the service or the caller provider is effective immediately', async () => {
+  it('disabling the service or the credential access rule is effective immediately', async () => {
     const fx = await setupProxy();
     expect((await fx.call('/a')).status).toBe(200);
-    await env.DB.prepare('UPDATE services SET enabled = 0 WHERE id = ?').bind(fx.serviceId).run();
+    await env.DB.prepare('UPDATE credentials SET enabled = 0 WHERE id = ?')
+      .bind(fx.serviceId)
+      .run();
     expect((await fx.call('/a')).status).toBe(404);
-    await env.DB.prepare('UPDATE services SET enabled = 1 WHERE id = ?').bind(fx.serviceId).run();
-    await env.DB.prepare('UPDATE caller_providers SET enabled = 0 WHERE id = ?')
+    await env.DB.prepare('UPDATE credentials SET enabled = 1 WHERE id = ?')
+      .bind(fx.serviceId)
+      .run();
+    await env.DB.prepare('UPDATE credential_access_rules SET enabled = 0 WHERE id = ?')
       .bind(fx.providerId)
       .run();
     const response = await fx.call('/a');
@@ -96,7 +102,7 @@ describe('I-AUTHZ-1: deny by default; revocation is effective on the next reques
   it('a grant for another service does not apply', async () => {
     const fx = await setupProxy({ grant: false });
     const other = await fx.addService({ slug: 'other' });
-    await fx.addGrant({ serviceId: other.id });
+    await fx.addIssuerAccessRule({ serviceId: other.id });
     expect((await fx.call('/a', { slug: 'other' })).status).toBe(200);
     expect((await fx.call('/a')).status).toBe(403);
   });

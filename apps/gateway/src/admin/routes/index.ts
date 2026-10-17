@@ -4,7 +4,7 @@
 //
 // Order matters: the admin middleware takes the first matched route (endpointRoute), so static
 // segments come before `:id`. sign-in before users (`/admin/users/sign-in` is not a user id), and
-// token-hosts and token-keys before tokens (`/admin/tokens/hosts` is not a token id).
+// token-hosts and token-keys before tokens (`/admin/credentials/hosts` is not a token id).
 // test/integration/admin-route-order.test.ts pins this.
 import type { App } from '../../app';
 import { registerAccessRoutes } from './access';
@@ -29,11 +29,11 @@ export function registerAdminRoutes(app: App): void {
   // Users
   registerSignInRoutes(app);
   registerUsersRoutes(app);
-  // Service tokens
+  // Credentials
   registerTokenHostsRoutes(app);
   registerTokenKeysRoutes(app);
   registerTokensRoutes(app);
-  // Service consumers
+  // Credential access rules
   registerConsumersRoutes(app);
   registerAccessRoutes(app);
   // Global

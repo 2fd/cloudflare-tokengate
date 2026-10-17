@@ -25,7 +25,7 @@ import {
 } from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
 import type { DenialGroup } from '../../db/rollups';
-import type { AuditEvent, CallerProvider, Role, Service } from '../../db/types';
+import type { AuditEvent, CredentialAccessRule, Role, Service } from '../../db/types';
 import { PROFILES } from '../../identity/profiles';
 import type { ProfileId } from '../../identity/types';
 import type { Percentile, TokenTraffic, TrafficStats } from '../../telemetry/dashboard';
@@ -158,9 +158,9 @@ export function tokenLogo(
   return token && !token.enabled ? { brand, disabled: true } : brand;
 }
 
-/** The brand tile of a consumer, from its profile; the OIDC key otherwise. */
+/** The brand tile of a credential access rule, from its profile; the OIDC key otherwise. */
 export function consumerLogo(
-  consumer: Pick<CallerProvider, 'profile' | 'enabled'> | null | undefined,
+  consumer: Pick<CredentialAccessRule, 'profile' | 'enabled'> | null | undefined,
 ): LogoSpec {
   const brand: LogoBrand =
     consumer?.profile === 'github-actions'
@@ -241,7 +241,9 @@ export function pipelineStages(
   const pct = (n: number) => (c.received > 0 ? formatPercent(n / c.received) : '0.0%');
   const erroring = tokens
     .filter((t) => t.serviceId !== '' && t.errors > 0)
-    .map((t) => `${tokenNames.get(t.serviceId) ?? 'a deleted token'} ${formatCount(t.errors)}`);
+    .map(
+      (t) => `${tokenNames.get(t.serviceId) ?? 'a deleted credential'} ${formatCount(t.errors)}`,
+    );
   return [
     {
       label: 'Received',
@@ -283,7 +285,7 @@ export function pipelineStages(
       drop: {
         count: c.deniedAfter,
         unit: 'no access',
-        why: 'Verified callers that no consumer access allows, or a token problem.',
+        why: 'Verified callers that no issuer access rules allows, or a token problem.',
         go: seeRequests(c.deniedAfter),
         ...(c.deniedAfter > 0 ? { href: paths.requests({ range, outcome: 'denied' }) } : {}),
       },
@@ -309,7 +311,7 @@ export function pipelineStages(
 // Top denied callers
 
 /**
- * Built-in issuer constant → consumer type, for "Add consumer" on `issuer_unknown`. The link
+ * Built-in issuer constant → issuer type, for "Add credential access rule" on `issuer_unknown`. The link
  * carries a value of this closed set, never text from the unverified token (I-LOG-2).
  */
 export const PROFILE_BY_ISSUER: ReadonlyMap<string, ProfileId> = new Map(
@@ -318,7 +320,7 @@ export const PROFILE_BY_ISSUER: ReadonlyMap<string, ProfileId> = new Map(
   ),
 );
 
-/** The consumer type of an unverified issuer, only when it is exactly a built-in constant. */
+/** The credential access rule type of an unverified issuer, only when it is exactly a built-in constant. */
 export function profileForIssuer(issuer: string | null): ProfileId | undefined {
   return issuer === null ? undefined : PROFILE_BY_ISSUER.get(issuer);
 }
@@ -333,7 +335,7 @@ function groupHref(g: DenialGroup, range: OverviewRange): string {
     range,
     outcome: 'denied',
     token: g.service_id || 'none',
-    consumer: g.caller_provider_id || 'none',
+    consumer: g.credential_access_rule_id || 'none',
     ...(g.reason ? { reason: g.reason } : {}),
     ...(g.claims_verified === 1 && g.caller_kind === 'repository' && g.caller
       ? { repo: g.caller }
@@ -350,7 +352,7 @@ export function TopDenied(props: {
   range: OverviewRange;
   caption: string;
   now: number;
-  consumers: ReadonlyMap<string, Pick<CallerProvider, 'name' | 'profile' | 'enabled'>>;
+  consumers: ReadonlyMap<string, Pick<CredentialAccessRule, 'name' | 'profile' | 'enabled'>>;
   tokens: ReadonlyMap<string, Pick<Service, 'name' | 'slug' | 'template_id' | 'enabled'>>;
   ctx: ViewContext;
 }) {
@@ -370,7 +372,7 @@ export function TopDenied(props: {
     >
       {props.groups.map((g) => {
         const verified = g.claims_verified === 1;
-        const consumer = consumers.get(g.caller_provider_id);
+        const consumer = consumers.get(g.credential_access_rule_id);
         const token = tokenName(g);
         const caller = verified ? (g.caller ?? consumer?.name ?? 'unknown caller') : null;
         return (
@@ -404,7 +406,7 @@ export function TopDenied(props: {
                   ·{' '}
                   {consumer?.name ??
                     (g.service_id
-                      ? 'no service consumer'
+                      ? 'no credential access rule'
                       : `refused before a token was chosen${g.service_slug ? ` for /proxy/${g.service_slug}` : ''}`)}
                 </span>
               </span>
@@ -468,7 +470,7 @@ function DenialAction(props: {
         href={paths.consumerNew(type ? { type } : undefined)}
         srSuffix="for this issuer"
       >
-        Add consumer
+        Add credential access rule
       </Button>
     );
   }
@@ -576,7 +578,7 @@ export function toAttentionItems(alerts: readonly Alert[], ctx: ViewContext): At
     if (form?.kind === 'rewrap' && ctx.can('keyring:rewrap')) {
       actions.push(
         <ActionButton
-          action="/admin/tokens/keys/rewrap"
+          action="/admin/credentials/keys/rewrap"
           csrf={ctx.csrf}
           returnTo="overview"
           size="sm"
@@ -704,22 +706,22 @@ export function ActorAvatar(props: { event: Pick<AuditEvent, 'actor_type' | 'act
 
 /** Plain-language text of each audit action (the code is shown next to it). */
 export const AUDIT_ACTION_TEXT: Readonly<Record<string, string>> = {
-  'service.create': 'Added a service token',
-  'service.update': 'Changed a service token',
-  'service.delete': 'Deleted a service token',
-  'service.enable': 'Enabled a service token',
-  'service.disable': 'Disabled a service token',
+  'service.create': 'Added a credential',
+  'service.update': 'Changed a credential',
+  'service.delete': 'Deleted a credential',
+  'service.enable': 'Enabled a credential',
+  'service.disable': 'Disabled a credential',
   'service.credential.set': 'Replaced secret',
   'service.credential.test': 'Tested a secret',
   'service.credential.test_result': 'Tested a secret',
   'credential.expiring': 'Secret expires soon',
   'keyring.rewrap': 'Re-encrypted secrets',
   'settings.upstream_hosts': 'Changed the allowed hosts',
-  'caller_provider.create': 'Added a service consumer',
-  'caller_provider.update': 'Changed a service consumer',
-  'caller_provider.delete': 'Deleted a service consumer',
-  'caller_provider.enable': 'Enabled a service consumer',
-  'caller_provider.disable': 'Disabled a service consumer',
+  'credential_access_rule.create': 'Added a credential access rule',
+  'credential_access_rule.update': 'Changed a credential access rule',
+  'credential_access_rule.delete': 'Deleted a credential access rule',
+  'credential_access_rule.enable': 'Enabled a credential access rule',
+  'credential_access_rule.disable': 'Disabled a credential access rule',
   'grant.create': 'Gave access',
   'grant.update': 'Changed access',
   'grant.delete': 'Deleted access',
@@ -747,7 +749,7 @@ export function actionText(action: string): string | null {
   const text = Object.hasOwn(AUDIT_ACTION_TEXT, action)
     ? (AUDIT_ACTION_TEXT[action] ?? null)
     : null;
-  // it follows the actor in a sentence: "priya@acme.dev disabled a service token: Slack (legacy)."
+  // it follows the actor in a sentence: "priya@acme.dev disabled a credential: Slack (legacy)."
   return text === null ? null : text.charAt(0).toLowerCase() + text.slice(1);
 }
 
@@ -771,15 +773,20 @@ export const AUDIT_TARGETS: Readonly<
     }
   >
 > = {
-  service: { label: 'Service token', noun: 'token', prefix: 'svc', page: (id) => paths.token(id) },
-  caller_provider: {
-    label: 'Service consumer',
-    noun: 'consumer',
+  service: {
+    label: 'Credential',
+    noun: 'credential',
+    prefix: 'svc',
+    page: (id) => paths.token(id),
+  },
+  credential_access_rule: {
+    label: 'Credential access rule',
+    noun: 'credential access rule',
     prefix: 'cpr',
     page: (id) => paths.consumer(id),
   },
   grant: {
-    label: 'Consumer access',
+    label: 'Issuer access rules',
     noun: 'access',
     prefix: 'grt',
     page: (id) => paths.accessItem(id),
@@ -809,7 +816,7 @@ export function auditTargetValue(
 }
 
 /**
- * The entity an event concerns, as a link with its current name; "deleted token svc_…" when it
+ * The entity an event concerns, as a link with its current name; "deleted credential svc_…" when it
  * no longer exists. `names` maps ids of existing entities to their names.
  */
 export function AuditTarget(props: {

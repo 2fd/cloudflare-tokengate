@@ -101,7 +101,7 @@ The gateway keeps no admin sessions. On every `/admin` request it verifies the
 `Cf-Access-Jwt-Assertion` header itself (`apps/gateway/src/admin/auth/access.ts`): signature, issuer, audience
 and expiry. A request without a valid header gets `401` and "Cloudflare Access did not present a
 valid user identity for this request." This also covers a path that the Access application does not
-match: the request reaches the Worker without the header and is refused. Access service tokens carry
+match: the request reaches the Worker without the header and is refused. Access credentials carry
 no email and are refused. The gateway still applies its own users and roles after Access
 (`apps/gateway/src/admin/auth/middleware.tsx`).
 

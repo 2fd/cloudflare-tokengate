@@ -42,6 +42,8 @@ const identity = (subject: string, userId: string) =>
 beforeAll(async () => {
   await applyD1Migrations(db, env.TEST_MIGRATIONS);
   await db.batch([
+    db.prepare(`INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
+      VALUES ('svc_schema', 'schema', 'Schema fixture', 'https://api.example.com', '{"kind":"bearer"}', 0, 0)`),
     user('usr_owner1', 'owner'),
     user('usr_owner2', 'owner'),
     user('usr_viewer', 'viewer'),
@@ -50,9 +52,9 @@ beforeAll(async () => {
     identity('team|viewer-b', 'usr_viewer'),
     db
       .prepare(
-        `INSERT INTO caller_providers (id, name, profile, issuer, jwks_uri, audience, allowed_algs,
+        `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
            created_at, updated_at, max_token_age_seconds)
-         VALUES ('cpr_1', 'GitHub', 'github-actions', 'https://token.actions.githubusercontent.com',
+         VALUES ('cpr_1', (SELECT id FROM credentials ORDER BY id LIMIT 1), 'GitHub', 'github-actions', 'https://token.actions.githubusercontent.com',
            'https://token.actions.githubusercontent.com/.well-known/jwks',
            'tokengate:0123456789abcdef', '["RS256"]', ?, ?, 900)`,
       )
@@ -110,16 +112,16 @@ describe('I-OWNER-1: users, roles and identities', () => {
   });
 });
 
-describe('services.template_id', () => {
+describe('credentials.template_id', () => {
   it('is nullable', async () => {
     await db
       .prepare(
-        `INSERT INTO services (id, slug, name, base_url, injection, created_at, updated_at)
+        `INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
          VALUES ('svc_1', 'one', 'One', 'https://api.example.com', '{"kind":"bearer"}', ?, ?)`,
       )
       .bind(T, T)
       .run();
-    expect(await rows("SELECT template_id FROM services WHERE id = 'svc_1'")).toEqual([
+    expect(await rows("SELECT template_id FROM credentials WHERE id = 'svc_1'")).toEqual([
       { template_id: null },
     ]);
   });
@@ -129,7 +131,7 @@ describe('claim_labels', () => {
   const label = (value: string) =>
     db
       .prepare(
-        `INSERT INTO claim_labels (caller_provider_id, claim, value, label, updated_at)
+        `INSERT INTO claim_labels (credential_access_rule_id, claim, value, label, updated_at)
          VALUES ('cpr_1', 'repository_id', ?, 'acme/api', ?)`,
       )
       .bind(value, T);
@@ -146,12 +148,12 @@ describe('claim_labels', () => {
     },
   );
 
-  it('refuses unknown claims and caller providers', async () => {
+  it('refuses unknown claims and credential access rules', async () => {
     expect(
       await refused(
         db
           .prepare(
-            `INSERT INTO claim_labels (caller_provider_id, claim, value, label, updated_at)
+            `INSERT INTO claim_labels (credential_access_rule_id, claim, value, label, updated_at)
              VALUES ('cpr_1', 'sub', '1', 'x', ?)`,
           )
           .bind(T),
@@ -161,7 +163,7 @@ describe('claim_labels', () => {
       await refused(
         db
           .prepare(
-            `INSERT INTO claim_labels (caller_provider_id, claim, value, label, updated_at)
+            `INSERT INTO claim_labels (credential_access_rule_id, claim, value, label, updated_at)
              VALUES ('cpr_missing', 'repository_id', '1', 'x', ?)`,
           )
           .bind(T),

@@ -97,7 +97,7 @@ describe('FilterSearch', () => {
 describe('AddFilter', () => {
   const html = render(
     <AddFilter
-      label="Token"
+      label="Credential"
       srSuffix="requests"
       open
       options={[
@@ -113,9 +113,9 @@ describe('AddFilter', () => {
     />,
   );
 
-  it('is a disclosure whose summary reads "Filter by Token"', () => {
+  it('is a disclosure whose summary reads "Filter by Credential"', () => {
     expect(html).toContain(
-      '<details class="fadd" open=""><summary><span aria-hidden="true">+</span><span class="vh">Filter by </span>Token</summary>',
+      '<details class="fadd" open=""><summary><span aria-hidden="true">+</span><span class="vh">Filter by </span>Credential</summary>',
     );
   });
 
@@ -134,7 +134,7 @@ describe('AddFilter', () => {
   it('is closed by default, without a divider when there are no extras', () => {
     const closed = render(
       <AddFilter
-        label="Consumer"
+        label="Credential access rule"
         options={[{ href: '?c=1', label: 'GitHub Actions (acme)' }]}
         class="x"
       />,
@@ -165,7 +165,7 @@ describe('AddFilter', () => {
             group: 'Caller',
             options: [
               { href: '?reason=issuer_unknown', label: 'Unknown issuer', count: 182 },
-              { href: '?reason=no_matching_grant', label: 'No consumer access' },
+              { href: '?reason=no_matching_grant', label: 'No issuer access rules' },
             ],
           },
           {
@@ -179,7 +179,7 @@ describe('AddFilter', () => {
       '<div class="fpop"><a href="?reason=any">Any denial</a>' +
         '<div role="group" aria-label="Caller"><p class="fpop-h" aria-hidden="true">Caller</p>' +
         '<a href="?reason=issuer_unknown">Unknown issuer<span class="n">182<span class="vh"> requests</span></span></a>' +
-        '<a href="?reason=no_matching_grant">No consumer access</a></div>' +
+        '<a href="?reason=no_matching_grant">No issuer access rules</a></div>' +
         '<div role="group" aria-label="Upstream"><p class="fpop-h" aria-hidden="true">Upstream</p>' +
         '<a href="?reason=upstream_5xx">Upstream error</a></div></div>',
     );
@@ -199,13 +199,13 @@ describe('ActiveFilters', () => {
     const html = render(
       <ActiveFilters
         lead="Active filters"
-        filters={[{ label: 'Token: Slack', href: '?outcome=denied' }]}
+        filters={[{ label: 'Credential: Slack', href: '?outcome=denied' }]}
         clearHref="/admin/requests"
       />,
     );
     expect(html).toBe(
       '<div class="achips" role="group" aria-label="Active filters"><span class="hint">Active filters</span>' +
-        '<a class="achip" href="?outcome=denied"><span class="vh">Remove filter </span>Token: Slack<span class="x" aria-hidden="true">✕</span></a>' +
+        '<a class="achip" href="?outcome=denied"><span class="vh">Remove filter </span>Credential: Slack<span class="x" aria-hidden="true">✕</span></a>' +
         '<a class="sm" href="/admin/requests">Clear all</a></div>',
     );
   });
@@ -255,11 +255,11 @@ describe('QuickLinks', () => {
         <QuickLinks
           label="Focus"
           class="x"
-          links={[{ href: '/a', label: 'All consumers', tone: 'warn' }]}
+          links={[{ href: '/a', label: 'All credential access rules', tone: 'warn' }]}
         />,
       ),
     ).toBe(
-      '<nav class="qlinks x" aria-label="Focus"><a class="ql warn" href="/a">All consumers</a></nav>',
+      '<nav class="qlinks x" aria-label="Focus"><a class="ql warn" href="/a">All credential access rules</a></nav>',
     );
   });
 });

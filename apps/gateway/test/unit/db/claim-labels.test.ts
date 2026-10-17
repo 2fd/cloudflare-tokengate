@@ -9,15 +9,15 @@ import {
   repositoryLabelOptions,
   resolveIdWithLabel,
 } from '../../../src/db/claim-labels';
-import type { CallerProvider } from '../../../src/db/types';
+import type { CredentialAccessRule } from '../../../src/db/types';
 import { opsDeps, resetControlPlane, seedGithubProvider } from '../admin/ops/helpers';
 
-let a: CallerProvider;
-let b: CallerProvider;
+let a: CredentialAccessRule;
+let b: CredentialAccessRule;
 
 async function label(providerId: string, claim: string, value: string, text: string) {
   await env.DB.prepare(
-    `INSERT INTO claim_labels (caller_provider_id, claim, value, label, updated_at, updated_by)
+    `INSERT INTO claim_labels (credential_access_rule_id, claim, value, label, updated_at, updated_by)
      VALUES (?, ?, ?, ?, 1, 'usr_x')`,
   )
     .bind(providerId, claim, value, text)
@@ -29,11 +29,11 @@ beforeEach(async () => {
   const deps = opsDeps();
   a = await seedGithubProvider(deps);
   const other = await env.DB.prepare(
-    `INSERT INTO caller_providers (id, name, profile, issuer, jwks_uri, audience, allowed_algs,
+    `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
        max_token_age_seconds, created_at, updated_at)
-     VALUES ('cpr_other', 'GitLab', 'gitlab-ci', 'https://gitlab.com', 'https://gitlab.com/oauth/discovery/keys',
+     VALUES ('cpr_other', (SELECT id FROM credentials ORDER BY id LIMIT 1), 'GitLab', 'gitlab-ci', 'https://gitlab.com', 'https://gitlab.com/oauth/discovery/keys',
        'tokengate:abcdefghijklmnop', '["RS256"]', 900, 1, 1) RETURNING *`,
-  ).first<CallerProvider>();
+  ).first<CredentialAccessRule>();
   if (!other) throw new Error('insert failed');
   b = other;
   await label(a.id, 'repository_owner_id', '4242', 'acme');
@@ -43,14 +43,18 @@ beforeEach(async () => {
 });
 
 describe('claim labels', () => {
-  it('lists the labels of one caller provider, or of all', async () => {
+  it('lists the labels of one credential access rule, or of all', async () => {
     const own = await listClaimLabels(env.DB, a.id);
     expect(own.map((row) => [row.claim, row.value, row.label])).toEqual([
       ['repository_id', '11', 'acme/web'],
       ['repository_id', '987654321', 'acme/api'],
       ['repository_owner_id', '4242', 'acme'],
     ]);
-    expect(own[0]).toMatchObject({ caller_provider_id: a.id, updated_at: 1, updated_by: 'usr_x' });
+    expect(own[0]).toMatchObject({
+      credential_access_rule_id: a.id,
+      updated_at: 1,
+      updated_by: 'usr_x',
+    });
     expect(await listClaimLabels(env.DB)).toHaveLength(4);
   });
 
@@ -111,10 +115,10 @@ describe('the ID input format: name (ID)', () => {
     expect(parseIdWithLabelList('acme (1234567), acme-labs')).toBeNull();
   });
 
-  it('accepts a bare ID only when the consumer already has a label for it', () => {
+  it('accepts a bare ID only when the credential access rule already has a label for it', () => {
     const labels = [
       {
-        caller_provider_id: 'cpr_x',
+        credential_access_rule_id: 'cpr_x',
         claim: 'repository_id' as const,
         value: '42',
         label: 'acme/api',

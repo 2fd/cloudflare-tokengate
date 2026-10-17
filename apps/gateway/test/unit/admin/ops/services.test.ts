@@ -13,10 +13,10 @@ import {
   slugBaseFor,
   testServiceCredential,
   updateServiceFields,
-} from '../../../../src/admin/ops/services';
+} from '../../../../src/admin/ops/credentials';
 import { credentialAad, openCredential, sealedKid } from '../../../../src/crypto/envelope';
 import { loadKeyring } from '../../../../src/crypto/keyring';
-import { getService } from '../../../../src/db/services';
+import { getService } from '../../../../src/db/credentials';
 import { setAdminHosts, setUpstreamHosts, TEST_ACCESS_ENV } from '../../../helpers/app';
 import {
   ACTOR,
@@ -28,7 +28,7 @@ import {
   opsDeps,
   resetControlPlane,
   seedGithubProvider,
-  seedGrant,
+  seedIssuerAccessRule,
   seedService,
   serviceInput,
 } from './helpers';
@@ -413,7 +413,9 @@ describe('testServiceCredential', () => {
     const network = fakeNetwork();
     const deps = opsDeps({ fetch: network.fetch });
     const id = await seedService(deps, { secret: SECRET, verify: VERIFY });
-    await env.DB.prepare("UPDATE services SET base_url = 'https://evil.example.net' WHERE id = ?")
+    await env.DB.prepare(
+      "UPDATE credentials SET base_url = 'https://evil.example.net' WHERE id = ?",
+    )
       .bind(id)
       .run();
     const calls = network.calls.length;
@@ -456,11 +458,11 @@ describe('deleteService', () => {
     expect(JSON.stringify(audit)).not.toContain('credential_sealed');
   });
 
-  it('refuses while grants reference the service', async () => {
+  it('refuses while issuer_access_rules reference the service', async () => {
     const deps = opsDeps();
     const id = await seedService(deps);
     const provider = await seedGithubProvider(deps);
-    await seedGrant(deps, provider.id, id, 'ci deploy');
+    await seedIssuerAccessRule(deps, provider.id, id, 'ci deploy');
     const before = await auditCount();
     const result = await deleteService(deps, ACTOR, id);
     expect(result).toMatchObject({ ok: false, reason: 'conflict' });
@@ -575,7 +577,9 @@ describe('token helpers', () => {
     const rotated = await rotateServiceSecret(deps, ACTOR, id, { secret: `${SECRET}x` }, CONTEXT);
     expect(rotated).toMatchObject({ ok: true, siblings: [] });
     expect((await getService(env.DB, id))?.base_url).toBe('https://api.github.com');
-    await env.DB.prepare("UPDATE services SET base_url = 'https://uploads.github.com' WHERE id = ?")
+    await env.DB.prepare(
+      "UPDATE credentials SET base_url = 'https://uploads.github.com' WHERE id = ?",
+    )
       .bind(id)
       .run();
     expect(await rotateServiceSecret(deps, ACTOR, id, { secret: SECRET }, CONTEXT)).toMatchObject({
@@ -597,7 +601,7 @@ describe('token helpers', () => {
       secret: SECRET,
       verify: { method: 'GET', path: '/rate_limit', expect_status: 200 },
     });
-    await env.DB.prepare('UPDATE services SET credential_expires_at = NULL WHERE id = ?')
+    await env.DB.prepare('UPDATE credentials SET credential_expires_at = NULL WHERE id = ?')
       .bind(id)
       .run();
     const result = await testServiceCredential(deps, ACTOR, id, CONTEXT);

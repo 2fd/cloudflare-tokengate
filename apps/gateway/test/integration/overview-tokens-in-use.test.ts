@@ -35,8 +35,8 @@ beforeEach(async () => {
 
 describe('Tokens in use', () => {
   it('lists each access of a token with its status, linked to the access', async () => {
-    const disabled = await fixture.addGrant({ enabled: false });
-    const expired = await fixture.addGrant({ expiresAt: fixture.clock.now() - 1 });
+    const disabled = await fixture.addIssuerAccessRule({ enabled: false });
+    const expired = await fixture.addIssuerAccessRule({ expiresAt: fixture.clock.now() - 1 });
     expect((await fixture.call('/ok/1')).status).toBe(200);
     await fixture.app.settle();
     const html = section(
@@ -46,7 +46,7 @@ describe('Tokens in use', () => {
     const items = listItems(html);
     expect(items).toHaveLength(3);
     const item = (grant: string | null) =>
-      items.find((li) => li.includes(`/admin/access/${grant}"`));
+      items.find((li) => li.includes(`/admin/issuer-access-rules/${grant}"`));
     // The spoken text of each item is a sentence; the status is a word, not a colour.
     expect(item(fixture.grantId)).toMatch(
       /<span class="vh"> can use <\/span>[\s\S]*echo[\s\S]*<\/a><span class="st">Active<\/span>/,
@@ -58,21 +58,23 @@ describe('Tokens in use', () => {
     expect(html).toContain(
       `href="/admin/requests?token=${fixture.serviceId}&amp;range=24h&amp;outcome=denied"`,
     );
-    expect(html).toContain('<a class="linkish" href="/admin/access">Open consumer access (3)');
+    expect(html).toContain(
+      '<a class="linkish" href="/admin/issuer-access-rules">Open issuer access rules (3)',
+    );
     // The token node opens the access list of the token.
-    expect(html).toContain(`href="/admin/access?token=${fixture.serviceId}"`);
+    expect(html).toContain(`href="/admin/issuer-access-rules?token=${fixture.serviceId}"`);
   });
 
-  it('marks a consumer that is disabled and a token without a secret', async () => {
-    await env.DB.prepare('UPDATE caller_providers SET enabled = 0 WHERE id = ?')
+  it('marks a credential access rule that is disabled and a token without a secret', async () => {
+    await env.DB.prepare('UPDATE credential_access_rules SET enabled = 0 WHERE id = ?')
       .bind(fixture.providerId)
       .run();
     const bare = await fixture.addService({ slug: 'bare', secret: null });
-    await fixture.addGrant({ serviceId: bare.id });
+    await fixture.addIssuerAccessRule({ serviceId: bare.id });
     const html = section(
       await (await adminGet(fixture.app, await loginAs(fixture.app, viewer), '/admin')).text(),
     );
-    expect(html).toContain('<span class="st off">Inactive: consumer disabled</span>');
+    expect(html).toContain('<span class="st off">Inactive: credential access rule disabled</span>');
     expect(html).toContain('<span class="t-bad">No credential</span>');
     // A token with a problem is listed first even without traffic.
     expect(html.indexOf('<span class="nm">bare ')).toBeLessThan(
@@ -81,7 +83,7 @@ describe('Tokens in use', () => {
   });
 
   it('draws every access in the text list, however many a token has', async () => {
-    for (let i = 0; i < 4; i++) await fixture.addGrant({});
+    for (let i = 0; i < 4; i++) await fixture.addIssuerAccessRule({});
     const html = section(
       await (await adminGet(fixture.app, await loginAs(fixture.app, viewer), '/admin')).text(),
     );
@@ -96,20 +98,20 @@ describe('Tokens in use', () => {
     expect(html).toContain('<li class="node tnode idle"><span class="tag">1 idle token</span>');
   });
 
-  it('offers "Give a consumer access" on a token with none, only to access:write holders', async () => {
+  it('offers "Add issuer access rule" on a token with none, only to access:write holders', async () => {
     await fixture.addService({ slug: 'lonely' });
     const a = fixture.app;
     const own = section(await (await adminGet(a, await loginAs(a, owner), '/admin')).text());
     expect(own).toContain('no consumer can use this token yet.');
     expect(own).toMatch(
-      /href="\/admin\/access\/new\?token=svc_[0-9A-Z]{26}">Give a consumer access/,
+      /href="\/admin\/issuer-access-rules\/new\?token=svc_[0-9A-Z]{26}">Add issuer access rule/,
     );
     const tokenManager = await createUser({ email: 'tm@example.com', role: 'token_manager' });
     const tm = section(await (await adminGet(a, await loginAs(a, tokenManager), '/admin')).text());
     expect(tm).toContain('no consumer can use this token yet.');
-    expect(tm).not.toContain('/admin/access/new');
+    expect(tm).not.toContain('/admin/issuer-access-rules/new');
     const view = section(await (await adminGet(a, await loginAs(a, viewer), '/admin')).text());
-    expect(view).not.toContain('/admin/access/new');
+    expect(view).not.toContain('/admin/issuer-access-rules/new');
   });
 
   it('counts requests refused before a token was chosen, with a link to them', async () => {

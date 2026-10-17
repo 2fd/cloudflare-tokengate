@@ -1,24 +1,24 @@
 import { sealedKid } from '../crypto/envelope';
-// Who can use which service token: every consumer access (grant) with its consumer, its token, a
+// Who can use which credential: every issuer access rules (grant) with its consumer, its token, a
 // status from the A9 vocabulary, a summary and its last use. One loader for the Overview, the token
 // and consumer lists and pages, the access matrix and the access form, so a status reads the same
 // everywhere. Read-only. Monitoring data (last use) is for display only and never an autocomplete
 // source; when TELEMETRY_DB cannot be read, the usage is empty and no access is called unused.
 import { loadKeyring } from '../crypto/keyring';
-import { listCallerProviders } from '../db/caller-providers';
 import { listClaimLabels } from '../db/claim-labels';
-import { listGrants } from '../db/grants';
+import { listCredentialAccessRules } from '../db/credential-access-rules';
+import { listServices } from '../db/credentials';
+import { listIssuerAccessRules } from '../db/issuer_access_rules';
 import {
   aggregateRequestLogStatement,
-  type GrantUsage,
+  type IssuerAccessRuleUsage,
   grantUsageStatement,
   HOUR_MS,
-  mergeGrantUsage,
+  mergeIssuerAccessRuleUsage,
   rollupFromRow,
 } from '../db/rollups';
-import { listServices } from '../db/services';
 import { getSettings } from '../db/settings';
-import type { CallerProvider, ClaimLabel, Grant, Service } from '../db/types';
+import type { CredentialAccessRule, ClaimLabel, IssuerAccessRule, Service } from '../db/types';
 import type { Deps } from '../deps';
 import {
   cronHealthFrom,
@@ -28,7 +28,8 @@ import {
   recordedKcvStatement,
 } from '../health';
 import { getProfile } from '../identity/profiles';
-import { validateGrant } from '../policy/validate';
+import { conditionsWithin } from '../policy/boundaries';
+import { validateIssuerAccessRule } from '../policy/validate';
 import { EXPIRY_WARNING_MS } from '../telemetry/dashboard';
 import { hourStart } from '../telemetry/rollup';
 import { accessSummary } from './access-summary';
@@ -45,9 +46,9 @@ export interface AccessFlag {
 }
 
 export interface AccessEdge {
-  grant: Grant;
+  grant: IssuerAccessRule;
   /** Null only if the row was deleted between reads. */
-  consumer: CallerProvider | null;
+  consumer: CredentialAccessRule | null;
   token: Service | null;
   /** disabled, expired, inactive, expiring or active, in that precedence. */
   status: StatusKey;
@@ -67,14 +68,14 @@ export interface ConnectionsFilter {
 }
 
 export interface Connections {
-  /** Every consumer and token, also those without accesses (the matrix axes). */
-  consumers: CallerProvider[];
+  /** Every credential access rule and credential, also those without accesses (the matrix axes). */
+  consumers: CredentialAccessRule[];
   tokens: Service[];
   /** The accesses that match the filter, in evaluation order (created_at, id). */
   accesses: AccessEdge[];
   /** Allowed requests per grant id in the last 30 days. */
-  usage: Map<string, GrantUsage>;
-  /** Claim labels of the filtered consumer, or of every consumer. */
+  usage: Map<string, IssuerAccessRuleUsage>;
+  /** Claim labels of the filtered consumer, or of every credential access rule. */
   labels: ClaimLabel[];
   /** Ids of tokens whose stored credential the keyring cannot open (credential_unreadable). */
   unreadableTokenIds: Set<string>;
@@ -89,12 +90,14 @@ export async function loadConnections(
 ): Promise<Connections> {
   const now = deps.now();
   const db = deps.env.DB;
-  const [consumers, tokens, grants, labels, settings, [cronRows, kcvRows], keyring] =
+  const [consumers, tokens, issuer_access_rules, labels, settings, [cronRows, kcvRows], keyring] =
     await Promise.all([
-      listCallerProviders(db),
+      listCredentialAccessRules(db),
       listServices(db),
-      listGrants(db, {
-        ...(filter.consumerId === undefined ? {} : { caller_provider_id: filter.consumerId }),
+      listIssuerAccessRules(db, {
+        ...(filter.consumerId === undefined
+          ? {}
+          : { credential_access_rule_id: filter.consumerId }),
         ...(filter.tokenId === undefined ? {} : { service_id: filter.tokenId }),
       }),
       listClaimLabels(db, filter.consumerId),
@@ -117,13 +120,13 @@ export async function loadConnections(
   const tokenById = new Map(tokens.map((token) => [token.id, token]));
   const labelsByConsumer = new Map<string, ClaimLabel[]>();
   for (const label of labels) {
-    const list = labelsByConsumer.get(label.caller_provider_id) ?? [];
+    const list = labelsByConsumer.get(label.credential_access_rule_id) ?? [];
     list.push(label);
-    labelsByConsumer.set(label.caller_provider_id, list);
+    labelsByConsumer.set(label.credential_access_rule_id, list);
   }
 
-  const accesses = grants.map((grant): AccessEdge => {
-    const consumer = consumerById.get(grant.caller_provider_id) ?? null;
+  const accesses = issuer_access_rules.map((grant): AccessEdge => {
+    const consumer = consumerById.get(grant.credential_access_rule_id) ?? null;
     const token = tokenById.get(grant.service_id) ?? null;
     const lastUsedHour = usage.get(grant.id)?.last_hour ?? null;
     const { status, detail } = accessStatus(grant, consumer, token, unreadableTokenIds, now);
@@ -156,7 +159,7 @@ export async function loadConnections(
       status,
       ...(detail === undefined ? {} : { statusDetail: detail }),
       flags,
-      ...accessSummary(grant, labelsByConsumer.get(grant.caller_provider_id) ?? []),
+      ...accessSummary(grant, labelsByConsumer.get(grant.credential_access_rule_id) ?? []),
       lastUsedHour,
     };
   });
@@ -175,8 +178,12 @@ export async function loadConnections(
 
 /** The A9 status of one access. Credential expiry is a flag, not a state (D24). */
 export function accessStatus(
-  grant: Pick<Grant, 'enabled' | 'expires_at'>,
-  consumer: Pick<CallerProvider, 'enabled'> | null,
+  grant: Pick<IssuerAccessRule, 'enabled' | 'expires_at'> &
+    Partial<Pick<IssuerAccessRule, 'conditions'>>,
+  consumer:
+    | (Pick<CredentialAccessRule, 'enabled'> &
+        Partial<Pick<CredentialAccessRule, 'conditions' | 'credential_id'>>)
+    | null,
   token: Pick<Service, 'id' | 'enabled' | 'credential_sealed'> | null,
   unreadableTokenIds: ReadonlySet<string>,
   now: number,
@@ -185,6 +192,16 @@ export function accessStatus(
   if (grant.expires_at !== null && grant.expires_at <= now) return { status: 'expired' };
   const inactive = inactiveReason(consumer, token, unreadableTokenIds);
   if (inactive !== null) return { status: 'inactive', detail: inactive };
+  if (
+    consumer &&
+    token &&
+    ((consumer.credential_id !== undefined && consumer.credential_id !== token.id) ||
+      (grant.conditions &&
+        consumer.conditions &&
+        !conditionsWithin(grant.conditions, consumer.conditions)))
+  ) {
+    return { status: 'inactive', detail: 'outside credential access limits' };
+  }
   if (grant.expires_at !== null && grant.expires_at - now <= EXPIRY_WARNING_MS) {
     return { status: 'expiring', detail: String(Math.ceil((grant.expires_at - now) / DAY_MS)) };
   }
@@ -192,12 +209,12 @@ export function accessStatus(
 }
 
 function inactiveReason(
-  consumer: Pick<CallerProvider, 'enabled'> | null,
+  consumer: Pick<CredentialAccessRule, 'enabled'> | null,
   token: Pick<Service, 'id' | 'enabled' | 'credential_sealed'> | null,
   unreadableTokenIds: ReadonlySet<string>,
 ): InactiveReason | null {
-  if (token === null || !token.enabled) return 'token disabled';
-  if (consumer === null || !consumer.enabled) return 'consumer disabled';
+  if (token === null || !token.enabled) return 'credential disabled';
+  if (consumer === null || !consumer.enabled) return 'credential access rule disabled';
   if (token.credential_sealed === null) return 'token has no credential';
   if (unreadableTokenIds.has(token.id)) return 'credential unreadable';
   return null;
@@ -219,10 +236,14 @@ export function credentialUnreadable(
 }
 
 /** Stored conditions that save with warnings were saved with those risks acknowledged. */
-function hasWarnings(grant: Grant, consumer: CallerProvider, token: Service | null): boolean {
+function hasWarnings(
+  grant: IssuerAccessRule,
+  consumer: CredentialAccessRule,
+  token: Service | null,
+): boolean {
   const profile = getProfile(consumer.profile);
   if (!profile) return false;
-  const result = validateGrant(
+  const result = validateIssuerAccessRule(
     { conditions: grant.conditions, rules: grant.rules },
     profile,
     consumer,
@@ -235,7 +256,7 @@ async function loadUsage(
   deps: Pick<Deps, 'env'>,
   now: number,
   cronLastSuccessAt: number | null,
-): Promise<{ usage: Map<string, GrantUsage>; available: boolean }> {
+): Promise<{ usage: Map<string, IssuerAccessRuleUsage>; available: boolean }> {
   const telemetry = deps.env.TELEMETRY_DB;
   // Same split as the dashboard: until the cron has rolled up the previous hour, it is live too.
   const currentHour = hourStart(now);
@@ -249,7 +270,7 @@ async function loadUsage(
       aggregateRequestLogStatement(telemetry, liveFrom, currentHour + HOUR_MS),
     ]);
     return {
-      usage: mergeGrantUsage(
+      usage: mergeIssuerAccessRuleUsage(
         rowsOf<Record<string, unknown>>(stored),
         rowsOf<Record<string, unknown>>(live).map(rollupFromRow),
       ),

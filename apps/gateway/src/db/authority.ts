@@ -42,9 +42,9 @@ const ACTOR_CHECK_SQL = `WITH
                 FROM actor_teams a JOIN teams t ON t.id = a.team_id),
   actor_tokens AS (SELECT x.service_id, max(x.level) AS level, max(x.reveal) AS reveal
                    FROM actor_teams a JOIN team_tokens x ON x.team_id = a.team_id GROUP BY x.service_id),
-  actor_consumers AS (SELECT x.caller_provider_id, max(x.level) AS level
+  actor_consumers AS (SELECT x.credential_access_rule_id, max(x.level) AS level
                       FROM actor_teams a JOIN team_consumers x ON x.team_id = a.team_id
-                      GROUP BY x.caller_provider_id),
+                      GROUP BY x.credential_access_rule_id),
   -- Teams the actor does NOT dominate. The actor dominates team T when T exists and is not listed
   -- here: the actor holds every global permission of T, an all-scope at least T's for each kind
   -- (and all-scope reveal when T has it), and every explicit row of T (level and reveal). A team
@@ -63,7 +63,7 @@ const ACTOR_CHECK_SQL = `WITH
        OR (x.reveal = 1 AND aa.reveal = 0 AND coalesce(y.reveal, 0) = 0)
     UNION
     SELECT x.team_id FROM team_consumers x JOIN actor_all aa
-      LEFT JOIN actor_consumers y ON y.caller_provider_id = x.caller_provider_id
+      LEFT JOIN actor_consumers y ON y.credential_access_rule_id = x.credential_access_rule_id
     WHERE max(aa.consumers, coalesce(y.level, 0)) < x.level
     UNION
     SELECT 'tea_owner' WHERE NOT EXISTS (SELECT 1 FROM actor_teams WHERE team_id = 'tea_owner')),
@@ -104,7 +104,7 @@ const ACTOR_CHECK_SQL = `WITH
       WHEN 'token_reveal' THEN (SELECT reveal FROM actor_all) = 1
                             OR EXISTS (SELECT 1 FROM actor_tokens WHERE service_id = id AND reveal = 1)
       WHEN 'consumer' THEN max((SELECT consumers FROM actor_all),
-                               coalesce((SELECT level FROM actor_consumers WHERE caller_provider_id = id), 0)) >= l
+                               coalesce((SELECT level FROM actor_consumers WHERE credential_access_rule_id = id), 0)) >= l
       WHEN 'token_all' THEN (SELECT tokens FROM actor_all) >= l
       WHEN 'token_all_reveal' THEN (SELECT reveal FROM actor_all) = 1
       WHEN 'consumer_all' THEN (SELECT consumers FROM actor_all) >= l

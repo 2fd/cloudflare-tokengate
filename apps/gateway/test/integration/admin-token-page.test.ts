@@ -34,7 +34,7 @@ async function sessionFor(role: Role, email = `${role}@example.com`): Promise<Ad
 }
 
 async function createOpenAi(session: AdminSession): Promise<string> {
-  const res = await adminPost(app, session, '/admin/tokens', {
+  const res = await adminPost(app, session, '/admin/credentials', {
     template: 'openai',
     credential: SECRET,
   });
@@ -46,9 +46,9 @@ async function createOpenAi(session: AdminSession): Promise<string> {
 async function insertConsumer(id: string, name: string): Promise<void> {
   const now = Date.now();
   await env.DB.prepare(
-    `INSERT INTO caller_providers (id, name, profile, issuer, jwks_uri, audience, allowed_algs,
+    `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
        max_token_age_seconds, tenant_pin, anchor_claims, enabled, created_at, updated_at)
-     VALUES (?, ?, 'generic', ?, ?, 'tokengate:0123456789ABCDEF',
+     VALUES (?, (SELECT id FROM credentials ORDER BY id LIMIT 1), ?, 'generic', ?, ?, 'tokengate:0123456789ABCDEF',
        '["RS256"]', 600, '[]', '[]', 1, ?, ?)`,
   )
     .bind(id, name, `https://${id}.example.com`, `https://${id}.example.com/jwks`, now, now)
@@ -64,7 +64,7 @@ async function insertAccess(
 ): Promise<void> {
   const now = Date.now();
   await env.DB.prepare(
-    `INSERT INTO grants (id, name, description, caller_provider_id, service_id, conditions, rules,
+    `INSERT INTO issuer_access_rules (id, name, description, credential_access_rule_id, service_id, conditions, rules,
        enabled, expires_at, created_by, created_at, updated_at)
      VALUES (?, ?, '', ?, ?, ?, '[{"methods":["POST"],"path":"/responses"}]', 1, ?, NULL, ?, ?)`,
   )
@@ -104,7 +104,7 @@ describe('who can use a token', () => {
     await insertAccess('grt_B', 'cpr_1', id, 'acme/b');
     await insertAccess('grt_C', 'cpr_2', id, 'acme/c');
     await insertAccess('grt_D', 'cpr_3', id, 'acme/d');
-    const html = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
+    const html = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
     const map = /<ul class="wgroups"[\s\S]*?<\/ul>\s*<div class="whub"/.exec(html)?.[0] ?? '';
     // Groups by requests, then name: Alpha, Beta, Delta drawn; Gamma goes to the matrix node.
     expect(map.match(/<li class="wg">/g)).toHaveLength(3);
@@ -112,34 +112,36 @@ describe('who can use a token', () => {
     expect(map).not.toContain('Gamma CI');
     expect(map.match(/<li class="wrow(?: warn)?">/g)).toHaveLength(5);
     expect(map).toContain(
-      `href="/admin/access?token=${id}&amp;consumer=cpr_0">+ 2 more accesses<span class="vh"> of Alpha CI to OpenAI</span></a>`,
+      `href="/admin/issuer-access-rules?token=${id}&amp;consumer=cpr_0">+ 2 more accesses<span class="vh"> of Alpha CI to OpenAI</span></a>`,
     );
     expect(map).toContain('<span class="meta">1 expiring</span>');
     expect(map).toContain(
-      `<a class="node group" href="/admin/access?token=${id}&amp;view=matrix">`,
+      `<a class="node group" href="/admin/issuer-access-rules?token=${id}&amp;view=matrix">`,
     );
-    expect(map).toContain('+ 1 more consumer · 1 access');
-    expect(html).toContain('<b>4 consumers, 8 accesses.</b>');
+    expect(map).toContain('+ 1 more credential access rule · 1 access');
+    expect(html).toContain('<b>4 credential access rules, 8 accesses.</b>');
     expect(html).toContain(
-      `<a href="/admin/access?token=${id}&amp;status=expiring">1 expiring</a>`,
+      `<a href="/admin/issuer-access-rules?token=${id}&amp;status=expiring">1 expiring</a>`,
     );
     expect(html).toContain('Who can use OpenAI<span class="count">8</span>');
   });
 
-  it('an access manager gets "Give another consumer access"; nobody else does', async () => {
+  it('an access manager gets "Give another issuer access rules"; nobody else does', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
     await insertConsumer('cpr_0', 'Alpha CI');
     await insertAccess('grt_A', 'cpr_0', id, 'acme/a');
-    const html = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
+    const html = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
     expect(html).toMatch(
-      /<a class="btn sm ghost" href="\/admin\/access\/new\?token=[^"]+">[\s\S]*?Give another consumer access/,
+      /<a class="btn sm ghost" href="\/admin\/issuer-access-rules\/new\?token=[^"]+">[\s\S]*?Give another issuer access rules/,
     );
     const viewer = await (
-      await adminGet(app, await sessionFor('viewer'), `/admin/tokens/${id}`)
+      await adminGet(app, await sessionFor('viewer'), `/admin/credentials/${id}`)
     ).text();
-    expect(viewer).not.toContain('Give another consumer access');
-    expect(viewer).toContain('Consumer access is granted by access managers. Send them this link:');
+    expect(viewer).not.toContain('Give another issuer access rules');
+    expect(viewer).toContain(
+      'Issuer access rules is granted by access managers. Send them this link:',
+    );
   });
 });
 
@@ -148,33 +150,33 @@ describe('problems and history', () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
     const at = Date.now() + 3 * DAY + 3_600_000;
-    await env.DB.prepare('UPDATE services SET credential_expires_at = ? WHERE id = ?')
+    await env.DB.prepare('UPDATE credentials SET credential_expires_at = ? WHERE id = ?')
       .bind(at, id)
       .run();
-    const page = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
+    const page = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
     expect(page).toMatch(
       /<div class="callout warn">[\s\S]*?The secret of OpenAI expires on \d+ \w+ \d{4} \(in 4 days\)\./,
     );
-    expect(page).toContain(`href="/admin/tokens/${id}#secret">Replace the secret</a>`);
+    expect(page).toContain(`href="/admin/credentials/${id}#secret">Replace the secret</a>`);
     expect(page).toContain('Expires in 4 days');
-    const list = await (await adminGet(app, admin, '/admin/tokens')).text();
+    const list = await (await adminGet(app, admin, '/admin/credentials')).text();
     expect(list).toContain('The secret of OpenAI expires on');
     expect(list).toContain('Replace secret<span class="vh"> of OpenAI</span>');
     expect(list).toMatch(
       /<span class="meta t-warn"><span aria-hidden="true">⌛ <\/span>Expires in 4 days<\/span>/,
     );
     const viewer = await (
-      await adminGet(app, await sessionFor('viewer'), `/admin/tokens/${id}`)
+      await adminGet(app, await sessionFor('viewer'), `/admin/credentials/${id}`)
     ).text();
     expect(viewer).not.toContain('>Replace the secret</a>');
-    expect(viewer).toContain('Only token managers can replace the secret.');
+    expect(viewer).toContain('Only credential managers can replace the secret.');
   });
 
   it('a disabled token says so first, with Enable for writers', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
-    await adminPost(app, admin, `/admin/tokens/${id}/toggle`, { enabled: '0' });
-    const page = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
+    await adminPost(app, admin, `/admin/credentials/${id}/toggle`, { enabled: '0' });
+    const page = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
     expect(page).toContain('OpenAI is disabled: requests through it are refused.');
     const enable =
       /<form class="action-form" method="post" action="[^"]+\/toggle">(?:(?!<\/form>)[\s\S])*?>Enable<span class="vh"> OpenAI<\/span>/.exec(
@@ -182,19 +184,19 @@ describe('problems and history', () => {
       )?.[0] ?? '';
     expect(enable).toContain('name="_return" value="detail"');
     expect(enable).toContain('name="enabled" value="1"');
-    expect(page).toContain('<h3>Enable token</h3>');
+    expect(page).toContain('<h3>Enable credential</h3>');
     expect(page).toMatch(/<h1>OpenAI <span class="badge off">/);
   });
 
   it('the rail shows the record, who created it and the newest changes', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
-    await adminPost(app, admin, `/admin/tokens/${id}`, { name: 'OpenAI prod' });
-    const page = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
+    await adminPost(app, admin, `/admin/credentials/${id}`, { name: 'OpenAI prod' });
+    const page = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
     const rail =
       /<aside class="rail" aria-label="OpenAI prod details">[\s\S]*?<\/aside>/.exec(page)?.[0] ??
       '';
-    expect(rail).toContain('<dt>Token ID</dt><dd class="mono copyable">' + id);
+    expect(rail).toContain('<dt>Credential ID</dt><dd class="mono copyable">' + id);
     expect(rail).toContain('<small>by admin@example.com</small>');
     expect(rail).toMatch(
       /<ol class="feed compact">[\s\S]*?<b>admin@example\.com<\/b> created service openai with a credential/,
@@ -211,13 +213,13 @@ describe('delete dialog', () => {
     const id = await createOpenAi(admin);
     await insertConsumer('cpr_0', 'Alpha CI');
     await insertAccess('grt_A', 'cpr_0', id, 'acme/a');
-    const page = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
+    const page = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
     const dialog = /<dialog class="dlg" id="dlg-delete"[\s\S]*?<\/dialog>/.exec(page)?.[0] ?? '';
-    expect(dialog).toContain('Delete OpenAI and its 1 consumer access?');
+    expect(dialog).toContain('Delete OpenAI and its 1 issuer access rules?');
     expect(dialog).toContain('<button class="btn sm secondary" type="submit" form="dlg-disable">');
     expect(dialog).toContain('name="confirm_slug"');
     expect(dialog).toContain('pattern="openai"');
-    expect(dialog).toContain('href="/admin/access/grt_A"');
+    expect(dialog).toContain('href="/admin/issuer-access-rules/grt_A"');
     const detached =
       /<form method="post" action="[^"]+\/toggle" id="dlg-disable" hidden="">[\s\S]*?<\/form>/.exec(
         page,
@@ -225,8 +227,8 @@ describe('delete dialog', () => {
     expect(detached).toContain(`name="_csrf" value="${admin.csrfToken}"`);
     expect(detached).toContain('name="enabled" value="0"');
     // A disabled token has nothing to disable instead.
-    await adminPost(app, admin, `/admin/tokens/${id}/toggle`, { enabled: '0' });
-    const disabled = await (await adminGet(app, admin, `/admin/tokens/${id}`)).text();
+    await adminPost(app, admin, `/admin/credentials/${id}/toggle`, { enabled: '0' });
+    const disabled = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
     expect(disabled).not.toContain('id="dlg-disable"');
     expect(disabled).toContain('commandfor="dlg-delete"');
   });
@@ -235,7 +237,7 @@ describe('delete dialog', () => {
 describe('settings pages', () => {
   it('Allowed hosts re-opens its dialog after a refused save', async () => {
     const owner = await sessionFor('owner');
-    const res = await adminPost(app, owner, '/admin/tokens/hosts', { mode: 'list' });
+    const res = await adminPost(app, owner, '/admin/credentials/hosts', { mode: 'list' });
     expect(res.status).toBe(400);
     const html = await res.text();
     expect(html).toMatch(/<dialog class="dlg wide lform" id="dlg-hosts"[^>]* open="">/);
@@ -244,7 +246,7 @@ describe('settings pages', () => {
 
   it('Encryption keys lists the keys in a tray with their state as a word', async () => {
     const html = await (
-      await adminGet(app, await sessionFor('viewer'), '/admin/tokens/keys')
+      await adminGet(app, await sessionFor('viewer'), '/admin/credentials/keys')
     ).text();
     expect(html).toContain('<h1>Encryption keys</h1>');
     expect(html).toMatch(/<section class="tray" id="keys" aria-labelledby="keys-h">/);

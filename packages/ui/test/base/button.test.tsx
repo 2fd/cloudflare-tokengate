@@ -66,12 +66,12 @@ describe('Button', () => {
   it('is a link with href', () => {
     expect(
       render(
-        <Button href="/admin/tokens/new" variant="primary" id="b" describedBy="h">
-          Add token
+        <Button href="/admin/credentials/new" variant="primary" id="b" describedBy="h">
+          Add credential
         </Button>,
       ),
     ).toBe(
-      '<a class="btn primary" id="b" href="/admin/tokens/new" aria-describedby="h">Add token</a>',
+      '<a class="btn primary" id="b" href="/admin/credentials/new" aria-describedby="h">Add credential</a>',
     );
   });
 

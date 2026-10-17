@@ -1,5 +1,5 @@
 // Authorization (docs/policies.md): the first grant whose conditions, event guard and rules all match wins,
-// otherwise deny (I-AUTHZ-1). Skips unanchored grants (I-AUTHZ-2); untrusted events need an exact
+// otherwise deny (I-AUTHZ-1). Skips unanchored issuer_access_rules (I-AUTHZ-2); untrusted events need an exact
 // opt-in (I-AUTHZ-3); conditions fail closed (I-AUTHZ-4); trace details hide claims (I-LOG-1).
 import type { Claims, IssuerProfile } from '../identity/types';
 import { claimText, evaluateCondition, satisfiesAnchorRule } from './conditions';
@@ -10,7 +10,7 @@ export interface EvaluationInput {
   /** Verified token claims (raw, never the display form). */
   claims: Claims;
   profile: IssuerProfile;
-  /** The token's caller provider; generic anchor rules come from its anchor_claims. */
+  /** The token's credential access rule; generic anchor rules come from its anchor_claims. */
   provider: { anchor_claims: string[] };
   /** Request method as received (upper case). */
   method: string;
@@ -58,27 +58,26 @@ function pathMatches(pattern: string, path: string): boolean {
 }
 
 /**
- * Evaluates grants in the given order (created_at, id); the first match wins. Order affects
- * attribution only, because grants are allow-only.
+ * Evaluates issuer_access_rules in the given order (created_at, id); the first match wins. Order affects
+ * attribution only, because issuer_access_rules are allow-only.
  * Deny code is `event_not_trusted` when some grant would have matched except for the event
  * guard, otherwise `no_matching_grant`.
  */
-export function evaluateGrants<G extends { id: string; conditions: Condition[]; rules: Rule[] }>(
-  grants: G[],
-  input: EvaluationInput,
-): Decision<G> {
+export function evaluateIssuerAccessRules<
+  G extends { id: string; conditions: Condition[]; rules: Rule[] },
+>(issuer_access_rules: G[], input: EvaluationInput): Decision<G> {
   const trace: TraceEntry[] = [];
   let blockedOnlyByEventGuard = false;
   const anchorRules = input.profile.anchorRules(input.provider);
 
-  for (const grant of grants) {
+  for (const grant of issuer_access_rules) {
     // Save-time validation enforces anchors, but a later provider edit (generic anchor_claims) or
     // a row written around validation can leave a grant unanchored; it must not authorize.
     if (!satisfiesAnchorRule(grant.conditions, anchorRules)) {
       trace.push({
         grant_id: grant.id,
         result: 'invalid_grant',
-        detail: "grant does not satisfy the caller provider's anchor rules (I-AUTHZ-2)",
+        detail: "grant does not satisfy the credential access rule's anchor rules (I-AUTHZ-2)",
       });
       continue;
     }

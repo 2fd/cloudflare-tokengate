@@ -54,7 +54,7 @@ A key check value (KCV) identifies a key without revealing it: the first 8 bytes
 HMAC-SHA256(bound key, `tokengate/v1/kek-check`), in hex. The bound key depends on the login
 variables, so the same secret key has a different KCV under different `AUTH_ACCESS_*` values.
 
-- Service tokens › Encryption keys (`/admin/tokens/keys`) lists each key id in the table "Keys in
+- Credentials › Encryption keys (`/admin/credentials/keys`) lists each key id in the table "Keys in
   the keyring" with its "Key check value", its status (`active`, `loaded`, `missing` or
   `changed`), and how many "Secrets sealed with it" (a link to those tokens). Above it, a status
   sentence such as "Active key k2. 2 keys loaded. Every stored secret opens."; below it, the
@@ -71,7 +71,7 @@ variables, so the same secret key has a different KCV under different `AUTH_ACCE
 
 ## Before you start
 
-- You are an owner. Only owners can re-encrypt (the "Re-encrypt secrets" section of Service tokens › Encryption keys).
+- You are an owner. Only owners can re-encrypt (the "Re-encrypt secrets" section of Credentials › Encryption keys).
 - You can run `pnpm wrangler` against the account (`pnpm wrangler login`), from a clone of the
   repository with `pnpm install` done, on Node.js 22.18 or later (`pnpm keyring` needs type stripping).
 - You have `jq`.
@@ -92,7 +92,7 @@ Keyring. A request that is already running finishes with the old one.
 
 Use this the first time. The current `TOKENGATE_KEK` becomes key id `k1`; the new key becomes `k2`.
 
-1. Open Service tokens › Encryption keys and note the check value of `k1`.
+1. Open Credentials › Encryption keys and note the check value of `k1`.
 2. Check that your vault copy is the deployed key. The printed `kid k1 kcv` must equal the value from
    step 1:
 
@@ -124,7 +124,7 @@ Use this the first time. The current `TOKENGATE_KEK` becomes key id `k1`; the ne
      | pnpm wrangler secret bulk
    ```
 
-6. Reload Service tokens › Encryption keys. Check that `k1` and `k2` are listed with the check values from
+6. Reload Credentials › Encryption keys. Check that `k1` and `k2` are listed with the check values from
    step 4, and that `k2` is marked "active".
 7. Check `/readyz`: `checks.keyring` is `true`.
 8. Under "Re-encrypt secrets", select **Re-encrypt N secrets…** and confirm in the dialog. The
@@ -138,13 +138,13 @@ Use this the first time. The current `TOKENGATE_KEK` becomes key id `k1`; the ne
 Re-encryption opens each credential and seals it again under the active key, with the same binding
 ([I-CRED-2](../threat-model.md#i-cred-2)). The plaintext stays in memory. It writes one
 `keyring.rewrap` audit event ([I-AUDIT-1](../threat-model.md#i-audit-1)). If any credential cannot be
-opened, nothing is written and the page lists the affected services.
+opened, nothing is written and the page lists the affected credentials.
 
 ## Rotate a keyring
 
 The same steps, with `TOKENGATE_KEYRING` only. Example: from active `k2` to a new `k3`.
 
-1. Check the vault copy of the current key against Service tokens › Encryption keys:
+1. Check the vault copy of the current key against Credentials › Encryption keys:
 
    ```sh
    vault-read tokengate-kek-k2 | pnpm -s keyring check
@@ -168,7 +168,7 @@ Remove a key only when no credential uses it. A Credential sealed with a key id 
 Keyring cannot be opened: its service answers `503 credential_unavailable` (reason
 `keyring_missing_key`), and the dashboard shows an error banner.
 
-1. Check that the old key id shows 0 "Secrets sealed with it" in Service tokens › Encryption keys.
+1. Check that the old key id shows 0 "Secrets sealed with it" in Credentials › Encryption keys.
 2. Set the keyring without the old key:
 
    ```sh
@@ -185,7 +185,7 @@ Keyring cannot be opened: its service answers `503 credential_unavailable` (reas
 ## Recover from a replaced key
 
 Symptom: an error banner says "Key id(s) ... now hold a different key than the one stored
-credentials were sealed with", `/readyz` reports `keyring: false`, and affected services answer
+credentials were sealed with", `/readyz` reports `keyring: false`, and affected credentials answer
 `503 credential_unavailable` (reason `credential_binding_mismatch`). Typical cause: someone set a new
 value with `wrangler secret put TOKENGATE_KEK`, so key id `k1` now names different key material.
 
@@ -214,7 +214,7 @@ key id. Choose one recovery:
 
 1. Enter every secret the old key sealed again, on each token page under **Change destination**
    (the Problems list of the Encryption keys page links each affected token).
-2. In Service tokens › Encryption keys, select **Re-encrypt…** and confirm: the dialog states that
+2. In Credentials › Encryption keys, select **Re-encrypt…** and confirm: the dialog states that
    confirming accepts the new key value. It opens every secret under the changed key id. If all of
    them open, it records the new check value and the alert clears; the notice says "New key
    confirmed: every secret opens with it." Otherwise nothing is written, and the page lists the
@@ -256,12 +256,12 @@ export.
 
 3. Get a new credential from each upstream and enter it on each service page. Enter the base URL,
    injection and destination host too, as in [Recover from a replaced key](#recover-from-a-replaced-key). Until then, the
-   dashboard lists the missing key id and those services answer `503 credential_unavailable`.
+   dashboard lists the missing key id and those credentials answer `503 credential_unavailable`.
 4. Check that the error banner is gone and `/readyz` reports `keyring: true`.
 
 ## If a key leaked
 
-A leaked KEK alone does not expose credentials. Combined with a copy of the `services` table (a D1
+A leaked KEK alone does not expose credentials. Combined with a copy of the `credentials` table (a D1
 export, a Time Travel restore, D1 read access), it does.
 
 1. Rotate the key with the procedure above, including [removing the old key](#remove-the-old-key).

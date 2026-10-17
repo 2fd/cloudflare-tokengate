@@ -1,10 +1,10 @@
-// A7.7: a risky consumer access is saved only with the risk explicitly accepted, either by the
+// A7.7: a risky issuer access rules is saved only with the risk explicitly accepted, either by the
 // structured choice that causes it or by ticking a box bound to a digest of exactly the risks
 // shown. A tick or choice for one risk never covers another, and nothing is written on refusal.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { getGrant, listGrants } from '../../src/db/grants';
-import type { CallerProvider } from '../../src/db/types';
+import { getIssuerAccessRule, listIssuerAccessRules } from '../../src/db/issuer_access_rules';
+import type { CredentialAccessRule } from '../../src/db/types';
 import { adminGet, adminPost } from '../helpers/admin-auth';
 import {
   type ConsumersWorld,
@@ -19,18 +19,18 @@ import {
   OWNER_ID,
   REPOSITORY_ID,
   seedGithubProvider,
-  seedGrant,
+  seedIssuerAccessRule,
   seedService,
 } from '../unit/admin/ops/helpers';
 
 let world: ConsumersWorld;
-let provider: CallerProvider;
+let provider: CredentialAccessRule;
 let serviceId: string;
 
 beforeEach(async () => {
   world = await consumersWorld();
-  provider = await seedGithubProvider(world.app.deps);
   serviceId = await seedService(world.app.deps);
+  provider = await seedGithubProvider(world.app.deps);
 });
 
 const session = () => world.sessions.access_manager;
@@ -73,7 +73,7 @@ describe('I-AUTHZ-3: risky access needs explicit acceptance', () => {
     const res = await adminPost(
       world.app,
       session(),
-      '/admin/access',
+      '/admin/issuer-access-rules',
       fields({ ref_protection: 'unprotected' }),
     );
     expect(res.status).toBe(303);
@@ -87,7 +87,7 @@ describe('I-AUTHZ-3: risky access needs explicit acceptance', () => {
       const res = await adminPost(
         world.app,
         session(),
-        '/admin/access',
+        '/admin/issuer-access-rules',
         fields({ context, pr_base: 'main' }),
       );
       expect(res.status, context).toBe(303);
@@ -96,20 +96,20 @@ describe('I-AUTHZ-3: risky access needs explicit acceptance', () => {
   });
 
   it('rows with an uncovered warning need the digest and the box: 422 first, then one submit', async () => {
-    const first = await adminPost(world.app, session(), '/admin/access', rows());
+    const first = await adminPost(world.app, session(), '/admin/issuer-access-rules', rows());
     expect(first.status).toBe(422);
     const html = await first.text();
     expect(html).toContain('href="#ga-risk-ack"');
     expect(html).toMatch(/name="acknowledge_warnings"[^>]*required/);
     const digest = inputValue(html, 'warnings_digest');
     expect(digest).toMatch(/^[0-9a-f]{64}$/);
-    expect(await listGrants(env.DB)).toEqual([]);
-    const unticked = await adminPost(world.app, session(), '/admin/access', {
+    expect(await listIssuerAccessRules(env.DB)).toEqual([]);
+    const unticked = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       ...rows(),
       warnings_digest: digest ?? '',
     });
     expect(unticked.status).toBe(422);
-    const second = await adminPost(world.app, session(), '/admin/access', {
+    const second = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       ...rows(),
       warnings_digest: digest ?? '',
       acknowledge_warnings: '1',
@@ -120,12 +120,12 @@ describe('I-AUTHZ-3: risky access needs explicit acceptance', () => {
 
   it('rows that constrain no ref, environment or event carry the any-ref risk too', async () => {
     const anyRef = rows({ 'cond.2.claim': '', 'cond.2.match': '', 'cond.2.values': '' });
-    const first = await adminPost(world.app, session(), '/admin/access', anyRef);
+    const first = await adminPost(world.app, session(), '/admin/issuer-access-rules', anyRef);
     expect(first.status).toBe(422);
     const html = await first.text();
     expect(html).toContain('anyone with write access to the repository');
-    expect(await listGrants(env.DB)).toEqual([]);
-    const second = await adminPost(world.app, session(), '/admin/access', {
+    expect(await listIssuerAccessRules(env.DB)).toEqual([]);
+    const second = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       ...anyRef,
       warnings_digest: inputValue(html, 'warnings_digest') ?? '',
       acknowledge_warnings: '1',
@@ -134,55 +134,61 @@ describe('I-AUTHZ-3: risky access needs explicit acceptance', () => {
     expect((await lastAudit('grant.create'))?.accepted_risks).toEqual(['any_ref']);
     // The access page and the Risk accepted filter agree with the acceptance.
     const id = idFromLocation(locationOf(second));
-    const page = await (await adminGet(world.app, session(), `/admin/access/${id}`)).text();
+    const page = await (
+      await adminGet(world.app, session(), `/admin/issuer-access-rules/${id}`)
+    ).text();
     expect(page).toContain('anyone with write access to the repository');
     const risky = await (
-      await adminGet(world.app, session(), '/admin/access?view=list&status=risk')
+      await adminGet(world.app, session(), '/admin/issuer-access-rules?view=list&status=risk')
     ).text();
-    expect(risky).toContain(`/admin/access/${id}"`);
+    expect(risky).toContain(`/admin/issuer-access-rules/${id}"`);
   });
 
   it('a digest of other risks does not count', async () => {
-    const first = await adminPost(world.app, session(), '/admin/access', rows());
+    const first = await adminPost(world.app, session(), '/admin/issuer-access-rules', rows());
     const digest = inputValue(await first.text(), 'warnings_digest') ?? '';
-    const broader = await adminPost(world.app, session(), '/admin/access', {
+    const broader = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       ...rows({ 'cond.2.values': 'refs/heads/**' }),
       warnings_digest: digest,
       acknowledge_warnings: '1',
     });
     expect(broader.status).toBe(422);
     expect(await broader.text()).toContain('The risks changed');
-    expect(await listGrants(env.DB)).toEqual([]);
+    expect(await listIssuerAccessRules(env.DB)).toEqual([]);
   });
 
   it('a copy of a risk-accepted access asks for the acknowledgement on its first render', async () => {
     const created = await adminPost(
       world.app,
       session(),
-      '/admin/access',
+      '/admin/issuer-access-rules',
       fields({ ref_protection: 'unprotected' }),
     );
     const sourceId = idFromLocation(locationOf(created));
-    const page = await adminGet(world.app, session(), `/admin/access/new?copy=${sourceId}`);
+    const page = await adminGet(
+      world.app,
+      session(),
+      `/admin/issuer-access-rules/new?copy=${sourceId}`,
+    );
     const html = await page.text();
     expect(html).toContain('Copied the constraints of');
     expect(html).toMatch(/name="ref_protection" value="unprotected" checked/);
     expect(html).toMatch(/name="acknowledge_warnings"[^>]*required/);
     expect(html).not.toMatch(/name="acknowledge_warnings"[^>]*checked/);
     const digest = inputValue(html, 'warnings_digest') ?? '';
-    const without = await adminPost(world.app, session(), '/admin/access', {
+    const without = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       ...fields({ ref_protection: 'unprotected', repository: 'acme/web (5)' }),
       warnings_digest: digest,
     });
     expect(without.status).toBe(422);
-    expect(await listGrants(env.DB)).toHaveLength(1);
+    expect(await listIssuerAccessRules(env.DB)).toHaveLength(1);
   });
 
   it('a copy of an access whose repository has no stored name asks for the acknowledgement too', async () => {
     // Created by the ops (or before WP4): owner and repository conditions, no labels: any_ref.
-    const source = await seedGrant(world.app.deps, provider.id, serviceId);
+    const source = await seedIssuerAccessRule(world.app.deps, provider.id, serviceId);
     const html = await (
-      await adminGet(world.app, session(), `/admin/access/new?copy=${source.id}`)
+      await adminGet(world.app, session(), `/admin/issuer-access-rules/new?copy=${source.id}`)
     ).text();
     expect(html).toContain('<div class="riskacc always" id="ga-risk"');
     expect(html).toMatch(/name="acknowledge_warnings"[^>]*required/);
@@ -191,24 +197,29 @@ describe('I-AUTHZ-3: risky access needs explicit acceptance', () => {
     const fields = await formFields(html, 'access-form');
     const repository = `acme/api (${REPOSITORY_ID})`;
     // Typing the name alone does not accept the prefilled risky choice.
-    const unticked = await adminPost(world.app, session(), '/admin/access', {
+    const unticked = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       ...fields,
       repository,
     });
     expect(unticked.status).toBe(422);
     const { warnings_digest: _digest, ...withoutDigest } = fields;
-    const noDigest = await adminPost(world.app, session(), '/admin/access', {
+    const noDigest = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       ...withoutDigest,
       repository,
     });
     expect(noDigest.status).toBe(422);
     expect(await noDigest.text()).toMatch(/name="acknowledge_warnings"[^>]*required/);
     // A 422 for another input keeps the acknowledgement on the page.
-    const missing = await adminPost(world.app, session(), '/admin/access', withoutDigest);
+    const missing = await adminPost(
+      world.app,
+      session(),
+      '/admin/issuer-access-rules',
+      withoutDigest,
+    );
     expect(missing.status).toBe(422);
     expect(await missing.text()).toContain('<div class="riskacc always" id="ga-risk"');
-    expect(await listGrants(env.DB)).toHaveLength(1);
-    const ticked = await adminPost(world.app, session(), '/admin/access', {
+    expect(await listIssuerAccessRules(env.DB)).toHaveLength(1);
+    const ticked = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       ...fields,
       repository,
       acknowledge_warnings: '1',
@@ -219,10 +230,10 @@ describe('I-AUTHZ-3: risky access needs explicit acceptance', () => {
 
   it('a decoy choice in another branch covers nothing', async () => {
     const other = await seedService(world.app.deps, { slug: 'other', name: 'Other' });
-    // Two tokens: the token branches are prefixed. The chosen one is rows mode for the consumer
+    // Two tokens: the token branches are prefixed. The chosen one is rows mode for the credential access rule
     // (one consumer, so its fields are unprefixed); a decoy "unprotected" sits in an unrelated
     // prefix and must not be read.
-    const res = await adminPost(world.app, session(), '/admin/access', {
+    const res = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       ...rows(),
       token_id: serviceId,
       [`${serviceId}.ops`]: '1',
@@ -235,19 +246,19 @@ describe('I-AUTHZ-3: risky access needs explicit acceptance', () => {
       ref_protection: 'unprotected',
     });
     expect(res.status).toBe(422);
-    expect(await listGrants(env.DB)).toEqual([]);
+    expect(await listIssuerAccessRules(env.DB)).toEqual([]);
   });
 
   it('an edit that adds a risk asks again', async () => {
-    const created = await adminPost(world.app, session(), '/admin/access', fields());
+    const created = await adminPost(world.app, session(), '/admin/issuer-access-rules', fields());
     const id = idFromLocation(locationOf(created));
-    const res = await adminPost(world.app, session(), `/admin/access/${id}`, {
+    const res = await adminPost(world.app, session(), `/admin/issuer-access-rules/${id}`, {
       ...rows(),
       intent: 'save',
       expires: 'keep',
     });
     expect(res.status).toBe(422);
     expect(await res.text()).toMatch(/<details class="disc" id="edit" open/);
-    expect((await getGrant(env.DB, id))?.conditions).toHaveLength(6);
+    expect((await getIssuerAccessRule(env.DB, id))?.conditions).toHaveLength(6);
   });
 });

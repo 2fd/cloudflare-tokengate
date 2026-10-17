@@ -34,10 +34,10 @@ export const stepper: ComponentDoc = {
       layout: 'stack',
       render: () => (
         <Stepper>
-          <FormStep n={1} title="Consumer" id="sp-consumer">
+          <FormStep n={1} title="Credential access rule" id="sp-consumer">
             <RowPicker name="sp-consumer" options={consumers} value="gha-acme" />
             <a class="btn ghost sm" href="?new=consumer">
-              + Add a new consumer
+              + Add a new credential access rule
             </a>
           </FormStep>
           <FormStep
@@ -65,9 +65,9 @@ export const stepper: ComponentDoc = {
         </Stepper>
       ),
       code: `<Stepper>
-  <FormStep n={1} title="Consumer" id="consumer">
+  <FormStep n={1} title="Credential access rule" id="consumer">
     <RowPicker name="consumer" options={consumers} value="gha-acme" />
-    <a class="btn ghost sm" href="/admin/consumers/new">+ Add a new consumer</a>
+    <a class="btn ghost sm" href="/admin/credential-access-rules/new">+ Add a new credential access rule</a>
   </FormStep>
   <FormStep n={2} kind="group" id="jobs" title="Which jobs"
     description="Only repositories of the acme organization can match.">
@@ -127,7 +127,7 @@ export const stepper: ComponentDoc = {
               Saved as <b>Slack</b>: consumers call <span class="mono">/proxy/slack</span>
             </Inherit>
           </FormStep>
-          <FormStep n={2} title="Give a consumer access" state="current" id="sp-next">
+          <FormStep n={2} title="Add issuer access rule" state="current" id="sp-next">
             <RowPicker name="sp-next" options={consumers.slice(0, 2)} />
           </FormStep>
           <FormStep
@@ -144,7 +144,7 @@ export const stepper: ComponentDoc = {
   <FormStep n={1} kind="group" title="Token loaded" state="done" description="Slack · secret checked …">
     <Inherit>Saved as <b>Slack</b>: consumers call <span class="mono">/proxy/slack</span></Inherit>
   </FormStep>
-  <FormStep n={2} title="Give a consumer access" state="current" id="next">
+  <FormStep n={2} title="Add issuer access rule" state="current" id="next">
     <RowPicker name="next" options={consumers} />
   </FormStep>
   <FormStep n={3} kind="group" title="Add the step to the workflow" description="…">

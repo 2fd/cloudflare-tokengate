@@ -80,13 +80,13 @@ export const checkbox: ComponentDoc = {
           name="cb-uploads2"
           value="1"
           disabled
-          hint="This repository has no uploads.github.com token type."
+          hint="This repository has no uploads.github.com credential type."
         >
           Also create a token for uploads.github.com
         </Checkbox>
       ),
       code: `<Checkbox name="also_uploads" value="1" disabled
-  hint="This repository has no uploads.github.com token type.">
+  hint="This repository has no uploads.github.com credential type.">
   Also create a token for uploads.github.com
 </Checkbox>`,
     },

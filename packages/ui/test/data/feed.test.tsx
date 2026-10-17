@@ -84,9 +84,9 @@ describe('EmptyState', () => {
         <EmptyState
           icon="consumer"
           title="No consumer can use a token yet"
-          description="Give a consumer access."
+          description="Add issuer access rule."
           actions={
-            <a class="btn primary" href="/admin/access/new">
+            <a class="btn primary" href="/admin/issuer-access-rules/new">
               Give access
             </a>
           }
@@ -94,8 +94,8 @@ describe('EmptyState', () => {
       ),
     ).toBe(
       '<div class="empty"><span class="glyph" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect><path d="M10 6.5h4a3 3 0 0 1 3 3V14"></path></svg></span>' +
-        '<h3>No consumer can use a token yet</h3><p>Give a consumer access.</p>' +
-        '<div class="btn-row"><a class="btn primary" href="/admin/access/new">Give access</a></div></div>',
+        '<h3>No consumer can use a token yet</h3><p>Add issuer access rule.</p>' +
+        '<div class="btn-row"><a class="btn primary" href="/admin/issuer-access-rules/new">Give access</a></div></div>',
     );
   });
 

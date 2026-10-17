@@ -1,16 +1,16 @@
 # Calling the gateway from GitHub Actions
 
-This page shows workflow authors how to call the gateway from GitHub Actions, and shows admins how to set up the matching caller provider and grants.
+This page shows workflow authors how to call the gateway from GitHub Actions, and shows admins how to set up the matching credential access rule and issuer_access_rules.
 
 A job mints a GitHub OIDC token (the caller token) and sends it with each request to `/proxy/<service-slug>/<path>`.
-The gateway verifies the token, evaluates the grants, removes the caller token and adds the service credential.
+The gateway verifies the token, evaluates the issuer_access_rules, removes the caller token and adds the service credential.
 The job never sees the credential.
 
-![Sequence: the workflow job requests an OIDC token for the caller provider audience, sends it to the gateway in x-tokengate-token, the gateway verifies it, checks the tenant pin and grants, forwards the same request with the service credential, and returns the upstream response without the credential.](../diagrams/request-flow.svg)
+![Sequence: the workflow job requests an OIDC token for the credential access rule audience, sends it to the gateway in x-tokengate-token, the gateway verifies it, checks the tenant pin and issuer_access_rules, forwards the same request with the service credential, and returns the upstream response without the credential.](../diagrams/request-flow.svg)
 
 <sub>Diagram source: [`../diagrams/src/`](../diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
-## 1. Add the service consumer (admin)
+## 1. Add the credential access rule (admin)
 
 1. Get each organization or user account that owns the calling repositories, in the format the form takes, `name (ID)`:
 
@@ -20,14 +20,14 @@ The job never sees the credential.
    ```
 
    Each command prints one line, such as `acme (1234567)`.
-2. In the admin UI, open **Service consumers** and open **Add a consumer**.
+2. In the admin UI, open **Credential access rules** and open **Add a credential access rule**.
 3. Keep **GitHub Actions** and paste the lines into **Organizations**, separated by commas.
 4. Only for GitHub Enterprise Cloud with its own OIDC issuer: open **GitHub Enterprise Cloud with its own issuer** and enter the enterprise slug (the issuer becomes `https://token.actions.githubusercontent.com/<slug>`) and, optionally, the numeric **Enterprise ID**.
-5. Select **Add consumer**.
+5. Select **Add credential access rule**.
 
-The gateway derives the rest: the name ("GitHub Actions (acme)"), the issuer, the signing keys (OIDC discovery), the algorithm (`RS256`), the maximum token age (600 seconds) and a random audience (`tokengate:` followed by 26 characters). When a GitHub Actions consumer for the same issuer exists, **Add consumer** adds the organizations to it instead. Organizations can be added and removed later on the consumer page. The issuer, audience, algorithms, maximum token age and enterprise ID are under **Advanced trust settings**.
+The gateway derives the rest: the name ("GitHub Actions (acme)"), the issuer, the signing keys (OIDC discovery), the algorithm (`RS256`), the maximum token age (600 seconds) and a random audience (`tokengate:` followed by 26 characters). When a GitHub Actions consumer for the same issuer exists, **Add credential access rule** adds the organizations to it instead. Organizations can be added and removed later on the credential access rule page. The issuer, audience, algorithms, maximum token age and enterprise ID are under **Advanced trust settings**.
 
-Rules the gateway enforces (`apps/gateway/src/policy/validate.ts`, `apps/gateway/src/admin/ops/caller-providers.ts`):
+Rules the gateway enforces (`apps/gateway/src/policy/validate.ts`, `apps/gateway/src/admin/ops/credential-access-rules.ts`):
 
 - At least one organization is required: GitHub signs tokens for every GitHub user on `https://token.actions.githubusercontent.com` ([I-TEN-1](../threat-model.md#i-ten-1)), and the access form derives each repository's organization from this list.
 - The tenant pin may only use `repository_owner_id` and `enterprise_id`, as numeric IDs that a rename cannot reuse.
@@ -39,7 +39,7 @@ Rules the gateway enforces (`apps/gateway/src/policy/validate.ts`, `apps/gateway
 
 Store the gateway URL and the audience as organization variables, for example `TOKENGATE_URL` and `TOKENGATE_AUDIENCE`.
 Reusable workflows that an access pins must not read the URL from variables: the caller repository supplies them (see [Central reusable workflow](#central-reusable-workflow-for-the-organization)).
-The consumer page shows a ready-to-copy snippet under **Connect your jobs**, with the slugs of the tokens it can use.
+The credential access rule page shows a ready-to-copy snippet under **Connect your jobs**, with the slugs of the tokens it can use.
 
 ## 2. Mint the token with the composite action
 
@@ -118,7 +118,7 @@ The gateway reads the caller token from these headers, in this order (`apps/gate
 |---|---|
 | `x-tokengate-token: <token>` | Recommended. Works for every service. |
 | `Authorization: Bearer <token>` or `Authorization: token <token>` | SDKs that send their API key as a bearer token (Slack, OpenAI, Octokit). |
-| The service's injection header, for example `x-api-key: <token>` | Only for services with **Custom header** injection, and only when neither header above is present. The header prefix, if set, is removed first. |
+| The service's injection header, for example `x-api-key: <token>` | Only for credentials with **Custom header** injection, and only when neither header above is present. The header prefix, if set, is removed first. |
 
 If you send both `x-tokengate-token` and `Authorization: Bearer|token`, both must carry the same token. Otherwise the gateway returns `400 token_ambiguous`.
 `Authorization` values with another scheme (for example `Basic`) are ignored.
@@ -151,7 +151,7 @@ The command prints `acme/api (89012345)`. The ID keeps working after a rename; t
 
 ## Examples per context
 
-Admins create these accesses with **Give a consumer access**: paste the repository, choose **When**, and enter its branch, tag or environment.
+Admins create these accesses with **Give an issuer access rule**: paste the repository, choose **When**, and enter its branch, tag or environment.
 The conditions below come from `apps/gateway/src/policy/presets.ts`, with **Only protected branches and tags (recommended)** chosen.
 The access page shows them under **Exact conditions**. Full semantics: [policies.md](../policies.md#structured-access-form).
 
@@ -222,7 +222,7 @@ event_name exact pull_request
 base_ref glob main
 ```
 
-- A `pull_request` job runs the code proposed in the pull request. Grant it only low-risk calls.
+- A `pull_request` job runs the code proposed in the pull request. IssuerAccessRule it only low-risk calls.
 - Pull request refs (`refs/pull/N/merge`) are never protected. If you require protected refs, the grant never matches.
 - Pull requests from forks get no OIDC token by default, so the action fails with `No OIDC token available`.
 - `pull_request_target`, `workflow_run` and `issue_comment` run with base-repository privileges on outside input ("pwn requests"). The access form asks you to accept that risk when the rows editor opts in to them.
@@ -297,13 +297,13 @@ So the called workflow must decide where the token goes and which calls it makes
 2. Hardcode a GitHub-hosted runner label in `runs-on`, and add `runner_environment exact github-hosted` to the grant. Self-hosted runners of the caller repository can read the token.
 3. Give the grant only the exact method and path of each call the workflow makes. Do not let inputs choose the service, path or method.
 4. Do not expose the token as a workflow output, artifact or cache entry.
-5. Keep **Maximum token age (seconds)** of the caller provider short, for example 120, if your workflows call the gateway right after minting. The setting applies to every grant of the caller provider.
+5. Keep **Maximum token age (seconds)** of the credential access rule short, for example 120, if your workflows call the gateway right after minting. The setting applies to every grant of the credential access rule.
 6. Protect `acme/ai-workflows`: the pin is a name, not an ID (see [Reusable workflow pin](#reusable-workflow-pin)).
 
 Set up the grant:
 
 1. If `acme/ai-workflows` is private, allow access from the other repositories: in `acme/ai-workflows`, open Settings > Actions > General > Access.
-2. Give the consumer access to the OpenAI token with an empty **Repository**, **When**: **Any branch, tag or environment**, and under **More constraints** the **Workflow pin** and **Only GitHub-hosted runners**. The result:
+2. Give the issuer access rules to the OpenAI token with an empty **Repository**, **When**: **Any branch, tag or environment**, and under **More constraints** the **Workflow pin** and **Only GitHub-hosted runners**. The result:
 
    ```text
    repository_owner_id exact 1234567
@@ -401,8 +401,8 @@ A response without `x-tokengate-request-id` came from Cloudflare, not from the g
 |---|---|---|
 | Action fails: `No OIDC token available` | Missing `id-token: write`, or a fork pull request | Add the permission. Fork pull requests get no token by default. |
 | `token_missing` (401) | No header, or an empty `$TOKEN` | Send `x-tokengate-token`. Check the step ID in `steps.<id>.outputs.token`. |
-| `audience_mismatch` (401) | Wrong `audience` input | Use the audience shown on the caller provider page. The error message names the expected value. |
-| `issuer_unknown` (401) | No enabled caller provider for the issuer | Ask an admin to add or enable it. |
+| `audience_mismatch` (401) | Wrong `audience` input | Use the audience shown on the credential access rule page. The error message names the expected value. |
+| `issuer_unknown` (401) | No enabled credential access rule for the issuer | Ask an admin to add or enable it. |
 | `tenant_mismatch` (401) | The repository owner is not in **Allowed organization IDs** | Ask an admin to add the organization ID. |
 | `token_expired` or `token_too_old` (401) | Token minted too early | Call `tokengate-token` right before the request. |
 | `event_not_trusted` (403) | The event is not trusted and the grant does not opt in | Ask an admin to add the event to an exact `event_name` condition, or trigger the job another way. |

@@ -46,7 +46,9 @@ describe('admin stylesheets', () => {
     onTestFinished(() => resetControlPlane());
     const app = createTestApp();
     const owner = await createUser({ email: 'o@example.com', role: 'owner' });
-    const html = await (await adminGet(app, await loginAs(app, owner), '/admin/tokens')).text();
+    const html = await (
+      await adminGet(app, await loginAs(app, owner), '/admin/credentials')
+    ).text();
     const links = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)].map((m) => m[1]);
     expect(links).toEqual(ADMIN_STYLESHEETS.map((asset) => asset.href));
     expect(links).toEqual([uiCss.href, pagesCss.href]);

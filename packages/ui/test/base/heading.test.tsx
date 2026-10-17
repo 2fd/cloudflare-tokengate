@@ -15,13 +15,13 @@ import { render } from '../render';
 
 describe('HeadingOffset', () => {
   it('pushes a page header H1 down, styled as an H1', () => {
-    expect(render(<PageHeader title="Tokens" />)).toContain('<h1>Tokens</h1>');
+    expect(render(<PageHeader title="Credentials" />)).toContain('<h1>Credentials</h1>');
     const html = render(
       <HeadingOffset by={3}>
-        <PageHeader title="Tokens" />
+        <PageHeader title="Credentials" />
       </HeadingOffset>,
     );
-    expect(html).toContain('<h4 class="h1">Tokens</h4>');
+    expect(html).toContain('<h4 class="h1">Credentials</h4>');
     expect(html).not.toContain('<h1');
   });
 
@@ -47,13 +47,13 @@ describe('HeadingOffset', () => {
 describe('containers forward the level', () => {
   it('a tray at h3 puts its empty state at h4', () => {
     const html = render(
-      <Tray id="t" title="Tokens" headingLevel={3}>
+      <Tray id="t" title="Credentials" headingLevel={3}>
         <Panel>
           <EmptyState title="No tokens" />
         </Panel>
       </Tray>,
     );
-    expect(html).toContain('<h3 id="t-h">Tokens</h3>');
+    expect(html).toContain('<h3 id="t-h">Credentials</h3>');
     expect(html).toContain('<h4>No tokens</h4>');
   });
 
@@ -72,12 +72,12 @@ describe('containers forward the level', () => {
       <HeadingOffset by={2}>
         <Tray id="g" title="Get started">
           <Panel>
-            <Checklist steps={[{ state: 'todo', title: 'Add a token', why: 'w' }]} />
+            <Checklist steps={[{ state: 'todo', title: 'Add a credential', why: 'w' }]} />
           </Panel>
         </Tray>
       </HeadingOffset>,
     );
     expect(html).toContain('<h4 id="g-h">Get started</h4>');
-    expect(html).toContain('<h5>Add a token');
+    expect(html).toContain('<h5>Add a credential');
   });
 });

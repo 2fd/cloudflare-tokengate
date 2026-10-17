@@ -4,20 +4,11 @@
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  createCallerProvider,
-  deleteCallerProvider,
-  setCallerProviderEnabled,
-  updateCallerProvider,
-} from '../../src/admin/ops/caller-providers';
-import { exportConfiguration } from '../../src/admin/ops/export';
-import {
-  createGrant,
-  deleteGrant,
-  duplicateGrant,
-  setGrantEnabled,
-  updateGrant,
-} from '../../src/admin/ops/grants';
-import { rewrapCredentials } from '../../src/admin/ops/keyring';
+  createCredentialAccessRule,
+  deleteCredentialAccessRule,
+  setCredentialAccessRuleEnabled,
+  updateCredentialAccessRule,
+} from '../../src/admin/ops/credential-access-rules';
 import {
   createService,
   deleteService,
@@ -25,11 +16,21 @@ import {
   setServiceCredential,
   testServiceCredential,
   updateServiceFields,
-} from '../../src/admin/ops/services';
+} from '../../src/admin/ops/credentials';
+import { exportConfiguration } from '../../src/admin/ops/export';
+import {
+  createIssuerAccessRule,
+  deleteIssuerAccessRule,
+  duplicateIssuerAccessRule,
+  setIssuerAccessRuleEnabled,
+  updateIssuerAccessRule,
+} from '../../src/admin/ops/issuer_access_rules';
+import { rewrapCredentials } from '../../src/admin/ops/keyring';
 import { addUpstreamHost, updateUpstreamHosts } from '../../src/admin/ops/upstream-hosts';
-import type { CallerProvider } from '../../src/db/types';
+import type { CredentialAccessRule } from '../../src/db/types';
 import type { Deps } from '../../src/deps';
 import { newId } from '../../src/lib/ids';
+import { testCredentialId } from '../unit/admin/ops/helpers';
 import {
   ACTOR,
   anchoredConditions,
@@ -41,7 +42,7 @@ import {
   opsDeps,
   resetControlPlane,
   seedGithubProvider,
-  seedGrant,
+  seedIssuerAccessRule,
   seedService,
   serviceInput,
 } from '../unit/admin/ops/helpers';
@@ -50,7 +51,7 @@ const CANARY = 'CANARY-tokengate-0123456789abcdefXYZ';
 const VERIFY = { method: 'GET' as const, path: '/rate_limit', expect_status: 200 };
 
 let deps: Deps;
-let provider: CallerProvider;
+let provider: CredentialAccessRule;
 let serviceId: string;
 let logLines: string[];
 
@@ -74,8 +75,8 @@ beforeEach(async () => {
     });
   }
   deps = opsDeps({ fetch: echoingNetwork().fetch });
-  provider = await seedGithubProvider(deps);
   serviceId = await seedService(deps, { secret: CANARY, verify: VERIFY });
+  provider = await seedGithubProvider(deps);
 });
 
 afterEach(() => {
@@ -89,9 +90,11 @@ interface OpCase {
   run: (deps: Deps, id: string) => Promise<{ ok: boolean }>;
 }
 
-const seedOwnGrant = async (d: Deps) => (await seedGrant(d, provider.id, serviceId)).id;
+const seedOwnIssuerAccessRule = async (d: Deps) =>
+  (await seedIssuerAccessRule(d, provider.id, serviceId)).id;
 const seedGeneric = async (d: Deps) => {
-  const created = await createCallerProvider(d, ACTOR, {
+  const created = await createCredentialAccessRule(d, ACTOR, {
+    credential_id: await testCredentialId(d),
     name: 'temp',
     profile: 'generic',
     issuer: 'https://temp.example.org',
@@ -99,7 +102,7 @@ const seedGeneric = async (d: Deps) => {
     anchor_claims: ['sub'],
   });
   if (!created.ok) throw new Error(created.errors.join());
-  return created.callerProvider.id;
+  return created.credentialAccessRule.id;
 };
 const rotatedKeyring = (d: Deps): Deps => ({
   ...d,
@@ -155,7 +158,7 @@ const successes: Array<OpCase & { action: string }> = [
     action: 'service.delete',
     setup: async (d) => {
       const id = await seedService(d, { slug: 'cascade' });
-      return `${id}:${(await seedGrant(d, provider.id, id)).id}`;
+      return `${id}:${(await seedIssuerAccessRule(d, provider.id, id)).id}`;
     },
     run: (d, ids) => {
       const [id = '', grantId = ''] = ids.split(':');
@@ -178,10 +181,11 @@ const successes: Array<OpCase & { action: string }> = [
     run: (d) => addUpstreamHost(d, ACTOR, 'https://api.openai.com/v1'),
   },
   {
-    name: 'createCallerProvider',
-    action: 'caller_provider.create',
-    run: (d) =>
-      createCallerProvider(d, ACTOR, {
+    name: 'createCredentialAccessRule',
+    action: 'credential_access_rule.create',
+    run: async (d) =>
+      createCredentialAccessRule(d, ACTOR, {
+        credential_id: await testCredentialId(d),
         name: 'generic',
         profile: 'generic',
         issuer: 'https://idp.example.org',
@@ -190,67 +194,67 @@ const successes: Array<OpCase & { action: string }> = [
       }),
   },
   {
-    name: 'updateCallerProvider',
-    action: 'caller_provider.update',
-    run: (d) => updateCallerProvider(d, ACTOR, provider.id, { max_token_age_seconds: 120 }),
+    name: 'updateCredentialAccessRule',
+    action: 'credential_access_rule.update',
+    run: (d) => updateCredentialAccessRule(d, ACTOR, provider.id, { max_token_age_seconds: 120 }),
   },
   {
-    name: 'setCallerProviderEnabled',
-    action: 'caller_provider.disable',
-    run: (d) => setCallerProviderEnabled(d, ACTOR, provider.id, false),
+    name: 'setCredentialAccessRuleEnabled',
+    action: 'credential_access_rule.disable',
+    run: (d) => setCredentialAccessRuleEnabled(d, ACTOR, provider.id, false),
   },
   {
-    name: 'setCallerProviderEnabled (enable)',
-    action: 'caller_provider.enable',
-    run: (d) => setCallerProviderEnabled(d, ACTOR, provider.id, true),
+    name: 'setCredentialAccessRuleEnabled (enable)',
+    action: 'credential_access_rule.enable',
+    run: (d) => setCredentialAccessRuleEnabled(d, ACTOR, provider.id, true),
   },
   {
-    name: 'deleteCallerProvider',
-    action: 'caller_provider.delete',
+    name: 'deleteCredentialAccessRule',
+    action: 'credential_access_rule.delete',
     setup: seedGeneric,
-    run: (d, id) => deleteCallerProvider(d, ACTOR, id),
+    run: (d, id) => deleteCredentialAccessRule(d, ACTOR, id),
   },
   {
-    name: 'createGrant',
+    name: 'createIssuerAccessRule',
     action: 'grant.create',
     run: (d) =>
-      createGrant(d, ACTOR, {
+      createIssuerAccessRule(d, ACTOR, {
         name: 'g',
-        caller_provider_id: provider.id,
+        credential_access_rule_id: provider.id,
         service_id: serviceId,
         conditions: anchoredConditions(),
         rules: [{ methods: ['GET'], path: '/**' }],
       }),
   },
   {
-    name: 'updateGrant',
+    name: 'updateIssuerAccessRule',
     action: 'grant.update',
-    setup: seedOwnGrant,
-    run: (d, id) => updateGrant(d, ACTOR, id, { name: 'renamed' }),
+    setup: seedOwnIssuerAccessRule,
+    run: (d, id) => updateIssuerAccessRule(d, ACTOR, id, { name: 'renamed' }),
   },
   {
-    name: 'setGrantEnabled',
+    name: 'setIssuerAccessRuleEnabled',
     action: 'grant.disable',
-    setup: seedOwnGrant,
-    run: (d, id) => setGrantEnabled(d, ACTOR, id, false),
+    setup: seedOwnIssuerAccessRule,
+    run: (d, id) => setIssuerAccessRuleEnabled(d, ACTOR, id, false),
   },
   {
-    name: 'setGrantEnabled (enable)',
+    name: 'setIssuerAccessRuleEnabled (enable)',
     action: 'grant.enable',
-    setup: seedOwnGrant,
-    run: (d, id) => setGrantEnabled(d, ACTOR, id, true),
+    setup: seedOwnIssuerAccessRule,
+    run: (d, id) => setIssuerAccessRuleEnabled(d, ACTOR, id, true),
   },
   {
-    name: 'duplicateGrant',
+    name: 'duplicateIssuerAccessRule',
     action: 'grant.duplicate',
-    setup: seedOwnGrant,
-    run: (d, id) => duplicateGrant(d, ACTOR, id),
+    setup: seedOwnIssuerAccessRule,
+    run: (d, id) => duplicateIssuerAccessRule(d, ACTOR, id),
   },
   {
-    name: 'deleteGrant',
+    name: 'deleteIssuerAccessRule',
     action: 'grant.delete',
-    setup: seedOwnGrant,
-    run: (d, id) => deleteGrant(d, ACTOR, id),
+    setup: seedOwnIssuerAccessRule,
+    run: (d, id) => deleteIssuerAccessRule(d, ACTOR, id),
   },
   {
     name: 'rewrapCredentials',
@@ -295,19 +299,19 @@ const failures: OpCase[] = [
   },
   {
     name: 'deleteService (referenced)',
-    setup: seedOwnGrant,
+    setup: seedOwnIssuerAccessRule,
     run: (d) => deleteService(d, ACTOR, serviceId),
   },
   {
     name: 'deleteService (accesses not the confirmed set)',
-    setup: seedOwnGrant,
+    setup: seedOwnIssuerAccessRule,
     run: (d) => deleteService(d, ACTOR, serviceId, { withAccesses: true, accessIds: [] }),
   },
   {
     name: 'rotateServiceSecret (unattested)',
     setup: async () => {
       await env.DB.prepare(
-        "UPDATE services SET base_url = 'https://uploads.github.com' WHERE id = ?",
+        "UPDATE credentials SET base_url = 'https://uploads.github.com' WHERE id = ?",
       )
         .bind(serviceId)
         .run();
@@ -328,58 +332,66 @@ const failures: OpCase[] = [
       ),
   },
   {
-    name: 'createCallerProvider (no pin on shared issuer)',
-    run: (d) => createCallerProvider(d, ACTOR, { name: 'x', profile: 'github-actions' }),
+    name: 'createCredentialAccessRule (no pin on shared issuer)',
+    run: async (d) =>
+      createCredentialAccessRule(d, ACTOR, {
+        credential_id: await testCredentialId(d),
+        name: 'x',
+        profile: 'github-actions',
+      }),
   },
   {
-    name: 'updateCallerProvider (profile change)',
-    run: (d) => updateCallerProvider(d, ACTOR, provider.id, { profile: 'generic' }),
+    name: 'updateCredentialAccessRule (profile change)',
+    run: (d) => updateCredentialAccessRule(d, ACTOR, provider.id, { profile: 'generic' }),
   },
   {
-    name: 'deleteCallerProvider (referenced)',
-    setup: seedOwnGrant,
-    run: (d) => deleteCallerProvider(d, ACTOR, provider.id),
+    name: 'deleteCredentialAccessRule (referenced)',
+    setup: seedOwnIssuerAccessRule,
+    run: (d) => deleteCredentialAccessRule(d, ACTOR, provider.id),
   },
   {
-    name: 'createGrant (unanchored)',
+    name: 'createIssuerAccessRule (unanchored)',
     run: (d) =>
-      createGrant(d, ACTOR, {
+      createIssuerAccessRule(d, ACTOR, {
         name: 'g',
-        caller_provider_id: provider.id,
+        credential_access_rule_id: provider.id,
         service_id: serviceId,
         conditions: [{ claim: 'sub', match: 'glob', values: ['**'] }],
         rules: [{ methods: ['GET'], path: '/**' }],
       }),
   },
   {
-    name: 'createGrant (unacknowledged warnings)',
+    name: 'createIssuerAccessRule (unacknowledged warnings)',
     run: (d) =>
-      createGrant(d, ACTOR, {
+      createIssuerAccessRule(d, ACTOR, {
         name: 'g',
-        caller_provider_id: provider.id,
+        credential_access_rule_id: provider.id,
         service_id: serviceId,
         conditions: [...anchoredConditions(), { claim: 'ref', match: 'glob', values: ['*'] }],
         rules: [{ methods: ['GET'], path: '/**' }],
       }),
   },
   {
-    name: 'updateGrant (invalid rules)',
-    setup: seedOwnGrant,
-    run: (d, id) => updateGrant(d, ACTOR, id, { rules: [] }),
-  },
-  { name: 'deleteGrant (missing)', run: (d) => deleteGrant(d, ACTOR, 'grt_nope') },
-  {
-    name: 'setGrantEnabled (non-boolean)',
-    setup: seedOwnGrant,
-    run: (d, id) => setGrantEnabled(d, ACTOR, id, 'false' as never),
+    name: 'updateIssuerAccessRule (invalid rules)',
+    setup: seedOwnIssuerAccessRule,
+    run: (d, id) => updateIssuerAccessRule(d, ACTOR, id, { rules: [] }),
   },
   {
-    name: 'updateCallerProvider (unconfirmed trust change)',
-    setup: seedOwnGrant,
+    name: 'deleteIssuerAccessRule (missing)',
+    run: (d) => deleteIssuerAccessRule(d, ACTOR, 'grt_nope'),
+  },
+  {
+    name: 'setIssuerAccessRuleEnabled (non-boolean)',
+    setup: seedOwnIssuerAccessRule,
+    run: (d, id) => setIssuerAccessRuleEnabled(d, ACTOR, id, 'false' as never),
+  },
+  {
+    name: 'updateCredentialAccessRule (unconfirmed trust change)',
+    setup: seedOwnIssuerAccessRule,
     run: async (d) => {
       const issuer = 'https://token.actions.githubusercontent.com/acme';
       const network = fakeNetwork(undefined, { [issuer]: `${issuer}/.well-known/jwks` });
-      const result = await updateCallerProvider(
+      const result = await updateCredentialAccessRule(
         { ...d, fetch: network.fetch },
         ACTOR,
         provider.id,
@@ -446,7 +458,7 @@ describe('I-AUDIT-1: the change and its audit row commit together', () => {
     await expect(
       createService(fixed, ACTOR, serviceInput({ slug: 'atomic' }), CONTEXT),
     ).rejects.toThrow();
-    const row = await env.DB.prepare("SELECT id FROM services WHERE slug = 'atomic'").first();
+    const row = await env.DB.prepare("SELECT id FROM credentials WHERE slug = 'atomic'").first();
     expect(row).toBeNull();
   });
 });

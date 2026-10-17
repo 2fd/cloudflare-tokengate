@@ -4,14 +4,14 @@
 // of the configuration export, and IDs stay strings end to end (they can exceed 2^53).
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { getGrant } from '../../src/db/grants';
+import { getIssuerAccessRule } from '../../src/db/issuer_access_rules';
 // oxlint-disable-next-line import/default -- a ?raw import is the file text
 import proxyContextSource from '../../src/db/proxy-context.ts?raw';
-import type { CallerProvider } from '../../src/db/types';
+import type { CredentialAccessRule } from '../../src/db/types';
 import { getProfile } from '../../src/identity/profiles';
 // oxlint-disable-next-line import/default -- a ?raw import is the file text
 import conditionsSource from '../../src/policy/conditions.ts?raw';
-import { evaluateGrants } from '../../src/policy/evaluate';
+import { evaluateIssuerAccessRules } from '../../src/policy/evaluate';
 // oxlint-disable-next-line import/default -- a ?raw import is the file text
 import evaluateSource from '../../src/policy/evaluate.ts?raw';
 // oxlint-disable-next-line import/default -- a ?raw import is the file text
@@ -29,13 +29,13 @@ import {
 import { OWNER_ID, seedGithubProvider, seedService } from '../unit/admin/ops/helpers';
 
 let world: ConsumersWorld;
-let provider: CallerProvider;
+let provider: CredentialAccessRule;
 let serviceId: string;
 
 beforeEach(async () => {
   world = await consumersWorld();
-  provider = await seedGithubProvider(world.app.deps);
   serviceId = await seedService(world.app.deps);
+  provider = await seedGithubProvider(world.app.deps);
 });
 
 const session = () => world.sessions.admin;
@@ -55,7 +55,7 @@ describe('I-AUTHZ-2: labels are display only', () => {
   });
 
   it('a label change never changes an evaluation decision', async () => {
-    const res = await adminPost(world.app, session(), '/admin/access', {
+    const res = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       consumer_id: provider.id,
       token_id: serviceId,
       repository: 'acme/api (55)',
@@ -65,7 +65,7 @@ describe('I-AUTHZ-2: labels are display only', () => {
       op: 'read-repo',
       expires: 'never',
     });
-    const grant = await getGrant(env.DB, idFromLocation(locationOf(res)));
+    const grant = await getIssuerAccessRule(env.DB, idFromLocation(locationOf(res)));
     if (!grant) throw new Error('missing');
     const profile = getProfile('github-actions');
     if (!profile) throw new Error('profile');
@@ -86,12 +86,12 @@ describe('I-AUTHZ-2: labels are display only', () => {
       matchPath: '/repos/acme/api/contents',
       revealClaims: new Set<string>(),
     });
-    const before = evaluateGrants([grant], input('acme/api')).decision;
+    const before = evaluateIssuerAccessRules([grant], input('acme/api')).decision;
     await seedLabel(provider.id, 'repository_id', '55', 'someone-else/repo');
-    const reloaded = await getGrant(env.DB, grant.id);
+    const reloaded = await getIssuerAccessRule(env.DB, grant.id);
     if (!reloaded) throw new Error('missing');
     expect(reloaded.conditions).toEqual(grant.conditions);
-    expect(evaluateGrants([reloaded], input('acme/api')).decision).toBe(before);
+    expect(evaluateIssuerAccessRules([reloaded], input('acme/api')).decision).toBe(before);
     expect(before).toBe('allow');
   });
 
@@ -99,11 +99,11 @@ describe('I-AUTHZ-2: labels are display only', () => {
     await seedLabel(provider.id, 'repository_owner_id', OWNER_ID, '"><img src=x onerror=1>');
     await seedLabel(provider.id, 'repository_id', '55', '<script>alert(1)</script>');
     for (const path of [
-      '/admin/consumers',
-      `/admin/consumers/${provider.id}`,
-      '/admin/access',
-      '/admin/access/new',
-      '/admin/access?view=list&repository=script',
+      '/admin/credential-access-rules',
+      `/admin/credential-access-rules/${provider.id}`,
+      '/admin/issuer-access-rules',
+      '/admin/issuer-access-rules/new',
+      '/admin/issuer-access-rules?view=list&repository=script',
     ]) {
       const html = await (await adminGet(world.app, session(), path)).text();
       expect(html, path).not.toContain('<script>alert(1)</script>');
@@ -112,7 +112,7 @@ describe('I-AUTHZ-2: labels are display only', () => {
   });
 
   it('keeps IDs above 2^53 as exact strings and exports the labels (v2)', async () => {
-    const res = await adminPost(world.app, session(), '/admin/access', {
+    const res = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       consumer_id: provider.id,
       token_id: serviceId,
       repository: `acme/big (${BIG_ID})`,
@@ -121,7 +121,7 @@ describe('I-AUTHZ-2: labels are display only', () => {
       expires: 'never',
     });
     expect(res.status).toBe(303);
-    const grant = await getGrant(env.DB, idFromLocation(locationOf(res)));
+    const grant = await getIssuerAccessRule(env.DB, idFromLocation(locationOf(res)));
     expect(grant?.conditions).toContainEqual({
       claim: 'repository_id',
       match: 'exact',

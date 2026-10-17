@@ -11,9 +11,9 @@ streaming keeps running until it ends ([known limitations](../threat-model.md#av
 
 | Action | Where | Effect on the next request | Scope |
 |---|---|---|---|
-| Disable a grant | Grants > the Grant > "Disable" | Callers that matched only this grant get `403 no_matching_grant` | One grant |
+| Disable a grant | Issuer access rules > the issuer access rule > "Disable" | Callers that matched only this grant get `403 no_matching_grant` | One grant |
 | Disable a service | Services > the service > "Disable service" | Every caller gets `404 service_not_found` | All callers of one service |
-| Disable a caller provider | Caller providers > the caller provider > "Disable" | Every token from that issuer gets `401 issuer_unknown` | All callers of one issuer |
+| Disable a credential access rule | Credential access rules > the credential access rule > "Disable" | Every token from that issuer gets `401 issuer_unknown` | All callers of one issuer |
 | Suspend a user | Users > status "Suspended" > "Save" | Every admin request of the user is refused, even with a valid Access session | One admin user |
 | Hold new users | Users > "New users" > status "Pending" | People who sign in for the first time wait for approval instead of getting in | Every new user |
 | Revoke Access sessions | Cloudflare One > the Access application or the user | The user must sign in to Access again ([zone settings](cloudflare-zone-settings.md#cloudflare-access)) | One user, or every user of the application |
@@ -28,14 +28,14 @@ you may need for the investigation.
 Examples: a malicious commit on a protected branch, a stolen maintainer account, a workflow that runs
 untrusted code with `id-token: write`.
 
-1. Find the grants that admit the repository: open Grants and check the conditions on `repository`,
-   `repository_id` or `project_path`. Also check grants anchored on `repository_owner_id` or
-   `namespace_id` with broad conditions, and grants on a reusable workflow (`job_workflow_ref`).
-2. Disable each of those grants.
-3. If you cannot narrow it down quickly, disable the affected services instead.
-4. If the attacker can mint tokens for the whole organization, disable the caller provider.
+1. Find the issuer_access_rules that admit the repository: open Issuer access rules and check the conditions on `repository`,
+   `repository_id` or `project_path`. Also check issuer_access_rules anchored on `repository_owner_id` or
+   `namespace_id` with broad conditions, and issuer_access_rules on a reusable workflow (`job_workflow_ref`).
+2. Disable each of those issuer_access_rules.
+3. If you cannot narrow it down quickly, disable the affected credentials instead.
+4. If the attacker can mint tokens for the whole organization, disable the credential access rule.
 5. [Investigate the request log](#investigate-the-request-log) for the repository.
-6. Decide whether the credentials of the reached services leaked. A caller never receives the
+6. Decide whether the credentials of the reached credentials leaked. A caller never receives the
    Credential from the gateway ([I-CRED-1](../threat-model.md#i-cred-1)), but it can receive it from
    an upstream response body, and it can use the upstream API to create new keys
    ([known limitations](../threat-model.md#credentials-and-responses)). If either is possible with
@@ -43,9 +43,9 @@ untrusted code with `id-token: write`.
    the upstream for keys or tokens created during the incident.
 7. Fix the repository: revoke the stolen account, remove the malicious commit, check branch
    protection and environment rules.
-8. Enable the grants again, narrowed if needed ([policies](../policies.md)).
+8. Enable the issuer_access_rules again, narrowed if needed ([policies](../policies.md)).
 
-A caller token stays valid until it expires or reaches the caller provider's maximum token age
+A caller token stays valid until it expires or reaches the credential access rule's maximum token age
 (default 600 s). Disabling the grant stops it on the next request; nothing needs to change at the issuer.
 
 ## A Credential leaked
@@ -58,7 +58,7 @@ Examples: the key appears in a log, a paste or a commit; an upstream response re
 2. Check the upstream's own logs for use of the old key from addresses other than Cloudflare.
 3. [Investigate the request log](#investigate-the-request-log) for the service, to see which callers
    reached endpoints that return the credential.
-4. Narrow the grants of that service so they no longer reach those endpoints. For `path` Injection
+4. Narrow the issuer_access_rules of that service so they no longer reach those endpoints. For `path` Injection
    (webhooks), allow only `POST /`.
 
 ## An admin account is compromised
@@ -68,15 +68,15 @@ Examples: the key appears in a log, a paste or a commit; an upstream response re
    ([I-SESS-1](../threat-model.md#i-sess-1)). If it is the last active owner, invite a second owner
    first, or use [break-glass](break-glass.md).
 2. In Audit log, set Actor to the account's email and review every event since the suspected start.
-3. Undo unwanted changes: Grants, caller providers (a new issuer the attacker controls is the typical
-   path), services and users.
+3. Undo unwanted changes: Issuer access rules, credential access rules (a new issuer the attacker controls is the typical
+   path), credentials and users.
    If you restore `DB` to undo the attacker's changes instead, the restore can undo step 1: the account
    is active again. After the restore, suspend the account again
    ([checks after a restore](backup-restore.md#checks-after-a-restore)).
 4. Look for `config.export` events: the export holds no credentials, but it maps your configuration.
-5. An admin can use credentials through grants but cannot extract them from the gateway
+5. An admin can use credentials through issuer_access_rules but cannot extract them from the gateway
    ([known limitations](../threat-model.md#credentials-and-responses)). If the attacker created a
-   caller provider and a grant, treat every credential that grant reached as used, and check the
+   credential access rule and a grant, treat every credential that grant reached as used, and check the
    upstream for keys created during the incident.
 6. Remove the attacker's access to Access: fix the account at the identity provider, narrow the Access
    policy, and revoke the account's Access sessions in Cloudflare One
@@ -86,7 +86,7 @@ To sign every admin out at once, see [break-glass](break-glass.md#sign-every-adm
 
 ## The KEK or keyring leaked
 
-A key alone does not expose credentials; together with a copy of the `services` table it does.
+A key alone does not expose credentials; together with a copy of the `credentials` table it does.
 Follow [key rotation: if a key leaked](key-rotation.md#if-a-key-leaked): rotate the key, then rotate
 every upstream credential sealed with it.
 
@@ -208,7 +208,7 @@ retention ([observability](../observability.md#auditevent-log-lines-for-a-siem))
 
 1. Keep a [configuration export](backup-restore.md#configuration-export) and the query results with
    the incident record.
-2. Review grants for the gap that allowed the incident ([policies](../policies.md)).
+2. Review issuer_access_rules for the gap that allowed the incident ([policies](../policies.md)).
 3. Consider `PROXY_RATE_LIMITER` to cap what one grant can do
    ([configuration](../configuration.md#proxy_rate_limiter)).
 4. Report suspected gateway vulnerabilities privately ([SECURITY.md](../../SECURITY.md)).

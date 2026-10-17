@@ -18,7 +18,7 @@ export interface ConfirmText {
 interface ConfirmDialogBase {
   /** Id of the dialog (see `Dialog`); the confirm field gets `${id}-confirm`. */
   id: string;
-  /** The question with the object and the count ("Delete Slack and its 3 consumer accesses?"). */
+  /** The question with the object and the count ("Delete Slack and its 3 issuer access ruleses?"). */
   title: Child;
   /** "This cannot be undone." plus what stops working. */
   description?: Child;

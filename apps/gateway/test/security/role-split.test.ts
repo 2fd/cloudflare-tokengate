@@ -1,5 +1,5 @@
-// I-RBAC-1 for the role split (ADR 0018) on the real app: a token manager manages services but
-// cannot give anyone access to them, an access manager manages caller providers and grants but
+// I-RBAC-1 for the role split (ADR 0018) on the real app: a credential manager manages credentials but
+// cannot give anyone access to them, an access manager manages credential access rules and issuer_access_rules but
 // cannot touch a service or its credential, field permissions refuse the fields a role lacks, and
 // neither role can export. Every refusal leaves the control plane unchanged.
 import { env } from 'cloudflare:workers';
@@ -20,9 +20,9 @@ import { type AdminSession, adminGet, adminPost, createUser, loginAs } from '../
 async function controlPlaneDump(): Promise<string> {
   const tables = [
     'users',
-    'caller_providers',
-    'services',
-    'grants',
+    'credential_access_rules',
+    'credentials',
+    'issuer_access_rules',
     'claim_labels',
     'settings',
     'audit_log',
@@ -90,11 +90,11 @@ async function expectRefused(key: string, role: Role, extra: Record<string, stri
 
 describe('I-RBAC-1: token and access duties are separate', () => {
   it('lists token and access routes', () => {
-    expect(TOKEN_ROUTES).toContain('POST /admin/tokens/:id/test');
-    expect(TOKEN_ROUTES).toContain('POST /admin/tokens/:id/secret');
-    expect(TOKEN_ROUTES).toContain('POST /admin/tokens/:id/destination');
-    expect(ACCESS_ROUTES).toContain('POST /admin/access');
-    expect(ACCESS_ROUTES).toContain('POST /admin/consumers');
+    expect(TOKEN_ROUTES).toContain('POST /admin/credentials/:id/test');
+    expect(TOKEN_ROUTES).toContain('POST /admin/credentials/:id/secret');
+    expect(TOKEN_ROUTES).toContain('POST /admin/credentials/:id/destination');
+    expect(ACCESS_ROUTES).toContain('POST /admin/issuer-access-rules');
+    expect(TOKEN_ROUTES).toContain('POST /admin/credential-access-rules');
   });
 
   it.each(ACCESS_ROUTES)('token_manager is refused %s', async (key) => {
@@ -121,24 +121,26 @@ describe('I-RBAC-1: token and access duties are separate', () => {
     );
   });
 
-  it('a token manager cannot delete a service together with its grants (with_accesses)', async () => {
-    await expectRefused('POST /admin/tokens/:id/delete', 'token_manager', { with_accesses: '1' });
+  it('a credential manager cannot delete a service together with its issuer_access_rules (with_accesses)', async () => {
+    await expectRefused('POST /admin/credentials/:id/delete', 'token_manager', {
+      with_accesses: '1',
+    });
   });
 
   it.each(['token_manager', 'admin'] as const)(
     '%s cannot allow a host on the way (allow_host needs settings:write)',
     async (role) => {
-      await expectRefused('POST /admin/tokens', role, { allow_host: '1' });
+      await expectRefused('POST /admin/credentials', role, { allow_host: '1' });
     },
   );
 
   it('an empty field-permission field is not a use of it', async () => {
-    const { res } = await send('POST /admin/tokens', 'token_manager', { allow_host: '' });
+    const { res } = await send('POST /admin/credentials', 'token_manager', { allow_host: '' });
     expect(res.status).toBe(303);
   });
 
   it('an owner may send both fields', async () => {
-    const { res } = await send('POST /admin/tokens', 'owner', { allow_host: '1' });
+    const { res } = await send('POST /admin/credentials', 'owner', { allow_host: '1' });
     expect(res.status).toBe(303);
   });
 

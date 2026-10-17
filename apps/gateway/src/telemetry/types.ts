@@ -15,7 +15,7 @@ export interface RequestRecord {
   path: string;
   service_slug: string | null;
   service_id: string | null;
-  caller_provider_id: string | null;
+  credential_access_rule_id: string | null;
   grant_id: string | null;
   claims_verified: 0 | 1;
   caller_subject: string | null;
@@ -46,7 +46,7 @@ export const REQUEST_RECORD_COLUMNS = [
   'path',
   'service_slug',
   'service_id',
-  'caller_provider_id',
+  'credential_access_rule_id',
   'grant_id',
   'claims_verified',
   'caller_subject',

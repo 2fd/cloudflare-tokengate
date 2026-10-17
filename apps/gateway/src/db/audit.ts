@@ -252,7 +252,7 @@ function changeCategory(
   ) {
     return 'tokens';
   }
-  if (action.startsWith('caller_provider.')) return 'consumers';
+  if (action.startsWith('credential_access_rule.')) return 'consumers';
   if (action.startsWith('grant.')) return 'access';
   if (['user.bootstrap', 'user.join', 'user.link'].includes(action)) return null;
   if (action.startsWith('user.') || action === 'settings.admin_hosts') return 'users';

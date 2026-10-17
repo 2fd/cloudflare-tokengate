@@ -25,7 +25,7 @@ import { testAccess, withTestAccessCerts } from './login-providers';
 export { TEST_ACCESS_ENV, TEST_ORIGIN };
 
 /**
- * Empties the control-plane tables, grants before the services and caller providers they
+ * Empties the control-plane tables, issuer_access_rules before the credentials and credential access rules they
  * reference. The built-in team rows are never touched; custom teams and every membership are
  * deleted. The last-owner delete triggers (I-OWNER-1) are dropped and re-created from their stored
  * SQL inside the same batch, since they forbid deleting the last owner. Settings go first, so the
@@ -52,10 +52,10 @@ export async function resetControlPlane(): Promise<void> {
     db.prepare('DELETE FROM teams WHERE builtin IS NULL'),
     db.prepare('DELETE FROM user_identities'),
     db.prepare('DELETE FROM audit_log'),
-    db.prepare('DELETE FROM grants'),
+    db.prepare('DELETE FROM issuer_access_rules'),
     db.prepare('DELETE FROM claim_labels'),
-    db.prepare('DELETE FROM services'),
-    db.prepare('DELETE FROM caller_providers'),
+    db.prepare('DELETE FROM credentials'),
+    db.prepare('DELETE FROM credential_access_rules'),
     db.prepare('DELETE FROM users'),
     ...triggers.map((trigger) => db.prepare(trigger.sql)),
   ]);
@@ -233,13 +233,13 @@ export function createAdminTestApp(options: AdminTestAppOptions = {}): AdminTest
 export function stubAdminPages(app: App): void {
   const ok = (c: Context<AppContext>) => c.text(`ok ${c.get('viewer').user.role}`);
   app.get('/admin', ok);
-  app.get('/admin/tokens', ok);
-  app.get('/admin/tokens/new', ok);
-  app.post('/admin/tokens', ok);
-  app.get('/admin/tokens/:id', ok);
-  app.post('/admin/tokens/:id', ok);
+  app.get('/admin/credentials', ok);
+  app.get('/admin/credentials/new', ok);
+  app.post('/admin/credentials', ok);
+  app.get('/admin/credentials/:id', ok);
+  app.post('/admin/credentials/:id', ok);
   app.post('/admin/users', ok);
-  app.post('/admin/tokens/keys/rewrap', ok);
+  app.post('/admin/credentials/keys/rewrap', ok);
   app.get('/admin/unlisted', ok);
   app.all('/admin/any-method', ok);
 }

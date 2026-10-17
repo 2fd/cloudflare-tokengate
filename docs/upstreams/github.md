@@ -1,12 +1,12 @@
 # GitHub REST API
 
-This page shows admins how to set up GitHub API services and shows workflow authors how to call them through the gateway.
+This page shows admins how to set up GitHub API credentials and shows workflow authors how to call them through the gateway.
 
 Use this when a job needs a token with more access than its own `GITHUB_TOKEN`, for example to write to another repository, without storing that token in the repository.
 
 ## Service templates
 
-In the admin UI, open **Service tokens**, select **Add a token** and open the **GitHub REST API** card. Paste the token, tick **Also add release asset uploads (uploads.github.com) with the same token** if jobs upload release assets, and select **Check and save GitHub**. One paste creates both tokens. Everything in the table comes from the templates (`apps/gateway/src/admin/service-templates.ts`).
+In the admin UI, open **Credentials**, select **Add a token** and open the **GitHub REST API** card. Paste the token, tick **Also add release asset uploads (uploads.github.com) with the same token** if jobs upload release assets, and select **Check and save GitHub**. One paste creates both tokens. Everything in the table comes from the templates (`apps/gateway/src/admin/service-templates.ts`).
 
 | Field | **GitHub REST API** | **GitHub release asset uploads** |
 |---|---|---|
@@ -19,7 +19,7 @@ In the admin UI, open **Service tokens**, select **Add a token** and open the **
 | Suggested grant rule | `GET /repos/OWNER/REPO/**` | `POST /repos/OWNER/REPO/releases/*/assets` |
 | Host for the upstream host allowlist | `api.github.com` | `uploads.github.com` |
 
-If **Service tokens › Allowed hosts** is set and does not include `api.github.com`, the card says so before you type anything. An owner ticks **Also allow api.github.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
+If **Credentials › Allowed hosts** is set and does not include `api.github.com`, the card says so before you type anything. An owner ticks **Also allow api.github.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
 
 - Prefer a fine-grained personal access token limited to the repositories and permissions the jobs need (`github_pat_REDACTED`).
 - Release asset uploads use a separate host, so they need the second token. The checkbox stores the same secret in both, and **Replace secret** on either token page offers to replace it in the other too.

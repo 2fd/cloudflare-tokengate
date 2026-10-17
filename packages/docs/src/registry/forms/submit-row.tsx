@@ -29,7 +29,7 @@ export const submitRow: ComponentDoc = {
       ),
       code: `<SubmitRow hint="After saving you get the workflow snippet for these jobs.">
   <button class="btn primary" type="submit">Give access</button>
-  <a class="btn secondary" href="/admin/tokens/slack">Cancel</a>
+  <a class="btn secondary" href="/admin/credentials/slack">Cancel</a>
 </SubmitRow>`,
     },
     {

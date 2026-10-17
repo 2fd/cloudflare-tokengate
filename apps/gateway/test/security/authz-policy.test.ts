@@ -2,12 +2,12 @@
 // rule paths (trailing slash, %2F), method-override query parameters, GitLab inherited
 // pipeline sources and anchor rules re-checked at request time.
 import { describe, expect, it } from 'vitest';
-import type { CallerProvider } from '../../src/db/types';
+import type { CredentialAccessRule } from '../../src/db/types';
 import { PROFILES } from '../../src/identity/profiles';
 import type { Claims } from '../../src/identity/types';
-import { type EvaluationInput, evaluateGrants } from '../../src/policy/evaluate';
+import { type EvaluationInput, evaluateIssuerAccessRules } from '../../src/policy/evaluate';
 import type { Condition, Rule } from '../../src/policy/types';
-import { validateGrant } from '../../src/policy/validate';
+import { validateIssuerAccessRule } from '../../src/policy/validate';
 import { buildUpstreamUrl, canonicalizePath } from '../../src/proxy/path';
 import { setupProxy } from '../helpers/proxy-fixtures';
 
@@ -25,7 +25,7 @@ const githubClaims: Claims = {
   event_name: 'push',
 };
 
-/** Evaluates one grant the way the proxy does: canonical path first, then the grants. */
+/** Evaluates one grant the way the proxy does: canonical path first, then the issuer_access_rules. */
 function decide(
   rules: Rule[],
   method: string,
@@ -35,7 +35,7 @@ function decide(
 ) {
   const canonical = canonicalizePath(rawPath);
   if (!canonical.ok) throw new Error(`invalid path ${rawPath}`);
-  return evaluateGrants([{ id: 'grt_a', conditions, rules }], {
+  return evaluateIssuerAccessRules([{ id: 'grt_a', conditions, rules }], {
     claims: githubClaims,
     profile: github,
     provider: { anchor_claims: [] },
@@ -126,7 +126,7 @@ describe('I-AUTHZ-3: GitLab child and downstream pipelines need an explicit opt-
   ];
   const rules: Rule[] = [{ methods: ['POST'], path: '/deploy' }];
   const evaluate = (pipelineSource: string, grantConditions: Condition[]) =>
-    evaluateGrants([{ id: 'grt_a', conditions: grantConditions, rules }], {
+    evaluateIssuerAccessRules([{ id: 'grt_a', conditions: grantConditions, rules }], {
       claims: { namespace_id: 10, project_id: 42, pipeline_source: pipelineSource },
       profile: gitlab,
       provider: { anchor_claims: [] },
@@ -156,7 +156,7 @@ describe('I-AUTHZ-3: GitLab child and downstream pipelines need an explicit opt-
     expect(evaluate('parent_pipeline', optIn).decision).toBe('allow');
 
     const provider = gitlabProvider();
-    const warned = validateGrant({ conditions: optIn, rules }, gitlab, provider);
+    const warned = validateIssuerAccessRule({ conditions: optIn, rules }, gitlab, provider);
     expect(warned.errors).toEqual([]);
     expect(warned.warnings.join('\n')).toContain('ref_protected exact true');
     expect(warned.warnings.join('\n')).toContain('"parent_pipeline" pipelines can be started');
@@ -165,21 +165,21 @@ describe('I-AUTHZ-3: GitLab child and downstream pipelines need an explicit opt-
       ...optIn,
       { claim: 'ref_protected', match: 'exact', values: ['true'] },
     ];
-    const quiet = validateGrant({ conditions: protectedOnly, rules }, gitlab, provider);
+    const quiet = validateIssuerAccessRule({ conditions: protectedOnly, rules }, gitlab, provider);
     expect(quiet.warnings.join('\n')).not.toContain('pipelines can be started');
   });
 });
 
 describe('I-AUTHZ-2: a grant that no longer satisfies the anchor rules does not authorize', () => {
-  // Generic anchor rules come from the caller provider; an admin can change anchor_claims after
-  // grants were saved against the old list.
-  const emailGrant = {
+  // Generic anchor rules come from the credential access rule; an admin can change anchor_claims after
+  // issuer_access_rules were saved against the old list.
+  const emailIssuerAccessRule = {
     id: 'grt_email',
     conditions: [{ claim: 'email', match: 'exact', values: ['a@x.com'] }] as Condition[],
     rules: [{ methods: ['GET'], path: '/**' }] as Rule[],
   };
   const evaluate = (anchorClaims: string[]) =>
-    evaluateGrants([emailGrant], {
+    evaluateIssuerAccessRules([emailIssuerAccessRule], {
       claims: { sub: 's', email: 'a@x.com', oid: 'o-1' },
       profile: generic,
       provider: { anchor_claims: anchorClaims },
@@ -202,8 +202,10 @@ describe('I-AUTHZ-2: a grant that no longer satisfies the anchor rules does not 
   });
 });
 
-function gitlabProvider(): CallerProvider {
+function gitlabProvider(): CredentialAccessRule {
   return {
+    credential_id: 'svc_test',
+    conditions: [],
     id: 'cpr_01JTESTGITLAB0000000000000',
     name: 'GitLab',
     profile: 'gitlab-ci',

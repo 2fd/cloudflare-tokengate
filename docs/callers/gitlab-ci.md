@@ -1,12 +1,12 @@
 # Calling the gateway from GitLab CI
 
-This page shows pipeline authors how to call the gateway from GitLab CI/CD jobs, and shows admins how to set up the matching service consumer and consumer access.
+This page shows pipeline authors how to call the gateway from GitLab CI/CD jobs, and shows admins how to set up the matching credential access rule and issuer access rules.
 
 A job declares an ID token in `id_tokens`. GitLab mints it when the job starts.
 The job sends the token (the caller token) with each request to `/proxy/<service-slug>/<path>`.
-The gateway verifies the token, evaluates the grants and adds the service credential. The job never sees the credential.
+The gateway verifies the token, evaluates the issuer_access_rules and adds the service credential. The job never sees the credential.
 
-## 1. Add the service consumer (admin)
+## 1. Add the credential access rule (admin)
 
 1. Get each group whose projects call the gateway, in the format the form takes, `path (ID)`:
 
@@ -15,14 +15,14 @@ The gateway verifies the token, evaluates the grants and adds the service creden
    ```
 
    The command prints a line such as `acme-group (5678901)`. You can also copy the group ID from the group page (⋮ › Copy group ID).
-2. In the admin UI, open **Service consumers** and open **Add a consumer**.
+2. In the admin UI, open **Credential access rules** and open **Add a credential access rule**.
 3. Choose **GitLab CI** and paste the lines into **Groups**, separated by commas. List every subgroup whose projects run pipelines: the token names the project's direct group.
 4. Only for self-managed GitLab: open **Self-managed GitLab** and enter your instance URL, for example `https://gitlab.example.com`.
-5. Select **Add consumer**.
+5. Select **Add credential access rule**.
 
-The gateway derives the name ("GitLab (acme-group)", or "GitLab (gitlab.example.com)" for a self-managed instance), the issuer, the signing keys, the algorithm and a random audience. When a GitLab consumer for the same issuer exists, **Add consumer** adds the groups to it. Groups can be added and removed later on the consumer page; the audience and the token checks are under **Advanced trust settings**.
+The gateway derives the name ("GitLab (acme-group)", or "GitLab (gitlab.example.com)" for a self-managed instance), the issuer, the signing keys, the algorithm and a random audience. When a GitLab consumer for the same issuer exists, **Add credential access rule** adds the groups to it. Groups can be added and removed later on the credential access rule page; the audience and the token checks are under **Advanced trust settings**.
 
-Rules the gateway enforces (`apps/gateway/src/policy/validate.ts`, `apps/gateway/src/identity/profiles/gitlab-ci.ts`, `apps/gateway/src/admin/ops/caller-providers.ts`):
+Rules the gateway enforces (`apps/gateway/src/policy/validate.ts`, `apps/gateway/src/identity/profiles/gitlab-ci.ts`, `apps/gateway/src/admin/ops/credential-access-rules.ts`):
 
 - At least one group is required: gitlab.com signs tokens for every user ([I-TEN-1](../threat-model.md#i-ten-1)), and the access form derives each project's group from this list.
 - The tenant pin may only use `namespace_id`, as numeric IDs.
@@ -39,7 +39,7 @@ A self-managed instance must be reachable from the public internet: the Worker o
 notify:
   id_tokens:
     TOKENGATE_TOKEN:
-      aud: tokengate:abcdefghijklmnopqrstuvwxyz   # the consumer audience
+      aud: tokengate:abcdefghijklmnopqrstuvwxyz   # the credential access rule audience
   script:
     - >
       curl -sS --fail-with-body "$TOKENGATE_URL/proxy/slack/chat.postMessage"
@@ -50,10 +50,10 @@ notify:
 
 - Store `TOKENGATE_URL` as a CI/CD variable. The audience is not a secret.
 - Do not `echo` the token or write it to artifacts.
-- The consumer page shows a ready-to-copy snippet under **Connect your jobs**, with the slugs of the tokens it can use.
+- The credential access rule page shows a ready-to-copy snippet under **Connect your jobs**, with the slugs of the tokens it can use.
 
 Send the token in `x-tokengate-token` (recommended), or as `Authorization: Bearer <token>`.
-For services with **Custom header** injection, the injection header also works when neither header above is present.
+For credentials with **Custom header** injection, the injection header also works when neither header above is present.
 See [github-actions.md](github-actions.md#3-send-the-token) for the full order. The gateway never forwards these headers ([I-TOK-1](../threat-model.md#i-tok-1)).
 
 ## Claims the gateway uses
@@ -76,7 +76,7 @@ Get a project in the format the access form takes: `glab api projects/acme-group
 
 ## Examples per context
 
-Admins create these accesses with **Give a consumer access**: paste the project, choose **When** (Environment, Branch, Tag, Any protected branch or tag, or Any branch, tag or environment) and enter its name. The conditions below are what the form builds; the access page shows them under **Exact conditions**. Contexts the form does not offer, such as a `pipeline_source` opt-in, use **Write conditions by hand**. Semantics: [policies.md](../policies.md#structured-access-form).
+Admins create these accesses with **Give an issuer access rule**: paste the project, choose **When** (Environment, Branch, Tag, Any protected branch or tag, or Any branch, tag or environment) and enter its name. The conditions below are what the form builds; the access page shows them under **Exact conditions**. Contexts the form does not offer, such as a `pipeline_source` opt-in, use **Write conditions by hand**. Semantics: [policies.md](../policies.md#structured-access-form).
 
 In GitLab tokens, `ref` is the plain branch or tag name (`main`, `v1.2.0`). `ref_path` carries the full form (`refs/heads/main`).
 
@@ -114,7 +114,7 @@ project_id exact 7654321
 pipeline_source exact merge_request_event
 ```
 
-- A merge request pipeline runs the proposed code. Grant it only low-risk calls.
+- A merge request pipeline runs the proposed code. IssuerAccessRule it only low-risk calls.
 - In merge request pipelines, GitLab sets `project_id` to the source project of the merge request. For a fork, that is the fork, so a grant anchored on your `project_id` does not match.
 
 ### Environment
@@ -189,9 +189,9 @@ See [errors.md](../errors.md) for every error code. A response without `x-tokeng
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `token_missing` (401) | `id_tokens` not declared, or a different variable name | Declare the token in the job and use the same variable name. |
-| `audience_mismatch` (401) | Wrong `aud` | Use the audience on the consumer page. |
-| `issuer_unknown` (401) | The consumer **Issuer** (Advanced trust settings) differs from the token `iss` (for example a trailing `/`, or another hostname) | Set **Issuer** to the exact `iss` value, for example `https://gitlab.example.com`. |
-| `tenant_mismatch` (401) | The project is in a subgroup that is not listed | Add the subgroup on the consumer page (**Add groups**). |
+| `audience_mismatch` (401) | Wrong `aud` | Use the audience on the credential access rule page. |
+| `issuer_unknown` (401) | The credential access rule **Issuer** (Advanced trust settings) differs from the token `iss` (for example a trailing `/`, or another hostname) | Set **Issuer** to the exact `iss` value, for example `https://gitlab.example.com`. |
+| `tenant_mismatch` (401) | The project is in a subgroup that is not listed | Add the subgroup on the credential access rule page (**Add groups**). |
 | `token_too_old` (401) | Call made more than **Maximum token age** after the job started | See [Long jobs](#long-jobs). |
 | `event_not_trusted` (403) | `pipeline_source` is not trusted and the grant does not opt in | Add an exact `pipeline_source` condition that lists it. |
 | `no_matching_grant` (403) | No grant matches | Ask an access manager to use **Give this caller access** on the request. |

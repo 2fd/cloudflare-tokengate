@@ -71,24 +71,24 @@ export const SECTIONS: Readonly<Record<SectionKey, SectionInfo>> = {
     ],
   },
   tokens: {
-    label: 'Service tokens',
+    label: 'Credentials',
     root: paths.tokens(),
-    help: 'concepts.md#service-token',
+    help: 'concepts.md#credential',
     icon: 'token',
     tabs: [
-      { key: 'tokens', href: paths.tokens(), label: 'Tokens' },
+      { key: 'tokens', href: paths.tokens(), label: 'Credentials' },
       { key: 'hosts', href: paths.tokenHosts(), label: 'Allowed hosts' },
       { key: 'keys', href: paths.tokenKeys(), label: 'Encryption keys' },
     ],
   },
   consumers: {
-    label: 'Service consumers',
+    label: 'Access Rules',
     root: paths.consumers(),
-    help: 'concepts.md#service-consumer',
+    help: 'concepts.md#credential-access-rule',
     icon: 'consumer',
     tabs: [
-      { key: 'consumers', href: paths.consumers(), label: 'Consumers' },
-      { key: 'access', href: paths.access(), label: 'Consumer access' },
+      { key: 'consumers', href: paths.consumers(), label: 'Credential Access Rules' },
+      { key: 'access', href: paths.access(), label: 'Issuer Access Rules' },
     ],
   },
 };
@@ -144,7 +144,7 @@ export function Document(props: { title: string; children?: Child }) {
 
 /**
  * `Error: Title – Section – tokengate`. The section part only inside the signed-in shell, and not
- * when the title is the section name ("Service tokens – tokengate").
+ * when the title is the section name ("Credentials – tokengate").
  */
 export function documentTitle(title: string, section: SectionKey | null, errors: boolean): string {
   const label = section ? SECTIONS[section].label : undefined;

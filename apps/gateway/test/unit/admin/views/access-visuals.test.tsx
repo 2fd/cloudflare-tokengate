@@ -1,4 +1,4 @@
-// Pure display helpers of the consumer and consumer access pages: the hour-based "last used" time,
+// Pure display helpers of the credential access rule and issuer access rules pages: the hour-based "last used" time,
 // the status a row leads with, the busiest-first order and the operation names.
 import { describe, expect, it } from 'vitest';
 import type { AccessEdge } from '../../../../src/admin/connections';
@@ -43,9 +43,11 @@ describe('leadStatus', () => {
     });
     expect(lead.status).toBe('expired');
     expect(lead.rest).toEqual([{ status: 'risk_accepted' }]);
-    expect(leadStatus({ status: 'inactive', statusDetail: 'token disabled', flags: [] })).toEqual({
+    expect(
+      leadStatus({ status: 'inactive', statusDetail: 'credential disabled', flags: [] }),
+    ).toEqual({
       status: 'inactive',
-      detail: 'token disabled',
+      detail: 'credential disabled',
       rest: [],
     });
   });

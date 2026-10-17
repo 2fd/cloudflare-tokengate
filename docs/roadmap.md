@@ -31,13 +31,13 @@ These are outside the project's scope. Pull requests that add them are unlikely 
 
 - **Token exchange endpoint.** Exchange a workload identity token for a short-lived, scoped gateway token, for tools that cannot send a fresh caller token on every request.
 - **Per-grant rate limits configured in the UI.** Today the optional `PROXY_RATE_LIMITER` binding applies one limit, set in `wrangler.jsonc`, to each grant separately ([configuration.md](configuration.md)).
-- **Grant builder for GitLab CI.** The builder in `apps/gateway/src/policy/presets.ts` covers GitHub Actions only. GitLab grants use the conditions editor.
+- **IssuerAccessRule builder for GitLab CI.** The builder in `apps/gateway/src/policy/presets.ts` covers GitHub Actions only. GitLab issuer_access_rules use the conditions editor.
 - **Nested claims in conditions.** Conditions read only top-level claims ([policies.md](policies.md)).
 - **Policy cache.** An opt-in cache with a bounded TTL, if D1 latency on the proxy path becomes a problem. It would delay revocation by up to the TTL, so it needs its own ADR ([ADR 0006](adr/0006-no-policy-caching.md)).
 
 ### Administration
 
-- **Admin JSON API.** Manage services, caller providers and grants from scripts. Today the only machine-readable output is the export (`POST /admin/export`).
+- **Admin JSON API.** Manage credentials, credential access rules and issuer_access_rules from scripts. Today the only machine-readable output is the export (`POST /admin/export`).
 - **Import and plan/apply.** Keep configuration in git, preview the changes, then apply them.
 - **Detection of configuration regressions.** Warn on the dashboard and fail `/readyz` when Access login changes from configured to off. Today `apps/gateway/scripts/check-config.sh` guards only the committed `wrangler.jsonc` ([ADR 0013](adr/0013-operator-variables-outside-wrangler-config.md)).
 - **Configuration check during deploy.** Run `apps/gateway/scripts/check-config.sh` in `pnpm run deploy`. It is not run there yet. The script needs `bash` and `jq`, and their presence in the Workers Builds image is not confirmed.

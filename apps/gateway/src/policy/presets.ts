@@ -1,6 +1,6 @@
 // Structured access builders for GitHub Actions and GitLab CI (docs/policies.md, "Structured
 // access form"). UI-only convenience: they produce plain conditions that still go through
-// validateGrant. Defaults are the safe choice: numeric IDs, exact event allowlists, protected refs.
+// validateIssuerAccessRule. Defaults are the safe choice: numeric IDs, exact event allowlists, protected refs.
 // Patterns that the validator would call broad (a leading `*`, `**`, a wildcard environment or
 // workflow pin) are refused here, so the only risks of a structured access are the three explicit
 // choices of RiskCode. The inverses return the builder input only when it rebuilds the exact
@@ -159,7 +159,7 @@ function patternErrors(context: string, pattern: string): PresetError[] {
 }
 
 /** Builds the conditions of a GitHub Actions access. */
-export function githubGrantPreset(input: GithubPresetInput): PresetResult {
+export function githubIssuerAccessRulePreset(input: GithubPresetInput): PresetResult {
   const errors: PresetError[] = [];
   const risks: RiskCode[] = [];
   const conditions: Condition[] = [];
@@ -239,7 +239,7 @@ export function githubGrantPreset(input: GithubPresetInput): PresetResult {
  * Builds the conditions of a GitLab CI access. GitLab refs are bare names with `ref_type`; the
  * pipeline source stays implicit, so only trusted sources match (I-AUTHZ-3).
  */
-export function gitlabGrantPreset(input: GitlabPresetInput): PresetResult {
+export function gitlabIssuerAccessRulePreset(input: GitlabPresetInput): PresetResult {
   const errors: PresetError[] = [];
   const risks: RiskCode[] = [];
   const conditions: Condition[] = [];
@@ -368,7 +368,7 @@ export function githubPresetFromConditions(
           requireGithubHosted: hosted === 'github-hosted',
           workflowRef: workflowRef ?? null,
         };
-        const built = githubGrantPreset(input);
+        const built = githubIssuerAccessRulePreset(input);
         if (built.errors.length === 0 && conditionSetKey(built.conditions) === key) return input;
       }
     }
@@ -399,7 +399,7 @@ export function gitlabPresetFromConditions(
           requireProtectedRef: PROTECTABLE_CONTEXTS.includes(context) ? requireProtectedRef : true,
           configRef: configRef ?? null,
         };
-        const built = gitlabGrantPreset(input);
+        const built = gitlabIssuerAccessRulePreset(input);
         if (built.errors.length === 0 && conditionSetKey(built.conditions) === key) return input;
       }
     }

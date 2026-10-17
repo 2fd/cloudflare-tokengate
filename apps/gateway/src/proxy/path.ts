@@ -100,7 +100,7 @@ export function removeQueryParam(search: string, param: string): string | null {
 
 /**
  * Query parameter names that frameworks read as a method override (Symfony/Laravel `_method`,
- * Express method-override, the X-HTTP-Method-Override family). Grant rules match the request
+ * Express method-override, the X-HTTP-Method-Override family). IssuerAccessRule rules match the request
  * method only, so forwarding one would bypass them, like the headers in NEVER_FORWARD (I-AUTHZ-1).
  */
 export const METHOD_OVERRIDE_PARAMS: readonly string[] = [

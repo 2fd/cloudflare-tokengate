@@ -48,9 +48,13 @@ import {
 } from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
 import type { App } from '../../app';
-import { getCallerProvider, listCallerProviders } from '../../db/caller-providers';
 import { repositoryLabelOptions } from '../../db/claim-labels';
-import { listGrants } from '../../db/grants';
+import {
+  getCredentialAccessRule,
+  listCredentialAccessRules,
+} from '../../db/credential-access-rules';
+import { getService, listServices } from '../../db/credentials';
+import { listIssuerAccessRules } from '../../db/issuer_access_rules';
 import {
   getRequest,
   type RequestFilter,
@@ -58,15 +62,15 @@ import {
   type RequestPage,
   searchRequests,
 } from '../../db/requests';
-import { getService, listServices } from '../../db/services';
 import { getSettings } from '../../db/settings';
-import type { CallerProvider, Grant, Service } from '../../db/types';
+import type { CredentialAccessRule, IssuerAccessRule, Service } from '../../db/types';
 import { tenantPinHolds } from '../../identity/jwt';
 import { getProfile } from '../../identity/profiles';
 import type { Claims } from '../../identity/types';
 import { idTimestamp } from '../../lib/ids';
 import { parseJson } from '../../lib/json';
-import { evaluateGrants } from '../../policy/evaluate';
+import { boundaryHolds, conditionsWithin } from '../../policy/boundaries';
+import { evaluateIssuerAccessRules } from '../../policy/evaluate';
 import type { Decision, TraceEntry } from '../../policy/types';
 import { canonicalizePath } from '../../proxy/path';
 import {
@@ -128,7 +132,7 @@ export interface RequestParams {
   outcome?: Outcome;
   /** A token id or `none`. */
   token?: string;
-  /** A consumer id or `none`. */
+  /** A credential access rule id or `none`. */
   consumer?: string;
   access?: string;
   repo?: string;
@@ -175,7 +179,8 @@ export function parseRequestParams(query: (name: string) => string | undefined):
   const consumer = raw('consumer');
   if (consumer) {
     if (consumer === 'none' || PROVIDER_ID.test(consumer)) params.consumer = consumer;
-    else errors.push({ field: 'consumer', message: 'Choose a service consumer from the list.' });
+    else
+      errors.push({ field: 'consumer', message: 'Choose a credential access rule from the list.' });
   }
   const access = raw('access');
   if (access) {
@@ -183,7 +188,7 @@ export function parseRequestParams(query: (name: string) => string | undefined):
     else
       errors.push({
         field: null,
-        message: 'That consumer access filter is not valid; it was removed.',
+        message: 'That issuer access rules filter is not valid; it was removed.',
       });
   }
   const repo = raw('repo');
@@ -227,7 +232,7 @@ function toFilter(params: RequestParams, now: number): RequestFilter {
       : { service_id: params.token === 'none' ? null : params.token }),
     ...(params.consumer === undefined
       ? {}
-      : { caller_provider_id: params.consumer === 'none' ? null : params.consumer }),
+      : { credential_access_rule_id: params.consumer === 'none' ? null : params.consumer }),
     ...(params.access ? { grant_id: params.access } : {}),
     ...(params.outcome ? { outcomeClass: params.outcome } : {}),
     ...(params.reason ? { reason: params.reason } : {}),
@@ -304,15 +309,17 @@ export function registerRequestsRoutes(app: App): void {
       );
     }
     const db = deps.env.DB;
-    const [service, provider, grants, settings] = await Promise.all([
+    const [service, provider, issuer_access_rules, settings] = await Promise.all([
       record.service_id ? getService(db, record.service_id) : null,
-      record.caller_provider_id ? getCallerProvider(db, record.caller_provider_id) : null,
-      record.service_id ? listGrants(db, { service_id: record.service_id }) : [],
+      record.credential_access_rule_id
+        ? getCredentialAccessRule(db, record.credential_access_rule_id)
+        : null,
+      record.service_id ? listIssuerAccessRules(db, { service_id: record.service_id }) : [],
       getSettings(db),
     ]);
     const reevaluation =
       record.claims_verified === 1
-        ? reevaluate(record, { service, provider, grants, now: deps.now() })
+        ? reevaluate(record, { service, provider, issuer_access_rules, now: deps.now() })
         : null;
     // One flag for every "Give access from this request" on the page (I-LOG-2): a verified record,
     // an access-fixable reason, and the re-evaluation does not already allow it.
@@ -409,7 +416,7 @@ export function registerRequestsRoutes(app: App): void {
           record={record}
           service={service}
           provider={provider}
-          grants={grants}
+          issuer_access_rules={issuer_access_rules}
           reevaluation={reevaluation}
           giveAccess={giveAccess}
           accessAllowsNow={accessAllowsNow}
@@ -475,8 +482,8 @@ function refText(claims: Claims | null): string | undefined {
 
 interface Names {
   tokens: ReadonlyMap<string, Service>;
-  consumers: ReadonlyMap<string, CallerProvider>;
-  grants: ReadonlyMap<string, string>;
+  consumers: ReadonlyMap<string, CredentialAccessRule>;
+  issuer_access_rules: ReadonlyMap<string, string>;
 }
 
 async function requestsPage(
@@ -492,17 +499,17 @@ async function requestsPage(
   const deps = c.get('deps');
   const { params } = o;
   const now = deps.now();
-  const [services, providers, grants, repos, page] = await Promise.all([
+  const [credentials, providers, issuer_access_rules, repos, page] = await Promise.all([
     listServices(deps.env.DB),
-    listCallerProviders(deps.env.DB),
-    listGrants(deps.env.DB),
+    listCredentialAccessRules(deps.env.DB),
+    listIssuerAccessRules(deps.env.DB),
     repositoryLabelOptions(deps.env.DB),
     searchRequests(deps.env.TELEMETRY_DB, { ...toFilter(params, now), limit: PAGE_SIZE + 1 }),
   ]);
   const names: Names = {
-    tokens: new Map(services.map((s) => [s.id, s])),
+    tokens: new Map(credentials.map((s) => [s.id, s])),
     consumers: new Map(providers.map((p) => [p.id, p])),
-    grants: new Map(grants.map((g) => [g.id, g.name])),
+    issuer_access_rules: new Map(issuer_access_rules.map((g) => [g.id, g.name])),
   };
   const { rows, pager } = paginate(params, page);
   const titleParts = [
@@ -510,7 +517,9 @@ async function requestsPage(
     params.range ? `last ${RANGE_LABEL[params.range]}` : null,
     params.token ? `token ${tokenName(params.token, names.tokens)}` : null,
     params.consumer ? `consumer ${consumerName(params.consumer, names.consumers)}` : null,
-    params.access ? `access ${names.grants.get(params.access) ?? params.access}` : null,
+    params.access
+      ? `access ${names.issuer_access_rules.get(params.access) ?? params.access}`
+      : null,
     params.repo ? params.repo : null,
     params.reason ? reasonLabel(params.reason) : null,
     params.slug ? `slug ${params.slug}` : null,
@@ -642,7 +651,7 @@ async function requestsPage(
               <RequestFilters
                 params={params}
                 errors={o.errors}
-                services={services}
+                credentials={credentials}
                 providers={providers}
                 repos={[...new Set(repos.map((r) => r.label))]}
                 rawRepo={o.rawRepo}
@@ -666,7 +675,8 @@ async function requestsPage(
                   title="No requests recorded yet."
                   description={
                     <>
-                      Requests appear once a consumer calls <code>/proxy/&lt;token slug&gt;/…</code>
+                      Requests appear once a credential access rule calls{' '}
+                      <code>/proxy/&lt;token slug&gt;/…</code>
                     </>
                   }
                   actions={
@@ -727,7 +737,9 @@ function listSentence(params: RequestParams, names: Names): { title: string; res
         ? ' with no verified consumer'
         : ` through ${consumerName(params.consumer, names.consumers)}`
       : '',
-    params.access ? ` through the access ${names.grants.get(params.access) ?? params.access}` : '',
+    params.access
+      ? ` through the access ${names.issuer_access_rules.get(params.access) ?? params.access}`
+      : '',
     params.reason ? ` for the reason ${reasonLabel(params.reason)}` : '',
     params.range ? ` in the last ${RANGE_LABEL[params.range]}` : '',
   ].join('');
@@ -762,7 +774,7 @@ function OneCaller(props: { params: RequestParams; rows: RequestRecord[]; ctx: V
   return (
     <Callout
       title={`All ${formatCount(rows.length)} on this page come from one caller: ${first.caller_repository}${ref ? ` on ${ref}` : ''}.`}
-      more="No consumer access allows this call. The form opens with this caller and call filled in."
+      more="No issuer access rules allows this call. The form opens with this caller and call filled in."
       actions={
         <Button variant="primary" href={paths.accessNew({ from_request: first.id })}>
           Give access from the latest request
@@ -806,12 +818,12 @@ function tokenName(value: string, tokens: ReadonlyMap<string, Service>): string 
   return tokens.get(value)?.slug ?? value;
 }
 
-function consumerName(value: string, consumers: ReadonlyMap<string, CallerProvider>): string {
+function consumerName(value: string, consumers: ReadonlyMap<string, CredentialAccessRule>): string {
   if (value === 'none') return 'none';
   return consumers.get(value)?.name ?? value;
 }
 
-/** "Reason: No consumer access allows this call (no_matching_grant)". */
+/** "Reason: No issuer access rules allows this call (no_matching_grant)". */
 function capitalise(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
@@ -831,7 +843,7 @@ function filterChips(params: RequestParams, names: Names) {
           ? 'Token: refused before a token was chosen'
           : names.tokens.has(params.token)
             ? `Token: ${tokenName(params.token, names.tokens)}`
-            : `Token: Deleted token ${params.token}`,
+            : `Token: Deleted credential ${params.token}`,
       ),
     );
   }
@@ -843,12 +855,14 @@ function filterChips(params: RequestParams, names: Names) {
           ? 'Consumer: none'
           : names.consumers.has(params.consumer)
             ? `Consumer: ${consumerName(params.consumer, names.consumers)}`
-            : `Consumer: Deleted consumer ${params.consumer}`,
+            : `Consumer: Deleted credential access rule ${params.consumer}`,
       ),
     );
   }
   if (params.access)
-    chips.push(chip('access', `Access: ${names.grants.get(params.access) ?? params.access}`));
+    chips.push(
+      chip('access', `Access: ${names.issuer_access_rules.get(params.access) ?? params.access}`),
+    );
   if (params.repo) chips.push(chip('repo', `Repository: ${params.repo}`));
   if (params.reason) chips.push(chip('reason', `Reason: ${reasonLabel(params.reason)}`));
   if (params.slug) chips.push(chip('slug', `Slug: ${params.slug}`));
@@ -859,13 +873,13 @@ function filterChips(params: RequestParams, names: Names) {
 function RequestFilters(props: {
   params: RequestParams;
   errors: FieldErrorData[];
-  services: Service[];
-  providers: CallerProvider[];
+  credentials: Service[];
+  providers: CredentialAccessRule[];
   repos: string[];
   /** The submitted repository when it was invalid, re-rendered for correction (WCAG 3.3.7). */
   rawRepo?: string;
 }) {
-  const { params, services, providers } = props;
+  const { params, credentials, providers } = props;
   const error = (field: string) => props.errors.find((e) => e.field === field)?.message;
   // Every filter set by a link is kept when the repository is applied.
   const hidden: Record<string, string> = {};
@@ -914,9 +928,9 @@ function RequestFilters(props: {
       <Button type="submit">Apply</Button>
       <AddFilter
         id="f-token"
-        label="Token"
+        label="Credential"
         open={error('token') !== undefined}
-        options={[...services]
+        options={[...credentials]
           .sort((a, b) => a.name.localeCompare(b.name))
           .map((s) => ({
             href: listLink(params, { token: s.id }),
@@ -930,7 +944,7 @@ function RequestFilters(props: {
       />
       <AddFilter
         id="f-consumer"
-        label="Consumer"
+        label="Credential access rule"
         open={error('consumer') !== undefined}
         options={[...providers]
           .sort((a, b) => a.name.localeCompare(b.name))
@@ -1005,8 +1019,8 @@ function RequestTable(props: {
         const shown = shownOutcome(r);
         const { tone } = OUTCOME_TONE[shown];
         const token = r.service_id ? names.tokens.get(r.service_id) : undefined;
-        const provider = r.caller_provider_id
-          ? names.consumers.get(r.caller_provider_id)
+        const provider = r.credential_access_rule_id
+          ? names.consumers.get(r.credential_access_rule_id)
           : undefined;
         const tokenSide = {
           logo: tokenLogo(token),
@@ -1089,7 +1103,7 @@ function RequestTable(props: {
                   {filterLink(
                     { access: r.grant_id },
                     'access',
-                    names.grants.get(r.grant_id) ?? <code>{r.grant_id}</code>,
+                    names.issuer_access_rules.get(r.grant_id) ?? <code>{r.grant_id}</code>,
                   )}
                 </>
               ) : (
@@ -1116,13 +1130,13 @@ interface NextAction {
   context?: string;
   /** Without it the viewer sees AskSomeone instead of the link. */
   permission?: Permission;
-  /** The ask text: "Ask a token manager to …". */
+  /** The ask text: "Ask a credential manager to …". */
   verb?: string;
 }
 
 interface ActionContext {
   record: RequestRecord;
-  /** A current consumer access would allow it (blockers aside: an access cannot fix those). */
+  /** A current issuer access rules would allow it (blockers aside: an access cannot fix those). */
   accessAllowsNow: boolean;
 }
 
@@ -1147,8 +1161,8 @@ const setSecretAgain = (ctx: ActionContext): NextAction[] => {
 };
 
 const openConsumer = ({ record }: ActionContext): NextAction[] =>
-  record.caller_provider_id
-    ? [{ href: paths.consumer(record.caller_provider_id), label: 'Open consumer' }]
+  record.credential_access_rule_id
+    ? [{ href: paths.consumer(record.credential_access_rule_id), label: 'Open consumer' }]
     : [];
 
 const openKeys = (): NextAction[] => [{ href: paths.tokenKeys(), label: 'Open encryption keys' }];
@@ -1200,26 +1214,26 @@ export const NEXT_ACTIONS: Readonly<
     actions: callerDocs('token_ambiguous'),
   },
   token_malformed: {
-    text: "The token is not a JWT with an algorithm and key id this service consumer accepts. Check the service consumer's allowed algorithms.",
+    text: "The token is not a JWT with an algorithm and key id this credential access rule accepts. Check the credential access rule's allowed algorithms.",
     actions: openConsumer,
   },
   issuer_unknown: {
-    text: 'No enabled service consumer has this issuer. Add a service consumer for it, or enable the existing one.',
+    text: 'No enabled credential access rule has this issuer. Add a credential access rule for it, or enable the existing one.',
     actions: ({ record }) => {
       const type =
         record.claims_verified === 0 ? profileForIssuer(record.untrusted_iss) : undefined;
       return [
         {
           href: paths.consumerNew(type ? { type } : undefined),
-          label: 'Add a service consumer',
+          label: 'Add a credential access rule',
           permission: 'access:write',
-          verb: 'add a service consumer',
+          verb: 'add a credential access rule',
         },
       ];
     },
   },
   audience_mismatch: {
-    text: 'The token was minted for another audience. Use the audience shown on the service consumer page.',
+    text: 'The token was minted for another audience. Use the audience shown on the credential access rule page.',
     actions: openConsumer,
   },
   token_expired: {
@@ -1227,35 +1241,35 @@ export const NEXT_ACTIONS: Readonly<
     actions: callerDocs('token_expired'),
   },
   token_too_old: {
-    text: "Mint the token right before the call, or raise the service consumer's maximum token age.",
+    text: "Mint the token right before the call, or raise the credential access rule's maximum token age.",
     actions: openConsumer,
   },
   signature_invalid: {
-    text: "The token signature does not match the issuer's signing keys. Check that the service consumer's issuer and JWKS URL are correct.",
+    text: "The token signature does not match the issuer's signing keys. Check that the credential access rule's issuer and JWKS URL are correct.",
     actions: openConsumer,
   },
   jwks_unavailable: {
-    text: "The gateway could not download the issuer's signing keys. Usually temporary; if it persists, check the service consumer's JWKS URL.",
+    text: "The gateway could not download the issuer's signing keys. Usually temporary; if it persists, check the credential access rule's JWKS URL.",
     actions: openConsumer,
   },
   claims_invalid: {
-    text: 'The token lacks claims this service consumer requires.',
+    text: 'The token lacks claims this credential access rule requires.',
     actions: openConsumer,
   },
   tenant_mismatch: {
-    text: "The caller is outside the organization or group pinned on the service consumer (tenant pin). Check the service consumer's organizations or groups.",
+    text: "The caller is outside the organization or group pinned on the credential access rule (tenant pin). Check the credential access rule's organizations or groups.",
     actions: openConsumer,
   },
   profile_unknown: {
-    text: 'The service consumer uses a consumer type this version does not know. Check the service consumer, or upgrade the gateway.',
+    text: 'The credential access rule uses a credential access rule type this version does not know. Check the credential access rule, or upgrade the gateway.',
     actions: openConsumer,
   },
   no_matching_grant: {
-    text: 'No consumer access allows this caller to make this request. Read the policy evaluation below to see which check failed. An access manager, admin or owner can give access from this request.',
+    text: 'No issuer access rules allows this caller to make this request. Read the policy evaluation below to see which check failed. An access manager, admin or owner can give access from this request.',
     actions: giveAccess,
   },
   event_not_trusted: {
-    text: 'The workflow event (for example pull_request_target) is not trusted by default. A consumer access must list it explicitly, which is risky for events that run untrusted code.',
+    text: 'The workflow event (for example pull_request_target) is not trusted by default. A issuer access rules must list it explicitly, which is risky for events that run untrusted code.',
     actions: giveAccess,
   },
   service_not_found: {
@@ -1266,9 +1280,9 @@ export const NEXT_ACTIONS: Readonly<
         : []),
       {
         href: paths.tokenNew(),
-        label: 'Add a service token',
+        label: 'Add a credential',
         permission: 'tokens:write',
-        verb: 'add a service token',
+        verb: 'add a credential',
       },
     ],
   },
@@ -1297,19 +1311,19 @@ export const NEXT_ACTIONS: Readonly<
     actions: setSecretAgain,
   },
   keyring_absent: {
-    text: 'Set the TOKENGATE_KEK secret on the Worker. See Service tokens › Encryption keys for the keyring status.',
+    text: 'Set the TOKENGATE_KEK secret on the Worker. See Credentials › Encryption keys for the keyring status.',
     actions: openKeys,
   },
   keyring_malformed: {
-    text: 'Fix the TOKENGATE_KEK or TOKENGATE_KEYRING secret. See Service tokens › Encryption keys.',
+    text: 'Fix the TOKENGATE_KEK or TOKENGATE_KEYRING secret. See Credentials › Encryption keys.',
     actions: openKeys,
   },
   active_kid_missing: {
-    text: 'Fix the TOKENGATE_KEYRING secret: its active key is missing. See Service tokens › Encryption keys.',
+    text: 'Fix the TOKENGATE_KEYRING secret: its active key is missing. See Credentials › Encryption keys.',
     actions: openKeys,
   },
   key_not_32_bytes: {
-    text: 'Fix the keyring secret: every key must be 32 bytes. See Service tokens › Encryption keys.',
+    text: 'Fix the keyring secret: every key must be 32 bytes. See Credentials › Encryption keys.',
     actions: openKeys,
   },
   both_kek_and_keyring_set: {
@@ -1317,7 +1331,7 @@ export const NEXT_ACTIONS: Readonly<
     actions: openKeys,
   },
   dev_placeholder_key: {
-    text: 'Replace the development TOKENGATE_KEK from .dev.vars.example with a key of your own. See Service tokens › Encryption keys.',
+    text: 'Replace the development TOKENGATE_KEK from .dev.vars.example with a key of your own. See Credentials › Encryption keys.',
     actions: openKeys,
   },
   credential_missing: {
@@ -1325,12 +1339,12 @@ export const NEXT_ACTIONS: Readonly<
     actions: setSecretAgain,
   },
   credential_binding_mismatch: {
-    text: 'If Service tokens › Encryption keys shows a replaced key, restore it. Otherwise the token row was probably edited in D1: check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the secret again.',
+    text: 'If Credentials › Encryption keys shows a replaced key, restore it. Otherwise the token row was probably edited in D1: check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the secret again.',
     actions: setSecretAgain,
   },
   credential_invalid: { text: 'Re-enter the secret on the token page.', actions: setSecretAgain },
   credential_unavailable: {
-    text: "The token's secret could not be opened. Check Service tokens › Encryption keys; if the keys are fine, check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the secret again.",
+    text: "The token's secret could not be opened. Check Credentials › Encryption keys; if the keys are fine, check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the secret again.",
     actions: setSecretAgain,
   },
   keyring_missing_key: {
@@ -1354,7 +1368,7 @@ export const NEXT_ACTIONS: Readonly<
     actions: openToken,
   },
   rate_limited: {
-    text: 'The caller exceeded the rate limit for this consumer access.',
+    text: 'The caller exceeded the rate limit for this issuer access rules.',
     actions: ({ record }) =>
       record.grant_id ? [{ href: paths.accessItem(record.grant_id), label: 'Open access' }] : [],
   },
@@ -1386,7 +1400,7 @@ function WhatToDo(props: {
   ctx: ViewContext;
   record: RequestRecord;
   service: Service | null;
-  provider: CallerProvider | null;
+  provider: CredentialAccessRule | null;
   accessAllowsNow: boolean;
   giveAccess: boolean;
   step: number;
@@ -1460,7 +1474,7 @@ function WhatToDo(props: {
 function prefillChips(
   record: RequestRecord,
   claims: Claims | null,
-  provider: CallerProvider | null,
+  provider: CredentialAccessRule | null,
   service: Service | null,
 ): PrefillValue[] {
   const chips: PrefillValue[] = [];
@@ -1486,7 +1500,7 @@ function prefillChips(
   return chips;
 }
 
-/** The reason group a code belongs to ("Caller token", "Consumer access", …). */
+/** The reason group a code belongs to ("Caller token", "Issuer access rules", …). */
 function reasonGroup(reason: string | null): string | null {
   if (reason === null) return null;
   return REASON_GROUPS.find((group) => group.codes.includes(reason))?.group ?? null;
@@ -1499,7 +1513,7 @@ function reasonGroup(reason: string | null): string | null {
 function traceSteps(
   r: RequestRecord,
   ctx: {
-    provider: CallerProvider | null;
+    provider: CredentialAccessRule | null;
     service: Service | null;
     grantName: string | null;
     checked: number;
@@ -1509,9 +1523,9 @@ function traceSteps(
   const upstreamFailed =
     group === 'Upstream' || (r.upstream_status !== null && r.upstream_status >= 500);
   let stop: number | null;
-  if (group === 'Caller token' || group === 'Service consumer') stop = 1;
+  if (group === 'Caller token' || group === 'Credential access rule') stop = 1;
   else if (group === 'Token configuration' || group === 'Encryption keys') stop = 2;
-  else if (group === 'Consumer access') stop = 3;
+  else if (group === 'Issuer access rules') stop = 3;
   else if (upstreamFailed) stop = 4;
   else if (r.outcome === 'allowed') stop = null;
   else stop = r.claims_verified !== 1 ? 1 : !r.service_id ? 2 : !r.grant_id ? 3 : 4;
@@ -1560,7 +1574,7 @@ function traceSteps(
 /** One sentence on what happened, from the record and the current names. */
 function happenedSentence(
   r: RequestRecord,
-  provider: CallerProvider | null,
+  provider: CredentialAccessRule | null,
   service: Service | null,
 ): Child {
   const why = reasonText(r.reason);
@@ -1609,15 +1623,15 @@ function RequestDetail(props: {
   ctx: ViewContext;
   record: RequestRecord;
   service: Service | null;
-  provider: CallerProvider | null;
-  grants: Grant[];
+  provider: CredentialAccessRule | null;
+  issuer_access_rules: IssuerAccessRule[];
   reevaluation: Reevaluation | null;
   giveAccess: boolean;
   accessAllowsNow: boolean;
   retentionDays: number;
 }) {
   const { record: r, service, provider, ctx } = props;
-  const grantNames = new Map(props.grants.map((g) => [g.id, g.name]));
+  const grantNames = new Map(props.issuer_access_rules.map((g) => [g.id, g.name]));
   const claims = storedClaims(r);
   const trace = storedTrace(r);
   const tokenLabel = service?.slug ?? r.service_slug;
@@ -1647,7 +1661,7 @@ function RequestDetail(props: {
   const summary: RailKeyValueItem[] = [
     { label: 'Result', value: <OutcomeBadge record={r} /> },
     {
-      label: 'Token',
+      label: 'Credential',
       value:
         r.service_id && service ? (
           <>
@@ -1664,13 +1678,13 @@ function RequestDetail(props: {
         ),
     },
     {
-      label: 'Consumer',
-      value: r.caller_provider_id ? (
+      label: 'Credential access rule',
+      value: r.credential_access_rule_id ? (
         provider ? (
-          <a href={paths.consumer(r.caller_provider_id)}>{provider.name}</a>
+          <a href={paths.consumer(r.credential_access_rule_id)}>{provider.name}</a>
         ) : (
           <>
-            <code>{r.caller_provider_id}</code> <span class="muted">(deleted)</span>
+            <code>{r.credential_access_rule_id}</code> <span class="muted">(deleted)</span>
           </>
         )
       ) : (
@@ -1711,7 +1725,7 @@ function RequestDetail(props: {
     {
       label: 'Access that allowed it',
       value: r.grant_id ? (
-        <GrantLink id={r.grant_id} names={grantNames} />
+        <IssuerAccessRuleLink id={r.grant_id} names={grantNames} />
       ) : (
         <span class="muted">None matched</span>
       ),
@@ -1788,7 +1802,7 @@ function RequestDetail(props: {
                   Check against current access{verdict ? <> {verdict}</> : null}
                 </>
               }
-              description="The policy runs again with this request's stored claims against the consumer accesses as they are now. Stored claims subset only: constraints on claims that were not stored fail, so a real token may be allowed where this check says denied. Nothing is changed."
+              description="The policy runs again with this request's stored claims against the issuer access rules as they are now. Stored claims subset only: constraints on claims that were not stored fail, so a real token may be allowed where this check says denied. Nothing is changed."
             >
               <Panel variant="pad">
                 <Recheck record={r} result={props.reevaluation} grantNames={grantNames} />
@@ -1819,7 +1833,7 @@ function RequestDetail(props: {
             <Tray
               id="trace"
               title="Evaluation trace"
-              description="Each consumer access of this consumer and token, in evaluation order, with the first check that failed."
+              description="Each issuer access rules of this credential access rule and token, in evaluation order, with the first check that failed."
             >
               <Panel variant="flush">
                 <TraceTable
@@ -1834,7 +1848,7 @@ function RequestDetail(props: {
           <Tray
             id="claims"
             title="Caller claims"
-            description="Allowlisted claims only: claims off the service consumer's allowlist, and the token itself, are never stored."
+            description="Allowlisted claims only: claims off the credential access rule's allowlist, and the token itself, are never stored."
           >
             <Panel variant="pad">
               {claims && Object.keys(claims).length > 0 ? (
@@ -1864,7 +1878,7 @@ function RequestDetail(props: {
                   items={[
                     { label: 'Request ID', value: r.id, mono: true, copyable: true },
                     { label: 'Time', value: formatTime(r.ts) },
-                    { label: 'Token ID (jti)', value: r.jti ?? '—', mono: r.jti !== null },
+                    { label: 'Credential ID (jti)', value: r.jti ?? '—', mono: r.jti !== null },
                     {
                       label: 'Caller subject (sub)',
                       value: r.caller_subject ?? '—',
@@ -1943,7 +1957,7 @@ function TraceTable(props: {
       labelledBy={props.labelledBy}
       caption={props.caption}
       stackable
-      columns={[{ label: 'Consumer access and result' }, { label: 'Detail' }]}
+      columns={[{ label: 'Issuer access rules and result' }, { label: 'Detail' }]}
     >
       {props.trace.map((item) => (
         <Row>
@@ -1953,7 +1967,7 @@ function TraceTable(props: {
               `${item.omitted} more not shown (trace size limit)`
             ) : (
               <span class="ent-t">
-                <GrantLink id={item.grant_id} names={props.grantNames} />
+                <IssuerAccessRuleLink id={item.grant_id} names={props.grantNames} />
                 {item.result === 'matched' ? (
                   <span class="meta t-ok">
                     <span aria-hidden="true">✓ </span>Matched
@@ -1985,7 +1999,7 @@ export type Reevaluation =
       ok: true;
       /** Checks that run before accesses and would refuse the request on their own. */
       blockers: string[];
-      decision: Decision<Grant>;
+      decision: Decision<IssuerAccessRule>;
       grantsChecked: number;
     };
 
@@ -1998,9 +2012,9 @@ export function reevaluate(
   record: RequestRecord,
   ctx: {
     service: Service | null;
-    provider: CallerProvider | null;
+    provider: CredentialAccessRule | null;
     /** Accesses of the record's token, any state. */
-    grants: Grant[];
+    issuer_access_rules: IssuerAccessRule[];
     now: number;
   },
 ): Reevaluation {
@@ -2010,17 +2024,17 @@ export function reevaluate(
   const claims = storedClaims(record);
   if (claims === null) return { ok: false, message: 'No claims were stored for this request.' };
   const { provider, service } = ctx;
-  if (!record.caller_provider_id || !provider) {
-    return { ok: false, message: 'The service consumer of this request no longer exists.' };
+  if (!record.credential_access_rule_id || !provider) {
+    return { ok: false, message: 'The credential access rule of this request no longer exists.' };
   }
   const profile = getProfile(provider.profile);
   if (!profile)
-    return { ok: false, message: 'The service consumer uses an unknown consumer type.' };
+    return { ok: false, message: 'The credential access rule uses an unknown issuer type.' };
   if (!record.service_id || !service) {
     return {
       ok: false,
       message:
-        'The request did not reach a token that exists today, so no consumer access applies.',
+        'The request did not reach a token that exists today, so no issuer access rules applies.',
     };
   }
   const canonical = canonicalizePath(record.path);
@@ -2028,25 +2042,31 @@ export function reevaluate(
 
   const blockers: string[] = [];
   if (!provider.enabled) {
-    blockers.push('The service consumer is disabled: the gateway rejects all of its callers.');
+    blockers.push(
+      'The credential access rule is disabled: the gateway rejects all of its callers.',
+    );
   }
   if (!tenantPinHolds(provider, claims)) {
     blockers.push(
-      "The stored claims do not satisfy the service consumer's current organizations or groups (tenant pin), or the pin now uses a claim that was not stored.",
+      "The stored claims do not satisfy the credential access rule's current organizations or groups (tenant pin), or the pin now uses a claim that was not stored.",
     );
   }
-  if (!service.enabled) blockers.push('The token is disabled.');
+  if (!service.enabled) blockers.push('The credential is disabled.');
+  if (provider.credential_id !== service.id || !boundaryHolds(provider.conditions, claims)) {
+    blockers.push('The stored claims do not satisfy the current credential access limits.');
+  }
 
   // Same access set and order as the proxy (db/proxy-context.ts): enabled, unexpired, sorted by
-  // (created_at, id) as listGrants returns them.
-  const grants = ctx.grants.filter(
+  // (created_at, id) as listIssuerAccessRules returns them.
+  const issuer_access_rules = ctx.issuer_access_rules.filter(
     (g) =>
-      g.caller_provider_id === provider.id &&
+      g.credential_access_rule_id === provider.id &&
       g.service_id === service.id &&
+      conditionsWithin(g.conditions, provider.conditions) &&
       g.enabled &&
       (g.expires_at === null || g.expires_at > ctx.now),
   );
-  const decision = evaluateGrants(grants, {
+  const decision = evaluateIssuerAccessRules(issuer_access_rules, {
     claims,
     profile,
     provider,
@@ -2055,7 +2075,7 @@ export function reevaluate(
     matchPath: canonical.matchPath,
     revealClaims: new Set(profile.logClaimAllowlist(provider)),
   });
-  return { ok: true, blockers, decision, grantsChecked: grants.length };
+  return { ok: true, blockers, decision, grantsChecked: issuer_access_rules.length };
 }
 
 function storedClaims(record: RequestRecord): Claims | null {
@@ -2081,13 +2101,13 @@ function storedTrace(record: RequestRecord): TraceItem[] {
 
 const TRACE_RESULT_TEXT: Record<TraceEntry['result'], string> = {
   matched: 'matched',
-  invalid_grant: "the access no longer meets the service consumer's anchor rule (I-AUTHZ-2)",
+  invalid_grant: "the access no longer meets the credential access rule's anchor rule (I-AUTHZ-2)",
   condition_failed: 'a constraint did not match',
   event_not_trusted: 'event not opted in',
   no_rule: 'no rule allows this method and path',
 };
 
-function GrantLink(props: { id: string | null; names: Map<string, string> }) {
+function IssuerAccessRuleLink(props: { id: string | null; names: Map<string, string> }) {
   if (!props.id) return <>—</>;
   const name = props.names.get(props.id);
   return <a href={paths.accessItem(props.id)}>{name ?? <code>{props.id}</code>}</a>;
@@ -2111,7 +2131,7 @@ function Recheck(props: {
   const { decision, blockers } = result;
   const checked =
     result.grantsChecked === 0
-      ? 'No enabled consumer access exists for this consumer and token.'
+      ? 'No enabled issuer access rules exists for this credential access rule and token.'
       : `${result.grantsChecked} enabled ${result.grantsChecked === 1 ? 'access' : 'accesses'} checked.`;
   // Verdict first (A11.3 #4). A blocker refuses the request before any access is consulted, so an
   // allowing access alone never makes the verdict "allowed".
@@ -2121,7 +2141,7 @@ function Recheck(props: {
         <>
           <p>
             Would still be <b>refused</b>: {blockers.length === 1 ? 'this check' : 'these checks'}{' '}
-            {blockers.length === 1 ? 'fails' : 'fail'} before consumer accesses apply.
+            {blockers.length === 1 ? 'fails' : 'fail'} before issuer access rules apply.
           </p>
           <ul class="blockers">
             {blockers.map((blocker) => (
@@ -2131,18 +2151,19 @@ function Recheck(props: {
           {decision.decision === 'allow' ? (
             <p>
               Once {blockers.length === 1 ? 'it passes' : 'they pass'}, access{' '}
-              <GrantLink id={decision.grant.id} names={props.grantNames} /> would allow it.
+              <IssuerAccessRuleLink id={decision.grant.id} names={props.grantNames} /> would allow
+              it.
             </p>
           ) : (
             <p>
-              Consumer accesses would also deny it (<code>{decision.code}</code>). {checked}
+              Issuer access ruleses would also deny it (<code>{decision.code}</code>). {checked}
             </p>
           )}
         </>
       ) : decision.decision === 'allow' ? (
         <p>
           Would now be <b>allowed</b> by access{' '}
-          <GrantLink id={decision.grant.id} names={props.grantNames} />.
+          <IssuerAccessRuleLink id={decision.grant.id} names={props.grantNames} />.
         </p>
       ) : (
         <p>

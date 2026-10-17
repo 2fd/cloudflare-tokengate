@@ -1,6 +1,6 @@
-// Small IssuerProfile and CallerProvider fixtures for policy tests. They mirror docs/policies.md but are
+// Small IssuerProfile and CredentialAccessRule fixtures for policy tests. They mirror docs/policies.md but are
 // deliberately independent of src/identity/profiles so policy tests pin policy behavior only.
-import type { CallerProvider } from '../../../src/db/types';
+import type { CredentialAccessRule } from '../../../src/db/types';
 import type { Claims, IssuerProfile } from '../../../src/identity/types';
 
 const display = (claims: Claims) => ({ subject: String(claims.sub ?? '') });
@@ -62,8 +62,10 @@ export const genericProfile: IssuerProfile = {
   display,
 };
 
-export function provider(overrides: Partial<CallerProvider> = {}): CallerProvider {
+export function provider(overrides: Partial<CredentialAccessRule> = {}): CredentialAccessRule {
   return {
+    credential_id: 'svc_test',
+    conditions: [],
     id: 'cpr_01JTESTPROVIDER000000000000',
     name: 'GitHub',
     profile: 'github-actions',

@@ -67,7 +67,7 @@ describe('WhoCanUse', () => {
             more: { href: '/m', label: '+ 5 more accesses', srSuffix: 'of GitHub Actions (acme)' },
           },
         ]}
-        rest={{ href: '/matrix', label: '+ 11 more consumers' }}
+        rest={{ href: '/matrix', label: '+ 11 more credential access rules' }}
         footer="Buildkite has no access."
         footerAction={
           <a class="btn sm ghost" href="/new">
@@ -106,11 +106,11 @@ describe('WhoCanUse', () => {
         label="l"
         token={{ name: 'Slack 2', logo: 'slack', path: '/proxy/slack-2' }}
         groups={[]}
-        empty={{ title: 'No consumer access yet', children: <p class="ask">Ask</p> }}
+        empty={{ title: 'No issuer access rules yet', children: <p class="ask">Ask</p> }}
       />,
     );
     expect(html).toContain(
-      '<div class="wmap is-empty"><div class="wghost"><h3>No consumer access yet</h3><p class="ask">Ask</p></div>',
+      '<div class="wmap is-empty"><div class="wghost"><h3>No issuer access rules yet</h3><p class="ask">Ask</p></div>',
     );
     expect(html).not.toContain('cmap-note');
   });
@@ -121,7 +121,7 @@ describe('WhoCanUse', () => {
         label="l"
         token={{ name: 'Slack', logo: 'slack', path: '/proxy/slack' }}
         groups={[]}
-        rest={{ href: '/matrix', label: '+ 11 more consumers' }}
+        rest={{ href: '/matrix', label: '+ 11 more credential access rules' }}
         note={
           <>
             <b>14 consumers.</b> The map draws the 3 busiest. <a href="/matrix">Open the matrix</a>

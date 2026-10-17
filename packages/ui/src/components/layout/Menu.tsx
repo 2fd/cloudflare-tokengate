@@ -84,7 +84,7 @@ interface MenuItemBase {
   /** The label: the outcome ("Export configuration", "Viewer", "Suspend"). */
   children: Child;
   /**
-   * Second line (`.s`): what the choice changes ("− service tokens, export"). With it, or with
+   * Second line (`.s`): what the choice changes ("− credentials, export"). With it, or with
    * `keyFact`, the item is a two-line item (`.menu-item.two`).
    */
   detail?: Child;

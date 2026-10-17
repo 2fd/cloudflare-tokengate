@@ -8,7 +8,7 @@ describe('ActionForm', () => {
     expect(
       render(
         <ActionForm
-          action="/admin/access/a1/disable"
+          action="/admin/issuer-access-rules/a1/disable"
           hidden={{ _csrf: 'tok', id: 'a1' }}
           size="sm"
           srSuffix="acme/api → Slack"
@@ -17,7 +17,7 @@ describe('ActionForm', () => {
         </ActionForm>,
       ),
     ).toBe(
-      '<form class="action-form" method="post" action="/admin/access/a1/disable"><input type="hidden" name="_csrf" value="tok"/><input type="hidden" name="id" value="a1"/><button class="btn sm secondary" type="submit">Disable<span class="vh"> acme/api → Slack</span></button></form>',
+      '<form class="action-form" method="post" action="/admin/issuer-access-rules/a1/disable"><input type="hidden" name="_csrf" value="tok"/><input type="hidden" name="id" value="a1"/><button class="btn sm secondary" type="submit">Disable<span class="vh"> acme/api → Slack</span></button></form>',
     );
   });
 
@@ -53,7 +53,7 @@ describe('ActionCards', () => {
         { value: 'ask', title: 'Ask an owner first', current: true },
         {
           value: 'tm',
-          title: 'Let them in as Token manager…',
+          title: 'Let them in as Credential manager…',
           risk: true,
           dialog: 'dlg-tm',
           go: 'Confirm next →',

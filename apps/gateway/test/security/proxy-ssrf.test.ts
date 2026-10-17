@@ -19,7 +19,7 @@ async function repointWithValidSeal(
     canonicalJson({ kind: 'bearer' }),
     TEST_SECRET,
   );
-  await env.DB.prepare('UPDATE services SET base_url = ?, credential_sealed = ? WHERE id = ?')
+  await env.DB.prepare('UPDATE credentials SET base_url = ?, credential_sealed = ? WHERE id = ?')
     .bind(baseUrl, sealed, fx.serviceId)
     .run();
 }
@@ -118,7 +118,7 @@ describe('I-PATH-1: the upstream URL stays on the base origin and under the base
   it('path injection: the caller path cannot reach outside the credential segment', async () => {
     const fx = await setupProxy({
       service: {
-        baseUrl: 'https://hooks.upstream.test/services',
+        baseUrl: 'https://hooks.upstream.test/credentials',
         injection: { kind: 'path' },
         secret: 'T000/B000/XYZ123',
       },
@@ -126,7 +126,7 @@ describe('I-PATH-1: the upstream URL stays on the base origin and under the base
     expect((await fx.call('/..%2fother')).status).toBe(400);
     expect((await fx.call('/x')).status).toBe(200);
     expect(fx.upstreamCalls.map((c) => c.url)).toEqual([
-      'https://hooks.upstream.test/services/T000/B000/XYZ123/x',
+      'https://hooks.upstream.test/credentials/T000/B000/XYZ123/x',
     ]);
   });
 });

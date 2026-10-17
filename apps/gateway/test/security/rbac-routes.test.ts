@@ -39,9 +39,9 @@ async function auditCount(): Promise<number> {
 async function controlPlaneDump(): Promise<string> {
   const tables = [
     'users',
-    'caller_providers',
-    'services',
-    'grants',
+    'credential_access_rules',
+    'credentials',
+    'issuer_access_rules',
     'claim_labels',
     'settings',
     'audit_log',
@@ -148,13 +148,13 @@ describe('I-RBAC-1: routes outside the table are denied (fail closed)', () => {
 
   it.each([
     ['GET', '/admin/not-a-page'],
-    ['GET', '/admin/tokens/svc_x/credential'],
+    ['GET', '/admin/credentials/svc_x/credential'],
     ['HEAD', '/admin/not-a-page'],
     // Old URLs (ADR 0019): no redirects.
-    ['GET', '/admin/services'],
-    ['GET', '/admin/services/new'],
-    ['GET', '/admin/caller-providers'],
-    ['GET', '/admin/grants'],
+    ['GET', '/admin/tokens'],
+    ['GET', '/admin/tokens/new'],
+    ['GET', '/admin/consumers'],
+    ['GET', '/admin/access'],
     ['GET', '/admin/settings'],
   ])('%s %s is a 404 page for an owner, with no side effect', async (method, path) => {
     const before = await controlPlaneDump();
@@ -172,9 +172,9 @@ describe('I-RBAC-1: routes outside the table are denied (fail closed)', () => {
   it.each([
     ['POST', '/admin/requests'],
     ['POST', '/admin/audit'],
-    ['POST', '/admin/services'],
+    ['POST', '/admin/tokens'],
     ['POST', '/admin/settings'],
-    ['PUT', '/admin/tokens'],
+    ['PUT', '/admin/credentials'],
     ['DELETE', '/admin/users/usr_x'],
     ['PATCH', '/admin/retention'],
   ])('%s %s is 403 for an owner, with no side effect', async (method, path) => {
@@ -187,7 +187,7 @@ describe('I-RBAC-1: routes outside the table are denied (fail closed)', () => {
 
   it('HEAD resolves to the GET rule (admin-only pages stay admin-only)', async () => {
     const head = (actor: Role) =>
-      world.app.request('/admin/tokens/new', {
+      world.app.request('/admin/credentials/new', {
         method: 'HEAD',
         headers: { ...sessions[actor].headers },
         redirect: 'manual',

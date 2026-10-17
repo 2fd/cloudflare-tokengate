@@ -36,7 +36,7 @@ The columns are defined in `apps/gateway/migrations-telemetry/0001_initial.sql` 
 | `outcome`, `reason` | See above. `reason` is the error code or a finer reason code; `null` when the upstream answered ([reason codes](errors.md#request-record-reason-codes)) |
 | `status`, `upstream_status` | Status returned to the caller; status from the upstream (`null` when not forwarded). `upstream_status` is the raw value fetch reported, any 32-bit signed integer (also outside 100 to 999, 0 or negative) for `upstream_invalid_status` |
 | `method`, `path` | HTTP method; path after `/proxy/<slug>` as received (not decoded), without the query |
-| `service_slug`, `service_id`, `caller_provider_id`, `grant_id` | What the pipeline resolved. `service_slug` is the slug from the URL, even for unknown services |
+| `service_slug`, `service_id`, `credential_access_rule_id`, `grant_id` | What the pipeline resolved. `service_slug` is the slug from the URL, even for unknown credentials |
 | `claims_verified` | `1` when the caller token was verified and the tenant pin held, else `0` |
 | `caller_subject`, `caller_repository` | Display values from the verified claims |
 | `caller_claims` | JSON of the profile's allowlisted claims (for example `repository`, `ref`, `run_id`, `sha` for GitHub Actions) |
@@ -96,19 +96,19 @@ Newer and Older links.
   same count as the Overview. A time range starts at the start of an hour (UTC), so the page states
   the actual start ("since …").
 - **Filter form:** it shows when a filter is active or the page has more than 10 rows. Token,
-  Service consumer and Reason are lists; Repository is the only typed
+  Credential access rule and Reason are lists; Repository is the only typed
   filter (exact `owner/name`). Its suggestions are the repository labels stored on consumers and
   accesses, never values from the request log. "Refused before a token was chosen" and "No
   consumer" select the records without a token or consumer.
 - **Cells are filters:** select a token, repository, consumer, access or reason in a row to filter
   by it. Each active filter is a chip; select it to remove that filter.
-- **Index use:** the token, the repository or the consumer access alone, and the Denied and Errors
+- **Index use:** the token, the repository or the issuer access rules alone, and the Denied and Errors
   tabs alone, use indexes and search the whole log (the Denied and Errors tabs use the partial
   index `request_log_problems`). Other filters and combinations search 10,000 requests at a time, so
   one page reads at most about 20,000 rows; "Search older" searches the next 10,000.
 - **A record:** the page says what to do for its reason, with at most two links (for example "Give
   access from this request" or "Set the secret again"), each shown only to the roles that can do
-  it. It always re-runs authorization against the current consumer accesses with the stored claims
+  it. It always re-runs authorization against the current issuer access ruleses with the stored claims
   only ("Check against current access"); claims that were not stored fail closed, and nothing is
   changed. A disabled consumer or token, or a tenant pin that fails, refuses the request before any
   access applies, so the check then says "Would still be refused" even when an access matches.
@@ -197,22 +197,22 @@ page. Nothing refreshes by itself: the page says when it was built and has a Ref
 - **Health:** every alert (below), then "All checks": the two database schemas, the hourly job
   (last success, last error, next run), encryption keys, sign-in, admin hosts, the optional
   bindings and configuration problems by variable name, never by value.
-- **Get started:** the four first steps (add a service token, add a service consumer, give a
-  consumer access, make the first call), shown until all four are done. Each step links to its
+- **Get started:** the four first steps (add a credential, add a credential access rule, give a
+  issuer access rules, make the first call), shown until all four are done. Each step links to its
   form, or says whom to ask.
 - **Traffic:** Requests, Allowed, Denied, Errors (count and share), p50 and p95, each count a link
   to the matching Requests list; then a bar chart with a "Show the numbers" table. **Errors** are
   gateway errors plus allowed requests the upstream answered with 5xx, the same as the Requests
   Errors tab. p50 and p95 are interpolated from the latency buckets of allowed requests; a value in
   the last bucket is shown as a lower bound.
-- **Tokens in use:** one row per token with its status, the consumer accesses that can use it
+- **Tokens in use:** one row per token with its status, the issuer access ruleses that can use it
   ("Used by"), its requests, denied and errors in the range, p95 and last use. Tokens with a
   problem come first; tokens without traffic or problems are folded under "N idle tokens".
   "Refused before a token was chosen" counts requests to unknown slugs and earlier failures.
 - **Top denials:** the 10 largest groups of denied requests in the range, by consumer, token,
   reason and repository (or the unverified issuer), from the newest 2,000 denials. The action is
   "Create access" (a verified `no_matching_grant` or `event_not_trusted` group, for access
-  managers, admins and owners), "Add a service consumer" (`issuer_unknown`), or "See requests".
+  managers, admins and owners), "Add a credential access rule" (`issuer_unknown`), or "See requests".
 - **Recent changes:** the last 5 audit events.
 
 When `allowed_sample_rate` is below 1 the page says counts are estimates; at 0 it says allowed
@@ -236,9 +236,9 @@ missing migrations, configuration problems). The texts below are abbreviated.
 | error | A key id now holds a different key (key check value changed) | [Recover a replaced key](operations/key-rotation.md#recover-from-a-replaced-key) |
 | error | Stored secrets are damaged (not valid sealed values) | Check the base URL out of band, then set the secret again |
 | error / warning | A secret has expired / expires within 14 days | [Rotate the secret](operations/credential-rotation.md) |
-| warning | A token with consumer accesses has no secret | Add the secret on the token page |
+| warning | A token with issuer access ruleses has no secret | Add the secret on the token page |
 | warning | The upstream rejected a token | At least 5 and at least 50% of forwarded requests got 401/403 in the last 15 minutes. [Rotate the secret](operations/credential-rotation.md) |
-| warning | Tokens point at hosts that Allowed hosts refuses | Change the token or Service tokens › Allowed hosts |
+| warning | Tokens point at hosts that Allowed hosts refuses | Change the token or Credentials › Allowed hosts |
 | error | "Database `<binding>` is missing migration ..." | `pnpm wrangler d1 migrations apply <binding> --remote` ([upgrades](operations/upgrades.md)) |
 | warning | Database has migrations newer than this deployment | Expected after a rollback ([upgrades](operations/upgrades.md#roll-back)) |
 | warning | Could not read the applied migrations | Check the D1 binding |
@@ -246,7 +246,7 @@ missing migrations, configuration problems). The texts below are abbreviated.
 | error | The hourly job failed | Read the message; see [troubleshooting](operations/troubleshooting.md#admin-ui-and-maintenance) |
 | warning | The hourly job last succeeded more than 2 hours ago | Same |
 | info | The hourly job has not run yet | Normal for up to an hour after the first deploy |
-| warning | A consumer access expires within 14 days | Extend it on the access page |
+| warning | A issuer access rules expires within 14 days | Extend it on the access page |
 | warning | People need a decision (pending approval or a refused sign-in) | Users › People |
 | info | Secrets use a key other than the active key | Re-encrypt them ([key rotation](operations/key-rotation.md)) |
 | info | There is only one active owner | Invite a second owner ([break-glass](operations/break-glass.md)) |
@@ -304,9 +304,9 @@ retention (days)": default 365, never less than 90.
 
 | Area | Actions |
 |---|---|
-| Caller providers | `caller_provider.create`, `.update`, `.enable`, `.disable`, `.delete` |
+| Credential access rules | `credential_access_rule.create`, `.update`, `.enable`, `.disable`, `.delete` |
 | Services | `service.create`, `.update`, `.enable`, `.disable`, `.delete`, `service.credential.set`, `service.credential.test` |
-| Grants | `grant.create`, `.duplicate`, `.update`, `.enable`, `.disable`, `.delete` |
+| Issuer access rules | `grant.create`, `.duplicate`, `.update`, `.enable`, `.disable`, `.delete` |
 | Users | `user.invite`, `.resend_invite`, `.update` (also approve and reject), `.reset_login`, `.link`, `.bootstrap`, `.join`, `.join_defaults` |
 | System | `settings.update`, `settings.upstream_hosts`, `settings.admin_hosts`, `keyring.rewrap`, `config.export`, `credential.expiring` (hourly job, actor `system`) |
 
@@ -348,8 +348,8 @@ a sink ([I-LOG-1](threat-model.md#i-log-1)).
 | `telemetry.sink_failed` | error | `code`: `request_log_queue_send_failed`, `request_log_insert_failed` or `request_archive_send_failed` |
 | `telemetry.pretrust_records_dropped` | warn | Pre-trust records dropped in the last minute (`count`) |
 | `telemetry.invalid_queue_message` | error | A queue message was not a valid request record; dropped |
-| `telemetry.queue_batch_failed` | error | The consumer could not write a batch; retried in 30 s |
-| `telemetry.late_rollup_failed` | error | The consumer stored a batch but could not roll up its late hours (`hours`); retried in 30 s |
+| `telemetry.queue_batch_failed` | error | The credential access rule could not write a batch; retried in 30 s |
+| `telemetry.late_rollup_failed` | error | The credential access rule stored a batch but could not roll up its late hours (`hours`); retried in 30 s |
 | `cron.done` / `cron.failed` | info / error | Hourly job summary or failed steps |
 | `auth.login_failed` | warn | An admin request had no valid Cloudflare Access token (`error`: `missing`, `invalid`, `no_email` or `certs_unavailable`) |
 | `auth.login_denied` | warn | A valid Access identity was refused (`provider`, `reason`: `email_taken`, `pending` or `suspended`) |
@@ -368,7 +368,7 @@ Keep `head_sampling_rate` at `1`. Workers Logs billing moves to Cloudflare Obser
 
 ## Optional: request-log queue
 
-`REQUEST_LOG_QUEUE` batches request-log writes: the consumer writes up to 100 records in one D1
+`REQUEST_LOG_QUEUE` batches request-log writes: the credential access rule writes up to 100 records in one D1
 batch, which lowers D1 query contention at high request rates. It does not lower D1 rows written, and
 it adds queue operations to the bill ([cost](operations/cost.md)). Records reach D1 up to 30 seconds
 later, so the Overview's live hour lags. Setup and consumer settings:
@@ -378,7 +378,7 @@ Batches that fail 10 times go to `tokengate-request-log-dlq`, which nothing cons
 add a second entry to `queues.consumers` for `tokengate-request-log-dlq` with the same settings and
 run `pnpm run deploy`. The Worker's queue handler writes any batch it receives, and inserts are
 `INSERT OR IGNORE`, so a replay cannot duplicate records. Replayed records are usually older than
-the hourly job's 3-hour window, so the consumer also rolls up their hours, and the Overview counts
+the hourly job's 3-hour window, so the credential access rule also rolls up their hours, and the Overview counts
 them ([rollups](#rollups)). Remove the entry afterwards.
 
 ## Optional: R2 archive

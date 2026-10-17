@@ -50,11 +50,13 @@ CREATE TABLE user_identities (
 CREATE INDEX user_identities_user ON user_identities (user_id);
 
 -- Trusted workload-identity issuers. `profile` is immutable after creation.
-CREATE TABLE caller_providers (
+CREATE TABLE credential_access_rules (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
   profile TEXT NOT NULL CHECK (profile IN ('github-actions', 'gitlab-ci', 'generic')),
-  issuer TEXT NOT NULL UNIQUE,
+  issuer TEXT NOT NULL,
+  credential_id TEXT NOT NULL REFERENCES credentials (id) ON DELETE CASCADE,
+  conditions TEXT NOT NULL DEFAULT '[]', -- mandatory identity filters
   jwks_uri TEXT NOT NULL,
   audience TEXT NOT NULL CHECK (length(audience) >= 16),
   allowed_algs TEXT NOT NULL,          -- JSON string[]
@@ -63,11 +65,13 @@ CREATE TABLE caller_providers (
   anchor_claims TEXT NOT NULL DEFAULT '[]', -- JSON string[]; used by the generic profile only
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  UNIQUE (id, credential_id)
 );
+CREATE INDEX credential_access_rules_credential ON credential_access_rules (credential_id);
 
 -- Upstream APIs. The credential is sealed with AAD bound to (id, base_url, injection) (I-CRED-2).
-CREATE TABLE services (
+CREATE TABLE credentials (
   id TEXT PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
@@ -87,34 +91,35 @@ CREATE TABLE services (
   template_id TEXT                     -- service template: display and presets only, never in the AAD (ADR 0004)
 );
 
-CREATE TABLE grants (
+CREATE TABLE issuer_access_rules (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   description TEXT NOT NULL DEFAULT '',
-  caller_provider_id TEXT NOT NULL REFERENCES caller_providers (id),
-  service_id TEXT NOT NULL REFERENCES services (id),
+  credential_access_rule_id TEXT NOT NULL REFERENCES credential_access_rules (id),
+  service_id TEXT NOT NULL REFERENCES credentials (id),
   conditions TEXT NOT NULL,            -- JSON Condition[]
   rules TEXT NOT NULL,                 -- JSON Rule[]
   enabled INTEGER NOT NULL DEFAULT 1,
   expires_at INTEGER,
   created_by TEXT,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (credential_access_rule_id, service_id) REFERENCES credential_access_rules (id, credential_id)
 );
 -- Hot-path lookup. The query must use the literal `enabled = 1` for SQLite to pick this index.
-CREATE INDEX grants_lookup ON grants (caller_provider_id, service_id, created_at, id) WHERE enabled = 1;
-CREATE INDEX grants_service ON grants (service_id);
+CREATE INDEX grants_lookup ON issuer_access_rules (credential_access_rule_id, service_id, created_at, id) WHERE enabled = 1;
+CREATE INDEX grants_service ON issuer_access_rules (service_id);
 
 -- Human labels for numeric IDs, per consumer. Written only by consumer and access saves.
 -- Display and form derivation only; src/policy/* never reads it.
 CREATE TABLE claim_labels (
-  caller_provider_id TEXT NOT NULL REFERENCES caller_providers (id),
+  credential_access_rule_id TEXT NOT NULL REFERENCES credential_access_rules (id) ON DELETE CASCADE,
   claim TEXT NOT NULL CHECK (claim IN ('repository_owner_id', 'repository_id', 'namespace_id', 'project_id')),
   value TEXT NOT NULL CHECK (length(value) BETWEEN 1 AND 20 AND value NOT GLOB '*[^0-9]*'),
   label TEXT NOT NULL CHECK (length(label) BETWEEN 1 AND 256),
   updated_at INTEGER NOT NULL,
   updated_by TEXT,
-  PRIMARY KEY (caller_provider_id, claim, value)
+  PRIMARY KEY (credential_access_rule_id, claim, value)
 );
 
 CREATE TABLE settings (
@@ -186,7 +191,7 @@ CREATE TABLE team_permissions (
 -- Explicit scope rows. Deleting a service or caller provider deletes its rows (foreign keys).
 CREATE TABLE team_tokens (
   team_id TEXT NOT NULL REFERENCES teams (id) ON DELETE CASCADE,
-  service_id TEXT NOT NULL REFERENCES services (id) ON DELETE CASCADE,
+  service_id TEXT NOT NULL REFERENCES credentials (id) ON DELETE CASCADE,
   level INTEGER NOT NULL CHECK (level IN (1, 2, 3)),
   reveal INTEGER NOT NULL DEFAULT 0 CHECK (reveal IN (0, 1)),
   PRIMARY KEY (team_id, service_id)
@@ -195,20 +200,20 @@ CREATE INDEX team_tokens_service ON team_tokens (service_id);
 
 CREATE TABLE team_consumers (
   team_id TEXT NOT NULL REFERENCES teams (id) ON DELETE CASCADE,
-  caller_provider_id TEXT NOT NULL REFERENCES caller_providers (id) ON DELETE CASCADE,
+  credential_access_rule_id TEXT NOT NULL REFERENCES credential_access_rules (id) ON DELETE CASCADE,
   level INTEGER NOT NULL CHECK (level IN (1, 2, 3)),
-  PRIMARY KEY (team_id, caller_provider_id)
+  PRIMARY KEY (team_id, credential_access_rule_id)
 ) WITHOUT ROWID;
-CREATE INDEX team_consumers_consumer ON team_consumers (caller_provider_id);
+CREATE INDEX team_consumers_consumer ON team_consumers (credential_access_rule_id);
 
 -- The built-in teams (code mirror: BUILTIN_TEAMS in src/db/teams.ts). The seed runs before the
 -- triggers below exist, because they refuse every change to a built-in team.
 INSERT INTO teams (id, builtin, name, description, tokens_all, tokens_all_reveal, consumers_all, created_at, updated_at) VALUES
   ('tea_owner', 'owner', 'Owners', 'Everything: people, teams, settings, keys, and copying secrets.', 3, 1, 3, 0, 0),
-  ('tea_admin', 'admin', 'Admins', 'Every service token and consumer, consumer access, and the export.', 3, 0, 3, 0, 0),
-  ('tea_token_manager', 'token_manager', 'Token managers', 'Add, change and delete service tokens. See every consumer.', 3, 0, 1, 0, 0),
-  ('tea_access_manager', 'access_manager', 'Access managers', 'Add, change and delete consumers and their access. See every service token.', 1, 0, 3, 0, 0),
-  ('tea_viewer', 'viewer', 'Viewers', 'See every service token and consumer. Change nothing.', 1, 0, 1, 0, 0);
+  ('tea_admin', 'admin', 'Admins', 'Every credential and consumer, issuer access rules, and the export.', 3, 0, 3, 0, 0),
+  ('tea_token_manager', 'token_manager', 'Credential managers', 'Add, change and delete credentials. See every credential access rule.', 3, 0, 1, 0, 0),
+  ('tea_access_manager', 'access_manager', 'Access managers', 'Add, change and delete consumers and their access. See every credential.', 1, 0, 3, 0, 0),
+  ('tea_viewer', 'viewer', 'Viewers', 'See every credential and consumer. Change nothing.', 1, 0, 1, 0, 0);
 INSERT INTO team_permissions (team_id, permission) VALUES
   ('tea_owner', 'tokens:create'), ('tea_owner', 'consumers:create'), ('tea_owner', 'config:export'),
   ('tea_owner', 'users:write'), ('tea_owner', 'settings:write'), ('tea_owner', 'keyring:rewrap'),
@@ -242,7 +247,7 @@ WHEN EXISTS (SELECT 1 FROM teams WHERE id = NEW.team_id AND builtin IS NOT NULL)
 BEGIN SELECT RAISE(ABORT, 'builtin_team'); END;
 CREATE TRIGGER team_tokens_keys_fixed BEFORE UPDATE OF team_id, service_id ON team_tokens
 BEGIN SELECT RAISE(ABORT, 'immutable_row'); END;
-CREATE TRIGGER team_consumers_keys_fixed BEFORE UPDATE OF team_id, caller_provider_id ON team_consumers
+CREATE TRIGGER team_consumers_keys_fixed BEFORE UPDATE OF team_id, credential_access_rule_id ON team_consumers
 BEGIN SELECT RAISE(ABORT, 'immutable_row'); END;
 CREATE TRIGGER team_members_no_update BEFORE UPDATE ON team_members
 BEGIN SELECT RAISE(ABORT, 'immutable_row'); END;

@@ -98,31 +98,28 @@ export const BUILTIN_TEAMS: Readonly<Record<BuiltinTeam, BuiltinTeamPowers>> = O
   admin: builtin(
     'admin',
     'Admins',
-    'Every service token and consumer, consumer access, and the export.',
+    'Every credential and consumer, issuer access rules, and the export.',
     ['tokens:create', 'consumers:create', 'config:export'],
     { tokens: 3, consumers: 3 },
   ),
   token_manager: builtin(
     'token_manager',
-    'Token managers',
-    'Add, change and delete service tokens. See every consumer.',
+    'Credential managers',
+    'Add, change and delete credentials. See every credential access rule.',
     ['tokens:create'],
     { tokens: 3, consumers: 1 },
   ),
   access_manager: builtin(
     'access_manager',
     'Access managers',
-    'Add, change and delete consumers and their access. See every service token.',
+    'Add, change and delete consumers and their access. See every credential.',
     ['consumers:create'],
     { tokens: 1, consumers: 3 },
   ),
-  viewer: builtin(
-    'viewer',
-    'Viewers',
-    'See every service token and consumer. Change nothing.',
-    [],
-    { tokens: 1, consumers: 1 },
-  ),
+  viewer: builtin('viewer', 'Viewers', 'See every credential and consumer. Change nothing.', [], {
+    tokens: 1,
+    consumers: 1,
+  }),
 });
 
 /** SQL rank that sorts built-in teams first, in privilege order. Custom teams rank last. */
@@ -224,7 +221,9 @@ export async function getTeamPowers(db: D1Database, id: string): Promise<TeamPow
     db.prepare('SELECT * FROM teams WHERE id = ?').bind(id),
     db.prepare('SELECT permission FROM team_permissions WHERE team_id = ?').bind(id),
     db.prepare('SELECT service_id, level, reveal FROM team_tokens WHERE team_id = ?').bind(id),
-    db.prepare('SELECT caller_provider_id, level FROM team_consumers WHERE team_id = ?').bind(id),
+    db
+      .prepare('SELECT credential_access_rule_id, level FROM team_consumers WHERE team_id = ?')
+      .bind(id),
   ]);
   const row = team?.results[0];
   if (!row) return null;
@@ -237,7 +236,7 @@ export async function getTeamPowers(db: D1Database, id: string): Promise<TeamPow
   const consumerRows = new Map<string, { level: Level }>();
   for (const x of consumers?.results ?? []) {
     const level = levelOrZero(x.level);
-    if (level !== 0) consumerRows.set(str(x.caller_provider_id), { level });
+    if (level !== 0) consumerRows.set(str(x.credential_access_rule_id), { level });
   }
   return {
     id: decoded.id,

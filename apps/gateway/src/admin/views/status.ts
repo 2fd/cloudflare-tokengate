@@ -30,8 +30,8 @@ export type StatusKey =
 
 /** Reasons an access cannot work although it is enabled (`inactive`), exact texts. */
 export type InactiveReason =
-  | 'token disabled'
-  | 'consumer disabled'
+  | 'credential disabled'
+  | 'credential access rule disabled'
   | 'token has no credential'
   | 'credential unreadable';
 

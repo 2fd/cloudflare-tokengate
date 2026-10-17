@@ -257,11 +257,17 @@ describe('Select and Choice', () => {
 
   it('keeps the placeholder selectable, so a filter can go back to "any"', () => {
     const empty = html(
-      <Select name="token" label="Token" options={options(2)} placeholder="Any token" />,
+      <Select name="token" label="Credential" options={options(2)} placeholder="Any token" />,
     );
     expect(empty).toContain('<option value="" selected="">Any token</option>');
     const chosen = html(
-      <Select name="token" label="Token" options={options(2)} placeholder="Any token" value="v1" />,
+      <Select
+        name="token"
+        label="Credential"
+        options={options(2)}
+        placeholder="Any token"
+        value="v1"
+      />,
     );
     expect(chosen).toContain('<option value="">Any token</option>');
     expect(chosen).toContain('<option value="v1" selected="">Option 1</option>');
@@ -277,13 +283,15 @@ describe('Select and Choice', () => {
         error="Choose a target from the list."
         required
         options={[
-          { group: 'Tokens', options: [{ value: 'a', label: 'A' }] },
-          { group: 'Consumers', options: [{ value: 'b', label: 'B' }] },
+          { group: 'Credentials', options: [{ value: 'a', label: 'A' }] },
+          { group: 'Credential access rules', options: [{ value: 'b', label: 'B' }] },
         ]}
       />,
     );
     expect(out).toContain('<label for="f-target">Target</label>');
-    expect(out).toContain('<optgroup label="Consumers"><option value="b" selected="">B</option>');
+    expect(out).toContain(
+      '<optgroup label="Credential access rules"><option value="b" selected="">B</option>',
+    );
     const select = tagWithId(out, 'select', 'f-target');
     expect(select).toContain('required');
     expect(select).toContain('aria-describedby="f-target-hint f-target-error"');
@@ -504,7 +512,7 @@ describe('ConfirmDialog and ActionButton', () => {
     triggerContext: 'Slack',
     title: 'Delete Slack?',
     body: 'This cannot be undone.',
-    affected: ['2 consumer accesses stop working'],
+    affected: ['2 issuer access rules stop working'],
     confirmLabel: 'Delete Slack',
     danger: true,
   };
@@ -514,7 +522,7 @@ describe('ConfirmDialog and ActionButton', () => {
       <ConfirmDialog
         {...base}
         variant="standalone"
-        action="/admin/tokens/svc_1/delete"
+        action="/admin/credentials/svc_1/delete"
         csrf="csrf-token"
         fields={{ expected_updated_at: '5' }}
         returnTo="list"
@@ -525,9 +533,10 @@ describe('ConfirmDialog and ActionButton', () => {
     );
     expect(out).toContain('<dialog class="dlg" id="dlg-del-svc_1"');
     expect(out).toContain('popover="auto"');
-    const form = /<form method="post" action="\/admin\/tokens\/svc_1\/delete">(.*?)<\/form>/s.exec(
-      out,
-    )?.[1];
+    const form =
+      /<form method="post" action="\/admin\/credentials\/svc_1\/delete">(.*?)<\/form>/s.exec(
+        out,
+      )?.[1];
     for (const field of [
       'name="_csrf" value="csrf-token"',
       'name="_return" value="list"',
@@ -536,7 +545,7 @@ describe('ConfirmDialog and ActionButton', () => {
     ]) {
       expect(form).toContain(field);
     }
-    expect(form).toContain('<li>2 consumer accesses stop working</li>');
+    expect(form).toContain('<li>2 issuer access rules stop working</li>');
     expect(form).toContain('<button class="btn danger-solid" type="submit">Delete Slack</button>');
   });
 
@@ -565,7 +574,7 @@ describe('ConfirmDialog and ActionButton', () => {
   it('posts one button with _csrf, _return and the fields, naming its row for screen readers', () => {
     const out = html(
       <ActionButton
-        action="/admin/tokens/svc_1/toggle"
+        action="/admin/credentials/svc_1/toggle"
         csrf="csrf-token"
         label="Disable"
         context="Slack"
@@ -575,7 +584,7 @@ describe('ConfirmDialog and ActionButton', () => {
       />,
     );
     expect(out).toContain(
-      '<form class="action-form" method="post" action="/admin/tokens/svc_1/toggle">',
+      '<form class="action-form" method="post" action="/admin/credentials/svc_1/toggle">',
     );
     expect(out).toContain(
       '<input type="hidden" name="_csrf" value="csrf-token"/><input type="hidden" name="_return" value="list"/><input type="hidden" name="enabled" value="0"/>',
@@ -588,15 +597,15 @@ describe('ConfirmDialog and ActionButton', () => {
 
 describe('EmptyState', () => {
   it('titles the missing thing, a level 2 heading by default, with the text under it', () => {
-    expect(html(<EmptyState>No tokens yet.</EmptyState>)).toContain(
-      '<div class="empty"><h2>No tokens yet.</h2></div>',
+    expect(html(<EmptyState>No credentials yet.</EmptyState>)).toContain(
+      '<div class="empty"><h2>No credentials yet.</h2></div>',
     );
     const out = html(
-      <EmptyState title="No tokens yet" headingLevel={3}>
+      <EmptyState title="No credentials yet" headingLevel={3}>
         Add one to start.
       </EmptyState>,
     );
-    expect(out).toContain('<h3>No tokens yet</h3>');
+    expect(out).toContain('<h3>No credentials yet</h3>');
     expect(out).toContain('Add one to start.');
   });
 });
@@ -802,8 +811,8 @@ describe('status, time, notices, navigation', () => {
   });
 
   it('adds a "Learn more" docs link that names its topic', () => {
-    expect(html(<LearnMore path="concepts.md#service-token" about="service tokens" />)).toBe(
-      ' <a href="https://github.com/2fd/cloudflare-tokengate/blob/main/docs/concepts.md#service-token">Learn more<span class="vh"> about service tokens (GitHub docs)</span></a>',
+    expect(html(<LearnMore path="concepts.md#credential" about="credentials" />)).toBe(
+      ' <a href="https://github.com/2fd/cloudflare-tokengate/blob/main/docs/concepts.md#credential">Learn more<span class="vh"> about credentials (GitHub docs)</span></a>',
     );
   });
 });
@@ -813,12 +822,12 @@ describe('AskSomeone', () => {
     const out = html(
       <AskSomeone
         permission="tokens:write"
-        verb="add a service token"
+        verb="add a credential"
         ctx={view({ 'tokens:write': ['tm@example.com', 'owner@example.com'] }, 2)}
       />,
     );
     expect(out).toBe(
-      '<p class="ask">Only token managers can add a service token. Ask <b>tm@example.com</b> or <b>owner@example.com</b> and 2 more. <a href="mailto:tm@example.com,owner@example.com">Email them</a></p>',
+      '<p class="ask">Only credential managers can add a credential. Ask <b>tm@example.com</b> or <b>owner@example.com</b> and 2 more. <a href="mailto:tm@example.com,owner@example.com">Email them</a></p>',
     );
   });
 
@@ -844,15 +853,20 @@ describe('NotFound', () => {
   it('links the four sections in sidebar order as link cards and never echoes anything', () => {
     const out = html(<NotFound />);
     const links = [...out.matchAll(/<a class="tcard" href="([^"]+)">/g)].map((m) => m[1]);
-    expect(links).toEqual(['/admin', '/admin/tokens', '/admin/consumers', '/admin/users']);
+    expect(links).toEqual([
+      '/admin',
+      '/admin/credentials',
+      '/admin/credential-access-rules',
+      '/admin/users',
+    ]);
     expect(out).toContain('<h2 id="nf-sections-h">Go to a section</h2>');
     expect(out).toContain(
-      '<a class="tcard" href="/admin/tokens"><span class="t">Service tokens</span><span class="d">Tokens, allowed hosts and encryption keys</span>',
+      '<a class="tcard" href="/admin/credentials"><span class="t">Credentials</span><span class="d">Tokens, allowed hosts and encryption keys</span>',
     );
     // No bare user-agent list: the cards are a plain list.
     expect(out).not.toMatch(/<ul>/);
     expect(notFoundText('token')).toBe(
-      'There is no service token with this ID. It may have been deleted.',
+      'There is no credential with this ID. It may have been deleted.',
     );
   });
 

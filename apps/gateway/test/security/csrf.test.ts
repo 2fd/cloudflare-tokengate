@@ -24,12 +24,14 @@ async function setup(envOverrides: Record<string, string> = {}) {
 describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double-submit token', () => {
   it('accepts a same-origin form POST whose token matches the CSRF cookie', async () => {
     const { app, session } = await setup();
-    expect((await adminPost(app, session, '/admin/tokens', { name: 'x' })).status).toBe(200);
+    expect((await adminPost(app, session, '/admin/credentials', { name: 'x' })).status).toBe(200);
   });
 
   it('rejects a missing token', async () => {
     const { app, session } = await setup();
-    expect((await adminPost(app, session, '/admin/tokens', {}, { csrf: null })).status).toBe(403);
+    expect((await adminPost(app, session, '/admin/credentials', {}, { csrf: null })).status).toBe(
+      403,
+    );
   });
 
   it('rejects a mismatched token', async () => {
@@ -37,7 +39,7 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double
     const res = await adminPost(
       app,
       session,
-      '/admin/tokens',
+      '/admin/credentials',
       {},
       { csrf: `${session.csrfToken}x` },
     );
@@ -47,13 +49,19 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double
   it("rejects another browser's token", async () => {
     const { app, owner, session } = await setup();
     const other = await loginAs(app, owner);
-    const res = await adminPost(app, session, '/admin/tokens', {}, { csrf: other.csrfToken });
+    const res = await adminPost(app, session, '/admin/credentials', {}, { csrf: other.csrfToken });
     expect(res.status).toBe(403);
   });
 
   it('rejects a matching token when the browser sent no CSRF cookie', async () => {
     const { app, session } = await setup();
-    const res = await adminPost(app, session, '/admin/tokens', {}, { headers: { cookie: null } });
+    const res = await adminPost(
+      app,
+      session,
+      '/admin/credentials',
+      {},
+      { headers: { cookie: null } },
+    );
     expect(res.status).toBe(403);
   });
 
@@ -62,7 +70,7 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double
     const res = await adminPost(
       app,
       session,
-      '/admin/tokens',
+      '/admin/credentials',
       {},
       { csrf: 'x', headers: { cookie: '__Host-tokengate_csrf=x' } },
     );
@@ -74,12 +82,12 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double
     const query = await adminPost(
       app,
       session,
-      `/admin/tokens?_csrf=${session.csrfToken}`,
+      `/admin/credentials?_csrf=${session.csrfToken}`,
       {},
       { csrf: null },
     );
     expect(query.status).toBe(403);
-    const json = await app.request('/admin/tokens', {
+    const json = await app.request('/admin/credentials', {
       method: 'POST',
       headers: {
         ...session.headers,
@@ -98,7 +106,7 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double
       const res = await adminPost(
         app,
         session,
-        '/admin/tokens',
+        '/admin/credentials',
         {},
         { headers: { 'sec-fetch-site': site } },
       );
@@ -111,7 +119,7 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double
     const res = await adminPost(
       app,
       session,
-      '/admin/tokens',
+      '/admin/credentials',
       {},
       { headers: { 'sec-fetch-site': null } },
     );
@@ -123,7 +131,7 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double
     const same = await adminPost(
       app,
       session,
-      '/admin/tokens',
+      '/admin/credentials',
       {},
       {
         headers: { 'sec-fetch-site': null, origin: 'https://gw.test' },
@@ -133,7 +141,7 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double
     const cross = await adminPost(
       app,
       session,
-      '/admin/tokens',
+      '/admin/credentials',
       {},
       {
         headers: { 'sec-fetch-site': null, origin: 'https://evil.test' },
@@ -145,7 +153,7 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double
   it('compares Origin with the request origin', async () => {
     const { app, session } = await setup();
     const post = (origin: string) =>
-      app.request('/admin/tokens', {
+      app.request('/admin/credentials', {
         method: 'POST',
         headers: {
           ...session.headers,
@@ -161,7 +169,7 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double
 
   it('does not require the token on GET', async () => {
     const { app, session } = await setup();
-    expect((await adminGet(app, session, '/admin/tokens')).status).toBe(200);
+    expect((await adminGet(app, session, '/admin/credentials')).status).toBe(200);
   });
 
   it('rejects a repeated _csrf field, even when every copy is the valid token', async () => {
@@ -171,7 +179,13 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double
       [session.csrfToken, 'wrong'],
       ['wrong', session.csrfToken],
     ]) {
-      const res = await adminPost(app, session, '/admin/tokens', { _csrf: copies }, { csrf: null });
+      const res = await adminPost(
+        app,
+        session,
+        '/admin/credentials',
+        { _csrf: copies },
+        { csrf: null },
+      );
       expect(res.status).toBe(403);
     }
   });
@@ -180,7 +194,7 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double
     const { app, session } = await setup();
     const body = new FormData();
     body.set('_csrf', session.csrfToken);
-    const res = await app.request('/admin/tokens', {
+    const res = await app.request('/admin/credentials', {
       method: 'POST',
       headers: { ...session.headers, 'sec-fetch-site': 'same-origin' },
       body,
@@ -192,7 +206,7 @@ describe('I-CSRF-1: unsafe admin requests need same-site metadata AND the double
     const app = createAdminTestApp({ routes: stubAdminPages });
     const viewer = await createUser({ email: 'v@example.com', role: 'viewer' });
     const session = await loginAs(app, viewer);
-    const res = await adminPost(app, session, '/admin/tokens', {}, { csrf: null });
+    const res = await adminPost(app, session, '/admin/credentials', {}, { csrf: null });
     expect(res.status).toBe(403);
     expect(await res.text()).toContain('The form was not accepted');
   });
@@ -268,7 +282,7 @@ describe('I-CSRF-1: admin form bodies are capped before they are parsed (any rol
 
   it('refuses a form over the cap with 413 before the CSRF and role checks', async () => {
     const { app, session } = await viewerSetup();
-    const res = await adminPost(app, session, '/admin/tokens', {
+    const res = await adminPost(app, session, '/admin/credentials', {
       blob: 'a'.repeat(ADMIN_FORM_MAX_BYTES),
     });
     expect(res.status).toBe(413);
@@ -277,7 +291,7 @@ describe('I-CSRF-1: admin form bodies are capped before they are parsed (any rol
   it('refuses a declared Content-Length over the cap without reading the body', async () => {
     const { app, session } = await viewerSetup();
     const body = countingBody(ADMIN_FORM_MAX_BYTES * 4);
-    const res = await app.request('/admin/tokens', {
+    const res = await app.request('/admin/credentials', {
       method: 'POST',
       headers: {
         ...session.headers,
@@ -294,7 +308,7 @@ describe('I-CSRF-1: admin form bodies are capped before they are parsed (any rol
   it('stops reading a body without Content-Length once it passes the cap', async () => {
     const { app, session } = await viewerSetup();
     const body = countingBody(8 * 1024 * 1024);
-    const res = await app.request('/admin/tokens', {
+    const res = await app.request('/admin/credentials', {
       method: 'POST',
       headers: {
         ...session.headers,
@@ -312,6 +326,6 @@ describe('I-CSRF-1: admin form bodies are capped before they are parsed (any rol
     const owner = await createUser({ email: 'o2@example.com', role: 'owner' });
     const session = await loginAs(app, owner);
     const filler = 'a'.repeat(ADMIN_FORM_MAX_BYTES - 200);
-    expect((await adminPost(app, session, '/admin/tokens', { filler })).status).toBe(200);
+    expect((await adminPost(app, session, '/admin/credentials', { filler })).status).toBe(200);
   });
 });

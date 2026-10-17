@@ -33,14 +33,18 @@ const stages: PipelineStage[] = [
     drop: {
       count: 182,
       unit: 'not recognized',
-      why: 'Unknown issuer: no service consumer trusts it.',
+      why: 'Unknown issuer: no credential access rule trusts it.',
       href: '/admin/requests?reason=issuer_unknown',
     },
   },
   {
     label: 'Access matched',
     value: 7973,
-    drop: { count: 59, unit: 'no access', why: 'Verified callers that no consumer access allows.' },
+    drop: {
+      count: 59,
+      unit: 'no access',
+      why: 'Verified callers that no issuer access rules allows.',
+    },
   },
   {
     label: 'Upstream OK · allowed',
@@ -88,10 +92,10 @@ describe('Pipeline', () => {
 
   it('hangs drops below their stage, linked or not, with the error tone', () => {
     expect(html).toContain(
-      '<a class="drop" href="/admin/requests?reason=issuer_unknown"><span class="drop-n">182 <small>not recognized</small></span><span class="drop-why">Unknown issuer: no service consumer trusts it.</span><span class="drop-go">See 182 requests</span></a>',
+      '<a class="drop" href="/admin/requests?reason=issuer_unknown"><span class="drop-n">182 <small>not recognized</small></span><span class="drop-why">Unknown issuer: no credential access rule trusts it.</span><span class="drop-go">See 182 requests</span></a>',
     );
     expect(html).toContain(
-      '<div class="drop"><span class="drop-n">59 <small>no access</small></span><span class="drop-why">Verified callers that no consumer access allows.</span></div>',
+      '<div class="drop"><span class="drop-n">59 <small>no access</small></span><span class="drop-why">Verified callers that no issuer access rules allows.</span></div>',
     );
     expect(html).toContain('<a class="drop err" href="/admin/requests?reason=upstream_5xx">');
     expect(html).toContain('<span class="drop-go">See errors</span>');

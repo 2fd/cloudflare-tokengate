@@ -125,7 +125,7 @@ export const liveForm: ComponentDoc = {
           </LiveForm>
         </div>
       ),
-      code: `<LiveForm method="post" action="/admin/access" rail={
+      code: `<LiveForm method="post" action="/admin/issuer-access-rules" rail={
   <LiveSummary id="sum" title="This access">
     <SummaryRow logo="openai" title="OpenAI" meta="gate.acme.dev/proxy/openai" mono />
     <SummaryWire />
@@ -150,7 +150,11 @@ export const liveForm: ComponentDoc = {
         'layout="fields": the form column alone, without .form-layout, so a live form inside a detail column or a disclosure (the edit and copy forms) reserves no empty rail column at 80rem and wider. The :has() contract still applies: pick 90 days and the risk block shows.',
       layout: 'stack',
       render: () => (
-        <LiveForm layout="fields" action="/admin/access/1" hidden={{ _csrf: 'csrf-token' }}>
+        <LiveForm
+          layout="fields"
+          action="/admin/issuer-access-rules/1"
+          hidden={{ _csrf: 'csrf-token' }}
+        >
           <FieldSet id="lfn-exp" legend="Expires" live={1}>
             <Picks
               name="lfn-exp"
@@ -178,7 +182,7 @@ export const liveForm: ComponentDoc = {
           </div>
         </LiveForm>
       ),
-      code: `<LiveForm layout="fields" action="/admin/access/1" hidden={{ _csrf: csrf }}>
+      code: `<LiveForm layout="fields" action="/admin/issuer-access-rules/1" hidden={{ _csrf: csrf }}>
   <FieldSet id="exp" legend="Expires" live={1}>
     <Picks name="exp" value="30d" options={[…, { value: '90d', label: '90 days', risk: true }, …]} />
   </FieldSet>
@@ -247,7 +251,7 @@ export const liveForm: ComponentDoc = {
               logo="github"
               title={
                 <>
-                  Service consumer <Badge>Step 2</Badge>
+                  Credential access rule <Badge>Step 2</Badge>
                 </>
               }
               meta="for example GitHub Actions"
@@ -256,14 +260,14 @@ export const liveForm: ComponentDoc = {
             <SummaryRow
               icon="gate"
               title="tokengate"
-              meta="Checks every call against a consumer access (step 3)"
+              meta="Checks every call against an issuer access rule (step 3)"
             />
             <SummaryWire />
             <SummaryRow
               logo="slack"
               title={
                 <>
-                  Service token <Badge>Step 1</Badge>
+                  Credential <Badge>Step 1</Badge>
                 </>
               }
               meta="for example Slack or OpenAI. The upstream secret stays here."
@@ -273,11 +277,11 @@ export const liveForm: ComponentDoc = {
       ),
       code: `<LiveSummary id="plan" variant="plan" title="What you are building"
   description="The map on this page fills in as you finish each step.">
-  <SummaryRow logo="github" title={<>Service consumer <Badge>Step 2</Badge></>} meta="for example GitHub Actions" />
+  <SummaryRow logo="github" title={<>Credential access rule <Badge>Step 2</Badge></>} meta="for example GitHub Actions" />
   <SummaryWire />
-  <SummaryRow icon="gate" title="tokengate" meta="Checks every call against a consumer access (step 3)" />
+  <SummaryRow icon="gate" title="tokengate" meta="Checks every call against an issuer access rule (step 3)" />
   <SummaryWire />
-  <SummaryRow logo="slack" title={<>Service token <Badge>Step 1</Badge></>} meta="…" />
+  <SummaryRow logo="slack" title={<>Credential <Badge>Step 1</Badge></>} meta="…" />
 </LiveSummary>`,
     },
   ],
@@ -449,7 +453,7 @@ export const liveForm: ComponentDoc = {
     'Hidden phrases and branches are display:none, so screen readers read only the visible ones, the same as sighted people.',
     'The summary repeats the form; it is not a live region, so it does not interrupt while people choose.',
     'No required inside a Reveal: the browser cannot focus a hidden required field and would block the submit. The server validates the branch.',
-    'Logo phrases are decorative; the consumer name phrase carries the meaning.',
+    'Logo phrases are decorative; the credential access rule name phrase carries the meaning.',
   ],
   do: [
     'Render the preselected options checked, so the first paint matches the choices.',

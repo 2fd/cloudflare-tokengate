@@ -4,8 +4,8 @@ import type { Foundation } from './types';
 const USE: Record<IconName, string> = {
   gate: 'tokengate itself: the shield mark, “tokengate checks the call”',
   monitoring: 'Sidebar: Monitoring',
-  token: 'Sidebar: Service tokens; the OIDC logo tile',
-  consumer: 'Sidebar: Service consumers; empty consumer access',
+  token: 'Sidebar: Credentials; the OIDC logo tile',
+  consumer: 'Sidebar: Credential access rules; empty issuer access rules',
   users: 'Sidebar: Users',
   user: 'One person: empty people list',
   search: 'Search fields, “Find a request”',
@@ -29,7 +29,7 @@ const GLYPHS: ReadonlyArray<[string, string]> = [
   ['⏸', 'Disabled'],
   ['–', 'No secret'],
   ['i', 'Note (info callout)'],
-  ['+', 'Create actions (“+ Add token”)'],
+  ['+', 'Create actions (“+ Add credential”)'],
   ['→', 'Goes to, can use'],
   ['▾', 'Opens a menu'],
 ];
@@ -79,7 +79,7 @@ export const iconography: Foundation = {
           <div class="dx-row">
             <Button icon="search">Find a request</Button>
             <Button variant="primary" icon="token">
-              Add token
+              Add credential
             </Button>
             <span class="t-warn dx-row">
               <Icon name="monitoring" />
@@ -131,7 +131,7 @@ export const iconography: Foundation = {
       <Tray
         id="dx-i-logos"
         title="Brand tiles"
-        description="Upstream services and CI systems are letter tiles in the brand color (Logo), never images from another origin."
+        description="Upstream credentials and CI systems are letter tiles in the brand color (Logo), never images from another origin."
       >
         <Panel variant="pad">
           <div class="dx-row">

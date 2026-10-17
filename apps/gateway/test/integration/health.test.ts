@@ -25,8 +25,8 @@ beforeEach(async () => {
   resetSchemaStatusCacheForTests();
   await env.DB.batch([
     env.DB.prepare('DELETE FROM settings'),
-    env.DB.prepare('DELETE FROM grants'),
-    env.DB.prepare('DELETE FROM services'),
+    env.DB.prepare('DELETE FROM issuer_access_rules'),
+    env.DB.prepare('DELETE FROM credentials'),
   ]);
 });
 
@@ -86,7 +86,7 @@ describe('/readyz', () => {
 
     resetReadinessCacheForTests();
     await env.DB.prepare(
-      `INSERT INTO services (id, slug, name, base_url, injection, credential_sealed, created_at, updated_at)
+      `INSERT INTO credentials (id, slug, name, base_url, injection, credential_sealed, created_at, updated_at)
        VALUES ('svc_X', 'x', 'x', 'https://api.example.com', '{"kind":"bearer"}', ?, 0, 0)`,
     )
       .bind(JSON.stringify({ v: 1, kid: 'retired', iv: '', wdek: '', dek_iv: '', ct: '' }))
@@ -125,7 +125,7 @@ describe('/readyz', () => {
 describe('/readyz keyring check', () => {
   const insertSealed = (sealed: string) =>
     env.DB.prepare(
-      `INSERT INTO services (id, slug, name, base_url, injection, credential_sealed, created_at, updated_at)
+      `INSERT INTO credentials (id, slug, name, base_url, injection, credential_sealed, created_at, updated_at)
        VALUES ('svc_K', 'k', 'k', 'https://api.example.com', '{"kind":"bearer"}', ?, 0, 0)`,
     )
       .bind(sealed)

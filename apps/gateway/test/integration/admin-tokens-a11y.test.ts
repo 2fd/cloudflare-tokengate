@@ -1,11 +1,11 @@
-// Accessibility structure of the Service tokens pages (A16, A7.6): labels for every control,
+// Accessibility structure of the Credentials pages (A16, A7.6): labels for every control,
 // aria-describedby naming rendered ids, no native validation on controls that can be hidden while
 // their form is submittable, error re-renders that link to open fields, tables with captions and
 // row headers, radio groups in fieldsets, valid `pattern`s, and no script or inline style.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { destinationFingerprint } from '../../src/admin/ops/services';
-import { getService } from '../../src/db/services';
+import { destinationFingerprint } from '../../src/admin/ops/credentials';
+import { getService } from '../../src/db/credentials';
 import { adminGet, adminPost, createUser, loginAs, resetControlPlane } from '../helpers/admin-auth';
 import { createTestApp, setUpstreamHosts, type TestApp } from '../helpers/app';
 import { fakeNetwork, KEK_1 } from '../unit/admin/ops/helpers';
@@ -169,31 +169,31 @@ async function owner() {
   return loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
 }
 
-describe('A16: service token pages', () => {
+describe('A16: credential pages', () => {
   it('list, accordion, token page, hosts and keys meet the structure rules', async () => {
     const session = await owner();
     await setUpstreamHosts(['api.github.com', '*.slack.com']);
-    const res = await adminPost(app, session, '/admin/tokens', {
+    const res = await adminPost(app, session, '/admin/credentials', {
       template: 'github',
       credential: 'ghp_a11yTest0123456789abcdefghijklmn',
     });
     const id = /svc_[0-9A-Z]{26}/.exec(res.headers.get('location') ?? '')?.[0] ?? '';
     for (const path of [
-      '/admin/tokens',
-      '/admin/tokens/new',
-      '/admin/tokens/new?template=custom',
-      `/admin/tokens/${id}`,
-      `/admin/tokens/${id}?open=destination`,
-      `/admin/tokens/${id}?open=details`,
-      '/admin/tokens/hosts',
-      '/admin/tokens/keys',
+      '/admin/credentials',
+      '/admin/credentials/new',
+      '/admin/credentials/new?template=custom',
+      `/admin/credentials/${id}`,
+      `/admin/credentials/${id}?open=destination`,
+      `/admin/credentials/${id}?open=details`,
+      '/admin/credentials/hosts',
+      '/admin/credentials/keys',
     ]) {
       const checked = checkPage(await (await adminGet(app, session, path)).text(), path);
       if (!path.endsWith('/keys')) expect(checked.controls, path).toBeGreaterThan(0);
     }
     // The checker is not vacuous: the custom card has conditional and collapsed controls.
     const custom = checkPage(
-      await (await adminGet(app, session, '/admin/tokens/new')).text(),
+      await (await adminGet(app, session, '/admin/credentials/new')).text(),
       'new',
     );
     expect(custom.hidden).toBeGreaterThan(10);
@@ -201,7 +201,7 @@ describe('A16: service token pages', () => {
 
   it('error re-renders link every error to an open, rendered field', async () => {
     const session = await owner();
-    const created = await adminPost(app, session, '/admin/tokens', {
+    const created = await adminPost(app, session, '/admin/credentials', {
       template: 'github',
       credential: 'ghp_a11yTest0123456789abcdefghijklmn',
     });
@@ -212,32 +212,32 @@ describe('A16: service token pages', () => {
     const cases: Array<[string, string, Record<string, string>]> = [
       [
         'custom card',
-        '/admin/tokens',
+        '/admin/credentials',
         { template: 'custom', base_url: 'http://x', credential: 'abc' },
       ],
       [
         'template card, failed check',
-        '/admin/tokens',
+        '/admin/credentials',
         { template: 'openai', credential: 'sk-proj-0123456789abcdefghij' },
       ],
       [
         'template card, taken slug',
-        '/admin/tokens',
+        '/admin/credentials',
         { template: 'github', credential: 'ghp_x0123456789abcdefghij', slug: 'github' },
       ],
       [
         'details, advanced field',
-        `/admin/tokens/${id}`,
+        `/admin/credentials/${id}`,
         { name: 'GitHub', forward_headers: 'authorization' },
       ],
-      ['details, name', `/admin/tokens/${id}`, { name: '' }],
-      ['rotate', `/admin/tokens/${id}/secret`, { expected_destination: shown }],
+      ['details, name', `/admin/credentials/${id}`, { name: '' }],
+      ['rotate', `/admin/credentials/${id}/secret`, { expected_destination: shown }],
       [
         'destination',
-        `/admin/tokens/${id}/destination`,
+        `/admin/credentials/${id}/destination`,
         { base_url: 'nope', injection_kind: 'header' },
       ],
-      ['hosts', '/admin/tokens/hosts', { mode: 'list' }],
+      ['hosts', '/admin/credentials/hosts', { mode: 'list' }],
     ];
     for (const [label, path, fields] of cases) {
       const res = await adminPost(app, session, path, fields);
@@ -246,12 +246,12 @@ describe('A16: service token pages', () => {
       checkPage(html, label);
       checkErrorPage(html, label);
     }
-    expect(await env.DB.prepare('SELECT count(*) AS n FROM services').first('n')).toBe(1);
+    expect(await env.DB.prepare('SELECT count(*) AS n FROM credentials').first('n')).toBe(1);
   });
 
   it('secret inputs carry the password-manager opt-outs and never block paste', async () => {
     const session = await owner();
-    const html = await (await adminGet(app, session, '/admin/tokens/new')).text();
+    const html = await (await adminGet(app, session, '/admin/credentials/new')).text();
     const secrets = parse(html).filter((node) => node.attrs.type === 'password');
     expect(secrets.length).toBeGreaterThan(5);
     for (const node of secrets) {

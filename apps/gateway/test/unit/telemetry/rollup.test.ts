@@ -32,7 +32,7 @@ function record(ts: number, overrides: Partial<RequestRecord> = {}): RequestReco
     path: '/',
     service_slug: 'svc',
     service_id: 'svc_A',
-    caller_provider_id: 'cpr_A',
+    credential_access_rule_id: 'cpr_A',
     grant_id: 'grt_A',
     claims_verified: 1,
     caller_subject: null,

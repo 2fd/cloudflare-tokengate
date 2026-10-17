@@ -109,7 +109,7 @@ describe('I-LINK-1: email linking only for invited, unexpired users with an auth
     expect(await count("SELECT count(*) AS n FROM users WHERE status = 'invited'")).toBe(1);
   });
 
-  it('refuses an Access token without an email (service token)', async () => {
+  it('refuses an Access token without an email (credential)', async () => {
     await createUser({ email: 'dev@acme.com', status: 'invited', inviteExpiresAt: T0 + 1000 }, T0);
     const res = await accessLogin({ sub: '', common_name: 'ci.access' });
     expect(res.status).toBe(401);

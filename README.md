@@ -4,7 +4,7 @@ A self-hosted credential broker on Cloudflare Workers: CI jobs prove who they ar
 
 This page is for anyone who evaluates, deploys or audits tokengate. Full documentation starts at [docs/index.md](docs/index.md).
 
-![Sequence: the CI job gets a short-lived OIDC token from its issuer, calls tokengate at /proxy/<slug>/<path>; tokengate reads the service and grants from D1 in one batch, verifies the token against the issuer JWKS, forwards the call to the upstream API with the credential injected and the caller token removed, returns the filtered response, and writes a request record to TELEMETRY_DB after responding.](docs/diagrams/request-flow.svg)
+![Sequence: the CI job gets a short-lived OIDC token from its issuer, calls tokengate at /proxy/<slug>/<path>; tokengate reads the service and issuer_access_rules from D1 in one batch, verifies the token against the issuer JWKS, forwards the call to the upstream API with the credential injected and the caller token removed, returns the filtered response, and writes a request record to TELEMETRY_DB after responding.](docs/diagrams/request-flow.svg)
 
 <sub>Diagram source: [`docs/diagrams/src/`](docs/diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
@@ -27,7 +27,7 @@ Non-goals and future work are listed in [docs/roadmap.md](docs/roadmap.md).
 ## Features
 
 - **Workload identity instead of static keys.** Callers send a GitHub Actions OIDC token, a GitLab CI `id_token`, or a token from any OIDC issuer. The gateway checks signature, issuer, audience, age and required claims.
-- **Granular grants.** Conditions on verified claims select the caller: organization, repository, branch, tag, pull request, release or environment. Rules select the allowed methods and path globs. GitHub presets build the conditions for branch, tag, release, pull request and environment cases.
+- **Granular issuer_access_rules.** Conditions on verified claims select the caller: organization, repository, branch, tag, pull request, release or environment. Rules select the allowed methods and path globs. GitHub presets build the conditions for branch, tag, release, pull request and environment cases.
 - **Revocation on the next request.** Disabling a grant, a service or a caller provider takes effect on the next request. Policy is read from D1 on every request; there is no policy cache.
 - **Encrypted credentials.** AES-256-GCM envelope encryption under a key-encryption key that you generate and keep outside Cloudflare. The ciphertext is bound to the service and its destination.
 - **Request log.** Every proxied call can produce a request record with the outcome, the reason, the verified caller and the policy evaluation. Hourly rollups feed the dashboard. An optional archive writes every record to R2 through Basin Pipelines.
@@ -46,7 +46,7 @@ The steps below are a summary. [docs/getting-started.md](docs/getting-started.md
 1. Before you click, generate the key-encryption key outside Cloudflare and store it in your company vault: `openssl rand -base64 32`.
 2. Click the button. Paste the key when the form asks for `TOKENGATE_KEK`. The form also asks for `AUTH_ACCESS_DEVELOPMENT`, a local-only login: enter any email and delete it when you set the Access variables. Defaults kept from `.dev.vars.example` fail closed.
 3. In the build settings, check that the deploy command runs the `deploy` script: `pnpm run deploy`. Cloudflare pre-fills it from `apps/gateway/package.json`. This script applies the database migrations before it deploys.
-4. After the first deploy, continue with [getting-started.md, step 7](docs/getting-started.md#7-attach-a-custom-domain). Set the Access variables before you add services: stored credentials are bound to them ([I-CRED-3](docs/threat-model.md#i-cred-3)).
+4. After the first deploy, continue with [getting-started.md, step 7](docs/getting-started.md#7-attach-a-custom-domain). Set the Access variables before you add credentials: stored credentials are bound to them ([I-CRED-3](docs/threat-model.md#i-cred-3)).
 
 The button copies this repository into a new repository in your account. It is not a fork, so you pull updates yourself ([docs/operations/upgrades.md](docs/operations/upgrades.md)).
 
@@ -113,8 +113,8 @@ The full model, with the test that enforces each invariant, is in [docs/threat-m
 - Shared issuers (`token.actions.githubusercontent.com`, `gitlab.com`) sign tokens for anyone. A caller provider for them must pin your tenant, for example your GitHub organization ID. Tokens outside the pin get `401` before the gateway reveals whether the service exists ([I-TEN-1](docs/threat-model.md#i-ten-1)).
 - Access is denied by default. A request needs an enabled grant whose conditions and rules match ([I-AUTHZ-1](docs/threat-model.md#i-authz-1)). Every grant must pin identity claims exactly: the numeric organization and repository IDs, or an exact workflow pin, which follows repository names ([I-AUTHZ-2](docs/threat-model.md#i-authz-2), [policies](docs/policies.md#anchor-rules)). Events such as `pull_request_target` need an explicit opt-in ([I-AUTHZ-3](docs/threat-model.md#i-authz-3)).
 - The caller token never reaches the upstream ([I-TOK-1](docs/threat-model.md#i-tok-1)). The credential never appears in gateway responses, logs, audit events, the UI or exports ([I-CRED-1](docs/threat-model.md#i-cred-1)).
-- A credential only decrypts for the service, base URL and injection it was saved with ([I-CRED-2](docs/threat-model.md#i-cred-2)). Base URLs must be public `https` hosts, optionally limited to an owner-edited allowlist (Service tokens › Allowed hosts), checked at save time and on every request ([I-SSRF-1](docs/threat-model.md#i-ssrf-1)).
-- Anyone who can deploy the Worker has full trust. Admins can let callers use a credential through grants, but cannot read it back. Losing the key-encryption key loses every stored credential. See [actors](docs/threat-model.md#actors) and [known limitations](docs/threat-model.md#known-limitations).
+- A credential only decrypts for the service, base URL and injection it was saved with ([I-CRED-2](docs/threat-model.md#i-cred-2)). Base URLs must be public `https` hosts, optionally limited to an owner-edited allowlist (Credentials › Allowed hosts), checked at save time and on every request ([I-SSRF-1](docs/threat-model.md#i-ssrf-1)).
+- Anyone who can deploy the Worker has full trust. Admins can let callers use a credential through issuer_access_rules, but cannot read it back. Losing the key-encryption key loses every stored credential. See [actors](docs/threat-model.md#actors) and [known limitations](docs/threat-model.md#known-limitations).
 
 Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 

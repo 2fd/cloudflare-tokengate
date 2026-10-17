@@ -14,7 +14,7 @@ import { render } from '../render';
 describe('PageHeader (detail)', () => {
   const html = render(
     <PageHeader
-      crumbs={[{ label: 'Service tokens', href: '/admin/tokens' }, { label: 'Slack' }]}
+      crumbs={[{ label: 'Credentials', href: '/admin/credentials' }, { label: 'Slack' }]}
       identity={<Identity title="Slack" />}
       actions={<a href="#">Give access</a>}
     >
@@ -68,8 +68,8 @@ describe('PageHeader (detail)', () => {
   });
 
   it('renders a count of 0', () => {
-    expect(render(<PageHeader title="Consumer access" count={0} />)).toContain(
-      '<h1>Consumer access<span class="count">0</span></h1>',
+    expect(render(<PageHeader title="Issuer access rules" count={0} />)).toContain(
+      '<h1>Issuer access rules<span class="count">0</span></h1>',
     );
   });
 });
@@ -82,7 +82,7 @@ describe('Identity', () => {
       status={<span class="badge ok">✓ Active</span>}
       type="Slack Web API"
       slug="slack"
-      entityId={{ value: 'svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C', kind: 'Token' }}
+      entityId={{ value: 'svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C', kind: 'Credential' }}
       facts={['Created 3 Oct 2026']}
       class="x"
     />,
@@ -94,7 +94,7 @@ describe('Identity', () => {
 
   it('orders the meta line type, slug, ID chip, facts', () => {
     expect(html).toContain(
-      '<div class="ident-meta"><span>Slack Web API</span><span class="slug">slack</span><span class="vh">Token ID</span><span class="idchip" title="Token ID">svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C</span><span>Created 3 Oct 2026</span></div>',
+      '<div class="ident-meta"><span>Slack Web API</span><span class="slug">slack</span><span class="vh">Credential ID</span><span class="idchip" title="Credential ID">svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C</span><span>Created 3 Oct 2026</span></div>',
     );
   });
 
@@ -118,7 +118,7 @@ describe('Identity', () => {
 describe('Tabs', () => {
   const html = render(
     <Tabs
-      label="Token views"
+      label="Credential views"
       class="x"
       items={[
         { label: 'Overview', href: '/o', current: true },
@@ -129,7 +129,7 @@ describe('Tabs', () => {
   );
 
   it('is a named nav with the current tab marked', () => {
-    expect(html).toMatch(/^<nav class="tabs x" aria-label="Token views">/);
+    expect(html).toMatch(/^<nav class="tabs x" aria-label="Credential views">/);
     expect(html).toContain('<a href="/o" aria-current="page">Overview</a>');
     expect(html.match(/aria-current/g)).toHaveLength(1);
   });

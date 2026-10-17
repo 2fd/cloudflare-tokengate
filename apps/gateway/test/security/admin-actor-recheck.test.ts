@@ -2,11 +2,11 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Permission } from '../../src/admin/auth/rbac';
 import type { AdminActor } from '../../src/admin/auth/types';
-import { createGrant } from '../../src/admin/ops/grants';
-import { destinationFingerprint, testServiceCredential } from '../../src/admin/ops/services';
+import { destinationFingerprint, testServiceCredential } from '../../src/admin/ops/credentials';
+import { createIssuerAccessRule } from '../../src/admin/ops/issuer_access_rules';
 import { updateSettings } from '../../src/admin/ops/settings';
 import { inviteUser, updateUser } from '../../src/admin/ops/users';
-import { getService } from '../../src/db/services';
+import { getService } from '../../src/db/credentials';
 import {
   anchoredConditions,
   CONTEXT,
@@ -67,7 +67,7 @@ async function world() {
 }
 
 async function repoint(app: Parameters<typeof adminPost>[0], session: AdminSession, id: string) {
-  return adminPost(app, session, `/admin/tokens/${id}/destination`, {
+  return adminPost(app, session, `/admin/credentials/${id}/destination`, {
     base_url: `https://${ATTACKER_HOST}`,
     injection_kind: 'bearer',
     credential: 'attacker-token-0123456789',
@@ -75,7 +75,7 @@ async function repoint(app: Parameters<typeof adminPost>[0], session: AdminSessi
 }
 
 async function serviceState(serviceId: string, actorId: string) {
-  const baseUrl = await env.DB.prepare('SELECT base_url FROM services WHERE id = ?')
+  const baseUrl = await env.DB.prepare('SELECT base_url FROM credentials WHERE id = ?')
     .bind(serviceId)
     .first('base_url');
   const audits = await env.DB.prepare(
@@ -225,17 +225,17 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
     }
 
     const grantCount = async () =>
-      env.DB.prepare('SELECT count(*) AS n FROM grants').first<number>('n');
+      env.DB.prepare('SELECT count(*) AS n FROM issuer_access_rules').first<number>('n');
 
-    it('an admin demoted to token_manager cannot create a grant (POST /admin/access)', async () => {
+    it('an admin demoted to token_manager cannot create a grant (POST /admin/issuer-access-rules)', async () => {
       const w = await world();
       const before = await grantCount();
-      const result = await createGrant(
+      const result = await createIssuerAccessRule(
         demotedMidRequest(w, 'token_manager'),
         adminActor(w, ['access:write']),
         {
           name: 'demoted',
-          caller_provider_id: w.providerId,
+          credential_access_rule_id: w.providerId,
           service_id: w.serviceId,
           conditions: anchoredConditions(),
           rules: [{ methods: ['GET'], path: '/repos/**' }],
@@ -245,7 +245,7 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
       expect(await grantCount()).toBe(before);
     });
 
-    it('an admin demoted to access_manager cannot send the stored credential (POST /admin/tokens/:id/test)', async () => {
+    it('an admin demoted to access_manager cannot send the stored credential (POST /admin/credentials/:id/test)', async () => {
       const w = await world();
       const calls = w.network.calls.length;
       const result = await testServiceCredential(
@@ -262,12 +262,12 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
     it('a field permission is re-checked at commit: tokens:write plus access:write needs admin or owner', async () => {
       const w = await world();
       const before = await grantCount();
-      const result = await createGrant(
+      const result = await createIssuerAccessRule(
         demotedMidRequest(w, 'access_manager'),
         adminActor(w, ['access:write', 'tokens:write']),
         {
           name: 'needs both',
-          caller_provider_id: w.providerId,
+          credential_access_rule_id: w.providerId,
           service_id: w.serviceId,
           conditions: anchoredConditions(),
           rules: [{ methods: ['GET'], path: '/repos/**' }],
@@ -315,9 +315,9 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
     it('an authority without permissions never commits (fail closed)', async () => {
       const w = await world();
       const before = await grantCount();
-      const result = await createGrant(w.app.deps, adminActor(w, []), {
+      const result = await createIssuerAccessRule(w.app.deps, adminActor(w, []), {
         name: 'no permissions',
-        caller_provider_id: w.providerId,
+        credential_access_rule_id: w.providerId,
         service_id: w.serviceId,
         conditions: anchoredConditions(),
         rules: [{ methods: ['GET'], path: '/repos/**' }],
@@ -328,12 +328,12 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
 
     it('control: the admin commits with both permissions while still an admin', async () => {
       const w = await world();
-      const result = await createGrant(
+      const result = await createIssuerAccessRule(
         w.app.deps,
         adminActor(w, ['access:write', 'tokens:write']),
         {
           name: 'still admin',
-          caller_provider_id: w.providerId,
+          credential_access_rule_id: w.providerId,
           service_id: w.serviceId,
           conditions: anchoredConditions(),
           rules: [{ methods: ['GET'], path: '/repos/**' }],
@@ -356,7 +356,12 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
         disableStatus = res.status;
       }, 'api.github.com');
       const calls = w.network.calls.length;
-      const res = await adminPost(w.app, w.adminSession, `/admin/tokens/${w.serviceId}/test`, {});
+      const res = await adminPost(
+        w.app,
+        w.adminSession,
+        `/admin/credentials/${w.serviceId}/test`,
+        {},
+      );
       expect({ auditedAtSend, disableStatus, status: res.status }).toEqual({
         auditedAtSend: 1,
         disableStatus: 303,
@@ -411,7 +416,7 @@ function armedDb() {
 }
 
 describe('I-SESS-1: token writes stop when the role changes mid-request', () => {
-  it('an admin demoted to access_manager while the rotate check is in flight writes nothing (POST /admin/tokens/:id/secret)', async () => {
+  it('an admin demoted to access_manager while the rotate check is in flight writes nothing (POST /admin/credentials/:id/secret)', async () => {
     const w = await world();
     const before = await serviceState(w.serviceId, w.admin.id);
     w.whileInFlight(async () => {
@@ -422,7 +427,7 @@ describe('I-SESS-1: token writes stop when the role changes mid-request', () => 
     }, 'api.github.com');
     const row = await getService(env.DB, w.serviceId);
     if (!row) throw new Error('service missing');
-    const res = await adminPost(w.app, w.adminSession, `/admin/tokens/${w.serviceId}/secret`, {
+    const res = await adminPost(w.app, w.adminSession, `/admin/credentials/${w.serviceId}/secret`, {
       expected_destination: await destinationFingerprint(row),
       credential: 'ghp_rotatedWhileDemoted0123456789',
     });
@@ -430,7 +435,7 @@ describe('I-SESS-1: token writes stop when the role changes mid-request', () => 
     expect(await serviceState(w.serviceId, w.admin.id)).toEqual(before);
   });
 
-  it('an owner demoted to admin before the allowlist commit: neither row is written and nothing is sent (POST /admin/tokens with allow_host)', async () => {
+  it('an owner demoted to admin before the allowlist commit: neither row is written and nothing is sent (POST /admin/credentials with allow_host)', async () => {
     const armed = armedDb();
     const network = fakeNetwork();
     const app = createTestApp({
@@ -455,7 +460,7 @@ describe('I-SESS-1: token writes stop when the role changes mid-request', () => 
     ).toBe('["api.github.com"]');
     expect(
       await env.DB.prepare(
-        "SELECT count(*) AS n FROM services WHERE base_url = 'https://api.openai.com/v1'",
+        "SELECT count(*) AS n FROM credentials WHERE base_url = 'https://api.openai.com/v1'",
       ).first('n'),
     ).toBe(0);
     expect(network.calls.slice(calls)).toEqual([]);
@@ -477,12 +482,12 @@ describe('I-SESS-1: token writes stop when the role changes mid-request', () => 
     const res = await adminPost(app, session, request.path, request.fields);
     expect(res.status).toBe(409);
     expect(
-      await env.DB.prepare('SELECT count(*) AS n FROM services WHERE id = ?')
+      await env.DB.prepare('SELECT count(*) AS n FROM credentials WHERE id = ?')
         .bind(seeded.serviceId)
         .first('n'),
     ).toBe(1);
     expect(
-      await env.DB.prepare('SELECT count(*) AS n FROM grants WHERE id = ?')
+      await env.DB.prepare('SELECT count(*) AS n FROM issuer_access_rules WHERE id = ?')
         .bind(seeded.grantId)
         .first('n'),
     ).toBe(1);

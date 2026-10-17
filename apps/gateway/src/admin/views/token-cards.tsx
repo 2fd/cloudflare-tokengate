@@ -1,4 +1,4 @@
-// The Add token catalog (A13.2): a ui TypeCatalog with one exclusive TypeCard per template plus
+// The Add credential catalog (A13.2): a ui TypeCatalog with one exclusive TypeCard per template plus
 // Custom API, each holding its own form, so only the open card's fields can be submitted and the
 // native `required`/`pattern` of its secret always apply to a visible control. A template card
 // posts the secret and display fields only; everything else comes from SERVICE_TEMPLATES.
@@ -19,8 +19,8 @@ import {
 import { upstreamHostAllowed } from '../../config';
 import type { KeyringError } from '../../crypto/keyring';
 import type { Service } from '../../db/types';
+import { freeNameAmong, freeSlugAmong, slugBaseFor } from '../ops/credentials';
 import { KEYRING_ERROR_TEXT } from '../ops/keyring';
-import { freeNameAmong, freeSlugAmong, slugBaseFor } from '../ops/services';
 import { paths } from '../paths';
 import type { ViewContext } from '../render';
 import { getServiceTemplate, SERVICE_TEMPLATES, type ServiceTemplate } from '../service-templates';
@@ -214,7 +214,7 @@ function TemplateCard(props: {
   return (
     <TypeCard
       {...common}
-      action="/admin/tokens"
+      action="/admin/credentials"
       hidden={ctx.hidden({ template: template.id })}
       layout="form-layout"
     >
@@ -335,7 +335,7 @@ function TemplateCard(props: {
               and never shown again.
             </li>
             <li>
-              <b>Loading a token gives nobody access.</b> Consumer access is given separately.
+              <b>Loading a token gives nobody access.</b> Issuer access rules is given separately.
             </li>
           </ol>
           <p class="hint">
@@ -429,7 +429,7 @@ function CustomCard(props: {
       title="Custom API"
       description="Any HTTPS API. You set the base URL and how the secret is sent: bearer, header, basic, path or query."
       open={props.open}
-      action="/admin/tokens"
+      action="/admin/credentials"
       hidden={ctx.hidden({ template: CUSTOM })}
     >
       <Field
@@ -471,7 +471,7 @@ function CustomCard(props: {
           value="1"
           checked={values.allow_host !== ''}
           label="Also add this host to Allowed hosts"
-          hint="Only when the base URL's host is not allowed yet. Applies to every token."
+          hint="Only when the base URL's host is not allowed yet. Applies to every credential."
           error={ids.error('allow_host')}
         />
       ) : null}

@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest';
 import type { Condition, Injection, Rule } from '../../../src/policy/types';
 import {
   ALLOWED_ALGS,
-  type CallerProviderInput,
+  type CredentialAccessRuleInput,
   normalizeCredential,
   normalizeInjection,
   type ServiceFieldsInput,
   validateBaseUrl,
-  validateCallerProvider,
+  validateCredentialAccessRule,
   validateForwardHeaders,
-  validateGrant,
+  validateIssuerAccessRule,
   validateServiceFields,
 } from '../../../src/policy/validate';
 import { genericProfile, githubProfile, gitlabProfile, provider } from './fixtures';
@@ -117,7 +117,7 @@ describe('I-INJ-1: normalizeInjection', () => {
     [{ kind: 'query', param: 'api_key' }, '{"kind":"query","param":"api_key"}'],
     [{ kind: 'path' }, '{"kind":"path"}'],
     [{ kind: 'path', prefix: '' }, '{"kind":"path"}'],
-    [{ kind: 'path', prefix: '/services' }, '{"kind":"path","prefix":"/services"}'],
+    [{ kind: 'path', prefix: '/credentials' }, '{"kind":"path","prefix":"/credentials"}'],
   ])('normalizes %j', (raw, json) => {
     const result = normalizeInjection(raw);
     expect(result).toMatchObject({ ok: true, json });
@@ -293,8 +293,8 @@ describe('validateServiceFields', () => {
   });
 });
 
-describe('validateCallerProvider', () => {
-  const github: CallerProviderInput = {
+describe('validateCredentialAccessRule', () => {
+  const github: CredentialAccessRuleInput = {
     name: 'GitHub',
     profile: 'github-actions',
     issuer: 'https://token.actions.githubusercontent.com',
@@ -305,7 +305,7 @@ describe('validateCallerProvider', () => {
     tenant_pin: [{ claim: 'repository_owner_id', match: 'exact', values: ['1000'] }],
     anchor_claims: [],
   };
-  const generic: CallerProviderInput = {
+  const generic: CredentialAccessRuleInput = {
     ...github,
     name: 'Buildkite',
     profile: 'generic',
@@ -316,11 +316,11 @@ describe('validateCallerProvider', () => {
   };
 
   it('accepts valid providers', () => {
-    expect(validateCallerProvider(github, githubProfile, null)).toEqual({
+    expect(validateCredentialAccessRule(github, githubProfile, null)).toEqual({
       errors: [],
       warnings: [],
     });
-    expect(validateCallerProvider(generic, genericProfile, null)).toEqual({
+    expect(validateCredentialAccessRule(generic, genericProfile, null)).toEqual({
       errors: [],
       warnings: [],
     });
@@ -328,12 +328,12 @@ describe('validateCallerProvider', () => {
 
   it('keeps the profile immutable', () => {
     const existing = provider({ profile: 'generic' });
-    expect(validateCallerProvider(github, githubProfile, existing).errors).toContain(
-      'profile cannot be changed after the caller provider is created',
+    expect(validateCredentialAccessRule(github, githubProfile, existing).errors).toContain(
+      'profile cannot be changed after the credential access rule is created',
     );
   });
 
-  it.each<[string, Partial<CallerProviderInput>]>([
+  it.each<[string, Partial<CredentialAccessRuleInput>]>([
     ['http issuer', { issuer: 'http://token.actions.githubusercontent.com' }],
     ['issuer with fragment', { issuer: 'https://issuer.example.com#x' }],
     ['issuer with userinfo', { issuer: 'https://u:p@issuer.example.com' }],
@@ -354,17 +354,21 @@ describe('validateCallerProvider', () => {
     ['anchor claims on a fixed profile', { anchor_claims: ['repository_id'] }],
     ['empty name', { name: '' }],
   ])('rejects %s', (_name, patch) => {
-    expect(validateCallerProvider({ ...github, ...patch }, githubProfile, null).errors.length).toBe(
-      1,
-    );
+    expect(
+      validateCredentialAccessRule({ ...github, ...patch }, githubProfile, null).errors.length,
+    ).toBe(1);
   });
 
   describe('I-TEN-1: tenant pins', () => {
     it('requires a pin on shared issuers', () => {
-      const result = validateCallerProvider({ ...github, tenant_pin: [] }, githubProfile, null);
+      const result = validateCredentialAccessRule(
+        { ...github, tenant_pin: [] },
+        githubProfile,
+        null,
+      );
       expect(result.errors).toHaveLength(1);
       const slash = { ...github, issuer: `${github.issuer}/`, tenant_pin: [] };
-      expect(validateCallerProvider(slash, githubProfile, null).errors).toHaveLength(1);
+      expect(validateCredentialAccessRule(slash, githubProfile, null).errors).toHaveLength(1);
     });
 
     it('does not require a pin for a dedicated enterprise issuer', () => {
@@ -373,7 +377,7 @@ describe('validateCallerProvider', () => {
         issuer: 'https://token.actions.githubusercontent.com/acme',
         tenant_pin: [],
       };
-      expect(validateCallerProvider(enterprise, githubProfile, null).errors).toEqual([]);
+      expect(validateCredentialAccessRule(enterprise, githubProfile, null).errors).toEqual([]);
     });
 
     it('only allows exact, non-negated pins on tenant claims', () => {
@@ -385,19 +389,19 @@ describe('validateCallerProvider', () => {
         { claim: 'repository_owner_id', match: 'exact', values: [] },
       ];
       for (const c of cases) {
-        expect(validateCallerProvider(pin(c), githubProfile, null).errors.length).toBeGreaterThan(
-          0,
-        );
+        expect(
+          validateCredentialAccessRule(pin(c), githubProfile, null).errors.length,
+        ).toBeGreaterThan(0);
       }
     });
 
     it('refuses shared issuers under another profile', () => {
       const asGeneric = { ...generic, issuer: 'https://token.actions.githubusercontent.com' };
-      expect(validateCallerProvider(asGeneric, genericProfile, null).errors).toEqual([
+      expect(validateCredentialAccessRule(asGeneric, genericProfile, null).errors).toEqual([
         'issuers on token.actions.githubusercontent.com must use the github-actions profile',
       ]);
       const gitlabAsGithub = { ...github, issuer: 'https://gitlab.com' };
-      expect(validateCallerProvider(gitlabAsGithub, githubProfile, null).errors).toContain(
+      expect(validateCredentialAccessRule(gitlabAsGithub, githubProfile, null).errors).toContain(
         'issuers on gitlab.com must use the gitlab-ci profile',
       );
     });
@@ -410,13 +414,17 @@ describe('validateCallerProvider', () => {
       'https://gitlab.com/',
       'https://gitlab.com/acme',
     ])('binds every issuer on a CI host to its profile: %s', (issuer) => {
-      const result = validateCallerProvider({ ...generic, issuer }, genericProfile, null);
+      const result = validateCredentialAccessRule({ ...generic, issuer }, genericProfile, null);
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0]).toMatch(/must use the (github-actions|gitlab-ci) profile/);
     });
 
     it('warns when a generic provider has no pin', () => {
-      const result = validateCallerProvider({ ...generic, tenant_pin: [] }, genericProfile, null);
+      const result = validateCredentialAccessRule(
+        { ...generic, tenant_pin: [] },
+        genericProfile,
+        null,
+      );
       expect(result.errors).toEqual([]);
       expect(result.warnings).toHaveLength(1);
     });
@@ -426,7 +434,7 @@ describe('validateCallerProvider', () => {
     it.each(['none', 'None', 'HS256', 'HS384', 'HS512', 'ES512', 'rs256', ''])(
       'rejects %j',
       (alg) => {
-        const result = validateCallerProvider(
+        const result = validateCredentialAccessRule(
           { ...github, allowed_algs: [alg] },
           githubProfile,
           null,
@@ -437,12 +445,16 @@ describe('validateCallerProvider', () => {
 
     it('rejects a forbidden algorithm listed next to an allowed one', () => {
       const algs = ['RS256', 'HS256'];
-      const result = validateCallerProvider({ ...github, allowed_algs: algs }, githubProfile, null);
+      const result = validateCredentialAccessRule(
+        { ...github, allowed_algs: algs },
+        githubProfile,
+        null,
+      );
       expect(result.errors).toHaveLength(1);
     });
 
     it.each([...ALLOWED_ALGS])('accepts %s', (alg) => {
-      const result = validateCallerProvider(
+      const result = validateCredentialAccessRule(
         { ...github, allowed_algs: [alg] },
         githubProfile,
         null,
@@ -452,12 +464,16 @@ describe('validateCallerProvider', () => {
   });
 
   it('requires anchor claims on generic providers', () => {
-    const result = validateCallerProvider({ ...generic, anchor_claims: [] }, genericProfile, null);
+    const result = validateCredentialAccessRule(
+      { ...generic, anchor_claims: [] },
+      genericProfile,
+      null,
+    );
     expect(result.errors).toHaveLength(1);
   });
 
   it('allows the gitlab maximum token age of 3600', () => {
-    const gitlab: CallerProviderInput = {
+    const gitlab: CredentialAccessRuleInput = {
       ...github,
       profile: 'gitlab-ci',
       issuer: 'https://gitlab.com',
@@ -465,26 +481,31 @@ describe('validateCallerProvider', () => {
       tenant_pin: [{ claim: 'namespace_id', match: 'exact', values: ['42'] }],
       max_token_age_seconds: 3600,
     };
-    expect(validateCallerProvider(gitlab, gitlabProfile, null).errors).toEqual([]);
+    expect(validateCredentialAccessRule(gitlab, gitlabProfile, null).errors).toEqual([]);
   });
 });
 
-describe('validateGrant', () => {
+describe('validateIssuerAccessRule', () => {
   const owner: Condition = { claim: 'repository_owner_id', match: 'exact', values: ['1000'] };
   const repo: Condition = { claim: 'repository_id', match: 'exact', values: ['2000'] };
   const rules: Rule[] = [{ methods: ['POST'], path: '/api/chat.postMessage' }];
   const github = provider();
   const check = (conditions: Condition[], r: Rule[] = rules) =>
-    validateGrant({ conditions, rules: r }, githubProfile, github);
+    validateIssuerAccessRule({ conditions, rules: r }, githubProfile, github);
 
   it('accepts an anchored grant', () => {
     expect(check([owner, repo])).toEqual({ errors: [], warnings: [], warningDetails: [] });
   });
 
-  describe('I-CRED-1: path-injection services', () => {
+  describe('I-CRED-1: path-injection credentials', () => {
     const path = { injection: { kind: 'path' } as Injection };
     const withService = (r: Rule[], service: { injection: Injection } | null) =>
-      validateGrant({ conditions: [owner, repo], rules: r }, githubProfile, github, service);
+      validateIssuerAccessRule(
+        { conditions: [owner, repo], rules: r },
+        githubProfile,
+        github,
+        service,
+      );
 
     it('accepts POST-only rules without a warning', () => {
       expect(withService([{ methods: ['POST'], path: '/' }], path)).toEqual({
@@ -549,24 +570,24 @@ describe('validateGrant', () => {
       });
       const anchored = [{ claim: 'pipeline_id', match: 'exact', values: ['p1'] }] as Condition[];
       expect(
-        validateGrant({ conditions: anchored, rules }, genericProfile, generic).errors,
+        validateIssuerAccessRule({ conditions: anchored, rules }, genericProfile, generic).errors,
       ).toEqual([]);
       const unanchored = [{ claim: 'sub', match: 'exact', values: ['x'] }] as Condition[];
       expect(
-        validateGrant({ conditions: unanchored, rules }, genericProfile, generic).errors,
+        validateIssuerAccessRule({ conditions: unanchored, rules }, genericProfile, generic).errors,
       ).toHaveLength(1);
       const noAnchors = provider({ profile: 'generic', anchor_claims: [], tenant_pin: [] });
       expect(
-        validateGrant({ conditions: anchored, rules }, genericProfile, noAnchors).errors,
+        validateIssuerAccessRule({ conditions: anchored, rules }, genericProfile, noAnchors).errors,
       ).toHaveLength(1);
     });
   });
 
-  it('refuses a profile that does not belong to the caller provider', () => {
+  it('refuses a profile that does not belong to the credential access rule', () => {
     const generic = provider({ profile: 'generic', anchor_claims: ['repository_id'] });
     expect(
-      validateGrant({ conditions: [owner, repo], rules }, githubProfile, generic).errors,
-    ).toEqual(['profile github-actions does not match the caller provider (generic)']);
+      validateIssuerAccessRule({ conditions: [owner, repo], rules }, githubProfile, generic).errors,
+    ).toEqual(['profile github-actions does not match the credential access rule (generic)']);
   });
 
   it('applies the tenant pin as the intersection of its conditions on one claim', () => {
@@ -577,7 +598,11 @@ describe('validateGrant', () => {
       ],
     });
     const grant = (values: string[]) =>
-      validateGrant({ conditions: [{ ...owner, values }, repo], rules }, githubProfile, narrowed);
+      validateIssuerAccessRule(
+        { conditions: [{ ...owner, values }, repo], rules },
+        githubProfile,
+        narrowed,
+      );
     expect(grant(['1000']).errors).toEqual([]);
     expect(grant(['1001']).errors).toHaveLength(1);
   });
@@ -592,13 +617,15 @@ describe('validateGrant', () => {
       { claim: 'pipeline_id', match: 'exact', values: ['p1'] },
       { claim: 'organization_slug', match: 'exact', values: ['evil'] },
     ];
-    expect(validateGrant({ conditions, rules }, genericProfile, generic).errors).toHaveLength(1);
+    expect(
+      validateIssuerAccessRule({ conditions, rules }, genericProfile, generic).errors,
+    ).toHaveLength(1);
   });
 
   it('refuses owner values outside the tenant pin', () => {
     const result = check([{ ...owner, values: ['1000', '9999'] }, repo]);
     expect(result.errors).toEqual([
-      'repository_owner_id values ["9999"] are outside the caller provider\'s tenant pin',
+      'repository_owner_id values ["9999"] are outside the credential access rule\'s tenant pin',
     ]);
   });
 
@@ -684,7 +711,11 @@ describe('validateGrant', () => {
         { claim: 'project_id', match: 'exact', values: ['7'] },
       ];
       const check = (extra: Condition) =>
-        validateGrant({ conditions: [...anchored, extra], rules }, gitlabProfile, gitlab);
+        validateIssuerAccessRule(
+          { conditions: [...anchored, extra], rules },
+          gitlabProfile,
+          gitlab,
+        );
       expect(
         check({ claim: 'ref_path', match: 'glob', values: ['refs/heads/**'] }).warnings,
       ).toEqual([

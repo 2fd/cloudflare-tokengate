@@ -1,9 +1,9 @@
-// The consumer access form (A14.4) on design D: a ui LiveForm with numbered steps (Consumer,
+// The issuer access rules form (A14.4) on design D: a ui LiveForm with numbered steps (Consumer,
 // Which jobs, Allowed operations, Expires), a summary rail that follows the choices without JS,
 // and the risk acceptance when the server asks for one. A choice between several consumers or
 // tokens is a list whose branches hold that choice's own fields, prefixed with its id, so hidden
 // branches never share a field name and the server reads only the chosen one. The live slots of
-// the ui (`.sfN`/`.rvN`) are global to the form, so the fields of a consumer branch use the
+// the ui (`.sfN`/`.rvN`) are global to the form, so the fields of a credential access rule branch use the
 // page-local scoped classes (`.ga-scope`, `.ga-fN`, `.ga-rN`; pages.css) instead. The primary
 // submit is the first submit in tree order; "Write conditions by hand", "Add 2 more rows" and
 // "Show fields" are secondary submits after it (formnovalidate), and write nothing.
@@ -41,7 +41,7 @@ import {
 } from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
 import { type ConsumerSuggestions, type RuleSet, ruleSetKey } from '../../db/suggestions';
-import type { CallerProvider, ClaimLabel, Service } from '../../db/types';
+import type { CredentialAccessRule, ClaimLabel, Service } from '../../db/types';
 import type { IssuerProfile, ProfileId } from '../../identity/types';
 import { PROXY_METHODS } from '../../policy/types';
 import {
@@ -55,19 +55,16 @@ import {
   isPathInjected,
   type JobsForm,
   type OpsForm,
-  ownerFindCommand,
   pinOwnerValues,
   repositoryFindCommand,
   repositoryFindCommandForId,
 } from '../consumer-access';
+import { formatConditions } from '../grant-text';
 import type { FieldError } from '../ops/shared';
+import { paths } from '../paths';
 import { REPO_PLACEHOLDER, type ServiceTemplate } from '../service-templates';
 import { consumerLogo, hostOf, Tile, tokenLogo, trustLine, useFocusTarget } from './access-visuals';
-import {
-  AddConsumerFields,
-  type ConsumerForm,
-  genericAnchorSuggestions,
-} from './add-consumer-fields';
+import { type ConsumerForm } from './add-consumer-fields';
 import {
   Checkbox,
   CheckboxGroup,
@@ -81,7 +78,7 @@ import { formatTime } from './format';
 import { AddRowsButton, BLANK_ROWS, RepeatingRows } from './rows';
 
 export interface ConsumerBranch {
-  provider: CallerProvider;
+  provider: CredentialAccessRule;
   profile: IssuerProfile;
   prefix: string;
   jobs: JobsForm;
@@ -91,7 +88,7 @@ export interface ConsumerBranch {
   repositoryOptions: Suggestion[];
   /** Accesses per repository option value. */
   repositoryCounts?: Record<string, number>;
-  /** The safe context the consumer's accesses use most, or null without accesses. */
+  /** The safe context the credential access rule's accesses use most, or null without accesses. */
   mostUsedContext?: string | null;
   /** The repository's organization or group prefix that is not pinned yet (new_owner). */
   unknownOwner: string | null;
@@ -123,7 +120,7 @@ export type ConsumerChoice =
   | { kind: 'cards'; branches: ConsumerBranch[]; selected: string; newBranch: NewConsumerBranch }
   | {
       kind: 'select';
-      options: CallerProvider[];
+      options: CredentialAccessRule[];
       selected: string;
       branch: ConsumerBranch | null;
     }
@@ -161,7 +158,7 @@ export interface AccessFormModel {
   version?: string;
   consumer: ConsumerChoice;
   token: TokenChoice;
-  existingConsumers: CallerProvider[];
+  existingConsumers: CredentialAccessRule[];
   expiry: ExpiryForm;
   /** Edit: the stored expiry ("Keep"). */
   keep?: number | null;
@@ -226,7 +223,7 @@ export function AccessForm(props: { model: AccessFormModel }) {
     selectedJobs.jobs.editor === 'structured' &&
     !edit;
   const tokenName = selectedToken?.token.name ?? 'the token';
-  // Prefilled from a denied request, consumer and token fixed: a review of the values, the risk
+  // Prefilled from a denied request, credential access rule and credential fixed: a review of the values, the risk
   // tick and the submit; the full form waits in "Change the prefilled values" (1 tick + 1 submit).
   // The disclosure follows the submit, so Give access stays the first submit in tree order.
   const review =
@@ -274,7 +271,7 @@ export function AccessForm(props: { model: AccessFormModel }) {
       ) : null}
       {consumer.kind === 'select' || token.kind === 'select' ? (
         <Button type="submit" name="_action" value="refresh" formnovalidate>
-          Show fields for the chosen consumer and token
+          Show fields for the chosen credential access rule and credential
         </Button>
       ) : null}
     </>
@@ -438,7 +435,7 @@ function ReviewCard(props: { jobs: ConsumerBranch; ops: TokenBranch; model: Acce
           items={[
             {
               label: gitlab ? 'Project' : 'Repository',
-              value: jobs.repository || 'Any of the consumer',
+              value: jobs.repository || 'Any of the credential access rule',
               mono: jobs.repository !== '',
             },
             { label: 'When', value: contextWords(jobs) },
@@ -513,7 +510,7 @@ function repositoryLabelOf(branch: ConsumerBranch | null): string | null {
   return match?.[1] ?? null;
 }
 
-/** "acme/api" or the consumer: what a risk confirmation names. */
+/** "acme/api" or the credential access rule: what a risk confirmation names. */
 function subjectOf(branch: ConsumerBranch | null): string {
   return repositoryLabelOf(branch) ?? branch?.provider.name ?? 'these jobs';
 }
@@ -529,7 +526,7 @@ function secretBadge(credential: string): Child {
   if (credential === 'No secret yet') {
     return (
       <Badge tone="bad" glyph="–">
-        No secret yet: calls fail until a token manager sets it
+        No secret yet: calls fail until a credential manager sets it
       </Badge>
     );
   }
@@ -544,7 +541,7 @@ function TokenBar(props: { branch: TokenBranch; changeHref: string | null }) {
   const { token } = props.branch;
   return (
     <FixedBar
-      label="Token"
+      label="Credential"
       logo={tokenLogo(token)}
       name={`${token.name}${token.enabled ? '' : ' (disabled)'}`}
       meta={`/proxy/${token.slug}`}
@@ -563,7 +560,7 @@ function ConsumerBar(props: {
   return (
     <div class="ga-bar">
       <FixedBar
-        label="Consumer"
+        label="Credential access rule"
         logo={consumerLogo(provider)}
         name={`${provider.name}${provider.enabled ? '' : ' (disabled)'}`}
         meta={trustLine(provider, labels)}
@@ -571,7 +568,7 @@ function ConsumerBar(props: {
       />
       {props.newHref ? (
         <Button variant="ghost" size="sm" plus href={props.newHref}>
-          Add a new consumer
+          Add a new credential access rule
         </Button>
       ) : null}
     </div>
@@ -601,6 +598,7 @@ function InheritLine(props: { branch: ConsumerBranch }) {
     <Inherit>
       Inherited from <b>{provider.name}</b>: {owners.length === 1 ? word : `${word}s`}{' '}
       <span class="mono">{owners.join(', ')}</span>. Only its repositories can match.
+      {provider.conditions.length > 0 ? <pre>{formatConditions(provider.conditions)}</pre> : null}
     </Inherit>
   );
 }
@@ -613,34 +611,26 @@ function ConsumerStep(props: { model: AccessFormModel; n: number }) {
   const choice = model.consumer;
   const err = (name: string) => errorFor(model.errors, name);
   if (choice.kind === 'cards') {
-    const options = [
-      ...choice.branches.map((branch, index) => ({
-        value: branch.provider.id,
-        o: index + 1,
-        logo: consumerLogo(branch.provider),
-        title: `${branch.provider.name}${branch.provider.enabled ? '' : ' (disabled)'}`,
-        meta: `${
-          index === 0 && branch.accessCount > (choice.branches[1]?.accessCount ?? 0)
-            ? 'most used · '
-            : ''
-        }${branch.accessCount === 1 ? '1 access' : `${branch.accessCount} accesses`}`,
-      })),
-      {
-        value: 'new',
-        o: choice.branches.length + 1,
-        title: 'New consumer',
-        meta: 'Add one in this step',
-      },
-    ];
+    const options = choice.branches.map((branch, index) => ({
+      value: branch.provider.id,
+      o: index + 1,
+      logo: consumerLogo(branch.provider),
+      title: `${branch.provider.name}${branch.provider.enabled ? '' : ' (disabled)'}`,
+      meta: `${
+        index === 0 && branch.accessCount > (choice.branches[1]?.accessCount ?? 0)
+          ? 'most used · '
+          : ''
+      }${branch.accessCount === 1 ? '1 access' : `${branch.accessCount} accesses`}`,
+    }));
     const id = fieldId('consumer_id');
     useFocusTarget('consumer_id', { id, options });
     return (
       <FormStep
         n={props.n}
-        title="Consumer"
+        title="Credential access rule"
         live={1}
         id={id}
-        description="Whose jobs call the token. Its organizations and issuer are inherited."
+        description="The issuer and identity limits defined for the credential."
         error={err('consumer_id') ?? undefined}
       >
         <RowPicker
@@ -654,20 +644,17 @@ function ConsumerStep(props: { model: AccessFormModel; n: number }) {
   }
   if (choice.kind === 'select') {
     return (
-      <FormStep n={props.n} kind="group" id="ga-consumer" title="Consumer">
+      <FormStep n={props.n} kind="group" id="ga-consumer" title="Credential access rule">
         <Select
           name="consumer_id"
-          label="Which consumer"
+          label="Which credential access rule"
           value={choice.selected}
-          placeholder="Choose a consumer"
-          options={[
-            ...choice.options.map((provider) => ({
-              value: provider.id,
-              label: `${provider.name}${provider.enabled ? '' : ' (disabled)'}`,
-            })),
-            { value: 'new', label: 'New consumer' },
-          ]}
-          hint="After choosing, use Show fields for the chosen consumer and token below the form."
+          placeholder="Choose a credential access rule"
+          options={choice.options.map((provider) => ({
+            value: provider.id,
+            label: `${provider.name}${provider.enabled ? '' : ' (disabled)'}`,
+          }))}
+          hint="After choosing, use Show fields for the chosen credential access rule and credential below the form."
           error={err('consumer_id')}
         />
       </FormStep>
@@ -675,62 +662,16 @@ function ConsumerStep(props: { model: AccessFormModel; n: number }) {
   }
   if (choice.kind === 'new') {
     return (
-      <FormStep
-        n={props.n}
-        kind="group"
-        id="ga-consumer"
-        title="Consumer and its jobs"
-        description="Adding the consumer and its access is one step: nothing is saved until Give access."
-      >
-        {choice.existingHref ? (
-          <p>
-            <Button variant="ghost" size="sm" href={choice.existingHref}>
-              Use an existing consumer
-            </Button>
-          </p>
-        ) : null}
-        <NewConsumerFields
-          branch={choice.newBranch}
-          model={model}
-          legend="Where do the jobs run?"
-        />
+      <FormStep n={props.n} kind="group" id="ga-consumer" title="Credential access rule">
+        <p>
+          A credential administrator must define the allowed issuer and identity filters before
+          access can be granted.
+        </p>
+        <Button href={paths.consumers()}>View credential access rules</Button>
       </FormStep>
     );
   }
   return null;
-}
-
-function NewConsumerFields(props: {
-  branch: NewConsumerBranch;
-  model: AccessFormModel;
-  legend: string;
-}) {
-  const jobs = Object.fromEntries(
-    Object.entries(props.branch.jobs).map(([type, branch]) => [
-      type,
-      <JobsFields
-        branch={branch}
-        errors={props.model.errors}
-        live="scoped"
-        focus={props.model.focus}
-      />,
-    ]),
-  ) as Partial<Record<ProfileId, Child>>;
-  // Each type's branch holds the labels of the consumer a save would merge into.
-  const labels = Object.values(props.branch.jobs).flatMap((branch) => branch.labels);
-  return (
-    <AddConsumerFields
-      prefix="new."
-      live="scoped"
-      form={props.branch.form}
-      errors={props.model.errors}
-      existing={props.model.existingConsumers}
-      labels={labels}
-      anchorSuggestions={genericAnchorSuggestions(props.model.existingConsumers)}
-      jobs={jobs}
-      legend={props.legend}
-    />
-  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -768,7 +709,7 @@ function JobsStep(props: { model: AccessFormModel; n: number }) {
         kind="group"
         id="ga-jobs"
         title="Which jobs"
-        description="Only the fields of the chosen consumer are saved."
+        description="Only the fields of the chosen credential access rule are saved."
       >
         {choice.branches.map((branch, index) => (
           <div class="rv1 ga-branch ga-scope" data-o={String(index + 1)}>
@@ -776,13 +717,6 @@ function JobsStep(props: { model: AccessFormModel; n: number }) {
             <JobsFields branch={branch} errors={model.errors} live="scoped" focus={model.focus} />
           </div>
         ))}
-        <div class="rv1 ga-branch" data-o={String(choice.branches.length + 1)}>
-          <NewConsumerFields
-            branch={choice.newBranch}
-            model={model}
-            legend="Where do the jobs run?"
-          />
-        </div>
       </FormStep>
     );
   }
@@ -801,7 +735,8 @@ function JobsStep(props: { model: AccessFormModel; n: number }) {
           </>
         ) : (
           <p class="hint">
-            Choose a consumer above, then use Show fields for the chosen consumer and token.
+            Choose a credential access rule above, then use Show fields for the chosen credential
+            access rule and credential.
           </p>
         )}
       </FormStep>
@@ -929,19 +864,10 @@ export function JobsFields(props: {
         />
       ) : null}
       {branch.unknownOwner !== null ? (
-        <IdWithLabelField
-          kind={gitlab ? 'gitlab_group_list' : 'github_owner_list'}
-          name={name('new_owner')}
-          label={`Add ${gitlab ? 'group' : 'organization'} ${branch.unknownOwner} to this consumer`}
-          value={jobs.new_owner}
-          example={`${branch.unknownOwner} (7654321)`}
-          findCommand={ownerFindCommand(profile, branch.unknownOwner)}
-          hint={`Saving adds this ${gitlab ? 'group' : 'organization'} to the consumer, then creates the access.`}
-          error={err('new_owner')}
-          autocomplete="off"
-          required
-          conditional={conditional}
-        />
+        <p class="hint">
+          This organization is outside the credential access limits. Ask a credential administrator
+          to update the boundary.
+        </p>
       ) : null}
       <ContextFields branch={branch} live={live} error={err('context')} errors={errors} />
       <RefProtection branch={branch} live={live} />
@@ -1002,7 +928,7 @@ export function JobsFields(props: {
 }
 
 /**
- * The repository: the consumer's known repositories as rows plus "Another repository" (a reveal
+ * The repository: the credential access rule's known repositories as rows plus "Another repository" (a reveal
  * with the free-text input, `<p>repository_other`), or one input when none is known yet.
  */
 function RepositoryFields(props: {
@@ -1074,7 +1000,7 @@ function RepositoryFields(props: {
       <FieldSet
         id={pickId}
         legend={label}
-        hint={`${gitlab ? 'Projects' : 'Repositories'} this consumer used before, most used first. The ID keeps working after a rename.`}
+        hint={`${gitlab ? 'Projects' : 'Repositories'} this credential access rule used before, most used first. The ID keeps working after a rename.`}
         {...slot(live, 3)}
       >
         <RowPicker name={`${prefix}repository`} value={checked} options={options} />
@@ -1509,15 +1435,15 @@ function OpsStep(props: { model: AccessFormModel; n: number; jobs: ConsumerBranc
         <>
           <code>/proxy/{branch.token.slug}</code> · {hostOf(branch.token.base_url)} ·{' '}
           {branch.credential === 'No secret yet'
-            ? 'No secret yet: calls fail until a token manager sets it'
+            ? 'No secret yet: calls fail until a credential manager sets it'
             : branch.credential}
         </>
       ),
     }));
     useFocusTarget('token_id', { id, options });
     return (
-      <FormStep n={props.n} kind="group" id="ga-token" title="Token and operations">
-        <FieldSet id={id} legend="Token" live={2} error={err('token_id')}>
+      <FormStep n={props.n} kind="group" id="ga-token" title="Credential and operations">
+        <FieldSet id={id} legend="Credential" live={2} error={err('token_id')}>
           <UiRadioCards
             name="token_id"
             value={choice.selected}
@@ -1534,17 +1460,17 @@ function OpsStep(props: { model: AccessFormModel; n: number; jobs: ConsumerBranc
     );
   }
   return (
-    <FormStep n={props.n} kind="group" id="ga-token" title="Token and operations">
+    <FormStep n={props.n} kind="group" id="ga-token" title="Credential and operations">
       <Select
         name="token_id"
-        label="Which token"
+        label="Which credential"
         value={choice.selected}
         placeholder="Choose a token"
         options={choice.options.map((token) => ({
           value: token.id,
           label: `${token.name} (/proxy/${token.slug})`,
         }))}
-        hint="After choosing, use Show fields for the chosen consumer and token below the form."
+        hint="After choosing, use Show fields for the chosen credential access rule and credential below the form."
         error={err('token_id')}
       />
       {choice.branch ? (
@@ -1799,9 +1725,9 @@ function FormRail(props: { model: AccessFormModel }) {
             field={1}
             phrases={Object.fromEntries([
               ...consumer.branches.map((branch, index) => [index + 1, branch.provider.name]),
-              [consumer.branches.length + 1, 'The new consumer'],
+              [consumer.branches.length + 1, 'The new credential access rule'],
             ])}
-            empty="Choose a consumer"
+            empty="Choose a credential access rule"
           />
         }
         meta="the jobs you choose in step 2"
@@ -1809,7 +1735,7 @@ function FormRail(props: { model: AccessFormModel }) {
     ) : (
       <SummaryRow
         logo="oidc"
-        title={consumer.kind === 'new' ? 'The new consumer' : 'The chosen consumer'}
+        title={consumer.kind === 'new' ? 'The new credential access rule' : 'The chosen consumer'}
         meta="the jobs you choose"
       />
     );
@@ -1883,7 +1809,7 @@ function FormRail(props: { model: AccessFormModel }) {
         <>
           <SummaryRow
             logo={fixedJobs ? consumerLogo(fixedJobs.provider) : 'oidc'}
-            title={fixedJobs?.provider.name ?? 'The consumer'}
+            title={fixedJobs?.provider.name ?? 'The credential access rule'}
             meta={
               <>
                 {request.repository ? <span class="v">{request.repository}</span> : null}

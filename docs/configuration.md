@@ -66,7 +66,7 @@ Sign-in to the admin UI goes through Cloudflare Access only
 ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). Without a working Access login, `/admin`
 shows a setup page (`503`) that lists the variables to set. `AUTH_ACCESS_DEVELOPMENT` is for `pnpm dev`
 only. The keyring is [bound to the three `AUTH_ACCESS_*` variables](#login-binding): set them before
-you add services, and do not change them after.
+you add credentials, and do not change them after.
 
 ### First owner
 
@@ -110,7 +110,7 @@ Every key is bound to `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` and `AUTH_ACC
 AES-256-GCM key that seals credentials is HKDF-SHA256 of the secret key, with an empty salt and info
 `tokengate/v1/kek-binding`, a newline and the JSON array of the three trimmed values (`""` when unset).
 
-- **Set the login variables before you add services.** Treat them as part of the key and keep their
+- **Set the login variables before you add credentials.** Treat them as part of the key and keep their
   exact values in your vault next to it.
 - **A change makes every stored credential impossible to decrypt.** This includes setting, removing
   or rewriting any of the three, for example `acme` to `acme.cloudflareaccess.com` or a change of
@@ -145,7 +145,7 @@ answer `503 not_configured` and Settings shows the error. Replace it with a key 
 3. Set `AUTH_ACCESS_TEAM_DOMAIN` and `AUTH_ACCESS_AUD` (the application's AUD tag). Delete
    `AUTH_ACCESS_DEVELOPMENT` if it is set: with both, no login works.
 
-> **Warning:** Set these variables before you add services, and keep their exact values. The keyring
+> **Warning:** Set these variables before you add credentials, and keep their exact values. The keyring
 > is bound to them ([login binding](#login-binding)). A later change, also from `acme` to
 > `acme.cloudflareaccess.com`, makes every stored credential impossible to decrypt.
 
@@ -226,8 +226,8 @@ adds or removes one host and writes a `settings.admin_hosts` audit event.
 
 ## Upstream host allowlist
 
-The hosts that service token base URLs may use. It is a setting in the admin UI, not a variable:
-**Service tokens › Allowed hosts** (`/admin/tokens/hosts`). Only owners can change it (permission
+The hosts that credential base URLs may use. It is a setting in the admin UI, not a variable:
+**Credentials › Allowed hosts** (`/admin/credentials/hosts`). Only owners can change it (permission
 `settings:write`). Admins and token managers cannot widen it. Each change writes a
 `settings.upstream_hosts` audit event.
 
@@ -271,7 +271,7 @@ Hosts of the service templates (`apps/gateway/src/admin/service-templates.ts`):
 
 | Binding | Type | Required | Purpose |
 |---|---|---|---|
-| `DB` | D1 (`tokengate`, `apps/gateway/migrations/`) | Yes | Control plane: users, caller providers, services, grants, settings, audit log |
+| `DB` | D1 (`tokengate`, `apps/gateway/migrations/`) | Yes | Control plane: users, credential access rules, credentials, issuer_access_rules, settings, audit log |
 | `TELEMETRY_DB` | D1 (`tokengate-telemetry`, `apps/gateway/migrations-telemetry/`) | Yes | Request log and hourly rollups |
 | `REQUEST_LOG_QUEUE` | Queue producer + consumer | Optional | Batches request-log writes |
 | `REQUEST_ARCHIVE` | Pipelines stream | Optional | Archives every recorded request to R2 |
@@ -284,7 +284,7 @@ each optional binding is present.
 ### `REQUEST_LOG_QUEUE`
 
 Without the queue, each request record is inserted into `TELEMETRY_DB` directly, in `waitUntil`. With
-the queue, records are sent to it, and the consumer in the same Worker writes each batch in one D1 batch.
+the queue, records are sent to it, and the credential access rule in the same Worker writes each batch in one D1 batch.
 
 Workers Free includes 10,000 queue operations per day and keeps messages for 24 hours. One message
 usually costs 3 operations (write, read, delete), and each retry adds a read. That is about 3,300 request
@@ -428,7 +428,7 @@ These are constants in the code, not settings.
 | Admin form body | 64 KiB; larger bodies get 413 and are not read past the limit | `apps/gateway/src/admin/render.tsx` |
 | Caller token length | 16 KiB | `apps/gateway/src/proxy/caller-token.ts` |
 | Proxied path length | 2048 characters | `apps/gateway/src/proxy/path.ts` |
-| Service timeout (time to response headers) | 1,000–900,000 ms; default 120,000 | `apps/gateway/src/admin/ops/services.ts` |
+| Service timeout (time to response headers) | 1,000–900,000 ms; default 120,000 | `apps/gateway/src/admin/ops/credentials.ts` |
 | Caller token clock skew | 30 seconds | `apps/gateway/src/identity/jwt.ts` |
 | Pre-trust request records | 10 per minute per isolate | `apps/gateway/src/telemetry/sinks.ts` |
 
@@ -450,7 +450,7 @@ It uses two recent HTML features, each with a fallback:
 ## Related pages
 
 - [getting-started.md](getting-started.md): first deployment, step by step.
-- [policies.md](policies.md): caller providers, grants, conditions and rules.
+- [policies.md](policies.md): credential access rules, issuer_access_rules, conditions and rules.
 - [errors.md](errors.md): gateway error codes.
 - [observability.md](observability.md): request log, archive, health checks.
 - [operations/cloudflare-zone-settings.md](operations/cloudflare-zone-settings.md): WAF, Bot Fight Mode, Access.

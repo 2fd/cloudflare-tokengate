@@ -42,13 +42,13 @@ describe('TypeCard', () => {
           title="Slack Web API"
           description="slack.com/api · bot token xoxb-…"
           open
-          action="/admin/tokens"
+          action="/admin/credentials"
         >
           x
         </TypeCard>,
       ),
     ).toBe(
-      '<details class="type-card" name="token-type" id="type-slack" open=""><summary><span class="logo lg-slack" aria-hidden="true">S</span><span><b>Slack Web API</b><small>slack.com/api · bot token xoxb-…</small></span><span class="sel" aria-hidden="true">✓ Selected</span><span class="chev" aria-hidden="true">›</span></summary><form class="type-body fields" method="post" action="/admin/tokens">x</form></details>',
+      '<details class="type-card" name="token-type" id="type-slack" open=""><summary><span class="logo lg-slack" aria-hidden="true">S</span><span><b>Slack Web API</b><small>slack.com/api · bot token xoxb-…</small></span><span class="sel" aria-hidden="true">✓ Selected</span><span class="chev" aria-hidden="true">›</span></summary><form class="type-body fields" method="post" action="/admin/credentials">x</form></details>',
     );
   });
 

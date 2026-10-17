@@ -344,7 +344,7 @@ ul.operations {
   }
 }
 
-/* Give a consumer access: the fixed consumer bar and its "Add a new consumer". */
+/* Give a issuer access rules: the fixed consumer bar and its "Add a new consumer". */
 .ga-bar {
   display: grid;
   gap: var(--sp-2);
@@ -458,7 +458,7 @@ ul.operations {
 }
 
 /* == section: users == */
-/* Role diff words ("+ service tokens · − consumer access"): the sign carries the meaning. */
+/* Role diff words ("+ credentials · − issuer access rules"): the sign carries the meaning. */
 .gain {
   color: var(--ok);
 }

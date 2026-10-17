@@ -6,7 +6,7 @@ describe('I-LINK-1: authoritativeEmails', () => {
     it('uses the validated JWT email', () => {
       expect(authoritativeEmails('access', { email: 'Ops@Acme.com' })).toEqual(['ops@acme.com']);
     });
-    it('rejects a missing email (service tokens)', () => {
+    it('rejects a missing email (credentials)', () => {
       expect(authoritativeEmails('access', { email: undefined })).toEqual([]);
     });
     it('rejects a non-string email', () => {

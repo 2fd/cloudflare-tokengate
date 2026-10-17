@@ -47,12 +47,12 @@ describe('Select', () => {
                 { value: 'upstreams', label: 'Upstream hosts', disabled: true },
               ],
             },
-            { group: 'Tokens', options: [{ value: 'token', label: 'Service token' }] },
+            { group: 'Credentials', options: [{ value: 'token', label: 'Credential' }] },
           ]}
         />,
       ),
     ).toBe(
-      '<select class="select" id="t"><option value="all">All targets</option><optgroup label="Settings"><option value="hosts">Admin hosts</option><option value="upstreams" disabled="">Upstream hosts</option></optgroup><optgroup label="Tokens"><option value="token" selected="">Service token</option></optgroup></select>',
+      '<select class="select" id="t"><option value="all">All targets</option><optgroup label="Settings"><option value="hosts">Admin hosts</option><option value="upstreams" disabled="">Upstream hosts</option></optgroup><optgroup label="Credentials"><option value="token" selected="">Credential</option></optgroup></select>',
     );
   });
 

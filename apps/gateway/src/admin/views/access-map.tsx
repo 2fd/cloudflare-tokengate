@@ -1,4 +1,4 @@
-// The model of the connections map (ui ConnectionsMap) on Consumer access: every consumer and
+// The model of the connections map (ui ConnectionsMap) on Issuer access rules: every credential access rule and
 // token as a node, the given accesses as wires, a status line per token that says why a line needs
 // attention, and the token's last 24 hours of traffic. Display only.
 import type { MapAccess, MapConsumer, MapToken } from '@tokengate/ui';
@@ -32,11 +32,11 @@ export function mapModel(
 ): MapModel {
   const all = connections.accesses;
   const consumers: MapConsumer[] = connections.consumers.map((consumer) => {
-    const own = all.filter((edge) => edge.grant.caller_provider_id === consumer.id);
+    const own = all.filter((edge) => edge.grant.credential_access_rule_id === consumer.id);
     const quiet =
       connections.usageAvailable && own.length > 0 && own.every((e) => e.lastUsedHour === null);
     const idle = !consumer.enabled || quiet;
-    const labels = connections.labels.filter((l) => l.caller_provider_id === consumer.id);
+    const labels = connections.labels.filter((l) => l.credential_access_rule_id === consumer.id);
     const line = trustLine(consumer, labels);
     return {
       id: consumer.id,
@@ -88,11 +88,11 @@ function mapAccess(edge: AccessEdge): MapAccess {
   const risky = edge.flags.some((flag) => flag.status === 'risk_accepted');
   const tone = accessTone(edge.status);
   return {
-    consumer: edge.grant.caller_provider_id,
+    consumer: edge.grant.credential_access_rule_id,
     token: edge.grant.service_id,
     tone: risky && tone === 'ok' ? 'warn' : tone,
     status: statusLabel(edge.status, edge.statusDetail),
-    consumerLabel: `${edge.consumer?.name ?? 'Deleted consumer'} › ${edge.subject}`,
+    consumerLabel: `${edge.consumer?.name ?? 'Deleted credential access rule'} › ${edge.subject}`,
     context: edge.context,
     operation: operationsText(edge),
     href: paths.accessItem(edge.grant.id),
@@ -105,7 +105,7 @@ function tokenLine(
   own: readonly AccessEdge[],
   now: number,
 ): { line: Child; lineTone?: 'warn' | 'bad' } {
-  const consumers = new Set(own.map((edge) => edge.grant.caller_provider_id)).size;
+  const consumers = new Set(own.map((edge) => edge.grant.credential_access_rule_id)).size;
   if (!token.enabled) return { line: '⏸ Disabled · its access is inactive' };
   const expires = token.credential_expires_at;
   if (expires !== null && expires > now && expires - now <= EXPIRY_WARNING_MS) {
@@ -135,7 +135,12 @@ function tokenLine(
       lineTone: 'warn',
     };
   }
-  return { line: consumers === 0 ? 'No consumer yet' : plural(consumers, 'consumer', 'consumers') };
+  return {
+    line:
+      consumers === 0
+        ? 'No consumer yet'
+        : plural(consumers, 'credential access rule', 'credential access rules'),
+  };
 }
 
 /**

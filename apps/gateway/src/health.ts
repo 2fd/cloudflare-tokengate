@@ -72,7 +72,7 @@ export interface KeyringHealth {
   /** Why the keyring secret could not be loaded; null when it loaded. */
   error: KeyringError | null;
   activeKid: string | null;
-  /** Kids used by stored credentials but absent from the keyring: those services fail closed. */
+  /** Kids used by stored credentials but absent from the keyring: those credentials fail closed. */
   missingKids: string[];
   /**
    * Kids used by stored credentials whose key check value differs from the one recorded in
@@ -97,7 +97,7 @@ export function sealedKidCountsStatement(db: D1Database): D1PreparedStatement {
                    THEN json_extract(credential_sealed, '$.kid') END
             END AS kid,
             COUNT(*) AS n
-     FROM services WHERE credential_sealed IS NOT NULL GROUP BY 1`,
+     FROM credentials WHERE credential_sealed IS NOT NULL GROUP BY 1`,
   );
 }
 
@@ -221,7 +221,7 @@ export function sealedKidByServiceStatement(db: D1Database): D1PreparedStatement
               CASE WHEN json_type(credential_sealed, '$.kid') = 'text'
                    THEN json_extract(credential_sealed, '$.kid') END
             END AS kid
-     FROM services WHERE credential_sealed IS NOT NULL ORDER BY name, id`,
+     FROM credentials WHERE credential_sealed IS NOT NULL ORDER BY name, id`,
   );
 }
 

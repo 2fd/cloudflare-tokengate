@@ -14,7 +14,7 @@ export interface TeamSeed {
   permissions?: readonly GlobalPermission[];
   /** All-scope (`{ all }`), or explicit rows by service id. */
   tokens?: { all: Level; reveal?: boolean } | Record<string, { level: Level; reveal?: boolean }>;
-  /** All-scope (`{ all }`), or explicit rows by caller provider id. */
+  /** All-scope (`{ all }`), or explicit rows by credential access rule id. */
   consumers?: { all: Level } | Record<string, { level: Level }>;
   members?: ReadonlyArray<{ id: string }>;
 }
@@ -72,7 +72,7 @@ export async function createTeam(seed: TeamSeed, now: number = Date.now()): Prom
       statements.push(
         db
           .prepare(
-            'INSERT INTO team_consumers (team_id, caller_provider_id, level) VALUES (?, ?, ?)',
+            'INSERT INTO team_consumers (team_id, credential_access_rule_id, level) VALUES (?, ?, ?)',
           )
           .bind(id, consumerId, row.level),
       );

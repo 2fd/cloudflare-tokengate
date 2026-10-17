@@ -191,7 +191,7 @@ export const accesses: MapAccess[] = [
     consumer: 'buildkite-acme',
     token: 'slack-legacy',
     tone: 'off',
-    status: 'Inactive: token disabled',
+    status: 'Inactive: credential disabled',
     consumerLabel: 'Buildkite (acme) › pipeline deploy',
     operation: 'Post messages',
   },
@@ -286,7 +286,7 @@ export const scaleTokens: MapToken[] = [
   t('linear', 'Linear', 'custom', 10, '1 day ago'),
 ].map((token) => ({
   ...token,
-  line: plural(scaleUsers(token.id), 'consumer', 'consumers'),
+  line: plural(scaleUsers(token.id), 'credential access rule', 'credential access rules'),
 }));
 
 function scaleUsers(tokenId: string): number {
@@ -376,35 +376,35 @@ export const matrixColumns: MatrixColumn[] = [
     id: 'slack',
     name: 'Slack',
     logo: { brand: 'slack' },
-    href: '/admin/access?token=slack',
+    href: '/admin/issuer-access-rules?token=slack',
     meta: '3 accesses · 2,140 req',
   },
   {
     id: 'openai',
     name: 'OpenAI',
     logo: { brand: 'openai' },
-    href: '/admin/access?token=openai',
+    href: '/admin/issuer-access-rules?token=openai',
     meta: '1 access · 3,902 req',
   },
   {
     id: 'anthropic',
     name: 'Anthropic',
     logo: { brand: 'anthropic' },
-    href: '/admin/access?token=anthropic',
+    href: '/admin/issuer-access-rules?token=anthropic',
     meta: '2 accesses',
   },
   {
     id: 'github',
     name: 'GitHub',
     logo: { brand: 'github' },
-    href: '/admin/access?token=github',
+    href: '/admin/issuer-access-rules?token=github',
     meta: '1 access',
   },
   {
     id: 'discord-alerts',
     name: 'Discord alerts',
     logo: { brand: 'discord' },
-    href: '/admin/access?token=discord-alerts',
+    href: '/admin/issuer-access-rules?token=discord-alerts',
     meta: '1 access',
   },
 ];
@@ -413,29 +413,29 @@ export const matrixGroups: MatrixGroup[] = [
   {
     name: 'GitHub Actions (acme)',
     logo: { brand: 'github' },
-    href: '/admin/consumers/github-acme',
+    href: '/admin/credential-access-rules/github-acme',
     meta: 'org acme (1234567) · 6 accesses',
     rows: [
       {
         label: 'acme/api',
-        href: '/admin/access?repo=acme/api',
+        href: '/admin/issuer-access-rules?repo=acme/api',
         meta: '3 accesses',
         cells: {
           slack: {
-            href: '/admin/access/acc_01',
+            href: '/admin/issuer-access-rules/acc_01',
             status: 'Active',
             constraint: 'env production',
             operations: '1 operation',
           },
           openai: {
-            href: '/admin/access/acc_02',
+            href: '/admin/issuer-access-rules/acc_02',
             tone: 'warn',
             status: 'Secret expires',
             constraint: 'branch main',
             operations: '2 operations',
           },
           anthropic: {
-            href: '/admin/access/acc_03',
+            href: '/admin/issuer-access-rules/acc_03',
             tone: 'bad',
             status: 'Expired',
             constraint: 'tag v*',
@@ -445,23 +445,23 @@ export const matrixGroups: MatrixGroup[] = [
       },
       {
         label: 'acme/web',
-        href: '/admin/access?repo=acme/web',
+        href: '/admin/issuer-access-rules?repo=acme/web',
         meta: '2 accesses',
         cells: {
           slack: {
-            href: '/admin/access/acc_04',
+            href: '/admin/issuer-access-rules/acc_04',
             status: 'Active',
             constraint: 'env staging',
             operations: '1 operation',
           },
           anthropic: {
-            href: '/admin/access/acc_05',
+            href: '/admin/issuer-access-rules/acc_05',
             status: 'Active',
             constraint: 'branch main',
             operations: '1 operation',
           },
           github: {
-            href: '/admin/access/acc_06',
+            href: '/admin/issuer-access-rules/acc_06',
             tone: 'warn',
             glyph: '⚠',
             status: 'Risk accepted',
@@ -475,20 +475,20 @@ export const matrixGroups: MatrixGroup[] = [
   {
     name: 'Buildkite (acme)',
     logo: { brand: 'buildkite' },
-    href: '/admin/consumers/buildkite-acme',
+    href: '/admin/credential-access-rules/buildkite-acme',
     meta: 'idle 41 days · 1 access',
     rows: [
       {
         label: 'pipeline deploy',
-        href: '/admin/access?consumer=buildkite-acme',
+        href: '/admin/issuer-access-rules?consumer=buildkite-acme',
         meta: '1 access',
         cells: {
           slack: {
-            href: '/admin/access/acc_09',
+            href: '/admin/issuer-access-rules/acc_09',
             tone: 'off',
             status: 'Inactive',
             constraint: 'Slack (legacy)',
-            operations: 'token disabled',
+            operations: 'credential disabled',
           },
         },
       },

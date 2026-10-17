@@ -39,7 +39,7 @@ export interface IssuerProfile {
   sharedIssuers: readonly string[];
   /**
    * A grant must satisfy at least one rule: every claim in the rule has an exact, non-negated
-   * condition (I-AUTHZ-2). For `generic`, rules come from the caller provider's anchor_claims.
+   * condition (I-AUTHZ-2). For `generic`, rules come from the credential access rule's anchor_claims.
    */
   anchorRules(provider: { anchor_claims: string[] }): string[][];
   /** Claims jose must find in the token. */
@@ -50,7 +50,7 @@ export interface IssuerProfile {
 }
 
 export interface CallerIdentity {
-  callerProviderId: string;
+  credentialAccessRuleId: string;
   profile: ProfileId;
   claims: Claims;
   display: CallerDisplay;

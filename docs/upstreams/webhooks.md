@@ -1,13 +1,13 @@
 # Webhooks (Slack, Discord) and other URL-path credentials
 
-This page shows admins how to store webhook URLs as service tokens and shows workflow authors how to post to them through the gateway.
+This page shows admins how to store webhook URLs as credentials and shows workflow authors how to post to them through the gateway.
 
 A webhook URL contains its own secret. The gateway stores that part as the secret and adds it to the URL path (**Part of the URL path** injection).
 The caller posts to `/proxy/<slug>` and never sees the webhook URL.
 
 ## Service templates
 
-In the admin UI, open **Service tokens**, select **Add a token** and open the **Slack incoming webhook** or **Discord webhook** card. Paste the whole webhook URL and select **Save Slack webhook** (or **Save Discord webhook**). Everything in the table comes from the template (`apps/gateway/src/admin/service-templates.ts`).
+In the admin UI, open **Credentials**, select **Add a token** and open the **Slack incoming webhook** or **Discord webhook** card. Paste the whole webhook URL and select **Save Slack webhook** (or **Save Discord webhook**). Everything in the table comes from the template (`apps/gateway/src/admin/service-templates.ts`).
 
 | Field | **Slack incoming webhook** | **Discord webhook** |
 |---|---|---|
@@ -20,7 +20,7 @@ In the admin UI, open **Service tokens**, select **Add a token** and open the **
 | Suggested grant rule | `POST /` | `POST /` |
 | Host for the upstream host allowlist | `hooks.slack.com` | `discord.com` |
 
-If **Service tokens › Allowed hosts** is set and does not include the host, the card says so before you type anything. An owner ticks **Also allow** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
+If **Credentials › Allowed hosts** is set and does not include the host, the card says so before you type anything. An owner ticks **Also allow** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
 
 ### Secret value
 
@@ -68,7 +68,7 @@ Use one service per webhook URL. Each webhook posts to one channel, so the servi
 Send the caller token in `x-tokengate-token` or `Authorization: Bearer`. Webhook tokens have no injection header, so there is no third option.
 The gateway never forwards the caller token ([I-TOK-1](../threat-model.md#i-tok-1)).
 
-## Grant only `POST /`
+## IssuerAccessRule only `POST /`
 
 Upstream response bodies reach the caller unchanged. Discord answers `GET` and `PATCH` on the webhook URL with the webhook object, including its `token`.
 A caller with such a grant could read the token and use it outside the gateway, even after the grant is revoked.
@@ -93,7 +93,7 @@ Create the service without a template:
 | Credential | the bot token |
 
 The gateway appends the credential to the prefix, so `/proxy/<slug>/sendMessage` reaches `https://api.telegram.org/bot<token>/sendMessage`.
-Grant only the methods the job needs, for example `POST /sendMessage`.
+IssuerAccessRule only the methods the job needs, for example `POST /sendMessage`.
 
 ## Gotchas
 

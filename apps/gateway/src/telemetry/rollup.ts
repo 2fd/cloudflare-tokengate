@@ -1,7 +1,7 @@
 // Hourly rollups of request_log into request_rollup_hourly. Each run recomputes the last closed
 // hours, then catches up from a watermark in bounded batches, so hours missed by failed or skipped
 // runs are filled in. Records the queue delivers after the cron window has passed their hour are
-// rolled up by the consumer (lateRecordHours). Recomputes never lower a stored rollup
+// rolled up by the credential access rule (lateRecordHours). Recomputes never lower a stored rollup
 // (rollupHourStatement).
 import { HOUR_MS, rollupHourStatement } from '../db/rollups';
 import type { StateKey } from '../db/settings';
@@ -16,10 +16,10 @@ export const ROLLUP_CATCHUP_HOURS_PER_RUN = 24;
 
 /**
  * Settings key (control-plane DB) holding an hour start W such that every record of an hour <= W is
- * counted: it was stored before the run that wrote W, or the consumer rolls it up itself
+ * counted: it was stored before the run that wrote W, or the credential access rule rolls it up itself
  * (lateRecordHours). Hours after W may still get records only a cron run counts, so the next run
  * recomputes from W + 1 h. After a complete run W is the hour before the recompute window: a
- * record stored after the run for a window hour is not late for the consumer. Absent or invalid:
+ * record stored after the run for a window hour is not late for the credential access rule. Absent or invalid:
  * catch up from the oldest request_log row.
  */
 export const ROLLUP_WATERMARK_KEY: StateKey = 'rollup_watermark';

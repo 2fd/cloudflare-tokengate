@@ -112,13 +112,13 @@ describe('ReasonBar', () => {
   const reasons = [
     {
       count: 182,
-      label: 'Unknown issuer: no service consumer trusts it',
+      label: 'Unknown issuer: no credential access rule trusts it',
       short: 'unknown issuer',
       meta: '1 caller',
     },
     {
       count: 59,
-      label: 'No consumer access allows this call',
+      label: 'No issuer access rules allows this call',
       short: 'no access',
       meta: '2 callers',
     },
@@ -133,7 +133,7 @@ describe('ReasonBar', () => {
       '<svg class="rbar" viewBox="0 0 1000 12" preserveAspectRatio="none" role="img" aria-label="Denied by reason: 182 unknown issuer, 59 no access" focusable="false"><rect class="r-bad" x="0" width="753" height="12"></rect><rect class="r-hatch" x="755" width="245" height="12"></rect></svg>',
     );
     expect(html).toContain(
-      '<li><span class="sw bad" aria-hidden="true"></span><span class="n">182</span><span>Unknown issuer: no service consumer trusts it<span class="meta"> · 1 caller</span></span><span class="pct">75.5\u00a0%</span></li>',
+      '<li><span class="sw bad" aria-hidden="true"></span><span class="n">182</span><span>Unknown issuer: no credential access rule trusts it<span class="meta"> · 1 caller</span></span><span class="pct">75.5\u00a0%</span></li>',
     );
     expect(html).toContain('<span class="sw denied" aria-hidden="true"></span>');
   });

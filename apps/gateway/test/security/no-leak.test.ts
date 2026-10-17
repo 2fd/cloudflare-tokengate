@@ -2,13 +2,13 @@
 // unique canary; the test drives allowed, denied and error proxy paths, upstream redirects and
 // echoes, timeouts, credential verify/test, export and every admin page, and then searches every
 // sink (responses, console, both D1 databases, queue and pipeline payloads) for any encoding of
-// any canary. services.credential_sealed is the only place a credential may live.
+// any canary. credentials.credential_sealed is the only place a credential may live.
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ROUTE_PERMISSIONS } from '../../src/admin/auth/rbac';
-import { destinationFingerprint } from '../../src/admin/ops/services';
+import { destinationFingerprint } from '../../src/admin/ops/credentials';
 import { SERVICE_TEMPLATES } from '../../src/admin/service-templates';
-import { getService } from '../../src/db/services';
+import { getService } from '../../src/db/credentials';
 import type { Injection } from '../../src/policy/types';
 import { runCron } from '../../src/telemetry/cron';
 import { consumeRequestLogBatch } from '../../src/telemetry/queue-consumer';
@@ -97,7 +97,7 @@ async function capture(what: string, response: Response): Promise<Response> {
   return response;
 }
 
-/** Every row of every table of both databases; services.credential_sealed is removed. */
+/** Every row of every table of both databases; credentials.credential_sealed is removed. */
 async function dumpDatabases(): Promise<Array<{ sink: string; text: string }>> {
   const out: Array<{ sink: string; text: string }> = [];
   for (const [name, db] of [
@@ -114,7 +114,7 @@ async function dumpDatabases(): Promise<Array<{ sink: string; text: string }>> {
         .prepare(`SELECT * FROM "${table}"`)
         .all<Record<string, unknown>>();
       const rows = results.map((row) => {
-        if (table !== 'services') return row;
+        if (table !== 'credentials') return row;
         const { credential_sealed: _sealed, ...rest } = row;
         return rest;
       });
@@ -303,7 +303,7 @@ beforeEach(async () => {
     } as never,
   });
   // setupProxy always creates one service; it gets a grant and a canary like the others.
-  await env.DB.prepare('DELETE FROM services').run();
+  // Keep the original credential: deleting it also deletes its boundary.
   for (const spec of SERVICE_SPECS) {
     const canary = credentialCanary(spec.slug.replace('svc-', ''));
     credentials.push({ label: spec.slug, value: canary });
@@ -314,16 +314,16 @@ beforeEach(async () => {
       timeoutMs: spec.timeoutMs,
     });
     serviceIds.set(spec.slug, id);
-    await fx.addGrant({ serviceId: id });
+    await fx.addIssuerAccessRule({ serviceId: id });
   }
   const noCredential = await fx.addService({ slug: 'svc-nocred', secret: null });
-  await fx.addGrant({ serviceId: noCredential.id });
+  await fx.addIssuerAccessRule({ serviceId: noCredential.id });
   // Sealed for one base URL, then repointed in D1: the AAD no longer matches (I-CRED-2).
   const tamperedCanary = credentialCanary('tampered');
   credentials.push({ label: 'svc-tampered', value: tamperedCanary });
   const tampered = await fx.addService({ slug: 'svc-tampered', secret: tamperedCanary });
-  await fx.addGrant({ serviceId: tampered.id });
-  await env.DB.prepare("UPDATE services SET base_url = 'https://api.other.test/v1' WHERE id = ?")
+  await fx.addIssuerAccessRule({ serviceId: tampered.id });
+  await env.DB.prepare("UPDATE credentials SET base_url = 'https://api.other.test/v1' WHERE id = ?")
     .bind(tampered.id)
     .run();
 
@@ -486,11 +486,11 @@ async function driveAdmin(): Promise<void> {
     { label: 'form rotate (verify fails)', value: rotated },
     { label: 'wrong-type paste', value: wrongType },
   );
-  // One submit per token type card: only the secret is posted, the template supplies the rest.
+  // One submit per credential type card: only the secret is posted, the template supplies the rest.
   for (const template of SERVICE_TEMPLATES) {
     const canary = credentialCanary(`tpl${template.id.replaceAll('-', '')}`);
     credentials.push({ label: `template ${template.id}`, value: canary });
-    const res = await adminForm(`create ${template.id}`, '/admin/tokens', {
+    const res = await adminForm(`create ${template.id}`, '/admin/credentials', {
       template: template.id,
       credential: canary,
     });
@@ -502,7 +502,7 @@ async function driveAdmin(): Promise<void> {
   // names the likely card and never echoes the secret.
   expect(
     (
-      await adminForm('wrong-type create', '/admin/tokens', {
+      await adminForm('wrong-type create', '/admin/credentials', {
         template: 'openai',
         credential: wrongType,
       })
@@ -522,15 +522,15 @@ async function driveAdmin(): Promise<void> {
   };
   // Rejected create: the form is re-rendered, the credential is not.
   expect(
-    (await adminForm('create invalid', '/admin/tokens', { ...serviceForm, slug: '-' })).status,
+    (await adminForm('create invalid', '/admin/credentials', { ...serviceForm, slug: '-' })).status,
   ).toBe(400);
-  const createdRes = await adminForm('create', '/admin/tokens', serviceForm);
+  const createdRes = await adminForm('create', '/admin/credentials', serviceForm);
   expect(createdRes.status).toBe(303);
   const formServiceId = /svc_[0-9A-Z]{26}/.exec(createdRes.headers.get('location') ?? '')?.[0];
   expect(formServiceId).toBeDefined();
   serviceIds.set('svc-form', formServiceId ?? '');
 
-  const path = `/admin/tokens/${formServiceId}`;
+  const path = `/admin/credentials/${formServiceId}`;
   const draftOf = async (res: Response) =>
     /name="credential_draft" value="([^"]+)"/.exec(await res.clone().text())?.[1] ?? '';
   // Destination and rotate: a failed check re-renders with a sealed draft (A13.6), then a submit
@@ -574,25 +574,25 @@ async function driveAdmin(): Promise<void> {
 
   // Verify configured on a proxy service whose upstream echoes the credential in body and header.
   const bearerId = serviceIds.get('svc-bearer') ?? '';
-  await env.DB.prepare('UPDATE services SET verify = ? WHERE id = ?')
+  await env.DB.prepare('UPDATE credentials SET verify = ? WHERE id = ?')
     .bind(JSON.stringify({ method: 'GET', path: '/verify', expect_status: 200 }), bearerId)
     .run();
   expect(
-    (await adminForm('test (passes, echoes)', `/admin/tokens/${bearerId}/test`, {})).status,
+    (await adminForm('test (passes, echoes)', `/admin/credentials/${bearerId}/test`, {})).status,
   ).toBe(200);
   // An expiring credential produces a cron audit event that names the service.
-  await env.DB.prepare('UPDATE services SET credential_expires_at = ? WHERE id = ?')
+  await env.DB.prepare('UPDATE credentials SET credential_expires_at = ? WHERE id = ?')
     .bind(fx.clock.now() + 2 * 86_400_000, bearerId)
     .run();
   await runCron(fx.app.deps);
-  expect((await adminForm('rewrap', '/admin/tokens/keys/rewrap', {})).status).toBe(303);
+  expect((await adminForm('rewrap', '/admin/credentials/keys/rewrap', {})).status).toBe(303);
 
   // Every read page of the RBAC table, with every seeded id, plus query variants.
   const { results: requestRows } = await env.TELEMETRY_DB.prepare(
     'SELECT id FROM request_log ORDER BY id',
   ).all<{ id: string }>();
   expect(requestRows.length).toBeGreaterThan(20);
-  const { results: grantRows } = await env.DB.prepare('SELECT id FROM grants').all<{
+  const { results: grantRows } = await env.DB.prepare('SELECT id FROM issuer_access_rules').all<{
     id: string;
   }>();
   const { results: userRows } = await env.DB.prepare('SELECT id FROM users').all<{ id: string }>();
@@ -606,10 +606,10 @@ async function driveAdmin(): Promise<void> {
     // == users ==
     '/admin/users/:id': userRows.map((row) => row.id),
     // == tokens ==
-    '/admin/tokens/:id': [...serviceIds.values()],
+    '/admin/credentials/:id': [...serviceIds.values()],
     // == consumers ==
-    '/admin/consumers/:id': [fx.providerId],
-    '/admin/access/:id': grantRows.map((row) => row.id),
+    '/admin/credential-access-rules/:id': [fx.providerId],
+    '/admin/issuer-access-rules/:id': grantRows.map((row) => row.id),
   };
   for (const key of Object.keys(ROUTE_PERMISSIONS)) {
     if (!key.startsWith('GET ')) continue;
@@ -645,20 +645,20 @@ async function driveAdmin(): Promise<void> {
     '/admin/users?notice=invited',
   ];
   const tokensVariants = [
-    '/admin/tokens/new?template=github',
-    '/admin/tokens/new?template=custom',
-    '/admin/tokens?status=expiring',
-    '/admin/tokens?key=k1',
-    `/admin/tokens/${formServiceId}?open=destination`,
-    `/admin/tokens/${formServiceId}?open=details&notice=created_verified&also=host_added`,
-    '/admin/tokens/hosts',
-    '/admin/tokens/keys',
+    '/admin/credentials/new?template=github',
+    '/admin/credentials/new?template=custom',
+    '/admin/credentials?status=expiring',
+    '/admin/credentials?key=k1',
+    `/admin/credentials/${formServiceId}?open=destination`,
+    `/admin/credentials/${formServiceId}?open=details&notice=created_verified&also=host_added`,
+    '/admin/credentials/hosts',
+    '/admin/credentials/keys',
   ];
   const consumersVariants = [
-    ...requestRows.map((row) => `/admin/access/new?from_request=${row.id}`),
-    '/admin/access?view=list',
+    ...requestRows.map((row) => `/admin/issuer-access-rules/new?from_request=${row.id}`),
+    '/admin/issuer-access-rules?view=list',
     // The token cards of the access form show the credential state, never its hint.
-    ...[...serviceIds.values()].map((id) => `/admin/access/new?token=${id}`),
+    ...[...serviceIds.values()].map((id) => `/admin/issuer-access-rules/new?token=${id}`),
   ];
   for (const url of [
     ...monitoringVariants,

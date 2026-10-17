@@ -44,7 +44,7 @@ export function DangerZone({
 }
 
 export interface DangerRowProps {
-  /** What the action does, named after the object ("Delete Slack and its 3 consumer accesses"). */
+  /** What the action does, named after the object ("Delete Slack and its 3 issuer access ruleses"). */
   title: Child;
   /** The consequence in one sentence ("This cannot be undone."). */
   description?: Child;

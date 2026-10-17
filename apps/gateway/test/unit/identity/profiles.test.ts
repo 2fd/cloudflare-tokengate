@@ -193,7 +193,7 @@ describe('generic profile', () => {
     expect(profile.tenantClaims).toEqual([]);
   });
 
-  it('derives anchors, required claims and log allowlist from the caller provider', () => {
+  it('derives anchors, required claims and log allowlist from the credential access rule', () => {
     expect(profile.anchorRules(provider)).toEqual([['organization_id'], ['pipeline_id']]);
     expect(profile.verifyRequiredClaims(provider)).toEqual([
       'sub',

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   grantUsageStatement,
   HOUR_MS,
-  mergeGrantUsage,
+  mergeIssuerAccessRuleUsage,
   type RollupRow,
 } from '../../../src/db/rollups';
 
@@ -34,7 +34,7 @@ const live = (grantId: string, hour: number, requests: number, outcome = 'allowe
 describe('grant usage', () => {
   it('sums allowed requests per grant since an hour, newest hour last', async () => {
     const { results } = await grantUsageStatement(env.TELEMETRY_DB, H).all();
-    const usage = mergeGrantUsage(results, []);
+    const usage = mergeIssuerAccessRuleUsage(results, []);
     expect(Object.fromEntries(usage)).toEqual({
       grt_a: { grant_id: 'grt_a', last_hour: H, requests: 3 },
       grt_b: { grant_id: 'grt_b', last_hour: H + HOUR_MS, requests: 1 },
@@ -47,7 +47,7 @@ describe('grant usage', () => {
       H - 6 * HOUR_MS,
       H + HOUR_MS,
     ).all();
-    const usage = mergeGrantUsage(results, [
+    const usage = mergeIssuerAccessRuleUsage(results, [
       live('grt_b', H + HOUR_MS, 2),
       live('grt_c', H + HOUR_MS, 1, 'denied'),
       live('', H + HOUR_MS, 5),

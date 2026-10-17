@@ -32,7 +32,7 @@ export function SetupInstructions(props: { host: string }) {
               both set, no login works.
             </li>
             <li>
-              Set these variables before you add services. Stored credentials are bound to them:
+              Set these variables before you add credentials. Stored credentials are bound to them:
               changing, adding or removing any of them later makes every stored credential
               impossible to decrypt.
             </li>

@@ -10,7 +10,10 @@ export const GATEWAY_ERRORS = {
       'no caller token; send it in the x-tokengate-token header or as Authorization: Bearer <token>',
   },
   token_malformed: { status: 401, message: 'the caller token is not a valid JWT for this issuer' },
-  issuer_unknown: { status: 401, message: 'the token issuer is not a configured caller provider' },
+  issuer_unknown: {
+    status: 401,
+    message: 'the token issuer is not a configured credential access rule',
+  },
   audience_mismatch: { status: 401, message: 'the token audience does not match' },
   token_expired: { status: 401, message: 'the token has expired; mint a fresh one' },
   token_too_old: { status: 401, message: 'the token is older than the allowed maximum age' },

@@ -2,14 +2,14 @@
 // credential under that kid is known to open with the new key.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { rewrapCredentials } from '../../../../src/admin/ops/keyring';
 import {
   deleteService,
   openStoredCredential,
   setServiceCredential,
-} from '../../../../src/admin/ops/services';
+} from '../../../../src/admin/ops/credentials';
+import { rewrapCredentials } from '../../../../src/admin/ops/keyring';
 import { loadKeyring } from '../../../../src/crypto/keyring';
-import { getService } from '../../../../src/db/services';
+import { getService } from '../../../../src/db/credentials';
 import { keyringHealth } from '../../../../src/health';
 import {
   ACTOR,

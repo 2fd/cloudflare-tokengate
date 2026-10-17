@@ -14,12 +14,12 @@ describe('LiveForm', () => {
   it('renders the live form layout with the form column and the rail', () => {
     expect(
       render(
-        <LiveForm action="/admin/access" rail={<aside>r</aside>} id="give">
+        <LiveForm action="/admin/issuer-access-rules" rail={<aside>r</aside>} id="give">
           x
         </LiveForm>,
       ),
     ).toBe(
-      '<form class="lform form-layout" method="post" action="/admin/access" id="give"><div class="stack">x</div><aside>r</aside></form>',
+      '<form class="lform form-layout" method="post" action="/admin/issuer-access-rules" id="give"><div class="stack">x</div><aside>r</aside></form>',
     );
   });
 
@@ -39,12 +39,17 @@ describe('LiveForm', () => {
   it('layout="fields" renders the column alone, without .form-layout', () => {
     expect(
       render(
-        <LiveForm layout="fields" action="/admin/access/1" class="y" hidden={{ _csrf: 't' }}>
+        <LiveForm
+          layout="fields"
+          action="/admin/issuer-access-rules/1"
+          class="y"
+          hidden={{ _csrf: 't' }}
+        >
           x
         </LiveForm>,
       ),
     ).toBe(
-      '<form class="lform y" method="post" action="/admin/access/1"><input type="hidden" name="_csrf" value="t"/><div class="stack">x</div></form>',
+      '<form class="lform y" method="post" action="/admin/issuer-access-rules/1"><input type="hidden" name="_csrf" value="t"/><div class="stack">x</div></form>',
     );
   });
 
@@ -111,11 +116,11 @@ describe('summary parts', () => {
           field={1}
           as="b"
           phrases={{ 1: 'GitHub Actions (acme)', 2: 'GitLab CI (platform)' }}
-          empty="Choose a consumer"
+          empty="Choose a credential access rule"
         />,
       ),
     ).toBe(
-      '<b class="sv1"><span data-o="1">GitHub Actions (acme)</span><span data-o="2">GitLab CI (platform)</span><span data-o="0">Choose a consumer</span></b>',
+      '<b class="sv1"><span data-o="1">GitHub Actions (acme)</span><span data-o="2">GitLab CI (platform)</span><span data-o="0">Choose a credential access rule</span></b>',
     );
     expect(render(<LivePhrase field={6} phrases={{ 2: 'in 7 days' }} decorative class="x" />)).toBe(
       '<span class="sv6 x" aria-hidden="true"><span data-o="2">in 7 days</span></span>',

@@ -146,7 +146,7 @@ describe('I-CRED-1 and I-CRED-2: credential drafts', () => {
       base_url: CONTEXT.baseUrl,
       secret: SECRET,
     });
-    const stored = await env.DB.prepare('SELECT credential_sealed FROM services WHERE id = ?')
+    const stored = await env.DB.prepare('SELECT credential_sealed FROM credentials WHERE id = ?')
       .bind(id)
       .first<string>('credential_sealed');
     const context = { ...CONTEXT, target: id };
@@ -179,7 +179,7 @@ describe('I-CRED-1 and I-CRED-2: credential drafts in the token forms', () => {
 
   it('a failed check keeps the draft; a re-render that used it echoes the same string; save_anyway saves', async () => {
     const session = await owner();
-    const first = await adminPost(app, session, '/admin/tokens', {
+    const first = await adminPost(app, session, '/admin/credentials', {
       template: 'openai',
       credential: SECRET,
     });
@@ -196,21 +196,21 @@ describe('I-CRED-1 and I-CRED-2: credential drafts in the token forms', () => {
     const draft = draftOf(html);
     expect(draft).not.toBeNull();
 
-    const again = await adminPost(app, session, '/admin/tokens', {
+    const again = await adminPost(app, session, '/admin/credentials', {
       template: 'openai',
       credential_draft: draft ?? '',
     });
     expect(again.status).toBe(422);
     expect(draftOf(await again.text())).toBe(draft);
 
-    const saved = await adminPost(app, session, '/admin/tokens', {
+    const saved = await adminPost(app, session, '/admin/credentials', {
       template: 'openai',
       credential_draft: draft ?? '',
       save_anyway: '1',
     });
     expect(saved.status).toBe(303);
     expect(
-      await env.DB.prepare("SELECT credential_hint FROM services WHERE slug = 'openai'").first(
+      await env.DB.prepare("SELECT credential_hint FROM credentials WHERE slug = 'openai'").first(
         'credential_hint',
       ),
     ).toBe(`…WXYZ (${SECRET.length} chars)`);
@@ -223,7 +223,7 @@ describe('I-CRED-1 and I-CRED-2: credential drafts in the token forms', () => {
       // Stripe-style: the secret is the user part and the password is empty.
       ['sk_test_short:', 13],
     ] as const) {
-      const res = await adminPost(app, session, '/admin/tokens', {
+      const res = await adminPost(app, session, '/admin/credentials', {
         template: 'custom',
         base_url: 'https://api.basic.example',
         injection_kind: 'basic',
@@ -242,20 +242,20 @@ describe('I-CRED-1 and I-CRED-2: credential drafts in the token forms', () => {
 
   it('a typed secret wins over a draft', async () => {
     const session = await owner();
-    const first = await adminPost(app, session, '/admin/tokens', {
+    const first = await adminPost(app, session, '/admin/credentials', {
       template: 'openai',
       credential: SECRET,
     });
     const draft = draftOf(await first.text()) ?? '';
     const other = 'sk-proj-typedWins0123456789abcdefABCD';
-    await adminPost(app, session, '/admin/tokens', {
+    await adminPost(app, session, '/admin/credentials', {
       template: 'openai',
       credential: other,
       credential_draft: draft,
       save_anyway: '1',
     });
     expect(
-      await env.DB.prepare("SELECT credential_hint FROM services WHERE slug = 'openai'").first(
+      await env.DB.prepare("SELECT credential_hint FROM credentials WHERE slug = 'openai'").first(
         'credential_hint',
       ),
     ).toBe(`…ABCD (${other.length} chars)`);
@@ -265,28 +265,34 @@ describe('I-CRED-1 and I-CRED-2: credential drafts in the token forms', () => {
     const session = await owner();
     const draft = draftOf(
       await (
-        await adminPost(app, session, '/admin/tokens', { template: 'openai', credential: SECRET })
+        await adminPost(app, session, '/admin/credentials', {
+          template: 'openai',
+          credential: SECRET,
+        })
       ).text(),
     );
     const other = await loginAs(app, await createUser({ email: 'b@example.com', role: 'admin' }));
-    const res = await adminPost(app, other, '/admin/tokens', {
+    const res = await adminPost(app, other, '/admin/credentials', {
       template: 'openai',
       credential_draft: draft ?? '',
       save_anyway: '1',
     });
     expect(res.status).toBe(400);
     expect(await res.text()).toContain('Enter the API key again');
-    expect(await env.DB.prepare('SELECT count(*) AS n FROM services').first('n')).toBe(0);
+    expect(await env.DB.prepare('SELECT count(*) AS n FROM credentials').first('n')).toBe(0);
   });
 
   it('a draft made in one card does not open in another (other destination)', async () => {
     const session = await owner();
     const draft = draftOf(
       await (
-        await adminPost(app, session, '/admin/tokens', { template: 'openai', credential: SECRET })
+        await adminPost(app, session, '/admin/credentials', {
+          template: 'openai',
+          credential: SECRET,
+        })
       ).text(),
     );
-    const res = await adminPost(app, session, '/admin/tokens', {
+    const res = await adminPost(app, session, '/admin/credentials', {
       template: 'github',
       credential_draft: draft ?? '',
       save_anyway: '1',
@@ -297,7 +303,7 @@ describe('I-CRED-1 and I-CRED-2: credential drafts in the token forms', () => {
 
   it('a secret that fails the local format check gets no draft', async () => {
     const session = await owner();
-    const res = await adminPost(app, session, '/admin/tokens', {
+    const res = await adminPost(app, session, '/admin/credentials', {
       template: 'openai',
       credential: 'sk-proj-with space in it 0123456789',
     });
@@ -307,12 +313,12 @@ describe('I-CRED-1 and I-CRED-2: credential drafts in the token forms', () => {
 
   it('the draft and the secret are never in D1, audit diffs or console output', async () => {
     const session = await owner();
-    const first = await adminPost(app, session, '/admin/tokens', {
+    const first = await adminPost(app, session, '/admin/credentials', {
       template: 'openai',
       credential: SECRET,
     });
     const draft = draftOf(await first.text()) ?? '';
-    await adminPost(app, session, '/admin/tokens', {
+    await adminPost(app, session, '/admin/credentials', {
       template: 'openai',
       credential_draft: draft,
       save_anyway: '1',
@@ -334,7 +340,7 @@ describe('I-CRED-1 and I-CRED-2: credential drafts in the token forms', () => {
       noKey,
       await createUser({ email: 'o@example.com', role: 'owner' }),
     );
-    const res = await adminPost(noKey, session, '/admin/tokens', {
+    const res = await adminPost(noKey, session, '/admin/credentials', {
       template: 'openai',
       credential: SECRET,
     });

@@ -34,7 +34,7 @@ function record(ts: number, overrides: Partial<RequestRecord> = {}): RequestReco
     path: '/x',
     service_slug: 'echo',
     service_id: null,
-    caller_provider_id: null,
+    credential_access_rule_id: null,
     grant_id: null,
     claims_verified: 0,
     caller_subject: null,
@@ -116,7 +116,10 @@ describe('Requests filters', () => {
 
   it('filters requests refused before a token or consumer was resolved with `none`', async () => {
     const bare = record(TEST_EPOCH_MS);
-    const resolved = record(TEST_EPOCH_MS + 1000, { service_id: SVC, caller_provider_id: CPR });
+    const resolved = record(TEST_EPOCH_MS + 1000, {
+      service_id: SVC,
+      credential_access_rule_id: CPR,
+    });
     await env.TELEMETRY_DB.batch(
       insertRequestRecordsStatements(env.TELEMETRY_DB, [bare, resolved]),
     );
@@ -129,17 +132,19 @@ describe('Requests filters', () => {
   });
 
   it('suggests repositories from claim labels only, never from the request log', async () => {
+    await env.DB.prepare(`INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
+      VALUES ('svc_labels', 'labels', 'Labels fixture', 'https://api.example.com', '{"kind":"bearer"}', 0, 0)`).run();
     await env.DB.prepare(
-      `INSERT INTO caller_providers (id, name, profile, issuer, jwks_uri, audience, allowed_algs,
+      `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
          max_token_age_seconds, tenant_pin, anchor_claims, enabled, created_at, updated_at)
-       VALUES (?, 'GitHub', 'github-actions', 'https://token.actions.githubusercontent.com',
+       VALUES (?, (SELECT id FROM credentials ORDER BY id LIMIT 1), 'GitHub', 'github-actions', 'https://token.actions.githubusercontent.com',
          'https://token.actions.githubusercontent.com/.well-known/jwks', 'tokengate-test-audience',
          '["RS256"]', 300, '[]', '[]', 1, 0, 0)`,
     )
       .bind(CPR)
       .run();
     await env.DB.prepare(
-      `INSERT INTO claim_labels (caller_provider_id, claim, value, label, updated_at)
+      `INSERT INTO claim_labels (credential_access_rule_id, claim, value, label, updated_at)
        VALUES (?, 'repository_id', '987654321', 'acme/labelled', 0)`,
     )
       .bind(CPR)

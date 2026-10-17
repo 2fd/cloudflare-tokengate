@@ -62,7 +62,7 @@ export interface WhoCanUseProps {
   note?: Child;
   /** Footer line under the panel (`.wfoot`): what is missing, and one ghost button. */
   footer?: Child;
-  /** Action at the right of the footer (“+ Give another consumer access”). */
+  /** Action at the right of the footer (“+ Give another issuer access rules”). */
   footerAction?: Child;
   class?: string;
 }

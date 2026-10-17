@@ -42,7 +42,7 @@ export const actionForm: ComponentDoc = {
           </ActionForm>
         </ButtonRow>
       ),
-      code: `<ActionForm action="/admin/access/a1/disable" size="sm" srSuffix="acme/api → Slack"
+      code: `<ActionForm action="/admin/issuer-access-rules/a1/disable" size="sm" srSuffix="acme/api → Slack"
   hidden={{ _csrf: csrf, expected_updated_at: access.updatedAt }}>
   Disable
 </ActionForm>`,

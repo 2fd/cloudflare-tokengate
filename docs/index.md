@@ -52,7 +52,7 @@ For security reviewers who need to know what the gateway trusts and why.
 
 | Page | Covers |
 |---|---|
-| [concepts.md](concepts.md) | The trust objects: caller provider, tenant pin, grant, anchor claims, trusted events |
+| [concepts.md](concepts.md) | The trust objects: credential access rule, tenant pin, grant, anchor claims, trusted events |
 | [policies.md](policies.md) | Condition and rule semantics, GitHub presets, warnings, pitfalls |
 | [threat-model.md](threat-model.md) | Assets, actors, trust boundaries, invariants with their tests, known limitations |
 | [architecture.md](architecture.md) | Request pipeline, data model, module map |

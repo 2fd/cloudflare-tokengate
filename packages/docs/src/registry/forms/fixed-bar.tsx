@@ -27,7 +27,7 @@ export const fixedBar: ComponentDoc = {
       layout: 'stack',
       render: () => (
         <FixedBar
-          label="Token"
+          label="Credential"
           logo={logos.slackSm}
           name="Slack"
           meta="/proxy/slack"
@@ -39,10 +39,10 @@ export const fixedBar: ComponentDoc = {
           change={{ href: '?change=token', srSuffix: 'token' }}
         />
       ),
-      code: `<FixedBar label="Token" logo="slack"
+      code: `<FixedBar label="Credential" logo="slack"
   name="Slack" meta="/proxy/slack"
   status={<Badge tone="ok" glyph="✓">Secret set</Badge>}
-  change={{ href: '/admin/access/new', srSuffix: 'token' }} />`,
+  change={{ href: '/admin/issuer-access-rules/new', srSuffix: 'token' }} />`,
     },
     {
       title: 'Consumer fixed, long name',
@@ -50,7 +50,7 @@ export const fixedBar: ComponentDoc = {
       layout: 'stack',
       render: () => (
         <FixedBar
-          label="Consumer"
+          label="Credential access rule"
           logo={logos.githubSm}
           name="GitHub Actions (acme)"
           meta="token.actions.githubusercontent.com · acme (1234567)"
@@ -62,10 +62,10 @@ export const fixedBar: ComponentDoc = {
           change={{ href: '?change=consumer', srSuffix: 'consumer' }}
         />
       ),
-      code: `<FixedBar label="Consumer" logo="github" name="GitHub Actions (acme)"
+      code: `<FixedBar label="Credential access rule" logo="github" name="GitHub Actions (acme)"
   meta="token.actions.githubusercontent.com · acme (1234567)"
   status={<Badge tone="warn" glyph="⚠">Risk accepted</Badge>}
-  change={{ href: '/admin/access/new?token=slack', srSuffix: 'consumer' }} />`,
+  change={{ href: '/admin/issuer-access-rules/new?token=slack', srSuffix: 'consumer' }} />`,
     },
     {
       title: 'Inherited fact',
@@ -108,7 +108,7 @@ export const fixedBar: ComponentDoc = {
     },
   ],
   accessibility: [
-    'The Change link reads “Change token”: the hidden suffix makes it unique on the page.',
+    'The Change link reads “Change credential”: the hidden suffix makes it unique on the page.',
     'The logo is decorative; the name is text.',
     'The value is plain text, not a disabled input, so it is read in order and not skipped.',
   ],

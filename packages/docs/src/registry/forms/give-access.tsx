@@ -63,7 +63,7 @@ export function GiveAccessForm(props: { p: string; context?: string }) {
                   2: 'GitLab CI (platform)',
                   3: 'Buildkite (acme)',
                 }}
-                empty="Choose a consumer"
+                empty="Choose a credential access rule"
               />
             }
             meta={
@@ -161,7 +161,7 @@ export function GiveAccessForm(props: { p: string; context?: string }) {
       }
     >
       <FixedBar
-        label="Token"
+        label="Credential"
         logo={logos.slackSm}
         name="Slack"
         meta="/proxy/slack"
@@ -173,10 +173,10 @@ export function GiveAccessForm(props: { p: string; context?: string }) {
         change={{ href: '?change=token', srSuffix: 'token' }}
       />
       <Stepper>
-        <FormStep n={1} title="Consumer" live={1} id={`${p}-consumer`}>
+        <FormStep n={1} title="Credential access rule" live={1} id={`${p}-consumer`}>
           <RowPicker name={`${p}-consumer`} options={consumers} value="gha-acme" />
           <a class="btn ghost sm" href="?new=consumer">
-            + Add a new consumer
+            + Add a new credential access rule
           </a>
         </FormStep>
         <FormStep
@@ -195,7 +195,7 @@ export function GiveAccessForm(props: { p: string; context?: string }) {
             id={`${p}-repo`}
             legend="Repository"
             live={2}
-            hint="Repositories this consumer used before, most used first. The ID keeps working after a rename."
+            hint="Repositories this credential access rule used before, most used first. The ID keeps working after a rename."
           >
             <RowPicker name={`${p}-repo`} options={repositories} value="89012345" />
           </FieldSet>
@@ -301,11 +301,11 @@ export function GiveAccessForm(props: { p: string; context?: string }) {
   );
 }
 
-export const giveAccessCode = `<LiveForm method="post" action="/admin/access" rail={
+export const giveAccessCode = `<LiveForm method="post" action="/admin/issuer-access-rules" rail={
   <LiveSummary id="sum" title="This access" description="Follows the choices in this form.">
     <SummaryRow
       logoSlot={<LivePhrase field={1} decorative phrases={{ 1: githubLogo, 2: gitlabLogo, 3: buildkiteLogo }} empty={unknownLogo} />}
-      title={<LivePhrase field={1} phrases={{ 1: 'GitHub Actions (acme)', 2: 'GitLab CI (platform)', 3: 'Buildkite (acme)' }} empty="Choose a consumer" />}
+      title={<LivePhrase field={1} phrases={{ 1: 'GitHub Actions (acme)', 2: 'GitLab CI (platform)', 3: 'Buildkite (acme)' }} empty="Choose a credential access rule" />}
       meta={<>
         <LivePhrase field={2} phrases={{ 1: <span class="v">acme/api</span>, …, 5: 'the repository you enter' }} />
         <LivePhrase field={3} phrases={{
@@ -326,13 +326,13 @@ export const giveAccessCode = `<LiveForm method="post" action="/admin/access" ra
     </SummaryFoot>
   </LiveSummary>
 }>
-  <FixedBar label="Token" logo="slack" name="Slack" meta="/proxy/slack"
+  <FixedBar label="Credential" logo="slack" name="Slack" meta="/proxy/slack"
     status={<Badge tone="ok" glyph="✓">Secret set</Badge>}
-    change={{ href: '/admin/access/new', srSuffix: 'token' }} />
+    change={{ href: '/admin/issuer-access-rules/new', srSuffix: 'token' }} />
   <Stepper>
-    <FormStep n={1} title="Consumer" live={1} id="consumer">
+    <FormStep n={1} title="Credential access rule" live={1} id="consumer">
       <RowPicker name="consumer" options={consumers} value="gha-acme" />
-      <a class="btn ghost sm" href="/admin/consumers/new">+ Add a new consumer</a>
+      <a class="btn ghost sm" href="/admin/credential-access-rules/new">+ Add a new credential access rule</a>
     </FormStep>
     <FormStep n={2} kind="group" id="jobs" title="Which jobs" description={…}>
       <FieldSet id="repo" legend="Repository" live={2} hint="…">
@@ -378,6 +378,6 @@ export const giveAccessCode = `<LiveForm method="post" action="/admin/access" ra
     confirm="I accept this risk for acme/api → Slack" />
   <SubmitRow hint="After saving you get the workflow snippet for these jobs.">
     <button class="btn primary" type="submit">Give access</button>
-    <a class="btn secondary" href="/admin/tokens/slack">Cancel</a>
+    <a class="btn secondary" href="/admin/credentials/slack">Cancel</a>
   </SubmitRow>
 </LiveForm>`;

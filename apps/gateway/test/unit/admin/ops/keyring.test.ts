@@ -1,10 +1,10 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { openStoredCredential } from '../../../../src/admin/ops/credentials';
 import { keyringStatus, rewrapCredentials } from '../../../../src/admin/ops/keyring';
-import { openStoredCredential } from '../../../../src/admin/ops/services';
 import { sealedKid } from '../../../../src/crypto/envelope';
 import { loadKeyring } from '../../../../src/crypto/keyring';
-import { getService } from '../../../../src/db/services';
+import { getService } from '../../../../src/db/credentials';
 import { TEST_ACCESS_ENV } from '../../../helpers/app';
 import {
   ACTOR,
@@ -53,7 +53,7 @@ describe('keyringStatus', () => {
   it('reports missing kids, unreadable values and keyring errors', async () => {
     const id = await seedService(opsDeps(), { slug: 'a', secret: 'secret-a-0123456789' });
     await seedService(opsDeps(), { slug: 'b', secret: 'secret-b-0123456789' });
-    await env.DB.prepare("UPDATE services SET credential_sealed = 'garbage' WHERE id = ?")
+    await env.DB.prepare("UPDATE credentials SET credential_sealed = 'garbage' WHERE id = ?")
       .bind(id)
       .run();
     const status = await keyringStatus(
@@ -141,7 +141,9 @@ describe('rewrapCredentials', () => {
 
   it('refuses when a credential fails to open (tampered binding)', async () => {
     const id = await seedService(opsDeps(), { slug: 'a', secret: 'secret-a-0123456789' });
-    await env.DB.prepare("UPDATE services SET base_url = 'https://evil.example.net' WHERE id = ?")
+    await env.DB.prepare(
+      "UPDATE credentials SET base_url = 'https://evil.example.net' WHERE id = ?",
+    )
       .bind(id)
       .run();
     const result = await rewrapCredentials(rotated(), ACTOR);

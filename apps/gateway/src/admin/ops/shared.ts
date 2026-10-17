@@ -16,11 +16,11 @@ export type OpFailureReason =
   /** Input failed validation; `errors` say why. */
   | 'invalid'
   | 'not_found'
-  /** Refused because of other rows (e.g. grants still reference it) or a concurrent change. */
+  /** Refused because of other rows (e.g. issuer_access_rules still reference it) or a concurrent change. */
   | 'conflict'
   /** Valid, but has warnings; re-submit with `acknowledge_warnings`. */
   | 'acknowledgement_required'
-  /** Changes trust of enabled grants; re-submit with `confirm_trust_change`. */
+  /** Changes trust of enabled issuer_access_rules; re-submit with `confirm_trust_change`. */
   | 'confirmation_required'
   /** The credential check failed; re-submit with `save_anyway` to store it regardless. */
   | 'verify_failed'
@@ -170,24 +170,24 @@ export function actorNotAuthorized(): OpFailure {
 /** Known D1 constraint errors: unique clashes with another row are conflicts (HTTP 409). */
 const CONSTRAINT_FAILURES: ReadonlyArray<[RegExp, OpFailureReason, string]> = [
   [
-    /UNIQUE constraint failed: services\.slug/,
+    /UNIQUE constraint failed: credentials\.slug/,
     'conflict',
     'another service already uses this slug; choose a different slug',
   ],
   [
-    /UNIQUE constraint failed: caller_providers\.name/,
+    /UNIQUE constraint failed: credential_access_rules\.name/,
     'conflict',
-    'another caller provider already uses this name; choose a different name',
+    'another credential access rule already uses this name; choose a different name',
   ],
   [
-    /UNIQUE constraint failed: caller_providers\.issuer/,
+    /UNIQUE constraint failed: credential_access_rules\.issuer/,
     'conflict',
-    'another caller provider already has this issuer; edit that caller provider instead',
+    'another credential access rule already has this issuer; edit that credential access rule instead',
   ],
   [
     /FOREIGN KEY constraint failed/,
     'invalid',
-    'the referenced caller provider or service no longer exists',
+    'the referenced credential access rule or service no longer exists',
   ],
 ];
 

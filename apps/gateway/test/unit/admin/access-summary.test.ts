@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { accessSummary } from '../../../src/admin/access-summary';
 import type { ClaimLabel } from '../../../src/db/types';
-import { githubGrantPreset } from '../../../src/policy/presets';
+import { githubIssuerAccessRulePreset } from '../../../src/policy/presets';
 import type { Condition, Rule } from '../../../src/policy/types';
 
 const exact = (claim: string, ...values: string[]): Condition => ({
@@ -12,9 +12,19 @@ const exact = (claim: string, ...values: string[]): Condition => ({
 const glob = (claim: string, ...values: string[]): Condition => ({ claim, match: 'glob', values });
 
 const LABELS: ClaimLabel[] = [
-  { caller_provider_id: 'cpr_a', claim: 'repository_owner_id', value: '4242', label: 'acme' },
-  { caller_provider_id: 'cpr_a', claim: 'repository_id', value: '987654321', label: 'acme/api' },
-  { caller_provider_id: 'cpr_a', claim: 'project_id', value: '77', label: 'group/project' },
+  {
+    credential_access_rule_id: 'cpr_a',
+    claim: 'repository_owner_id',
+    value: '4242',
+    label: 'acme',
+  },
+  {
+    credential_access_rule_id: 'cpr_a',
+    claim: 'repository_id',
+    value: '987654321',
+    label: 'acme/api',
+  },
+  { credential_access_rule_id: 'cpr_a', claim: 'project_id', value: '77', label: 'group/project' },
 ].map((label) => ({ ...label, updated_at: 1, updated_by: null }) as ClaimLabel);
 
 const RULES: Rule[] = [
@@ -31,7 +41,7 @@ function github(
   pattern: string,
   requireProtectedRef = true,
 ) {
-  return githubGrantPreset({
+  return githubIssuerAccessRulePreset({
     ownerId: '4242',
     repositoryId: '987654321',
     context,

@@ -86,7 +86,7 @@ describe('POST /admin/export', () => {
       claim_labels: unknown[];
       users: Array<{ email: string }>;
     }>();
-    expect(body.schema_version).toBe(2);
+    expect(body.schema_version).toBe(3);
     expect(body.claim_labels).toEqual([]);
     expect(body.users.map((user) => user.email)).toEqual(['admin@example.com']);
     expect(await auditActions()).toEqual(['config.export']);

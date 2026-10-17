@@ -86,7 +86,7 @@ export const riskAcceptance: ComponentDoc = {
         'always: the server computed the risk (a copy, the row editor, validator warnings), so the block shows inside a LiveForm without a checked risky option. Only then can the box be required: it is always visible, so it never blocks a submit it hides. There is no default hint.',
       layout: 'stack',
       render: () => (
-        <LiveForm layout="fields" action="/admin/access/copy">
+        <LiveForm layout="fields" action="/admin/issuer-access-rules/copy">
           <RiskAcceptance
             id="ra-srv"
             title="Accept 1 risk to copy this access"
@@ -97,7 +97,7 @@ export const riskAcceptance: ComponentDoc = {
           />
         </LiveForm>
       ),
-      code: `<LiveForm layout="fields" action="/admin/access/copy">
+      code: `<LiveForm layout="fields" action="/admin/issuer-access-rules/copy">
   <RiskAcceptance id="risk" title="Accept 1 risk to copy this access" risks={[prRisk]}
     confirm="I accept this risk for acme/web → Slack" always required />
 </LiveForm>`,

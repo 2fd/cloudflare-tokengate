@@ -7,32 +7,37 @@ const columns: MatrixColumn[] = [
     id: 'slack',
     name: 'Slack',
     logo: { brand: 'slack' },
-    href: '/admin/access?token=slack',
+    href: '/admin/issuer-access-rules?token=slack',
     meta: '3 accesses · 2,140 req',
   },
-  { id: 'openai', name: 'OpenAI', logo: { brand: 'openai' }, href: '/admin/access?token=openai' },
+  {
+    id: 'openai',
+    name: 'OpenAI',
+    logo: { brand: 'openai' },
+    href: '/admin/issuer-access-rules?token=openai',
+  },
 ];
 
 const groups: MatrixGroup[] = [
   {
     name: 'GitHub Actions (acme)',
     logo: { brand: 'github' },
-    href: '/admin/consumers/github-acme',
+    href: '/admin/credential-access-rules/github-acme',
     meta: 'org acme (1234567) · 2 accesses',
     rows: [
       {
         label: 'acme/api',
-        href: '/admin/access?repo=acme/api',
+        href: '/admin/issuer-access-rules?repo=acme/api',
         meta: '2 accesses',
         cells: {
           slack: {
-            href: '/admin/access/a1',
+            href: '/admin/issuer-access-rules/a1',
             status: 'Active',
             constraint: 'env production',
             operations: '1 operation',
           },
           openai: {
-            href: '/admin/access/a2',
+            href: '/admin/issuer-access-rules/a2',
             tone: 'warn',
             status: 'Secret expires',
             constraint: 'branch main',
@@ -50,14 +55,14 @@ const groups: MatrixGroup[] = [
         mono: false,
         cells: {
           slack: {
-            href: '/admin/access/a9',
+            href: '/admin/issuer-access-rules/a9',
             tone: 'off',
             status: 'Inactive',
             glyph: '',
             constraint: 'Slack (legacy)',
             operations: 'token disabled',
           },
-          openai: { href: '/admin/access/a10', tone: 'bad', status: 'Expired' },
+          openai: { href: '/admin/issuer-access-rules/a10', tone: 'bad', status: 'Expired' },
         },
       },
     ],
@@ -68,11 +73,11 @@ describe('Matrix', () => {
   const html = render(
     <Matrix
       label="Access matrix"
-      corner="Consumer › repository"
+      corner="Credential access rule › repository"
       columns={columns}
       groups={groups}
       addHref={(row, column) =>
-        `/admin/access/new?repo=${encodeURIComponent(row.label)}&token=${column.id}`
+        `/admin/issuer-access-rules/new?repo=${encodeURIComponent(row.label)}&token=${column.id}`
       }
       class="x"
     />,
@@ -81,29 +86,31 @@ describe('Matrix', () => {
   it('is a focusable, named scroll region around the table', () => {
     expect(
       html.startsWith(
-        '<div class="matrix x" role="region" tabindex="0" aria-label="Access matrix"><table class="mx"><thead><tr><th scope="col">Consumer › repository</th>',
+        '<div class="matrix x" role="region" tabindex="0" aria-label="Access matrix"><table class="mx"><thead><tr><th scope="col">Credential access rule › repository</th>',
       ),
     ).toBe(true);
   });
 
   it('renders column headers with logo, link and meta', () => {
     expect(html).toContain(
-      '<th scope="col"><div class="colh"><span class="top"><span class="logo xs lg-slack" aria-hidden="true">S</span><a href="/admin/access?token=slack">Slack</a></span><span class="meta">3 accesses · 2,140 req</span></div></th>',
+      '<th scope="col"><div class="colh"><span class="top"><span class="logo xs lg-slack" aria-hidden="true">S</span><a href="/admin/issuer-access-rules?token=slack">Slack</a></span><span class="meta">3 accesses · 2,140 req</span></div></th>',
     );
-    expect(html).toContain('<a href="/admin/access?token=openai">OpenAI</a></span></div></th>');
+    expect(html).toContain(
+      '<a href="/admin/issuer-access-rules?token=openai">OpenAI</a></span></div></th>',
+    );
   });
 
   it('groups rows per consumer in their own tbody with a row-group header', () => {
     expect(html.match(/<tbody>/g)).toHaveLength(2);
     expect(html).toContain(
-      '<tr class="grp"><th colspan="3" scope="rowgroup"><span class="gin"><span class="logo xs lg-github" aria-hidden="true">GH</span><a class="ent-n" href="/admin/consumers/github-acme">GitHub Actions (acme)</a><span class="meta">org acme (1234567) · 2 accesses</span></span></th></tr>',
+      '<tr class="grp"><th colspan="3" scope="rowgroup"><span class="gin"><span class="logo xs lg-github" aria-hidden="true">GH</span><a class="ent-n" href="/admin/credential-access-rules/github-acme">GitHub Actions (acme)</a><span class="meta">org acme (1234567) · 2 accesses</span></span></th></tr>',
     );
     expect(html.match(/class="grp"/g)).toHaveLength(1);
   });
 
   it('renders row headers, mono by default', () => {
     expect(html).toContain(
-      '<th scope="row"><a class="mono" href="/admin/access?repo=acme/api">acme/api</a><span class="meta">2 accesses</span></th>',
+      '<th scope="row"><a class="mono" href="/admin/issuer-access-rules?repo=acme/api">acme/api</a><span class="meta">2 accesses</span></th>',
     );
     expect(html).toContain('<th scope="row"><span class="mono">acme/web</span></th>');
     expect(html).toContain('<th scope="row"><span>pipeline deploy</span></th>');
@@ -111,22 +118,22 @@ describe('Matrix', () => {
 
   it('renders cells by tone with the status word', () => {
     expect(html).toContain(
-      '<a class="mcell" href="/admin/access/a1"><span class="s"><span aria-hidden="true">✓</span>Active</span><span class="c">env production</span><span class="o">1 operation</span></a>',
+      '<a class="mcell" href="/admin/issuer-access-rules/a1"><span class="s"><span aria-hidden="true">✓</span>Active</span><span class="c">env production</span><span class="o">1 operation</span></a>',
     );
     expect(html).toContain(
-      '<a class="mcell warn" href="/admin/access/a2"><span class="s"><span aria-hidden="true">⌛</span>Secret expires</span>',
+      '<a class="mcell warn" href="/admin/issuer-access-rules/a2"><span class="s"><span aria-hidden="true">⌛</span>Secret expires</span>',
     );
     expect(html).toContain(
-      '<a class="mcell off" href="/admin/access/a9"><span class="s">Inactive</span>',
+      '<a class="mcell off" href="/admin/issuer-access-rules/a9"><span class="s">Inactive</span>',
     );
     expect(html).toContain(
-      '<a class="mcell bad" href="/admin/access/a10"><span class="s"><span aria-hidden="true">✕</span>Expired</span></a>',
+      '<a class="mcell bad" href="/admin/issuer-access-rules/a10"><span class="s"><span aria-hidden="true">✕</span>Expired</span></a>',
     );
   });
 
   it('offers + in empty cells, linking to the prefilled form with a spoken name', () => {
     expect(html).toContain(
-      '<td><a class="madd" href="/admin/access/new?repo=acme%2Fweb&amp;token=slack"><span aria-hidden="true">+</span><span class="vh">Give acme/web access to Slack</span></a></td>',
+      '<td><a class="madd" href="/admin/issuer-access-rules/new?repo=acme%2Fweb&amp;token=slack"><span aria-hidden="true">+</span><span class="vh">Give acme/web access to Slack</span></a></td>',
     );
     expect(html.match(/class="madd"/g)).toHaveLength(2);
   });

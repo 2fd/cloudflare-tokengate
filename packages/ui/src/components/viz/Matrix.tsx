@@ -100,7 +100,7 @@ function Cell(props: { cell: MatrixCell }) {
 /**
  * The access matrix (`.matrix > table.mx`): consumers' repositories down, tokens across, one cell
  * per access. Headers stay in view while the focusable region scrolls; empty cells offer "+" to
- * the prefilled create form. The "Matrix" view of Consumer access and the target of the map's
+ * the prefilled create form. The "Matrix" view of Issuer access rules and the target of the map's
  * group nodes.
  */
 export function Matrix(props: MatrixProps) {

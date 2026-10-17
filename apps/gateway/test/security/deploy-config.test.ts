@@ -1,6 +1,5 @@
 // Static checks on deployment files that the Worker never sees at runtime.
 // Behaviour of the get-token action itself is covered by actions/get-token/test.sh.
-import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import actionYml from '../../../../actions/get-token/action.yml?raw';
 import devVarsExample from '../../.dev.vars.example?raw';
@@ -34,8 +33,8 @@ describe('I-DEPLOY-1 / I-SSRF-1: deploys do not wipe operator vars set in the da
   });
 
   it('leaves no operator var as an empty placeholder in the deployed env', () => {
-    // The test env is built from wrangler.jsonc, so a committed "" shows up here.
-    const vars = env as unknown as Record<string, unknown>;
+    // Inspect deployment vars, excluding the deliberate isolation overrides in vitest.config.ts.
+    const vars = (config.vars ?? {}) as Record<string, unknown>;
     expect(OPERATOR_VARS.filter((name) => isBlank(vars[name]))).toEqual([]);
   });
 });

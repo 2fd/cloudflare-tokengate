@@ -10,7 +10,7 @@ export const checkPresets: ComponentDoc = {
     'Checkbox presets: named groups of API calls, each with its endpoints in mono, and a CSS-only count.',
   usage: {
     when: [
-      'Choose what a consumer may call: presets of a token type (“Post messages”, “Upload files”).',
+      'Choose what a credential access rule may call: presets of a credential type (“Post messages”, “Upload files”).',
       'Several independent yes/no options of the same kind, each with a technical detail.',
     ],
     whenNot: [
@@ -58,7 +58,7 @@ export const checkPresets: ComponentDoc = {
           </FieldSet>
         </LiveForm>
       ),
-      code: `<LiveForm method="post" action="/admin/access">
+      code: `<LiveForm method="post" action="/admin/issuer-access-rules">
   <FieldSet id="ops" legend="Allowed operations" countScope>
     <CheckPresets name="operations" options={operations} value={['post', 'upload']} />
     <SelectedCount total={4} />
@@ -145,7 +145,7 @@ export const checkPresets: ComponentDoc = {
     'The count is a CSS counter and hidden from assistive tech: screen readers read each box’s state instead.',
   ],
   do: [
-    'Name presets for what they let the consumer do.',
+    'Name presets for what they let the credential access rule do.',
     'Check the default preset on a new access.',
   ],
   dont: [

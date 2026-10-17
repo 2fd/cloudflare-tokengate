@@ -1,5 +1,5 @@
 // Caller token verification: compact-JWS shape (I-TOK-2), unverified alg/kid/iss peek used only to
-// pick a caller provider, jose signature and claims check (I-JWT-1), JWKS refetch gate per jwks_uri
+// pick a credential access rule, jose signature and claims check (I-JWT-1), JWKS refetch gate per jwks_uri
 // (I-JWT-2), tenant pin (I-TEN-1) and the resulting caller identity.
 import {
   createLocalJWKSet,
@@ -13,14 +13,14 @@ import {
   jwtVerify,
   type RemoteJWKSet,
 } from 'jose';
-import type { CallerProvider } from '../db/types';
+import type { CredentialAccessRule } from '../db/types';
 import type { Deps } from '../deps';
 import { claimText, conditionShapeError } from '../policy/conditions';
 import { isSharedIssuer } from './profiles';
 import type { CallerIdentity, Claims, IssuerProfile } from './types';
 
 /**
- * Asymmetric algorithms the verifier will ever accept, whatever a caller provider row says.
+ * Asymmetric algorithms the verifier will ever accept, whatever a credential access rule row says.
  * Never `none`, never HS* (a public key must not double as an HMAC secret).
  */
 export const VERIFIABLE_ALGS: readonly string[] = Object.freeze([
@@ -93,7 +93,7 @@ export function decodeUnverified(token: string): UnverifiedToken | null {
 /** Pre-verify header check: alg allowed for this provider (and asymmetric); kid present and tame. */
 export function headerAcceptable(
   decoded: Pick<UnverifiedToken, 'alg' | 'kid'>,
-  provider: Pick<CallerProvider, 'allowed_algs'>,
+  provider: Pick<CredentialAccessRule, 'allowed_algs'>,
 ): boolean {
   return (
     VERIFIABLE_ALGS.includes(decoded.alg) &&
@@ -221,7 +221,7 @@ class KeyResolutionFailed extends Error {
  */
 export async function verifyCallerToken(
   token: string,
-  provider: CallerProvider,
+  provider: CredentialAccessRule,
   profile: IssuerProfile,
   deps: Pick<Deps, 'fetch' | 'now'>,
 ): Promise<VerifyResult> {
@@ -294,7 +294,7 @@ function failureCode(error: unknown): VerifyFailureCode {
  * provider's profile, so a `generic` provider cannot bypass the requirement.
  */
 export function tenantPinHolds(
-  provider: Pick<CallerProvider, 'issuer' | 'tenant_pin'>,
+  provider: Pick<CredentialAccessRule, 'issuer' | 'tenant_pin'>,
   claims: Claims,
 ): boolean {
   if (!Array.isArray(provider.tenant_pin)) return false;
@@ -312,12 +312,12 @@ export function tenantPinHolds(
  * that conditions evaluate; `display` is derived for UI/logs and is never used for authorization.
  */
 export function buildCallerIdentity(
-  provider: Pick<CallerProvider, 'id'>,
+  provider: Pick<CredentialAccessRule, 'id'>,
   profile: IssuerProfile,
   claims: Claims,
 ): CallerIdentity {
   const identity: CallerIdentity = {
-    callerProviderId: provider.id,
+    credentialAccessRuleId: provider.id,
     profile: profile.id,
     claims,
     display: profile.display(claims),
@@ -342,7 +342,7 @@ export async function discoverJwksUri(
 /**
  * discoverJwksUri plus the document's `id_token_signing_alg_values_supported` (null when absent
  * or not a list of strings). The algorithms are a default for the admin to keep, never trusted
- * without the I-JWT-1 check of validateCallerProvider.
+ * without the I-JWT-1 check of validateCredentialAccessRule.
  */
 export async function discoverIssuer(
   issuer: string,

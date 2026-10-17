@@ -139,10 +139,12 @@ describe('visibleIds, isGlobalViewer and recordVisible', () => {
     ['empty consumer (rollup)', 'svc_a', '', false],
     ['visible consumer, empty token (rollup)', '', 'cpr_x', true],
   ])('%s → %s', (_name, service, consumer, expected) => {
-    expect(recordVisible(RESTRICTED, { service_id: service, caller_provider_id: consumer })).toBe(
-      expected,
-    );
-    expect(recordVisible(GLOBAL, { service_id: service, caller_provider_id: consumer })).toBe(true);
+    expect(
+      recordVisible(RESTRICTED, { service_id: service, credential_access_rule_id: consumer }),
+    ).toBe(expected);
+    expect(
+      recordVisible(GLOBAL, { service_id: service, credential_access_rule_id: consumer }),
+    ).toBe(true);
   });
 });
 
@@ -162,7 +164,7 @@ async function kept(
         .map((_, i) => `(?${start + i * 3}, ?${start + i * 3 + 1}, ?${start + i * 3 + 2})`)
         .join(', ')
     : rows;
-  const sql = `WITH r(id, service_id, caller_provider_id) AS (VALUES ${valueSql})
+  const sql = `WITH r(id, service_id, credential_access_rule_id) AS (VALUES ${valueSql})
     SELECT id FROM r WHERE ${guard.sql} ORDER BY id`;
   const binds = numbered
     ? [...leading, ...guard.binds, ...values.flat()]
@@ -214,7 +216,11 @@ describe('recordScopeSql', () => {
     ['a-none', 'svc_a', null],
     ['none-none', null, null],
   ];
-  const COLS = { service: 'service_id', consumer: 'caller_provider_id', empty: 'NULL' } as const;
+  const COLS = {
+    service: 'service_id',
+    consumer: 'credential_access_rule_id',
+    empty: 'NULL',
+  } as const;
 
   it('renders no clause for a global viewer', () => {
     expect(recordScopeSql(GLOBAL, COLS)).toBeNull();
@@ -229,7 +235,7 @@ describe('recordScopeSql', () => {
   it("applies the record rule to rollup rows ('' is unset)", async () => {
     const rollups = VALUES.map(([id, s, c]) => [id, s ?? '', c ?? ''] as [string, string, string]);
     const guard = recordScopeSql(RESTRICTED, { ...COLS, empty: "''" });
-    expect(guard?.sql).toContain("caller_provider_id <> ''");
+    expect(guard?.sql).toContain("credential_access_rule_id <> ''");
     expect(await kept(rollups, guard!)).toEqual(['a-x', 'none-x']);
   });
 
@@ -443,15 +449,15 @@ describe('loadScope', () => {
     await db.batch([
       db
         .prepare(
-          `INSERT INTO services (id, slug, name, base_url, injection, created_at, updated_at)
+          `INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
            VALUES ('svc_a', 'a', 'A', 'https://api.example.com', '{"kind":"bearer"}', ?, ?)`,
         )
         .bind(T, T),
       db
         .prepare(
-          `INSERT INTO caller_providers (id, name, profile, issuer, jwks_uri, audience, allowed_algs,
+          `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
              max_token_age_seconds, created_at, updated_at)
-           VALUES ('cpr_x', 'X', 'generic', 'https://x.example.com', 'https://x.example.com/jwks',
+           VALUES ('cpr_x', (SELECT id FROM credentials ORDER BY id LIMIT 1), 'X', 'generic', 'https://x.example.com', 'https://x.example.com/jwks',
              'tokengate:0123456789abcdef', '["RS256"]', 900, ?, ?)`,
         )
         .bind(T, T),

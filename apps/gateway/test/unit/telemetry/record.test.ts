@@ -33,7 +33,7 @@ function input(overrides: Partial<RequestRecordInput> = {}): RequestRecordInput 
     reason: null,
     status: 200,
     serviceId: 'svc_1',
-    callerProviderId: 'cpr_1',
+    credentialAccessRuleId: 'cpr_1',
     grantId: 'grt_1',
     untrustedIss: 'https://token.actions.githubusercontent.com',
     caller: {

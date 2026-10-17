@@ -7,7 +7,7 @@ import { Button, type ButtonProps } from '../base/Button';
 interface DialogBase {
   /** Id of the `dialog`; triggers point at it. The heading gets `${id}-h`, the description `${id}-d`. */
   id: string;
-  /** The question or task ("Delete Slack and its 3 consumer accesses?"). */
+  /** The question or task ("Delete Slack and its 3 issuer access ruleses?"). */
   title: Child;
   /** One or two sentences under the title; the dialog's description for screen readers. */
   description?: Child;

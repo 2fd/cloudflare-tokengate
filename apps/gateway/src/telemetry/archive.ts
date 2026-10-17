@@ -7,7 +7,7 @@ export const ARCHIVE_SCHEMA_VERSION = 1 as const;
 
 /**
  * Archived columns: every request_log column except the policy trace, which only makes sense next
- * to the grants it refers to.
+ * to the issuer_access_rules it refers to.
  */
 export const ARCHIVE_COLUMNS = REQUEST_RECORD_COLUMNS.filter(
   (column): column is Exclude<(typeof REQUEST_RECORD_COLUMNS)[number], 'eval_trace'> =>

@@ -45,7 +45,7 @@ tokengate uses two databases (see [architecture.md](architecture.md)):
 
 | Binding | Database name | Contents |
 |---|---|---|
-| `DB` | `tokengate` | Users, caller providers, services, grants, settings, audit log |
+| `DB` | `tokengate` | Users, credential access rules, credentials, issuer_access_rules, settings, audit log |
 | `TELEMETRY_DB` | `tokengate-telemetry` | Request log and hourly rollups |
 
 1. Choose a location hint near your CI runners: `weur`, `eeur`, `apac`, `oc`, `wnam` or `enam`.
@@ -141,7 +141,7 @@ Set operator variables in the Cloudflare dashboard, not in `wrangler.jsonc`. `wr
 3. If `AUTH_ACCESS_DEVELOPMENT` is listed (the Deploy button sets it), delete it. With it and the Access variables both set, no login works.
 4. Save and deploy the change.
 
-> **Warning:** Set these variables before you add services (step 13), and store their exact values in your vault next to the KEK. The KEK is bound to `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` and `AUTH_ACCESS_DEVELOPMENT` ([I-CRED-3](threat-model.md#i-cred-3)). A later change to any of them, even from `acme` to `acme.cloudflareaccess.com`, makes every stored credential impossible to decrypt ([configuration](configuration.md#login-binding)).
+> **Warning:** Set these variables before you add credentials (step 13), and store their exact values in your vault next to the KEK. The KEK is bound to `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` and `AUTH_ACCESS_DEVELOPMENT` ([I-CRED-3](threat-model.md#i-cred-3)). A later change to any of them, even from `acme` to `acme.cloudflareaccess.com`, makes every stored credential impossible to decrypt ([configuration](configuration.md#login-binding)).
 
 If a variable is half-configured or malformed, Access login stays off. `/admin` then shows the setup page, which names the variable ([I-CFG-1](threat-model.md#i-cfg-1)). Every variable, its format and its failure behavior are in [configuration.md](configuration.md).
 
@@ -169,9 +169,9 @@ To give someone a role before their first sign-in, enter their email under "Invi
 
 When someone is refused (an expired invitation, a cancelled invitation, a different Access account for a known email), the gateway records the attempt. Owners see it under "Needs your decision", with the action that fixes it: "Renew invitation", "Invite again as <role>" (a dialog for Owner) or "Reset sign-in…", plus "Dismiss".
 
-## 12. Add a service consumer
+## 12. Add a credential access rule
 
-A service consumer is the CI system whose jobs call the gateway. It tells the gateway which tokens to trust.
+A credential access rule is the CI system whose jobs call the gateway. It tells the gateway which tokens to trust.
 
 1. Get your GitHub organization in the format that the form takes, `name (ID)`:
 
@@ -181,23 +181,23 @@ A service consumer is the CI system whose jobs call the gateway. It tells the ga
 
    The command prints a line such as `acme (1234567)`. For a personal account, use `gh api users/NAME --jq '"\(.login) (\(.id))"'`.
 
-2. In the admin UI, open Service consumers and open "Add a consumer".
+2. In the admin UI, open Credential access rules and open "Add a credential access rule".
 3. Keep the type "GitHub Actions".
 4. Paste the line into "Organizations". To add several organizations, separate them with commas. The organizations are the tenant pin. A GitHub consumer needs at least one, because anyone on GitHub can get a token from the GitHub issuer ([I-TEN-1](threat-model.md#i-ten-1)).
-5. Click "Add consumer".
+5. Click "Add credential access rule".
 
-The gateway sets everything else: the name ("GitHub Actions (acme)"), the issuer, the signing keys, the token checks and the audience. The audience starts with `tokengate:` and is random, so tokens minted for other services are never accepted here. The consumer page shows it under "Connect your jobs", in a workflow snippet with your values.
+The gateway sets everything else: the name ("GitHub Actions (acme)"), the issuer, the signing keys, the token checks and the audience. The audience starts with `tokengate:` and is random, so tokens minted for other credentials are never accepted here. The credential access rule page shows it under "Connect your jobs", in a workflow snippet with your values.
 
-When you add a service token first (step 13), you can also skip this step: "Give a consumer access" adds the consumer in the same form.
+When you add a credential first (step 13), you can also skip this step: "Give an issuer access rule" adds the credential access rule in the same form.
 
 GitLab CI and other issuers are covered in [callers/gitlab-ci.md](callers/gitlab-ci.md) and [callers/generic-oidc.md](callers/generic-oidc.md).
 
-## 13. Add a service token
+## 13. Add a credential
 
-A service token is one upstream API plus the secret the gateway attaches. This example uses the GitHub REST API.
+A credential is one upstream API plus the secret the gateway attaches. This example uses the GitHub REST API.
 
 1. In GitHub, create a fine-grained personal access token that can access only your test repository. The default read-only "Metadata" permission is enough for this example.
-2. In the admin UI, open **Service tokens**. With no tokens yet, "Add your first token" is open.
+2. In the admin UI, open **Credentials**. With no tokens yet, "Add your first token" is open.
 3. Open the **GitHub REST API** card.
 4. Paste the token in **Personal access token**. Leave name and slug empty: the token gets the name `GitHub` and the slug `github`. Consumers use the slug in the URL: `<gateway>/proxy/github/...`. It cannot be changed later.
 5. Select **Check and save GitHub**.
@@ -212,7 +212,7 @@ The secret is encrypted before it is stored. The UI shows only its length and la
 
    ```sh
    gh variable set TOKENGATE_URL --repo OWNER/REPO --body "<gateway>"
-   gh variable set TOKENGATE_AUDIENCE --repo OWNER/REPO --body "<audience from the consumer page>"
+   gh variable set TOKENGATE_AUDIENCE --repo OWNER/REPO --body "<audience from the credential access rule page>"
    ```
 
 2. Add `.github/workflows/tokengate-smoke.yml` on the default branch:
@@ -254,7 +254,7 @@ The step fails with HTTP 403. The body contains `"code":"no_matching_grant"` and
 ## 15. Give access from the denied request
 
 1. In the admin UI, open Monitoring › Requests and open the denied request. Its reason is `no_matching_grant`.
-2. Click "Give this caller access". The form "Give a consumer access" opens, prefilled with this caller's exact values:
+2. Click "Give this caller access". The form "Give an issuer access rule" opens, prefilled with this caller's exact values:
    - Consumer: GitHub Actions (acme). Token: GitHub.
    - Repository: `acme/demo (7654321)`, the name and numeric ID from the verified token.
    - When: Branch `main`, with protected refs as the token reported them.
@@ -267,7 +267,7 @@ The access page opens with "Connect your jobs", the snippet with this token's sl
 
 Only requests with a verified token that were denied with `no_matching_grant` or `event_not_trusted` offer this button ([I-LOG-2](threat-model.md#i-log-2)). The button requires the role `access_manager`, `admin` or `owner`. The form never suggests values from the request log: its lists come from consumers and accesses that you saved.
 
-Without a denied request, open Service consumers › Consumer access and click "Give a consumer access". Paste the output of `gh api repos/acme/demo --jq '"\(.full_name) (\(.id))"'` into "Repository". Choose when jobs get the token, then click "Give access". The page [policies.md](policies.md#structured-access-form) shows the conditions each choice makes.
+Without a denied request, open Credential access rules › Issuer access rules and click "Give an issuer access rule". Paste the output of `gh api repos/acme/demo --jq '"\(.full_name) (\(.id))"'` into "Repository". Choose when jobs get the token, then click "Give access". The page [policies.md](policies.md#structured-access-form) shows the conditions each choice makes.
 
 ## 16. Call again
 
@@ -278,7 +278,7 @@ gh run watch --repo OWNER/REPO
 
 The step prints the repository JSON from the GitHub API. The job never saw the GitHub token: the gateway removed the caller token and added the credential ([I-TOK-1](threat-model.md#i-tok-1), [I-INJ-1](threat-model.md#i-inj-1)).
 
-The Requests page shows the call as allowed, with the consumer access that matched, unless "Share of allowed requests to record" is `0`. The matrix on Service consumers › Consumer access shows which consumers can use which tokens.
+The Requests page shows the call as allowed, with the issuer access rules that matched, unless "Share of allowed requests to record" is `0`. The matrix on Credential access rules › Issuer access rules shows which consumers can use which tokens.
 
 ## Production on a custom domain
 
@@ -292,7 +292,7 @@ The steps above already put the admin UI on a custom domain. Before real use:
    Details are in [operations/cloudflare-zone-settings.md](operations/cloudflare-zone-settings.md).
 2. If CI jobs still use the workers.dev URL, change `TOKENGATE_URL` in your CI variables to `<gateway>`.
 3. Optional: turn off the workers.dev hostname. Set `"workers_dev": false` in your clone's `apps/gateway/wrangler.jsonc` and run `pnpm run deploy`.
-4. Optional: in Settings > "Upstream hosts", list the exact hosts your services use. Empty allows any public https host ([configuration](configuration.md#upstream-host-allowlist)).
+4. Optional: in Settings > "Upstream hosts", list the exact hosts your credentials use. Empty allows any public https host ([configuration](configuration.md#upstream-host-allowlist)).
 5. Pin `actions/get-token` to a commit SHA in every workflow.
 6. Monitor `<gateway>/readyz` and read [observability.md](observability.md). Optional bindings (request log queue, R2 archive, rate limiter) are in [configuration.md](configuration.md).
 7. Plan backups and key custody: [operations/backup-restore.md](operations/backup-restore.md) and [operations/key-rotation.md](operations/key-rotation.md).
@@ -327,6 +327,6 @@ The optional R2 archive needs Workers Paid. The optional request log queue has a
 
 ## Next steps
 
-- Write grants for real workloads: [policies.md](policies.md).
+- Write issuer_access_rules for real workloads: [policies.md](policies.md).
 - Call more APIs from CI: [callers/github-actions.md](callers/github-actions.md) and the [upstreams](upstreams/) pages.
 - Operate the deployment: [operations/troubleshooting.md](operations/troubleshooting.md), [operations/incident-response.md](operations/incident-response.md).

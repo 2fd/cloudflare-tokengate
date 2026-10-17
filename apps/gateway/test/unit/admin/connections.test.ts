@@ -6,9 +6,9 @@ import {
   loadConnections,
   UNUSED_AFTER_MS,
 } from '../../../src/admin/connections';
-import { createGrant } from '../../../src/admin/ops/grants';
+import { createIssuerAccessRule } from '../../../src/admin/ops/issuer_access_rules';
 import { HOUR_MS } from '../../../src/db/rollups';
-import type { CallerProvider } from '../../../src/db/types';
+import type { CredentialAccessRule } from '../../../src/db/types';
 import type { Deps } from '../../../src/deps';
 import type { AppEnv } from '../../../src/env';
 import type { KeyringHealth } from '../../../src/health';
@@ -21,7 +21,7 @@ import {
   REPOSITORY_ID,
   resetControlPlane,
   seedGithubProvider,
-  seedGrant,
+  seedIssuerAccessRule,
   seedService,
 } from './ops/helpers';
 
@@ -30,7 +30,7 @@ const T0 = Date.UTC(2026, 9, 14, 12, 30);
 const CREATED = T0 - 40 * DAY_MS;
 
 let deps: Deps;
-let provider: CallerProvider;
+let provider: CredentialAccessRule;
 let github: string;
 let slack: string;
 
@@ -44,8 +44,8 @@ beforeEach(async () => {
     env.TELEMETRY_DB.prepare('DELETE FROM request_log'),
   ]);
   deps = opsDeps({ now: () => CREATED });
-  provider = await seedGithubProvider(deps);
   github = await seedService(deps, { secret: 'ghp_0123456789abcdef0123' });
+  provider = await seedGithubProvider(deps);
   slack = await seedService(deps, {
     slug: 'slack',
     name: 'Slack',
@@ -68,10 +68,10 @@ async function rollup(hour: number, grantId: string, requests: number, outcome =
 }
 
 describe('loadConnections', () => {
-  it('returns every consumer and token, the accesses with summaries, and claim labels', async () => {
-    const grant = await seedGrant(deps, provider.id, github, 'read');
+  it('returns every credential access rule and token, the accesses with summaries, and claim labels', async () => {
+    const grant = await seedIssuerAccessRule(deps, provider.id, github, 'read');
     await env.DB.prepare(
-      `INSERT INTO claim_labels (caller_provider_id, claim, value, label, updated_at)
+      `INSERT INTO claim_labels (credential_access_rule_id, claim, value, label, updated_at)
        VALUES (?, 'repository_id', ?, 'acme/api', 1)`,
     )
       .bind(provider.id, REPOSITORY_ID)
@@ -95,10 +95,10 @@ describe('loadConnections', () => {
   });
 
   it('filters the accesses by consumer and by token, never the axes', async () => {
-    await seedGrant(deps, provider.id, github, 'read');
-    const slackGrant = await seedGrant(deps, provider.id, slack, 'post');
+    await seedIssuerAccessRule(deps, provider.id, github, 'read');
+    const slackIssuerAccessRule = await seedIssuerAccessRule(deps, provider.id, slack, 'post');
     const byToken = await loadConnections(at(T0), { tokenId: slack });
-    expect(byToken.accesses.map((a) => a.grant.id)).toEqual([slackGrant.id]);
+    expect(byToken.accesses.map((a) => a.grant.id)).toEqual([slackIssuerAccessRule.id]);
     expect(byToken.tokens).toHaveLength(2);
     expect((await loadConnections(at(T0), { consumerId: 'cpr_none' })).accesses).toEqual([]);
     expect(
@@ -107,22 +107,24 @@ describe('loadConnections', () => {
   });
 
   it('marks accesses inactive for a disabled token or consumer or a missing credential', async () => {
-    await seedGrant(deps, provider.id, slack, 'post');
+    await seedIssuerAccessRule(deps, provider.id, slack, 'post');
     const noCredential = (await loadConnections(at(T0))).accesses[0];
     expect(noCredential).toMatchObject({
       status: 'inactive',
       statusDetail: 'token has no credential',
     });
-    await env.DB.prepare('UPDATE caller_providers SET enabled = 0').run();
-    expect((await loadConnections(at(T0))).accesses[0]?.statusDetail).toBe('consumer disabled');
-    await env.DB.prepare('UPDATE services SET enabled = 0').run();
-    expect((await loadConnections(at(T0))).accesses[0]?.statusDetail).toBe('token disabled');
-    await env.DB.prepare('UPDATE grants SET enabled = 0').run();
+    await env.DB.prepare('UPDATE credential_access_rules SET enabled = 0').run();
+    expect((await loadConnections(at(T0))).accesses[0]?.statusDetail).toBe(
+      'credential access rule disabled',
+    );
+    await env.DB.prepare('UPDATE credentials SET enabled = 0').run();
+    expect((await loadConnections(at(T0))).accesses[0]?.statusDetail).toBe('credential disabled');
+    await env.DB.prepare('UPDATE issuer_access_rules SET enabled = 0').run();
     expect((await loadConnections(at(T0))).accesses[0]?.status).toBe('disabled');
   });
 
   it('marks a credential sealed under a key the keyring lacks as unreadable', async () => {
-    await seedGrant(deps, provider.id, github, 'read');
+    await seedIssuerAccessRule(deps, provider.id, github, 'read');
     const other = await loadConnections(at(T0, { TOKENGATE_KEK: KEK_2 }));
     // The key id is still k1, so only the recorded key check value can tell the key was replaced.
     expect(other.unreadableTokenIds.has(github)).toBe(true);
@@ -134,8 +136,8 @@ describe('loadConnections', () => {
   });
 
   it('flags an expired credential as a warning, not as inactive', async () => {
-    await seedGrant(deps, provider.id, github, 'read');
-    await env.DB.prepare('UPDATE services SET credential_expires_at = ? WHERE id = ?')
+    await seedIssuerAccessRule(deps, provider.id, github, 'read');
+    await env.DB.prepare('UPDATE credentials SET credential_expires_at = ? WHERE id = ?')
       .bind(T0 - 1, github)
       .run();
     const [edge] = (await loadConnections(at(T0))).accesses;
@@ -144,16 +146,16 @@ describe('loadConnections', () => {
   });
 
   it('flags stored conditions with warnings as risk accepted', async () => {
-    const result = await createGrant(deps, ACTOR, {
+    const result = await createIssuerAccessRule(deps, ACTOR, {
       name: 'any branch',
-      caller_provider_id: provider.id,
+      credential_access_rule_id: provider.id,
       service_id: github,
       conditions: [...anchoredConditions(), { claim: 'ref', match: 'glob', values: ['*'] }],
       rules: [{ methods: ['GET'], path: '/repos/**' }],
       acknowledge_warnings: true,
     });
     expect(result.ok).toBe(true);
-    await seedGrant(deps, provider.id, github, 'plain');
+    await seedIssuerAccessRule(deps, provider.id, github, 'plain');
     // Both rows share created_at, so compare by name rather than by evaluation order.
     const flags = Object.fromEntries(
       (await loadConnections(at(T0))).accesses.map((a) => [
@@ -165,9 +167,13 @@ describe('loadConnections', () => {
   });
 
   it('takes the last use from rollups and the live hour, and calls old idle accesses unused', async () => {
-    const used = await seedGrant(deps, provider.id, github, 'used');
-    const idle = await seedGrant(deps, provider.id, github, 'idle');
-    const fresh = await seedGrant(opsDeps({ now: () => T0 - 2 * DAY_MS }), provider.id, github);
+    const used = await seedIssuerAccessRule(deps, provider.id, github, 'used');
+    const idle = await seedIssuerAccessRule(deps, provider.id, github, 'idle');
+    const fresh = await seedIssuerAccessRule(
+      opsDeps({ now: () => T0 - 2 * DAY_MS }),
+      provider.id,
+      github,
+    );
     const hour = hourStart(T0) - 5 * HOUR_MS;
     await rollup(hour, used.id, 3);
     await rollup(hour, idle.id, 4, 'denied');
@@ -186,7 +192,7 @@ describe('loadConnections', () => {
   });
 
   it('words unused for sampling and never says it when nothing is recorded', async () => {
-    const grant = await seedGrant(deps, provider.id, github, 'idle');
+    const grant = await seedIssuerAccessRule(deps, provider.id, github, 'idle');
     const flagsAt = async (rate: number) => {
       await env.DB.prepare(
         `INSERT INTO settings (key, value, updated_at) VALUES ('allowed_sample_rate', ?, 1)
@@ -203,7 +209,7 @@ describe('loadConnections', () => {
   });
 
   it('reports no usage, and nothing unused, when TELEMETRY_DB fails', async () => {
-    await seedGrant(deps, provider.id, github, 'idle');
+    await seedIssuerAccessRule(deps, provider.id, github, 'idle');
     const broken = at(T0);
     const failing = {
       batch: () => Promise.reject(new Error('down')),
@@ -230,7 +236,7 @@ describe('accessStatus', () => {
     expect(accessStatus(grant(true, now), null, null, none, now).status).toBe('expired');
     expect(accessStatus(grant(true, now + DAY_MS), { enabled: false }, token, none, now)).toEqual({
       status: 'inactive',
-      detail: 'consumer disabled',
+      detail: 'credential access rule disabled',
     });
     expect(accessStatus(grant(true, now + 2.5 * DAY_MS), consumer, token, none, now)).toEqual({
       status: 'expiring',
@@ -257,7 +263,7 @@ describe('credentialUnreadable', () => {
     malformedCount: 0,
   };
   const storedSealed = async () => {
-    const row = await env.DB.prepare('SELECT credential_sealed FROM services WHERE id = ?')
+    const row = await env.DB.prepare('SELECT credential_sealed FROM credentials WHERE id = ?')
       .bind(github)
       .first<{ credential_sealed: string }>();
     return { credential_sealed: row?.credential_sealed ?? '' };

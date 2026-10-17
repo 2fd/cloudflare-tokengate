@@ -33,11 +33,11 @@ describe('I-REDIR-1: redirects are returned, never followed, and rewritten or dr
   it('removes the path-injected secret from a rewritten Location', async () => {
     const fx = await setupProxy({
       service: {
-        baseUrl: 'https://hooks.upstream.test/services',
+        baseUrl: 'https://hooks.upstream.test/credentials',
         injection: { kind: 'path' },
         secret: 'T000/B000/XYZ123',
       },
-      upstream: redirect('https://hooks.upstream.test/services/T000/B000/XYZ123/next'),
+      upstream: redirect('https://hooks.upstream.test/credentials/T000/B000/XYZ123/next'),
     });
     const response = await fx.call('');
     expect(response.headers.get('location')).toBe('https://gw.test/proxy/echo/next');

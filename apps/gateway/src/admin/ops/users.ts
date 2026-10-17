@@ -60,7 +60,8 @@ export const SETTABLE_STATUSES: readonly SettableStatus[] = ['active', 'suspende
 
 export const EMAIL_MAX_LENGTH = 254;
 
-export const ROLE_MESSAGE = 'Choose one of: Viewer, Token manager, Access manager, Admin, Owner.';
+export const ROLE_MESSAGE =
+  'Choose one of: Viewer, Credential manager, Access manager, Admin, Owner.';
 export const LAST_OWNER_MESSAGE =
   'This change would leave no active owner. Make another user an owner first, then try again.';
 export const SELF_MESSAGE =
@@ -618,7 +619,7 @@ export const JOIN_POLICIES: readonly JoinPolicy[] = [
 export const JOIN_POLICY_LABELS: Readonly<Record<JoinPolicy, string>> = {
   pending: 'Ask an owner first',
   'active:viewer': 'Let them in as Viewer',
-  'active:token_manager': 'Let them in as Token manager',
+  'active:token_manager': 'Let them in as Credential manager',
   'active:access_manager': 'Let them in as Access manager',
   'active:admin': 'Let them in as Admin',
   closed: 'Only invited people',

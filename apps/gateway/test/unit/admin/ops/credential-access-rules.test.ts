@@ -2,17 +2,21 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   addTenantValue,
-  createCallerProvider,
+  createCredentialAccessRule,
   createOrMergeConsumer,
   defaultAudience,
-  deleteCallerProvider,
+  deleteCredentialAccessRule,
   deriveConsumerName,
   removeTenantValue,
-  setCallerProviderEnabled,
-  updateCallerProvider,
-} from '../../../../src/admin/ops/caller-providers';
-import { createGrant, setGrantEnabled } from '../../../../src/admin/ops/grants';
-import { getCallerProvider } from '../../../../src/db/caller-providers';
+  setCredentialAccessRuleEnabled,
+  updateCredentialAccessRule,
+} from '../../../../src/admin/ops/credential-access-rules';
+import {
+  createIssuerAccessRule,
+  setIssuerAccessRuleEnabled,
+} from '../../../../src/admin/ops/issuer_access_rules';
+import { getCredentialAccessRule } from '../../../../src/db/credential-access-rules';
+import { testCredentialId } from './helpers';
 import {
   ACTOR,
   auditCount,
@@ -24,7 +28,7 @@ import {
   opsDeps,
   resetControlPlane,
   seedGithubProvider,
-  seedGrant,
+  seedIssuerAccessRule,
   seedService,
 } from './helpers';
 
@@ -49,10 +53,11 @@ describe('defaultAudience', () => {
   });
 });
 
-describe('createCallerProvider', () => {
+describe('createCredentialAccessRule', () => {
   it('applies profile defaults, generates an audience and discovers the JWKS URI', async () => {
     const net = network();
-    const result = await createCallerProvider(opsDeps({ fetch: net.fetch }), ACTOR, {
+    const result = await createCredentialAccessRule(opsDeps({ fetch: net.fetch }), ACTOR, {
+      credential_id: await testCredentialId(opsDeps({ fetch: net.fetch })),
       name: ' GitHub Actions ',
       profile: 'github-actions',
       jwks_uri: 'https://attacker.example/jwks',
@@ -62,7 +67,7 @@ describe('createCallerProvider', () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.callerProvider).toMatchObject({
+    expect(result.credentialAccessRule).toMatchObject({
       name: 'GitHub Actions',
       profile: 'github-actions',
       issuer: GITHUB_ISSUER,
@@ -72,30 +77,32 @@ describe('createCallerProvider', () => {
       tenant_pin: [{ claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID] }],
       enabled: true,
     });
-    expect(result.callerProvider.audience).toMatch(/^tokengate:[a-z2-7]{26}$/);
+    expect(result.credentialAccessRule.audience).toMatch(/^tokengate:[a-z2-7]{26}$/);
     expect(net.calls.map((call) => call.url)).toEqual([
       `${GITHUB_ISSUER}/.well-known/openid-configuration`,
     ]);
-    const stored = await getCallerProvider(env.DB, result.callerProvider.id);
-    expect(stored).toEqual(result.callerProvider);
-    const [audit] = await auditRows(result.callerProvider.id);
-    expect(audit?.action).toBe('caller_provider.create');
+    const stored = await getCredentialAccessRule(env.DB, result.credentialAccessRule.id);
+    expect(stored).toEqual(result.credentialAccessRule);
+    const [audit] = await auditRows(result.credentialAccessRule.id);
+    expect(audit?.action).toBe('credential_access_rule.create');
   });
 
   it('requires a tenant pin on the shared GitHub issuer (I-TEN-1)', async () => {
-    const result = await createCallerProvider(opsDeps({ fetch: network().fetch }), ACTOR, {
+    const result = await createCredentialAccessRule(opsDeps({ fetch: network().fetch }), ACTOR, {
+      credential_id: await testCredentialId(opsDeps({ fetch: network().fetch })),
       name: 'GitHub',
       profile: 'github-actions',
     });
     expect(result).toMatchObject({ ok: false, reason: 'invalid' });
     if (result.ok) return;
     expect(result.errors.join()).toMatch(/tenant pin is required/);
-    expect(await auditCount()).toBe(0);
+    expect((await auditRows()).filter((row) => row.action !== 'service.create')).toHaveLength(0);
   });
 
   it('lets a generic provider name its JWKS URI without discovery', async () => {
     const net = network();
-    const result = await createCallerProvider(opsDeps({ fetch: net.fetch }), ACTOR, {
+    const result = await createCredentialAccessRule(opsDeps({ fetch: net.fetch }), ACTOR, {
+      credential_id: await testCredentialId(opsDeps({ fetch: net.fetch })),
       name: 'Acme',
       profile: 'generic',
       issuer: 'https://idp.other.example',
@@ -105,13 +112,14 @@ describe('createCallerProvider', () => {
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.callerProvider.jwks_uri).toBe('https://idp.other.example/jwks.json');
+    expect(result.credentialAccessRule.jwks_uri).toBe('https://idp.other.example/jwks.json');
     expect(result.warnings.join()).toMatch(/no tenant pin/);
     expect(net.calls).toHaveLength(0);
   });
 
   it('reports discovery failures', async () => {
-    const result = await createCallerProvider(opsDeps({ fetch: network().fetch }), ACTOR, {
+    const result = await createCredentialAccessRule(opsDeps({ fetch: network().fetch }), ACTOR, {
+      credential_id: await testCredentialId(opsDeps({ fetch: network().fetch })),
       name: 'Unknown',
       profile: 'generic',
       issuer: 'https://unknown.example',
@@ -122,30 +130,30 @@ describe('createCallerProvider', () => {
     expect(result.errors[0]).toMatch(/^JWKS discovery failed/);
   });
 
-  it('rejects unknown profiles and duplicate issuers', async () => {
+  it('rejects unknown profiles and allows independent rules for the same issuer', async () => {
     const deps = opsDeps({ fetch: network().fetch });
     expect(
-      await createCallerProvider(deps, ACTOR, { name: 'x', profile: 'constructor' }),
+      await createCredentialAccessRule(deps, ACTOR, {
+        credential_id: await testCredentialId(deps),
+        name: 'x',
+        profile: 'constructor',
+      }),
     ).toMatchObject({ ok: false, reason: 'invalid' });
     await seedGithubProvider(deps);
-    const duplicate = await createCallerProvider(deps, ACTOR, {
+    const duplicate = await createCredentialAccessRule(deps, ACTOR, {
+      credential_id: await testCredentialId(deps),
       name: 'GitHub again',
       profile: 'github-actions',
       tenant_pin: [{ claim: 'repository_owner_id', match: 'exact', values: ['1'] }],
     });
-    expect(duplicate).toMatchObject({
-      ok: false,
-      reason: 'conflict',
-      errors: [
-        'another caller provider already has this issuer; edit that caller provider instead',
-      ],
-    });
+    expect(duplicate).toMatchObject({ ok: true });
   });
 });
 
-describe('updateCallerProvider', () => {
+describe('updateCredentialAccessRule', () => {
   async function seedGeneric(deps: ReturnType<typeof opsDeps>) {
-    const result = await createCallerProvider(deps, ACTOR, {
+    const result = await createCredentialAccessRule(deps, ACTOR, {
+      credential_id: await testCredentialId(deps),
       name: 'Acme',
       profile: 'generic',
       issuer: ACME_ISSUER,
@@ -154,25 +162,27 @@ describe('updateCallerProvider', () => {
       tenant_pin: [{ claim: 'tenant', match: 'exact', values: ['acme'] }],
     });
     if (!result.ok) throw new Error(result.errors.join());
-    return result.callerProvider;
+    return result.credentialAccessRule;
   }
 
   it('keeps the profile immutable', async () => {
     const deps = opsDeps({ fetch: network().fetch });
     const provider = await seedGithubProvider(deps);
-    const result = await updateCallerProvider(deps, ACTOR, provider.id, { profile: 'generic' });
+    const result = await updateCredentialAccessRule(deps, ACTOR, provider.id, {
+      profile: 'generic',
+    });
     expect(result).toMatchObject({ ok: false, reason: 'invalid' });
   });
 
   it('audits only changed fields', async () => {
     const deps = opsDeps({ fetch: network().fetch });
     const provider = await seedGithubProvider(deps);
-    const result = await updateCallerProvider(deps, ACTOR, provider.id, {
+    const result = await updateCredentialAccessRule(deps, ACTOR, provider.id, {
       max_token_age_seconds: 300,
     });
     expect(result.ok).toBe(true);
     const audit = (await auditRows(provider.id)).at(-1);
-    expect(audit?.action).toBe('caller_provider.update');
+    expect(audit?.action).toBe('credential_access_rule.update');
     expect(audit?.diff).toMatchObject({
       before: { max_token_age_seconds: 600 },
       after: { max_token_age_seconds: 300 },
@@ -182,12 +192,12 @@ describe('updateCallerProvider', () => {
   it('refuses a save from a form opened at an older version', async () => {
     const deps = opsDeps({ fetch: network().fetch });
     const provider = await seedGithubProvider(deps);
-    const first = await updateCallerProvider(deps, ACTOR, provider.id, {
+    const first = await updateCredentialAccessRule(deps, ACTOR, provider.id, {
       max_token_age_seconds: 300,
       expected_updated_at: provider.updated_at,
     });
     expect(first.ok).toBe(true);
-    const stale = await updateCallerProvider(deps, ACTOR, provider.id, {
+    const stale = await updateCredentialAccessRule(deps, ACTOR, provider.id, {
       max_token_age_seconds: 120,
       expected_updated_at: provider.updated_at,
     });
@@ -199,13 +209,13 @@ describe('updateCallerProvider', () => {
     });
   });
 
-  it('requires confirmation to change the issuer under enabled grants', async () => {
+  it('requires confirmation to change the issuer under enabled issuer_access_rules', async () => {
     const deps = opsDeps({ fetch: network().fetch });
     const provider = await seedGeneric(deps);
     const serviceId = await seedService(deps);
-    const created = await createGrant(deps, ACTOR, {
+    const created = await createIssuerAccessRule(deps, ACTOR, {
       name: 'acme ci',
-      caller_provider_id: provider.id,
+      credential_access_rule_id: provider.id,
       service_id: serviceId,
       conditions: [{ claim: 'sub', match: 'exact', values: ['ci-bot'] }],
       rules: [{ methods: ['GET'], path: '/**' }],
@@ -213,20 +223,20 @@ describe('updateCallerProvider', () => {
     if (!created.ok) throw new Error(created.errors.join());
     const grant = created.grant;
 
-    const refused = await updateCallerProvider(deps, ACTOR, provider.id, {
+    const refused = await updateCredentialAccessRule(deps, ACTOR, provider.id, {
       issuer: 'https://idp2.acme.example',
     });
     expect(refused).toMatchObject({ ok: false, reason: 'confirmation_required' });
     if (refused.ok) return;
     expect(refused.errors.join()).toContain('"acme ci"');
-    expect((await getCallerProvider(env.DB, provider.id))?.issuer).toBe(ACME_ISSUER);
+    expect((await getCredentialAccessRule(env.DB, provider.id))?.issuer).toBe(ACME_ISSUER);
 
-    const confirmed = await updateCallerProvider(deps, ACTOR, provider.id, {
+    const confirmed = await updateCredentialAccessRule(deps, ACTOR, provider.id, {
       issuer: 'https://idp2.acme.example',
       confirm_trust_change: true,
     });
     expect(confirmed.ok).toBe(true);
-    expect(await getCallerProvider(env.DB, provider.id)).toMatchObject({
+    expect(await getCredentialAccessRule(env.DB, provider.id)).toMatchObject({
       issuer: 'https://idp2.acme.example',
       jwks_uri: 'https://idp2.acme.example/keys',
     });
@@ -234,9 +244,9 @@ describe('updateCallerProvider', () => {
       trust_change_confirmed: true,
     });
 
-    // Without enabled grants no confirmation is needed.
-    await setGrantEnabled(deps, ACTOR, grant.id, false);
-    const unconfirmed = await updateCallerProvider(deps, ACTOR, provider.id, {
+    // Without enabled issuer_access_rules no confirmation is needed.
+    await setIssuerAccessRuleEnabled(deps, ACTOR, grant.id, false);
+    const unconfirmed = await updateCredentialAccessRule(deps, ACTOR, provider.id, {
       issuer: ACME_ISSUER,
     });
     expect(unconfirmed.ok).toBe(true);
@@ -245,29 +255,29 @@ describe('updateCallerProvider', () => {
   it('enables and disables', async () => {
     const deps = opsDeps({ fetch: network().fetch });
     const provider = await seedGithubProvider(deps);
-    await setCallerProviderEnabled(deps, ACTOR, provider.id, false);
-    expect((await getCallerProvider(env.DB, provider.id))?.enabled).toBe(false);
-    expect((await auditRows(provider.id)).at(-1)?.action).toBe('caller_provider.disable');
+    await setCredentialAccessRuleEnabled(deps, ACTOR, provider.id, false);
+    expect((await getCredentialAccessRule(env.DB, provider.id))?.enabled).toBe(false);
+    expect((await auditRows(provider.id)).at(-1)?.action).toBe('credential_access_rule.disable');
   });
 });
 
-describe('deleteCallerProvider', () => {
-  it('refuses while grants reference it, then deletes', async () => {
+describe('deleteCredentialAccessRule', () => {
+  it('refuses while issuer_access_rules reference it, then deletes', async () => {
     const deps = opsDeps({ fetch: network().fetch });
     const provider = await seedGithubProvider(deps);
     const serviceId = await seedService(deps);
-    const grant = await seedGrant(deps, provider.id, serviceId);
-    expect(await deleteCallerProvider(deps, ACTOR, provider.id)).toMatchObject({
+    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId);
+    expect(await deleteCredentialAccessRule(deps, ACTOR, provider.id)).toMatchObject({
       ok: false,
       reason: 'conflict',
     });
-    await env.DB.prepare('DELETE FROM grants WHERE id = ?').bind(grant.id).run();
-    expect(await deleteCallerProvider(deps, ACTOR, provider.id)).toEqual({
+    await env.DB.prepare('DELETE FROM issuer_access_rules WHERE id = ?').bind(grant.id).run();
+    expect(await deleteCredentialAccessRule(deps, ACTOR, provider.id)).toEqual({
       ok: true,
       deletedAccesses: 0,
     });
-    expect(await getCallerProvider(env.DB, provider.id)).toBeNull();
-    expect((await auditRows(provider.id)).at(-1)?.action).toBe('caller_provider.delete');
+    expect(await getCredentialAccessRule(env.DB, provider.id)).toBeNull();
+    expect((await auditRows(provider.id)).at(-1)?.action).toBe('credential_access_rule.delete');
   });
 });
 
@@ -304,59 +314,52 @@ describe('createOrMergeConsumer, addTenantValue, removeTenantValue', () => {
   const labelsOf = async (id: string) =>
     (
       await env.DB.prepare(
-        'SELECT value, label FROM claim_labels WHERE caller_provider_id = ? ORDER BY value',
+        'SELECT value, label FROM claim_labels WHERE credential_access_rule_id = ? ORDER BY value',
       )
         .bind(id)
         .all()
     ).results;
 
-  it('creates a consumer with a unique derived name and its labels in one audit row', async () => {
+  it('creates a credential access rule with a unique derived name and its labels in one audit row', async () => {
     const deps = opsDeps({ fetch: network().fetch });
     const first = await createOrMergeConsumer(deps, ACTOR, {
+      credential_id: await testCredentialId(deps),
       profile: 'github-actions',
       issuer: '',
       tenants: [{ value: OWNER_ID, label: 'acme' }],
     });
     expect(first).toMatchObject({ ok: true, merged: false, changed: true });
     if (!first.ok) return;
-    expect(first.callerProvider.name).toBe('GitHub Actions (acme)');
-    expect(await labelsOf(first.callerProvider.id)).toEqual([{ value: OWNER_ID, label: 'acme' }]);
-    expect((await auditRows()).map((row) => row.action)).toEqual(['caller_provider.create']);
+    expect(first.credentialAccessRule.name).toBe('GitHub Actions (acme)');
+    expect(await labelsOf(first.credentialAccessRule.id)).toEqual([
+      { value: OWNER_ID, label: 'acme' },
+    ]);
+    expect(
+      (await auditRows()).filter((row) => row.action !== 'service.create').map((row) => row.action),
+    ).toEqual(['credential_access_rule.create']);
   });
 
-  it('merges a second add for the same issuer into the existing consumer', async () => {
+  it('creates independent boundaries for the same issuer without widening earlier rules', async () => {
     const deps = opsDeps({ fetch: network().fetch });
+    const credential_id = await testCredentialId(deps);
     const first = await createOrMergeConsumer(deps, ACTOR, {
+      credential_id,
       profile: 'github-actions',
       issuer: '',
       tenants: [{ value: OWNER_ID, label: 'acme' }],
     });
-    if (!first.ok) throw new Error('create failed');
-    const merged = await createOrMergeConsumer(deps, ACTOR, {
+    const second = await createOrMergeConsumer(deps, ACTOR, {
+      credential_id,
       profile: 'github-actions',
       issuer: '',
-      tenants: [
-        { value: OWNER_ID, label: 'acme' },
-        { value: '7654321', label: 'acme-labs' },
-      ],
+      tenants: [{ value: '7654321', label: 'other' }],
     });
-    expect(merged).toMatchObject({ ok: true, merged: true, changed: true });
-    const stored = await getCallerProvider(env.DB, first.callerProvider.id);
-    expect(stored?.name).toBe('GitHub Actions (acme, acme-labs)');
-    expect(stored?.tenant_pin).toEqual([
-      { claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID, '7654321'] },
-    ]);
-    expect((await auditRows()).map((row) => row.action)).toEqual([
-      'caller_provider.create',
-      'caller_provider.update',
-    ]);
-    const same = await createOrMergeConsumer(deps, ACTOR, {
-      profile: 'github-actions',
-      issuer: '',
-      tenants: [{ value: '7654321', label: 'acme-labs' }],
-    });
-    expect(same).toMatchObject({ ok: true, merged: true, changed: false });
-    expect(await auditRows()).toHaveLength(2);
+    expect(first.ok && second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+    expect(second.credentialAccessRule.id).not.toBe(first.credentialAccessRule.id);
+    expect(
+      (await getCredentialAccessRule(env.DB, first.credentialAccessRule.id))?.tenant_pin,
+    ).toEqual([{ claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID] }]);
   });
 
   it('keeps a typed name when the organizations change', async () => {
@@ -366,7 +369,7 @@ describe('createOrMergeConsumer, addTenantValue, removeTenantValue', () => {
       claim: 'repository_owner_id',
       entries: [{ value: '5', label: 'other' }],
     });
-    expect(added.ok && added.callerProvider.name).toBe('GitHub Actions');
+    expect(added.ok && added.credentialAccessRule.name).toBe('GitHub Actions');
   });
 
   it('refuses a non-numeric organization ID (UI rule on top of the validator)', async () => {
@@ -377,14 +380,15 @@ describe('createOrMergeConsumer, addTenantValue, removeTenantValue', () => {
       entries: [{ value: 'acme', label: 'acme' }],
     });
     expect(result).toMatchObject({ ok: false, reason: 'invalid' });
-    const created = await createCallerProvider(deps, ACTOR, {
+    const created = await createCredentialAccessRule(deps, ACTOR, {
+      credential_id: await testCredentialId(deps),
       profile: 'github-actions',
       tenant_pin: [{ claim: 'repository_owner_id', match: 'exact', values: ['acme'] }],
     });
     expect(created).toMatchObject({ ok: false, reason: 'invalid' });
   });
 
-  it('removes a value unless enabled accesses use it or it is the last organization', async () => {
+  it('can revoke an organization used by existing accesses but keeps a nonempty organization limit', async () => {
     const deps = opsDeps({ fetch: network().fetch });
     const provider = await seedGithubProvider(deps);
     await addTenantValue(deps, ACTOR, provider.id, {
@@ -392,19 +396,19 @@ describe('createOrMergeConsumer, addTenantValue, removeTenantValue', () => {
       entries: [{ value: '5', label: 'other' }],
     });
     const serviceId = await seedService(deps);
-    await seedGrant(deps, provider.id, serviceId);
+    await seedIssuerAccessRule(deps, provider.id, serviceId);
     expect(
       await removeTenantValue(deps, ACTOR, provider.id, {
         claim: 'repository_owner_id',
         value: OWNER_ID,
       }),
-    ).toMatchObject({ ok: false, reason: 'invalid' });
+    ).toMatchObject({ ok: true });
     expect(
       await removeTenantValue(deps, ACTOR, provider.id, {
         claim: 'repository_owner_id',
         value: '5',
       }),
-    ).toMatchObject({ ok: true });
+    ).toMatchObject({ ok: false });
     expect(
       await removeTenantValue(deps, ACTOR, provider.id, {
         claim: 'repository_owner_id',
@@ -417,7 +421,7 @@ describe('createOrMergeConsumer, addTenantValue, removeTenantValue', () => {
     const deps = opsDeps({ fetch: network().fetch });
     const provider = await seedGithubProvider(deps);
     // Stored before the UI kept one row per claim: effective organizations {2}.
-    await env.DB.prepare('UPDATE caller_providers SET tenant_pin = ? WHERE id = ?')
+    await env.DB.prepare('UPDATE credential_access_rules SET tenant_pin = ? WHERE id = ?')
       .bind(
         JSON.stringify([
           { claim: 'repository_owner_id', match: 'exact', values: ['1', '2'] },
@@ -438,30 +442,31 @@ describe('createOrMergeConsumer, addTenantValue, removeTenantValue', () => {
     });
     expect(added.ok).toBe(true);
     // Organizations 1 and 3 stay out: only the admitted value plus the added one.
-    expect((await getCallerProvider(env.DB, provider.id))?.tenant_pin).toEqual([
+    expect((await getCredentialAccessRule(env.DB, provider.id))?.tenant_pin).toEqual([
       { claim: 'repository_owner_id', match: 'exact', values: ['2', '4'] },
     ]);
   });
 
-  it('refuses a merge whose enterprise ID differs from the existing consumer', async () => {
+  it('keeps enterprise restrictions independent between boundaries with the same issuer', async () => {
     const deps = opsDeps({ fetch: network().fetch });
     const first = await createOrMergeConsumer(deps, ACTOR, {
+      credential_id: await testCredentialId(deps),
       profile: 'github-actions',
       issuer: '',
       tenants: [{ value: OWNER_ID, label: 'acme' }],
     });
     if (!first.ok) throw new Error('create failed');
     const merged = await createOrMergeConsumer(deps, ACTOR, {
+      credential_id: await testCredentialId(deps),
       profile: 'github-actions',
       issuer: '',
       tenants: [{ value: '7654321', label: 'acme-labs' }],
       enterprise_id: '12345',
     });
-    expect(merged).toMatchObject({ ok: false, reason: 'invalid' });
-    expect(!merged.ok && merged.errors[0]).toContain('without an enterprise ID');
-    expect((await getCallerProvider(env.DB, first.callerProvider.id))?.tenant_pin).toEqual([
-      { claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID] },
-    ]);
+    expect(merged).toMatchObject({ ok: true, merged: false });
+    expect(
+      (await getCredentialAccessRule(env.DB, first.credentialAccessRule.id))?.tenant_pin,
+    ).toEqual([{ claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID] }]);
   });
 
   it('takes the generic algorithms from discovery within ALLOWED_ALGS', async () => {
@@ -475,12 +480,13 @@ describe('createOrMergeConsumer, addTenantValue, removeTenantValue', () => {
         id_token_signing_alg_values_supported: ['HS256', 'ES384', 'none'],
       });
     };
-    const created = await createCallerProvider(opsDeps({ fetch: fetchImpl }), ACTOR, {
+    const created = await createCredentialAccessRule(opsDeps({ fetch: fetchImpl }), ACTOR, {
+      credential_id: await testCredentialId(opsDeps({ fetch: fetchImpl })),
       profile: 'generic',
       issuer: ACME_ISSUER,
       anchor_claims: ['sub'],
     });
-    expect(created.ok && created.callerProvider).toMatchObject({
+    expect(created.ok && created.credentialAccessRule).toMatchObject({
       allowed_algs: ['ES384'],
       jwks_uri: ACME_JWKS,
       name: 'idp.acme.example',
@@ -488,41 +494,47 @@ describe('createOrMergeConsumer, addTenantValue, removeTenantValue', () => {
   });
 });
 
-describe('deleteCallerProvider with its accesses', () => {
-  it('deletes the consumer, exactly the listed accesses and its labels in one audited batch', async () => {
+describe('deleteCredentialAccessRule with its accesses', () => {
+  it('deletes the credential access rule, exactly the listed accesses and its labels in one audited batch', async () => {
     const deps = opsDeps({ fetch: network().fetch });
     const provider = await seedGithubProvider(deps);
     const serviceId = await seedService(deps);
-    const a = await seedGrant(deps, provider.id, serviceId, 'a');
-    const b = await seedGrant(deps, provider.id, serviceId, 'b');
+    const a = await seedIssuerAccessRule(deps, provider.id, serviceId, 'a');
+    const b = await seedIssuerAccessRule(deps, provider.id, serviceId, 'b');
     await env.DB.prepare(
-      `INSERT INTO claim_labels (caller_provider_id, claim, value, label, updated_at) VALUES (?, 'repository_id', '1', 'acme/x', 1)`,
+      `INSERT INTO claim_labels (credential_access_rule_id, claim, value, label, updated_at) VALUES (?, 'repository_id', '1', 'acme/x', 1)`,
     )
       .bind(provider.id)
       .run();
     const before = await auditCount();
-    const stale = await deleteCallerProvider(deps, ACTOR, provider.id, {
+    const stale = await deleteCredentialAccessRule(deps, ACTOR, provider.id, {
       withAccesses: true,
       accessIds: [a.id],
     });
     expect(stale).toMatchObject({ ok: false, reason: 'conflict' });
     expect(await auditCount()).toBe(before);
-    const result = await deleteCallerProvider(deps, ACTOR, provider.id, {
+    const result = await deleteCredentialAccessRule(deps, ACTOR, provider.id, {
       withAccesses: true,
       accessIds: [b.id, a.id],
     });
     expect(result).toEqual({ ok: true, deletedAccesses: 2 });
-    expect(await getCallerProvider(env.DB, provider.id)).toBeNull();
-    const left = await env.DB.prepare('SELECT count(*) AS n FROM grants').first<{ n: number }>();
+    expect(await getCredentialAccessRule(env.DB, provider.id)).toBeNull();
+    const left = await env.DB.prepare('SELECT count(*) AS n FROM issuer_access_rules').first<{
+      n: number;
+    }>();
     expect(left?.n).toBe(0);
     const labelRows = await env.DB.prepare('SELECT count(*) AS n FROM claim_labels').first<{
       n: number;
     }>();
     expect(labelRows?.n).toBe(0);
     const rows = await auditRows(provider.id);
-    expect(rows.at(-1)?.action).toBe('caller_provider.delete');
+    expect(rows.at(-1)?.action).toBe('credential_access_rule.delete');
     expect(
-      ((rows.at(-1)?.diff?.before ?? { grants: [] }) as { grants: Array<{ id: string }> }).grants
+      (
+        (rows.at(-1)?.diff?.before ?? { issuer_access_rules: [] }) as {
+          issuer_access_rules: Array<{ id: string }>;
+        }
+      ).issuer_access_rules
         .map((g) => g.id)
         .sort(),
     ).toEqual([a.id, b.id].sort());

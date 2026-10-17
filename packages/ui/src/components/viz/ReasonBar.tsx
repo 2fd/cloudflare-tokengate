@@ -7,7 +7,7 @@ export type ReasonKind = 'bad' | 'denied' | 'error';
 
 export interface Reason {
   count: number;
-  /** The reason in words ("Unknown issuer: no service consumer trusts it"). */
+  /** The reason in words ("Unknown issuer: no credential access rule trusts it"). */
   label: Child;
   /** The reason in a few words, for the bar's accessible name ("unknown issuer"). */
   short: string;

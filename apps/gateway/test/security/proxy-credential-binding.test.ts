@@ -19,7 +19,7 @@ async function expectCredentialUnavailable(
 describe('I-CRED-2: the credential only opens for the service, base URL and injection it was sealed for', () => {
   it('a D1 edit of base_url to another valid host → 503 credential_unavailable, no fetch', async () => {
     const fx = await setupProxy();
-    await env.DB.prepare('UPDATE services SET base_url = ? WHERE id = ?')
+    await env.DB.prepare('UPDATE credentials SET base_url = ? WHERE id = ?')
       .bind('https://attacker.example/v1', fx.serviceId)
       .run();
     await expectCredentialUnavailable(fx, 'credential_binding_mismatch');
@@ -27,7 +27,7 @@ describe('I-CRED-2: the credential only opens for the service, base URL and inje
 
   it('a D1 edit of the injection (bearer → query) → 503 credential_unavailable, no fetch', async () => {
     const fx = await setupProxy();
-    await env.DB.prepare('UPDATE services SET injection = ? WHERE id = ?')
+    await env.DB.prepare('UPDATE credentials SET injection = ? WHERE id = ?')
       .bind(canonicalJson({ kind: 'query', param: 'leak' }), fx.serviceId)
       .run();
     await expectCredentialUnavailable(fx, 'credential_binding_mismatch');
@@ -37,7 +37,7 @@ describe('I-CRED-2: the credential only opens for the service, base URL and inje
     const fx = await setupProxy();
     const other = await fx.addService({ slug: 'other', secret: 'other-service-secret-value' });
     await env.DB.prepare(
-      'UPDATE services SET credential_sealed = (SELECT credential_sealed FROM services WHERE id = ?) WHERE id = ?',
+      'UPDATE credentials SET credential_sealed = (SELECT credential_sealed FROM credentials WHERE id = ?) WHERE id = ?',
     )
       .bind(other.id, fx.serviceId)
       .run();
@@ -46,7 +46,7 @@ describe('I-CRED-2: the credential only opens for the service, base URL and inje
 
   it('a tampered sealed value does not open', async () => {
     const fx = await setupProxy();
-    await env.DB.prepare('UPDATE services SET credential_sealed = ? WHERE id = ?')
+    await env.DB.prepare('UPDATE credentials SET credential_sealed = ? WHERE id = ?')
       .bind('{"v":1}', fx.serviceId)
       .run();
     await expectCredentialUnavailable(fx, 'sealed_malformed');
@@ -70,7 +70,7 @@ describe('I-CRED-2: the credential only opens for the service, base URL and inje
 
   it('an injection that fails validation is refused before decryption', async () => {
     const fx = await setupProxy();
-    await env.DB.prepare('UPDATE services SET injection = ? WHERE id = ?')
+    await env.DB.prepare('UPDATE credentials SET injection = ? WHERE id = ?')
       .bind('{"kind":"header","name":"host"}', fx.serviceId)
       .run();
     await expectCredentialUnavailable(fx, 'injection_invalid');

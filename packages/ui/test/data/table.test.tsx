@@ -3,7 +3,7 @@ import { Cell, CountLink, Entity, Result, Row, RowHeader, Table } from '../../sr
 import { render } from '../render';
 
 const columns = [
-  { label: 'Token' },
+  { label: 'Credential' },
   { label: 'Requests 24 h', num: true },
   { label: 'Actions', act: true },
 ];
@@ -14,7 +14,7 @@ describe('Table', () => {
     expect(html).toBe(
       '<div class="scroll" role="region" tabindex="0" aria-labelledby="tokens-h">' +
         '<table class="tbl"><thead><tr>' +
-        '<th scope="col">Token</th>' +
+        '<th scope="col">Credential</th>' +
         '<th scope="col" class="num">Requests 24 h</th>' +
         '<th scope="col" class="act"><span class="vh">Actions</span></th>' +
         '</tr></thead></table></div>',
@@ -31,12 +31,14 @@ describe('Table', () => {
 
   it('renders without the region, and without a tbody when there are no rows', () => {
     const html = render(
-      <Table scroll={false} caption="Tokens" columns={columns}>
+      <Table scroll={false} caption="Credentials" columns={columns}>
         {[]}
       </Table>,
     );
     // without the region the table names itself: the caption is required
-    expect(html.startsWith('<table class="tbl"><caption class="vh">Tokens</caption>')).toBe(true);
+    expect(html.startsWith('<table class="tbl"><caption class="vh">Credentials</caption>')).toBe(
+      true,
+    );
     expect(html).not.toContain('scroll');
     expect(html).not.toContain('<tbody>');
   });
@@ -122,11 +124,17 @@ describe('Row, RowHeader, Cell', () => {
 describe('Entity', () => {
   it('renders logo, name link and a mono meta line', () => {
     const html = render(
-      <Entity logo="slack" name="Slack" href="/admin/tokens/slack" meta="/proxy/slack" metaMono />,
+      <Entity
+        logo="slack"
+        name="Slack"
+        href="/admin/credentials/slack"
+        meta="/proxy/slack"
+        metaMono
+      />,
     );
     expect(html).toBe(
       '<span class="ent"><span class="logo lg-slack" aria-hidden="true">S</span>' +
-        '<span class="ent-t"><a class="ent-n" href="/admin/tokens/slack">Slack</a>' +
+        '<span class="ent-t"><a class="ent-n" href="/admin/credentials/slack">Slack</a>' +
         '<span class="meta mono">/proxy/slack</span></span></span>',
     );
   });

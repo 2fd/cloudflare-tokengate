@@ -1,4 +1,4 @@
-// "Which consumers can use which tokens" (A14.3): one column per token, one row group per
+// "Which credential access rules can use which tokens" (A14.3): one column per token, one row group per
 // consumer and one row per anchor (a repository, a workflow pin, a generic anchor value, or a
 // custom condition set). A cell lists the accesses of that consumer, anchor and token, each with
 // its status as words; an empty cell is a "+" that opens the access form prefilled. The ui Matrix
@@ -12,7 +12,7 @@ import {
   type MatrixRow as UiMatrixRow,
 } from '@tokengate/ui';
 import { labelFor } from '../../db/claim-labels';
-import type { CallerProvider, ClaimLabel, Service } from '../../db/types';
+import type { CredentialAccessRule, ClaimLabel, Service } from '../../db/types';
 import { getProfile } from '../../identity/profiles';
 import type { AccessEdge, Connections } from '../connections';
 import { paths } from '../paths';
@@ -45,7 +45,7 @@ export interface MatrixRow {
 }
 
 export interface MatrixGroup {
-  consumer: CallerProvider;
+  consumer: CredentialAccessRule;
   rows: MatrixRow[];
 }
 
@@ -135,7 +135,7 @@ export function buildMatrix(
   connections: Connections,
   tokenWeight?: (tokenId: string) => number,
 ): MatrixModel {
-  const accessCount = (key: 'caller_provider_id' | 'service_id', id: string) =>
+  const accessCount = (key: 'credential_access_rule_id' | 'service_id', id: string) =>
     connections.accesses.filter((edge) => edge.grant[key] === id).length;
   const weight = tokenWeight ?? ((id: string) => accessCount('service_id', id));
   const columns = [...connections.tokens].sort(
@@ -147,13 +147,15 @@ export function buildMatrix(
   const groups: MatrixGroup[] = [];
   let rowCount = 0;
   const consumers = busiestFirst(connections.consumers, (id) =>
-    accessCount('caller_provider_id', id),
+    accessCount('credential_access_rule_id', id),
   );
   for (const consumer of consumers) {
-    const labels = connections.labels.filter((label) => label.caller_provider_id === consumer.id);
+    const labels = connections.labels.filter(
+      (label) => label.credential_access_rule_id === consumer.id,
+    );
     const rows = new Map<string, MatrixRow>();
     for (const edge of connections.accesses) {
-      if (edge.grant.caller_provider_id !== consumer.id) continue;
+      if (edge.grant.credential_access_rule_id !== consumer.id) continue;
       for (const anchor of anchorsOf(edge, labels)) {
         const row = rows.get(anchor.key) ?? {
           ...anchor,
@@ -234,7 +236,7 @@ function cellOf(edge: AccessEdge, subject: string, now: number): MatrixCell {
   const tone = accessTone(lead.status);
   return {
     href: paths.accessItem(edge.grant.id),
-    srPrefix: `${subject} can use ${edge.token?.name ?? 'a deleted token'}:`,
+    srPrefix: `${subject} can use ${edge.token?.name ?? 'a deleted credential'}:`,
     tone,
     status: statusLabel(lead.status, lead.detail),
     // The legend's glyphs: an access that cannot work reads ⏸ like the dashed cell it sits in.
@@ -245,7 +247,7 @@ function cellOf(edge: AccessEdge, subject: string, now: number): MatrixCell {
 }
 
 /**
- * The access matrix (ui Matrix): tokens across, each consumer's repositories down, one cell per
+ * The access matrix (ui Matrix): tokens across, each credential access rule's repositories down, one cell per
  * access (overlapping accesses stack in one cell). Access managers get "+" in an empty cell, which
  * opens the form prefilled with the row's constraints and the column's token; others get "—".
  */
@@ -256,12 +258,12 @@ export function AccessMatrix(props: {
 }) {
   const { model, connections, ctx } = props;
   const canWrite = ctx.can('access:write');
-  const source = new Map<UiMatrixRow, { consumer: CallerProvider; row: MatrixRow | null }>();
+  const source = new Map<UiMatrixRow, { consumer: CredentialAccessRule; row: MatrixRow | null }>();
   const groups: UiMatrixGroup[] = model.groups.map((group) => {
     const { consumer } = group;
-    const labels = connections.labels.filter((l) => l.caller_provider_id === consumer.id);
+    const labels = connections.labels.filter((l) => l.credential_access_rule_id === consumer.id);
     const count = connections.accesses.filter(
-      (edge) => edge.grant.caller_provider_id === consumer.id,
+      (edge) => edge.grant.credential_access_rule_id === consumer.id,
     ).length;
     const rows: UiMatrixRow[] =
       group.rows.length === 0
@@ -303,8 +305,8 @@ export function AccessMatrix(props: {
   }));
   return (
     <Matrix
-      label="Which consumers can use which tokens"
-      caption="Which consumers can use which tokens"
+      label="Which credential access rules can use which tokens"
+      caption="Which credential access rules can use which tokens"
       corner="Consumer › repository"
       columns={columns}
       groups={groups}

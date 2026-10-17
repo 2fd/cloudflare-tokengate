@@ -34,7 +34,7 @@ export const typeCatalog: ComponentDoc = {
   },
   examples: [
     {
-      title: 'Token types',
+      title: 'Credential types',
       description:
         'Slack is open (from the URL). Open another card and Slack closes: every card shares the name. A generic type comes after an OR.',
       layout: 'stack',
@@ -94,7 +94,8 @@ export const typeCatalog: ComponentDoc = {
                   <b>The secret is sealed</b> and never shown again.
                 </li>
                 <li>
-                  <b>Loading a token gives nobody access.</b> Consumer access is given separately.
+                  <b>Loading a token gives nobody access.</b> Issuer access rules is given
+                  separately.
                 </li>
               </ol>
             </SubBox>
@@ -206,7 +207,7 @@ export const typeCatalog: ComponentDoc = {
   description="Ready-made types set the URL, how the secret is sent and the check for you.">
   <CatalogGroup>Chat</CatalogGroup>
   <TypeCard name="token-type" id="type-slack" logo="slack" title="Slack Web API"
-    description="slack.com/api · bot token xoxb-…" open action="/admin/tokens" layout="form-layout">
+    description="slack.com/api · bot token xoxb-…" open action="/admin/credentials" layout="form-layout">
     <input type="hidden" name="template" value="slack" />
     <div class="fields">
       <Field id="slack-cred" label="Bot token" hint="… Starts with xoxb-.">
@@ -261,9 +262,9 @@ export const typeCatalog: ComponentDoc = {
       ),
       code: `<TypeCatalog id="types" title="Which API does this token unlock?">
   <TypeCard name="token-type" id="type-slack" logo="slack" title="Slack Web API"
-    description="slack.com/api · bot token xoxb-…" action="/admin/tokens">…</TypeCard>
+    description="slack.com/api · bot token xoxb-…" action="/admin/credentials">…</TypeCard>
   <TypeCard name="token-type" id="type-anthropic" logo="anthropic" title="Anthropic API"
-    description="api.anthropic.com · API key sk-ant-…" action="/admin/tokens">…</TypeCard>
+    description="api.anthropic.com · API key sk-ant-…" action="/admin/credentials">…</TypeCard>
 </TypeCatalog>`,
     },
   ],

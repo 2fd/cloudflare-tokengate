@@ -104,7 +104,7 @@ describe('GET /admin/audit', () => {
     expect(html).toContain('&quot;warnings&quot;');
     expect(html).toContain('secret expires soon');
     // Deleted (unknown) entities are named as such, with a History link.
-    expect(html).toContain(`deleted token <code>${SVC_A}</code>`);
+    expect(html).toContain(`deleted credential <code>${SVC_A}</code>`);
     expect(html).toContain(`href="/admin/audit?target=${SVC_A}"`);
     // Redacted at write time; the page never sees the value.
     expect(html).not.toContain('sealed-bytes');
@@ -113,7 +113,7 @@ describe('GET /admin/audit', () => {
 
   it('links targets that exist to their page by name', async () => {
     await env.DB.prepare(
-      `INSERT INTO services (id, slug, name, base_url, injection, created_at, updated_at)
+      `INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
        VALUES (?, 'slack', 'Slack bot', 'https://slack.com/api', '{"kind":"bearer"}', 0, 0)`,
     )
       .bind(SVC_A)
@@ -130,7 +130,7 @@ describe('GET /admin/audit', () => {
     // Any active filter shows it, with every target in the "+ Target" menu, keeping the range.
     const html = await (await adminGet(app, session, '/admin/audit?range=24h')).text();
     expect(html).toContain('aria-label="Filter audit log"');
-    expect(html).toContain(`<a href="/admin/tokens/${SVC_A}">Slack bot</a>`);
+    expect(html).toContain(`<a href="/admin/credentials/${SVC_A}">Slack bot</a>`);
     expect(html).toContain(
       `<a href="/admin/audit?range=24h&amp;target=${SVC_A}">Slack bot <span class="slug">token</span></a>`,
     );
@@ -331,7 +331,7 @@ describe('GET /admin/audit filter handling', () => {
   it('gives a well-formed id of a deleted object its own chip label, and nothing else', async () => {
     const html = await (await adminGet(app, session, `/admin/audit?target=${SVC_B}`)).text();
     expect(html).toContain(
-      `<a class="achip" href="/admin/audit"><span class="vh">Remove filter </span>Target: Deleted token ${SVC_B}<span class="x" aria-hidden="true">✕</span></a>`,
+      `<a class="achip" href="/admin/audit"><span class="vh">Remove filter </span>Target: Deleted credential ${SVC_B}<span class="x" aria-hidden="true">✕</span></a>`,
     );
   });
 });
@@ -347,7 +347,7 @@ describe('AUDIT_CATEGORIES', () => {
   for (const [file, text] of Object.entries(sources)) {
     if (file.includes('/admin/views/') || file.endsWith('/routes/audit.tsx')) continue;
     for (const match of text.matchAll(
-      /\baction: (?:[a-z]+ \? )?'((?:service|grant|caller_provider|user|settings|keyring|credential|config)\.[a-z_.]+)'(?: : '([a-z_.]+)')?/g,
+      /\baction: (?:[a-z]+ \? )?'((?:service|grant|credential_access_rule|user|settings|keyring|credential|config)\.[a-z_.]+)'(?: : '([a-z_.]+)')?/g,
     )) {
       emitted.add(match[1] as string);
       if (match[2]) emitted.add(match[2]);

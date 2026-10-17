@@ -15,7 +15,7 @@ CREATE TABLE request_log (
   path TEXT NOT NULL,          -- canonical path relative to the service, without query
   service_slug TEXT,
   service_id TEXT,
-  caller_provider_id TEXT,
+  credential_access_rule_id TEXT,
   grant_id TEXT,
   claims_verified INTEGER NOT NULL, -- 0: caller fields are empty (I-LOG-2)
   caller_subject TEXT,
@@ -39,7 +39,7 @@ CREATE INDEX request_log_verified ON request_log (id) WHERE claims_verified = 1;
 -- write. Queries must repeat the WHERE term literally for SQLite to use it (src/db/requests.ts,
 -- src/db/rollups.ts denialGroupsStatement).
 CREATE INDEX request_log_problems ON request_log (id) WHERE outcome <> 'allowed' OR status >= 500;
--- "Requests through this consumer access" (Requests ?access=).
+-- "Requests through this issuer access rules" (Requests ?access=).
 CREATE INDEX request_log_grant ON request_log (grant_id, id);
 
 -- Hourly aggregates, recomputed by the cron from request_log. '' = unknown service/grant.

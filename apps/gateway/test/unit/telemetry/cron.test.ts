@@ -31,7 +31,7 @@ async function insertService(
 ): Promise<string> {
   const id = newId('svc', H, random);
   await env.DB.prepare(
-    `INSERT INTO services (id, slug, name, base_url, injection, credential_sealed, credential_expires_at, created_at, updated_at)
+    `INSERT INTO credentials (id, slug, name, base_url, injection, credential_sealed, credential_expires_at, created_at, updated_at)
      VALUES (?, ?, ?, 'https://api.example.com', '{"kind":"bearer"}', ?, ?, 0, 0)`,
   )
     .bind(id, slug, slug, sealed ? '{"v":1}' : null, expiresAt)
@@ -56,8 +56,8 @@ beforeEach(async () => {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM audit_log'),
     env.DB.prepare('DELETE FROM settings'),
-    env.DB.prepare('DELETE FROM grants'),
-    env.DB.prepare('DELETE FROM services'),
+    env.DB.prepare('DELETE FROM issuer_access_rules'),
+    env.DB.prepare('DELETE FROM credentials'),
   ]);
   await env.TELEMETRY_DB.batch([
     env.TELEMETRY_DB.prepare('DELETE FROM request_log'),
@@ -161,7 +161,7 @@ describe('sendCredentialExpiryNotices', () => {
     const id = await insertService('rotated', H + 10 * DAY);
     const deps = makeDeps(() => H);
     await sendCredentialExpiryNotices(deps);
-    await env.DB.prepare('UPDATE services SET credential_expires_at = ? WHERE id = ?')
+    await env.DB.prepare('UPDATE credentials SET credential_expires_at = ? WHERE id = ?')
       .bind(H - 1, id)
       .run();
     expect(await sendCredentialExpiryNotices(deps)).toBe(1);
@@ -172,12 +172,12 @@ describe('sendCredentialExpiryNotices', () => {
     expect(expired?.diff).toEqual({ threshold_days: 3, expires_at: H - 1 });
   });
 
-  it('drops dedupe state for services that left the window', async () => {
+  it('drops dedupe state for credentials that left the window', async () => {
     const id = await insertService('gone', H + 10 * DAY);
     const deps = makeDeps(() => H);
     await sendCredentialExpiryNotices(deps);
     expect(Object.keys((await getState(env.DB, 'credential_expiry_notices')) ?? {})).toEqual([id]);
-    await env.DB.prepare('DELETE FROM services WHERE id = ?').bind(id).run();
+    await env.DB.prepare('DELETE FROM credentials WHERE id = ?').bind(id).run();
     await sendCredentialExpiryNotices(deps);
     expect(await getState(env.DB, 'credential_expiry_notices')).toEqual({});
   });
@@ -232,7 +232,7 @@ describe('I-CRED-1: cron output never carries stored credential material', () =>
     const canary = 'CANARY_SEALED_Y3JvbnNlY3JldA';
     const id = newId('svc', H, random);
     await env.DB.prepare(
-      `INSERT INTO services (id, slug, name, base_url, injection, credential_sealed, credential_hint, credential_expires_at, created_at, updated_at)
+      `INSERT INTO credentials (id, slug, name, base_url, injection, credential_sealed, credential_hint, credential_expires_at, created_at, updated_at)
        VALUES (?, 'canary', 'canary', 'https://api.example.com', '{"kind":"bearer"}', ?, 'xoxb…', ?, 0, 0)`,
     )
       .bind(id, JSON.stringify({ v: 1, kid: 'k1', ct: canary }), H + DAY)

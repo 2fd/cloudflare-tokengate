@@ -12,17 +12,17 @@ type SqlGuard = { sql: string; binds: unknown[] };
 type Row = Record<string, unknown>;
 
 export async function getService(db: D1Database, id: string): Promise<Service | null> {
-  const row = await db.prepare('SELECT * FROM services WHERE id = ?').bind(id).first<Row>();
+  const row = await db.prepare('SELECT * FROM credentials WHERE id = ?').bind(id).first<Row>();
   return row ? serviceFromRow(row) : null;
 }
 
 export async function getServiceBySlug(db: D1Database, slug: string): Promise<Service | null> {
-  const row = await db.prepare('SELECT * FROM services WHERE slug = ?').bind(slug).first<Row>();
+  const row = await db.prepare('SELECT * FROM credentials WHERE slug = ?').bind(slug).first<Row>();
   return row ? serviceFromRow(row) : null;
 }
 
 export async function listServices(db: D1Database): Promise<Service[]> {
-  const { results } = await db.prepare('SELECT * FROM services ORDER BY slug').all<Row>();
+  const { results } = await db.prepare('SELECT * FROM credentials ORDER BY slug').all<Row>();
   return results.map(serviceFromRow);
 }
 
@@ -50,7 +50,7 @@ export interface NewServiceRow {
 export function insertServiceStatement(db: D1Database, row: NewServiceRow): D1PreparedStatement {
   return db
     .prepare(
-      `INSERT INTO services (id, slug, name, description, base_url, injection, forward_headers, timeout_ms,
+      `INSERT INTO credentials (id, slug, name, description, base_url, injection, forward_headers, timeout_ms,
          credential_sealed, credential_hint, credential_updated_at, credential_expires_at, verify,
          template_id, enabled, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -96,7 +96,7 @@ export function updateServiceFieldsStatement(
 ): D1PreparedStatement {
   return db
     .prepare(
-      `UPDATE services SET name = ?, description = ?, forward_headers = ?, timeout_ms = ?, verify = ?,
+      `UPDATE credentials SET name = ?, description = ?, forward_headers = ?, timeout_ms = ?, verify = ?,
          enabled = ?, credential_expires_at = ?, updated_at = MAX(?, updated_at + 1)
        WHERE id = ? AND (${guard.sql})`,
     )
@@ -124,7 +124,7 @@ export function setServiceEnabledStatement(
 ): D1PreparedStatement {
   return db
     .prepare(
-      `UPDATE services SET enabled = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ? AND (${guard.sql})`,
+      `UPDATE credentials SET enabled = ?, updated_at = MAX(?, updated_at + 1) WHERE id = ? AND (${guard.sql})`,
     )
     .bind(enabled ? 1 : 0, now, id, ...guard.binds);
 }
@@ -149,7 +149,7 @@ export function updateServiceCredentialStatement(
 ): D1PreparedStatement {
   return db
     .prepare(
-      `UPDATE services SET base_url = ?, injection = ?, credential_sealed = ?, credential_hint = ?,
+      `UPDATE credentials SET base_url = ?, injection = ?, credential_sealed = ?, credential_hint = ?,
          credential_updated_at = ?, credential_expires_at = ?, template_id = ?,
          updated_at = MAX(?, updated_at + 1)
        WHERE id = ? AND (${guard.sql})`,
@@ -176,7 +176,7 @@ export function rewrapCredentialStatement(
   oldSealed: string,
 ): D1PreparedStatement {
   return db
-    .prepare('UPDATE services SET credential_sealed = ? WHERE id = ? AND credential_sealed = ?')
+    .prepare('UPDATE credentials SET credential_sealed = ? WHERE id = ? AND credential_sealed = ?')
     .bind(newSealed, id, oldSealed);
 }
 
@@ -186,14 +186,14 @@ export function deleteServiceStatement(
   guard: SqlGuard,
 ): D1PreparedStatement {
   return db
-    .prepare(`DELETE FROM services WHERE id = ? AND (${guard.sql})`)
+    .prepare(`DELETE FROM credentials WHERE id = ? AND (${guard.sql})`)
     .bind(id, ...guard.binds);
 }
 
 /** The service row still has exactly this `updated_at` (optimistic concurrency). */
 export function serviceVersionGuard(service: Pick<Service, 'id' | 'updated_at'>): SqlGuard {
   return {
-    sql: 'EXISTS (SELECT 1 FROM services WHERE id = ? AND updated_at = ?)',
+    sql: 'EXISTS (SELECT 1 FROM credentials WHERE id = ? AND updated_at = ?)',
     binds: [service.id, service.updated_at],
   };
 }
@@ -203,15 +203,15 @@ export function serviceCredentialGuard(
   service: Pick<Service, 'id' | 'base_url' | 'injection_json' | 'credential_sealed'>,
 ): SqlGuard {
   return {
-    sql: 'EXISTS (SELECT 1 FROM services WHERE id = ? AND base_url = ? AND injection = ? AND credential_sealed IS ?)',
+    sql: 'EXISTS (SELECT 1 FROM credentials WHERE id = ? AND base_url = ? AND injection = ? AND credential_sealed IS ?)',
     binds: [service.id, service.base_url, service.injection_json, service.credential_sealed],
   };
 }
 
-/** The service exists and no grant references it (grants are deleted first). */
+/** The service exists and no grant references it (issuer_access_rules are deleted first). */
 export function serviceUnreferencedGuard(id: string): SqlGuard {
   return {
-    sql: 'EXISTS (SELECT 1 FROM services WHERE id = ?) AND NOT EXISTS (SELECT 1 FROM grants WHERE service_id = ?)',
+    sql: 'EXISTS (SELECT 1 FROM credentials WHERE id = ?) AND NOT EXISTS (SELECT 1 FROM issuer_access_rules WHERE service_id = ?)',
     binds: [id, id],
   };
 }
@@ -228,7 +228,7 @@ export interface SealedCredentialRow {
 export async function listSealedCredentials(db: D1Database): Promise<SealedCredentialRow[]> {
   const { results } = await db
     .prepare(
-      'SELECT id, slug, base_url, injection, credential_sealed FROM services WHERE credential_sealed IS NOT NULL ORDER BY slug',
+      'SELECT id, slug, base_url, injection, credential_sealed FROM credentials WHERE credential_sealed IS NOT NULL ORDER BY slug',
     )
     .all<{
       id: string;
@@ -261,7 +261,7 @@ export async function credentialCountsByKid(
                      THEN json_extract(credential_sealed, '$.kid') END
               END AS kid,
               count(*) AS count
-       FROM services WHERE credential_sealed IS NOT NULL GROUP BY 1 ORDER BY 1`,
+       FROM credentials WHERE credential_sealed IS NOT NULL GROUP BY 1 ORDER BY 1`,
     )
     .all<{ kid: string | null; count: number }>();
   return results.map((row) => ({ kid: row.kid, count: Number(row.count) }));
@@ -273,5 +273,5 @@ function verifyJson(verify: VerifyCheck | null): string | null {
 
 /** The service row exists. */
 export function serviceExistsGuard(id: string): SqlGuard {
-  return { sql: 'EXISTS (SELECT 1 FROM services WHERE id = ?)', binds: [id] };
+  return { sql: 'EXISTS (SELECT 1 FROM credentials WHERE id = ?)', binds: [id] };
 }

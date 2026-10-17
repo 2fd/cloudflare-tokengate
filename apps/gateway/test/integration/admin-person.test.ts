@@ -74,7 +74,7 @@ describe('GET /admin/users/:id', () => {
       T0 - 86_400_000,
     );
     const html = await page(`/admin/users/${person.id}`);
-    expect(html).toContain('<p class="relline">Tom can give any service consumer access');
+    expect(html).toContain('<p class="relline">Tom can give any credential access rule access');
     const form = html.slice(
       html.indexOf(`id="role-${person.id}"`),
       html.indexOf('</form>', html.indexOf(`id="role-${person.id}"`)),
@@ -83,7 +83,7 @@ describe('GET /admin/users/:id', () => {
     expect(form).toContain('<legend>Make Tom</legend>');
     expect(form).toContain('type="submit" name="role" value="token_manager"');
     expect(form).toContain(
-      '<span class="gain">+ service tokens</span> · <span class="lose">− consumer access</span>',
+      '<span class="gain">+ credentials</span> · <span class="lose">− issuer access rules</span>',
     );
     // Owner is a card that opens a dialog; the dialog posts the change on its own form.
     expect(form).toContain(`commandfor="dlg-owner-${person.id}"`);

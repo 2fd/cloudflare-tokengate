@@ -727,7 +727,7 @@ const ROLE_CHIPS: ReadonlyArray<{ role: Role; label: string }> = [
   { role: 'owner', label: 'Owners' },
   { role: 'admin', label: 'Admins' },
   { role: 'access_manager', label: 'Access managers' },
-  { role: 'token_manager', label: 'Token managers' },
+  { role: 'token_manager', label: 'Credential managers' },
   { role: 'viewer', label: 'Viewers' },
 ];
 
@@ -974,9 +974,9 @@ function relationSentence(user: UserListEntry, now: number): string {
   }
   const can: Record<Role, string> = {
     viewer: `${first} sees every page and changes nothing.`,
-    token_manager: `${first} can add, rotate, test, disable and delete every service token, and cannot give any consumer access to them.`,
-    access_manager: `${first} can give any service consumer access to every service token, and never sees a secret. They cannot add or replace tokens.`,
-    admin: `${first} can change service tokens and consumer access, and download the configuration export.`,
+    token_manager: `${first} can add, rotate, test, disable and delete every credential, and cannot give any issuer access rules to them.`,
+    access_manager: `${first} can give any credential access rule access to every credential, and never sees a secret. They cannot add or replace tokens.`,
+    admin: `${first} can change credentials and issuer access rules, and download the configuration export.`,
     owner: `${first} can change everything, including people, sign-in and settings.`,
   };
   return user.status === 'suspended'
@@ -987,7 +987,7 @@ function relationSentence(user: UserListEntry, now: number): string {
 /** The icon of an audit action's category, for a feed avatar. */
 function actionIcon(action: string): 'token' | 'consumer' | 'users' | 'system' {
   if (/^(service|credential|keyring)\./.test(action)) return 'token';
-  if (/^(caller_provider|grant)\./.test(action)) return 'consumer';
+  if (/^(credential_access_rule|grant)\./.test(action)) return 'consumer';
   if (action.startsWith('user.')) return 'users';
   return 'system';
 }

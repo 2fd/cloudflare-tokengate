@@ -148,7 +148,7 @@ export function registerOverviewRoutes(app: App): void {
       loadAuditPeople(deps.env.DB),
       loadDone(deps, { userId: c.get('viewer').user.id }, c.req.query('done')),
     ]);
-    // `?focus=` is a consumer id of the map; anything else is ignored, never echoed.
+    // `?focus=` is a credential access rule id of the map; anything else is ignored, never echoed.
     const rawFocus = c.req.query('focus');
     const focus = connections.consumers.some((consumer) => consumer.id === rawFocus)
       ? rawFocus
@@ -156,7 +156,7 @@ export function registerOverviewRoutes(app: App): void {
     const steps = setupSteps(connections, overview.alertData, verifiedCall);
     const doneCount = Object.values(steps).filter(Boolean).length;
     // Fresh: nothing set up and nothing to show. Refused calls on a new install are worth showing
-    // (Top denied offers "Add consumer"), so any traffic or denial means the setup layout.
+    // (Top denied offers "Add credential access rule"), so any traffic or denial means the setup layout.
     const fresh =
       doneCount === 0 &&
       overview.telemetryAvailable &&
@@ -485,7 +485,7 @@ function TrafficTray(props: { data: OverviewData }) {
       <Tray id="traffic" title={`Requests per ${CHART[range].unit}`}>
         <Panel variant="pad">
           <ZeroState>
-            No requests in the selected range. Requests appear once a consumer calls{' '}
+            No requests in the selected range. Requests appear once a credential access rule calls{' '}
             <code>/proxy/&lt;token slug&gt;/…</code>.
           </ZeroState>
         </Panel>
@@ -601,7 +601,7 @@ function FreshOverview(props: PageData) {
               logo="github"
               title={
                 <>
-                  Service consumer <Badge>Step 2</Badge>
+                  Credential access rule <Badge>Step 2</Badge>
                 </>
               }
               meta="for example GitHub Actions"
@@ -610,14 +610,14 @@ function FreshOverview(props: PageData) {
             <SummaryRow
               icon="gate"
               title="tokengate"
-              meta="Checks every call against a consumer access (step 3)"
+              meta="Checks every call against an issuer access rule (step 3)"
             />
             <SummaryWire />
             <SummaryRow
               logo="slack"
               title={
                 <>
-                  Service token <Badge>Step 1</Badge>
+                  Credential <Badge>Step 1</Badge>
                 </>
               }
               meta="for example Slack or OpenAI. The upstream secret stays here."
@@ -626,7 +626,7 @@ function FreshOverview(props: PageData) {
           <Tray id="traffic" title="Traffic">
             <Panel variant="pad">
               <p class="muted">
-                No requests yet. They appear here once a consumer calls{' '}
+                No requests yet. They appear here once a credential access rule calls{' '}
                 <code>/proxy/&lt;token slug&gt;/…</code>.
               </p>
               <Chips label="Where calls went, all zero">
@@ -701,7 +701,7 @@ function setupSteps(
   verifiedCall: boolean,
 ): SetupSteps {
   return {
-    token: alertData.services.some((s) => s.has_credential),
+    token: alertData.credentials.some((s) => s.has_credential),
     consumer: connections.consumers.length > 0,
     access: connections.accesses.some((edge) => edge.grant.enabled),
     call: verifiedCall,
@@ -725,7 +725,7 @@ function GetStarted(props: {
     {
       done: steps.token,
       usable: ctx.can('tokens:write'),
-      title: 'Add a service token',
+      title: 'Add a credential',
       why: 'Load one upstream API key, for example a Slack bot token or an OpenAI key. You paste it once; nobody can read it again.',
       ...(ctx.can('tokens:write')
         ? {
@@ -736,19 +736,19 @@ function GetStarted(props: {
                   <span class="plus" aria-hidden="true">
                     +
                   </span>
-                  Add a service token
+                  Add a credential
                 </>
               ),
             },
           }
         : {
-            ask: <AskSomeone permission="tokens:write" ctx={ctx} verb="add a service token" />,
+            ask: <AskSomeone permission="tokens:write" ctx={ctx} verb="add a credential" />,
           }),
     },
     {
       done: steps.consumer,
       usable: ctx.can('access:write'),
-      title: 'Add a service consumer',
+      title: 'Add a credential access rule',
       why: (
         <>
           Trust the CI system that will call, for example GitHub Actions for your organization.{' '}
@@ -762,22 +762,26 @@ function GetStarted(props: {
                 connections.tokens.length > 0
                   ? paths.accessNew({ consumer: 'new' })
                   : paths.consumerNew({ type: 'github-actions' }),
-              label: 'Add a service consumer',
+              label: 'Add a credential access rule',
             },
           }
         : {
-            ask: <AskSomeone permission="access:write" ctx={ctx} verb="add a service consumer" />,
+            ask: (
+              <AskSomeone permission="access:write" ctx={ctx} verb="add a credential access rule" />
+            ),
           }),
     },
     {
       done: steps.access,
       usable: ctx.can('access:write'),
-      title: 'Give a consumer access',
+      title: 'Add issuer access rule',
       why: 'Say which repository and environment may use which token, and for which operations. Best after steps 1 and 2.',
       ...(ctx.can('access:write')
         ? { action: { href: paths.accessNew(), label: 'Give access' } }
         : {
-            ask: <AskSomeone permission="access:write" ctx={ctx} verb="give a consumer access" />,
+            ask: (
+              <AskSomeone permission="access:write" ctx={ctx} verb="give an issuer access rule" />
+            ),
           }),
     },
     {
@@ -1102,10 +1106,10 @@ function TokensInUse(props: PageData) {
   const traffic = new Map(data.tokens.map((t) => [t.serviceId, t]));
   const currentHour = hourStart(data.generatedAt);
   const consumers: MapConsumer[] = connections.consumers.map((consumer) => {
-    const grants = connections.accesses.filter(
-      (edge) => edge.grant.caller_provider_id === consumer.id,
+    const issuer_access_rules = connections.accesses.filter(
+      (edge) => edge.grant.credential_access_rule_id === consumer.id,
     );
-    const requests = grants.reduce(
+    const requests = issuer_access_rules.reduce(
       (sum, edge) => sum + (data.accessRequests.get(edge.grant.id) ?? 0),
       0,
     );
@@ -1117,7 +1121,7 @@ function TokensInUse(props: PageData) {
         ? (PROFILES[consumer.profile]?.label ?? consumer.profile)
         : `${PROFILES[consumer.profile]?.label ?? consumer.profile} · Disabled`,
       idle: !consumer.enabled || requests === 0,
-      weight: grants.length,
+      weight: issuer_access_rules.length,
     };
   });
   const rows = connections.tokens.map((token) => {
@@ -1144,7 +1148,8 @@ function TokensInUse(props: PageData) {
           : max,
       null,
     );
-    const consumerCount = new Set(accesses.map((edge) => edge.grant.caller_provider_id)).size;
+    const consumerCount = new Set(accesses.map((edge) => edge.grant.credential_access_rule_id))
+      .size;
     const tone = uiTone(STATUS[row.status].tone);
     const idle = idleRows.includes(row);
     return {
@@ -1188,11 +1193,11 @@ function TokensInUse(props: PageData) {
   const accesses: MapAccess[] = connections.accesses.map((edge) => {
     const flag = edge.flags[0];
     return {
-      consumer: edge.grant.caller_provider_id,
+      consumer: edge.grant.credential_access_rule_id,
       token: edge.grant.service_id,
       tone: accessTone(edge),
       status: `${statusLabel(edge.status, edge.statusDetail)}${flag ? `, ${statusLabel(flag.status, flag.detail)}` : ''}`,
-      consumerLabel: `${edge.consumer?.name ?? 'Deleted consumer'} › ${edge.subject}`,
+      consumerLabel: `${edge.consumer?.name ?? 'Deleted credential access rule'} › ${edge.subject}`,
       context: edge.context,
       operation: edge.operations.join(', ') || undefined,
       href: paths.accessItem(edge.grant.id),
@@ -1216,12 +1221,13 @@ function TokensInUse(props: PageData) {
       </>,
     );
   }
-  if (deleted > 0) footer.push(<>Traffic of deleted tokens: {formatCount(deleted)} requests</>);
+  if (deleted > 0)
+    footer.push(<>Traffic of deleted credentials: {formatCount(deleted)} requests</>);
   if (ctx.can('access:write')) {
     for (const row of lonely) {
       footer.push(
         <a href={paths.accessNew({ token: row.token.id })}>
-          Give a consumer access<span class="vh"> to {row.token.name}</span>
+          Add issuer access rule<span class="vh"> to {row.token.name}</span>
         </a>,
       );
     }
@@ -1230,11 +1236,11 @@ function TokensInUse(props: PageData) {
     <Tray
       id="tokens"
       title="Tokens in use"
-      description={`Who calls which token through tokengate, with the traffic in the last ${RANGE_LABEL[range]}. Each line is a consumer access.`}
+      description={`Who calls which token through tokengate, with the traffic in the last ${RANGE_LABEL[range]}. Each line is an issuer access rule.`}
       actions={
         <>
           <LinkAction href={paths.access()} arrow>
-            Open consumer access ({formatCount(connections.accesses.length)})
+            Open issuer access rules ({formatCount(connections.accesses.length)})
           </LinkAction>
           <Segmented
             label="View"
@@ -1254,16 +1260,16 @@ function TokensInUse(props: PageData) {
       {tokens.length === 0 ? (
         <Panel>
           <EmptyState
-            title="No service tokens yet"
+            title="No credentials yet"
             icon="token"
-            description="A service token holds one upstream API key. Consumers get access to it."
+            description="A credential holds one upstream API key. Consumers get access to it."
             actions={
               ctx.can('tokens:write') ? (
                 <Button variant="primary" plus href={paths.tokenNew()}>
-                  Add token
+                  Add credential
                 </Button>
               ) : (
-                <AskSomeone permission="tokens:write" ctx={ctx} verb="add a service token" />
+                <AskSomeone permission="tokens:write" ctx={ctx} verb="add a credential" />
               )
             }
           />

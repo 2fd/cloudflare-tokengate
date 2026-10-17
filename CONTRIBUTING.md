@@ -217,8 +217,8 @@ A Profile is code-reviewed knowledge about one issuer type. Open an issue first.
 2. Create `apps/gateway/src/identity/profiles/<id>.ts` that implements `IssuerProfile`: `id`, `label`, `defaults`, `eventClaim`, `trustedEvents`, `tenantClaims`, `sharedIssuers`, `anchorRules`, `verifyRequiredClaims`, `logClaimAllowlist`, `display`. Cite the platform's claim documentation in comments.
 3. Register it in `PROFILES` in `apps/gateway/src/identity/profiles/index.ts`.
 4. Run `pnpm typecheck`. It lists every `Record<ProfileId, …>` table to fill, for example in `apps/gateway/src/admin/routes/consumers.tsx`.
-5. Update the profile-specific code that the type checker does not flag: `CI_ISSUER_HOSTS` and `grantWarnings` in `apps/gateway/src/policy/validate.ts`, the error text in `apps/gateway/src/admin/ops/caller-providers.ts`, `PROFILE_ORDER` in `apps/gateway/src/admin/routes/consumers.tsx`, and `PREFILL_EXTRA_CLAIMS` in `apps/gateway/src/admin/routes/access.tsx`.
-6. The `caller_providers.profile` column has a `CHECK` constraint with the allowed IDs (`apps/gateway/migrations/0001_initial.sql`). SQLite cannot change a `CHECK` constraint in place, so this needs a migration that rebuilds the table. That is not additive (see [Migrations](#migrations)): agree on the approach in the issue and write an ADR.
+5. Update the profile-specific code that the type checker does not flag: `CI_ISSUER_HOSTS` and `grantWarnings` in `apps/gateway/src/policy/validate.ts`, the error text in `apps/gateway/src/admin/ops/credential-access-rules.ts`, `PROFILE_ORDER` in `apps/gateway/src/admin/routes/consumers.tsx`, and `PREFILL_EXTRA_CLAIMS` in `apps/gateway/src/admin/routes/access.tsx`.
+6. The `credential_access_rules.profile` column has a `CHECK` constraint with the allowed IDs (`apps/gateway/migrations/0001_initial.sql`). SQLite cannot change a `CHECK` constraint in place, so this needs a migration that rebuilds the table. That is not additive (see [Migrations](#migrations)): agree on the approach in the issue and write an ADR.
 7. Add tests in `apps/gateway/test/unit/identity/profiles.test.ts` and security tests for the tenant pin and anchor claims.
 8. Add `docs/callers/<platform>.md`, and update [docs/policies.md](docs/policies.md) and the profile entry in [docs/concepts.md](docs/concepts.md#profile).
 
@@ -234,7 +234,7 @@ A Profile is code-reviewed knowledge about one issuer type. Open an issue first.
 
 ### A Service template
 
-1. Add an entry to `SERVICE_TEMPLATES` in `apps/gateway/src/admin/service-templates.ts`. Keep its `operation_presets` narrow: each is a named set of rules that consumer access offers as a checkbox, and `{repo}` in a path stands for the repository.
+1. Add an entry to `SERVICE_TEMPLATES` in `apps/gateway/src/admin/service-templates.ts`. Keep its `operation_presets` narrow: each is a named set of rules that issuer access rules offers as a checkbox, and `{repo}` in a path stands for the repository.
 2. Add the template ID to the pinned list in `apps/gateway/test/unit/admin/ops/service-templates.test.ts`. The same file checks every template against the validation the form uses.
 3. Add or update a page under `docs/upstreams/` with SDK base-URL snippets.
 

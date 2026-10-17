@@ -38,15 +38,15 @@ describe('GET /admin on a fresh deployment', () => {
     const html = await res.text();
     expect(html).toContain('<title>Overview (last 24 hours) – Monitoring – tokengate</title>');
     expect(stepLinks(html)).toEqual([
-      '/admin/tokens/new',
-      '/admin/consumers/new?type=github-actions',
-      '/admin/access/new',
+      '/admin/credentials/new',
+      '/admin/credential-access-rules/new?type=github-actions',
+      '/admin/issuer-access-rules/new',
       'https://github.com/2fd/cloudflare-tokengate/blob/main/docs/callers/github-actions.md',
     ]);
     expect(html).toContain('Steps 1 and 2 can be done in any order, and by different people.');
     // Get started is the content: one primary, on step 1, and no empty charts or tables.
     expect(html.match(/class="btn primary"/g) ?? []).toHaveLength(1);
-    expect(html).toContain('<a class="btn primary" href="/admin/tokens/new">');
+    expect(html).toContain('<a class="btn primary" href="/admin/credentials/new">');
     expect(html).toContain('0 of 4 done');
     expect(html).toContain('<section class="tray" id="plan" aria-labelledby="plan-h">');
     expect(html).toContain('No requests yet.');
@@ -57,24 +57,24 @@ describe('GET /admin on a fresh deployment', () => {
     expect(html).not.toContain('<svg class="chart"');
   });
 
-  it('adds the consumer inside the access form once a token exists', async () => {
+  it('adds the credential access rule inside the access form once a token exists', async () => {
     const a = app();
     await env.DB.prepare(
-      `INSERT INTO services (id, slug, name, base_url, injection, created_at, updated_at)
+      `INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
        VALUES ('svc_01JAAAAAAAAAAAAAAAAAAAAAAA', 'slack', 'Slack', 'https://slack.com/api', '{"kind":"bearer"}', 0, 0)`,
     ).run();
     const html = await (await adminGet(a, await loginAs(a, owner), '/admin')).text();
-    expect(stepLinks(html)[1]).toBe('/admin/access/new?consumer=new');
+    expect(stepLinks(html)[1]).toBe('/admin/issuer-access-rules/new?consumer=new');
   });
 
   it('tells viewers whom to ask instead of linking to forms they cannot use', async () => {
     const a = app();
     const html = await (await adminGet(a, await loginAs(a, viewer), '/admin')).text();
-    expect(html).toContain('Only token managers can add a service token. Ask ');
-    expect(html).toContain('Only access managers can add a service consumer. Ask ');
+    expect(html).toContain('Only credential managers can add a credential. Ask ');
+    expect(html).toContain('Only access managers can add a credential access rule. Ask ');
     expect(html).toContain('href="mailto:owner@example.com');
-    expect(html).not.toContain('href="/admin/tokens/new"');
-    expect(html).not.toContain('href="/admin/access/new');
+    expect(html).not.toContain('href="/admin/credentials/new"');
+    expect(html).not.toContain('href="/admin/issuer-access-rules/new');
   });
 
   it('renders the alerts after Get started, never as role=alert', async () => {
@@ -141,11 +141,11 @@ describe('GET /admin with traffic', () => {
       '<a href="/admin/requests?range=24h&amp;outcome=denied"><span class="tl">Denied</span><b>1</b>',
     );
     expect(html).toContain('role="img"');
-    // The map: the token node opens its consumer accesses, the counts the request list.
-    expect(html).toContain(`href="/admin/access?token=${fixture.serviceId}"`);
+    // The map: the token node opens its issuer access rules, the counts the request list.
+    expect(html).toContain(`href="/admin/issuer-access-rules?token=${fixture.serviceId}"`);
     expect(html).toContain(`href="/admin/requests?token=${fixture.serviceId}&amp;range=24h"`);
-    expect(html).toContain(`href="/admin/access/${fixture.grantId}"`);
-    expect(html).toContain('href="/admin/access"');
+    expect(html).toContain(`href="/admin/issuer-access-rules/${fixture.grantId}"`);
+    expect(html).toContain('href="/admin/issuer-access-rules"');
   });
 
   it('lists top denials with a link to the latest record, and Create access only for access:write', async () => {
@@ -155,7 +155,7 @@ describe('GET /admin with traffic', () => {
     const denial = (await fixture.records()).find((r) => r.reason === 'no_matching_grant');
     expect(denial).toBeDefined();
     const a = fixture.app;
-    const create = `href="/admin/access/new?from_request=${denial?.id}"`;
+    const create = `href="/admin/issuer-access-rules/new?from_request=${denial?.id}"`;
     for (const role of ['owner', 'admin', 'access_manager'] as const) {
       const user =
         role === 'owner' ? owner : await createUser({ email: `${role}@example.com`, role });
@@ -163,7 +163,7 @@ describe('GET /admin with traffic', () => {
       expect(html, role).toContain('Top denied callers since');
       expect(html, role).toContain(`href="/admin/requests/${denial?.id}"`);
       expect(html, role).toContain(create);
-      expect(html, role).toContain('No consumer access allows this call');
+      expect(html, role).toContain('No issuer access rules allows this call');
     }
     for (const role of ['viewer', 'token_manager'] as const) {
       const user =
@@ -184,7 +184,7 @@ describe('GET /admin with traffic', () => {
     const a = fixture.app;
     const before = await (await adminGet(a, await loginAs(a, viewer), '/admin')).text();
     expect(before).toContain('id="get-started"');
-    expect(before).toContain(`href="/admin/access/${fixture.grantId}#use"`);
+    expect(before).toContain(`href="/admin/issuer-access-rules/${fixture.grantId}#use"`);
 
     expect((await fixture.call('/x')).status).toBe(200);
     await fixture.app.settle();
@@ -228,7 +228,7 @@ describe('GET /admin with traffic', () => {
 
   it('escapes token names (XSS)', async () => {
     const fixture = await setupProxy();
-    await env.DB.prepare('UPDATE services SET name = ? WHERE id = ?')
+    await env.DB.prepare('UPDATE credentials SET name = ? WHERE id = ?')
       .bind('<script>alert(1)</script>', fixture.serviceId)
       .run();
     expect((await fixture.call('/x')).status).toBe(200);

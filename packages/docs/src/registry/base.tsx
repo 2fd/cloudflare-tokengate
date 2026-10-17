@@ -87,7 +87,7 @@ export const base: readonly ComponentDoc[] = [
         render: () => (
           <>
             <Button variant="primary" plus>
-              Add token
+              Add credential
             </Button>
             <Button>Replace secret</Button>
             <Button variant="ghost">+ Add another repository</Button>
@@ -95,7 +95,7 @@ export const base: readonly ComponentDoc[] = [
             <Button variant="danger-solid">Delete Slack</Button>
           </>
         ),
-        code: `<Button variant="primary" plus>Add token</Button>
+        code: `<Button variant="primary" plus>Add credential</Button>
 <Button>Replace secret</Button>
 <Button variant="ghost">+ Add another repository</Button>
 <Button variant="danger">Delete Slack…</Button>
@@ -137,16 +137,16 @@ export const base: readonly ComponentDoc[] = [
           <>
             <Button icon="search">Find a request</Button>
             <Button variant="primary" icon="token">
-              Add token
+              Add credential
             </Button>
             <Button size="sm" icon="arrow-right">
-              Open consumer access
+              Open issuer access rules
             </Button>
           </>
         ),
         code: `<Button icon="search">Find a request</Button>
-<Button variant="primary" icon="token">Add token</Button>
-<Button size="sm" icon="arrow-right">Open consumer access</Button>`,
+<Button variant="primary" icon="token">Add credential</Button>
+<Button size="sm" icon="arrow-right">Open issuer access rules</Button>`,
       },
       {
         title: 'Disabled',
@@ -181,16 +181,16 @@ export const base: readonly ComponentDoc[] = [
                 Viewer
               </Button>
               <Button type="submit" size="sm" name="role" value="manager">
-                Token manager
+                Credential manager
               </Button>
             </form>
           </ButtonRow>
         ),
         code: `<ButtonRow>
-  <Button href="/admin/access/new?token=slack" variant="primary" plus>Give access</Button>
+  <Button href="/admin/issuer-access-rules/new?token=slack" variant="primary" plus>Give access</Button>
   <form method="post" action="/admin/users/sam/approve">
     <Button type="submit" size="sm" name="role" value="viewer">Viewer</Button>
-    <Button type="submit" size="sm" name="role" value="manager">Token manager</Button>
+    <Button type="submit" size="sm" name="role" value="manager">Credential manager</Button>
   </form>
 </ButtonRow>`,
       },
@@ -217,7 +217,7 @@ export const base: readonly ComponentDoc[] = [
             </ButtonRow>
           </form>
         ),
-        code: `<form method="post" action="/admin/access/new">
+        code: `<form method="post" action="/admin/issuer-access-rules/new">
   <ButtonRow>
     <Button type="submit" variant="primary">Give access</Button>
     <Button type="submit" variant="ghost" name="_action" value="add:cond" formnovalidate plus>
@@ -246,7 +246,7 @@ export const base: readonly ComponentDoc[] = [
         code: `<Button variant="primary" block>Give access</Button>
 <ButtonRow>
   <Button variant="primary">Give access</Button>
-  <Button href="/admin/access">Cancel</Button>
+  <Button href="/admin/issuer-access-rules">Cancel</Button>
   <LinkAction href="/docs/access">How access works</LinkAction>
 </ButtonRow>`,
       },
@@ -644,7 +644,7 @@ export const base: readonly ComponentDoc[] = [
       'A relationship chip: the logo and name of a related object, a count and a status glyph, linking to the relation.',
     usage: {
       when: [
-        'The tokens a consumer can use, or the consumers of a token, in a table cell or a rail.',
+        'The tokens a credential access rule can use, or the credential access rules of a token, in a table cell or a rail.',
         'A short related value without a logo (a text chip): “acme/api · env production”.',
       ],
       whenNot: [
@@ -690,17 +690,17 @@ export const base: readonly ComponentDoc[] = [
               tone="off"
               count={1}
               glyph="⚠"
-              srSuffix=": inactive, token disabled. Open."
+              srSuffix=": inactive, credential disabled. Open."
             >
               Slack (legacy)
             </Chip>
           </Chips>
         ),
-        code: `<Chips label="Can use" more={{ href: '/admin/access?consumer=gha-acme', label: '+1 more' }}>
-  <Chip href="/admin/access?…" logo="slack" count={2} srSuffix=": 2 accesses, active. Open.">Slack</Chip>
+        code: `<Chips label="Can use" more={{ href: '/admin/issuer-access-rules?consumer=gha-acme', label: '+1 more' }}>
+  <Chip href="/admin/issuer-access-rules?…" logo="slack" count={2} srSuffix=": 2 accesses, active. Open.">Slack</Chip>
   <Chip href="…" logo="openai" count={1} glyph="⌛" glyphTone="warn" srSuffix=": secret expires in 6 days. Open.">OpenAI</Chip>
   <Chip href="…" logo="anthropic" tone="warn" count={2} glyph="✕" srSuffix=": 1 expired. Open.">Anthropic</Chip>
-  <Chip href="…" logo="slack" tone="off" count={1} glyph="⚠" srSuffix=": inactive, token disabled. Open.">Slack (legacy)</Chip>
+  <Chip href="…" logo="slack" tone="off" count={1} glyph="⚠" srSuffix=": inactive, credential disabled. Open.">Slack (legacy)</Chip>
 </Chips>`,
       },
       {
@@ -802,7 +802,7 @@ export const base: readonly ComponentDoc[] = [
       'A brand tile for an upstream service or a CI system, in four sizes; and overlapping tiles with a count.',
     usage: {
       when: [
-        'Before the name of a token or a consumer: table rows, page identity, map nodes, chips.',
+        'Before the name of a token or a credential access rule: table rows, page identity, map nodes, chips.',
         <>
           <code>LogoStack</code>: “Used by” cells and summaries (“2 consumers”).
         </>,
@@ -877,7 +877,7 @@ export const base: readonly ComponentDoc[] = [
 <LogoStack brands={['slack', 'openai', 'anthropic', 'github']}>4 tokens</LogoStack>`,
       },
       {
-        title: 'Logo stack: a disabled consumer’s tile',
+        title: 'Logo stack: a disabled credential access rule’s tile',
         description:
           'Each entry is a LogoSpec, so a disabled object gets a dimmed tile and a custom upstream its own letters.',
         render: () => (
@@ -1018,7 +1018,7 @@ export const base: readonly ComponentDoc[] = [
           <>
             <a class="nav-item" href="#">
               <Icon name="token" />
-              Service tokens
+              Credentials
             </a>
             <Button icon="search">Find a request</Button>
             <Avatar variant="sys">
@@ -1030,7 +1030,7 @@ export const base: readonly ComponentDoc[] = [
             </span>
           </>
         ),
-        code: `<a class="nav-item" href="/admin/tokens"><Icon name="token" />Service tokens</a>
+        code: `<a class="nav-item" href="/admin/credentials"><Icon name="token" />Credentials</a>
 <Button icon="search">Find a request</Button>
 <Avatar variant="sys"><Icon name="system" /></Avatar>
 <span class="t-warn"><Icon name="monitoring" />Errors in the last hour</span>`,
@@ -1112,13 +1112,13 @@ export const base: readonly ComponentDoc[] = [
           <div class="ident-meta">
             <span>Slack Web API</span>
             <Slug>slack</Slug>
-            <IdChip kind="Token">svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C</IdChip>
+            <IdChip kind="Credential">svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C</IdChip>
             <span>Created 3 Oct 2026</span>
           </div>
         ),
         code: `<span>Slack Web API</span>
 <Slug>slack</Slug>
-<IdChip kind="Token">svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C</IdChip>
+<IdChip kind="Credential">svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C</IdChip>
 <span>Created 3 Oct 2026</span>`,
       },
       {
@@ -1126,13 +1126,13 @@ export const base: readonly ComponentDoc[] = [
         render: () => (
           <>
             <IdChip kind="Request">req_01JB8Z5K2Q7W3N4M6P8R9T0V1X</IdChip>
-            <IdChip kind="Consumer">csm_01JB8X4F6H8K0M2P4R6T8V0X2Z</IdChip>
+            <IdChip kind="Credential access rule">csm_01JB8X4F6H8K0M2P4R6T8V0X2Z</IdChip>
             <Slug>slack-legacy</Slug>
             <Slug>gha-acme</Slug>
           </>
         ),
         code: `<IdChip kind="Request">req_01JB8Z5K2Q7W3N4M6P8R9T0V1X</IdChip>
-<IdChip kind="Consumer">csm_01JB8X4F6H8K0M2P4R6T8V0X2Z</IdChip>
+<IdChip kind="Credential access rule">csm_01JB8X4F6H8K0M2P4R6T8V0X2Z</IdChip>
 <Slug>slack-legacy</Slug>
 <Slug>gha-acme</Slug>`,
       },
@@ -1443,7 +1443,7 @@ export const base: readonly ComponentDoc[] = [
               tone="warn"
               glyph="⌛"
               title="The secret of OpenAI expires on 21 Oct 2026 (in 6 days)."
-              more="Its 1 consumer access stops working then."
+              more="Its 1 issuer access rules stops working then."
               actions={
                 <Button size="sm" href="#">
                   Replace secret
@@ -1460,8 +1460,8 @@ export const base: readonly ComponentDoc[] = [
 </Callout>
 <Callout tone="warn" glyph="⌛"
   title="The secret of OpenAI expires on 21 Oct 2026 (in 6 days)."
-  more="Its 1 consumer access stops working then."
-  actions={<Button size="sm" href="/admin/tokens/openai/secret">Replace secret</Button>} />
+  more="Its 1 issuer access rules stops working then."
+  actions={<Button size="sm" href="/admin/credentials/openai/secret">Replace secret</Button>} />
 <Callout tone="bad" title="Slack rejected the new secret.">
   <code>invalid_auth</code>: check that it starts with <code>xoxb-</code>.
 </Callout>`,
@@ -1494,7 +1494,7 @@ export const base: readonly ComponentDoc[] = [
                 </>
               }
             >
-              Slack is ready. Give a consumer access next.
+              Slack is ready. Add issuer access rule next.
             </Notice>
           </>
         ),
@@ -1502,9 +1502,9 @@ export const base: readonly ComponentDoc[] = [
   GitHub Actions (acme) › acme/api › environment production can now use Slack.
 </Notice>
 <Notice title="Token created." actions={<>
-  <Button size="sm" href="/admin/access/new?token=slack">Give access</Button>
+  <Button size="sm" href="/admin/issuer-access-rules/new?token=slack">Give access</Button>
   <Button size="sm" variant="ghost" href="…">Undo</Button>
-</>}>Slack is ready. Give a consumer access next.</Notice>`,
+</>}>Slack is ready. Add issuer access rule next.</Notice>`,
       },
       {
         title: 'Notice focused after a redirect',
@@ -1617,7 +1617,7 @@ export const base: readonly ComponentDoc[] = [
       'Replaces an action the reader has no permission for: why, who can do it, and how to reach them.',
     usage: {
       when: [
-        'A token viewer on a page whose main action needs a token manager.',
+        'A token viewer on a page whose main action needs a credential manager.',
         'Anywhere a disabled button would otherwise appear without a reason.',
       ],
       whenNot: [
@@ -1635,14 +1635,14 @@ export const base: readonly ComponentDoc[] = [
             people={['Priya Natarajan', 'Diego Ruiz']}
             link={{ href: '#', label: 'Email them this page' }}
           >
-            Only token managers can add tokens.
+            Only credential managers can add tokens.
           </AskSomeone>
         ),
         code: `<AskSomeone
   people={['Priya Natarajan', 'Diego Ruiz']}
   link={{ href: 'mailto:priya@acme.dev,diego@acme.dev?body=…', label: 'Email them this page' }}
 >
-  Only token managers can add tokens.
+  Only credential managers can add tokens.
 </AskSomeone>`,
       },
       {
@@ -1664,7 +1664,7 @@ export const base: readonly ComponentDoc[] = [
             more={2}
             link={{ href: '#', label: 'Email them this page' }}
           >
-            Only token managers can replace secrets.
+            Only credential managers can replace secrets.
           </AskSomeone>
         ),
         code: `<AskSomeone
@@ -1672,7 +1672,7 @@ export const base: readonly ComponentDoc[] = [
   more={2}
   link={{ href: 'mailto:…?body=…', label: 'Email them this page' }}
 >
-  Only token managers can replace secrets.
+  Only credential managers can replace secrets.
 </AskSomeone>`,
       },
     ],

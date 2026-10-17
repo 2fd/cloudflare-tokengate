@@ -1,21 +1,21 @@
-// The structured consumer access form (A14.4, A14.7.3): raw form values in, conditions, rules,
+// The structured issuer access rules form (A14.4, A14.7.3): raw form values in, conditions, rules,
 // labels, expiry and field errors out, and the reverse (an access back into form values). Pure: no
-// I/O. Every security decision is still made by validateGrant at save time; this module only
+// I/O. Every security decision is still made by validateIssuerAccessRule at save time; this module only
 // builds candidate values and says which input a problem belongs to. Risks are accepted by the
 // selection that causes them (coveredRiskCodes), never by a client-supplied list (A7.7).
 import { labelFor, parseIdWithLabel, parseIdWithLabelList } from '../db/claim-labels';
 import type { RuleSet } from '../db/suggestions';
 import type { AccessShape } from '../db/suggestions';
-import type { CallerProvider, ClaimLabel, LabelledClaim, Service } from '../db/types';
+import type { CredentialAccessRule, ClaimLabel, LabelledClaim, Service } from '../db/types';
 import { getProfile } from '../identity/profiles';
 import type { IssuerProfile } from '../identity/types';
 import { globError } from '../policy/glob';
 import {
   type GithubPresetContext,
   type GitlabPresetContext,
-  githubGrantPreset,
+  githubIssuerAccessRulePreset,
   githubPresetFromConditions,
-  gitlabGrantPreset,
+  gitlabIssuerAccessRulePreset,
   gitlabPresetFromConditions,
   type PresetResult,
   PROTECTABLE_CONTEXTS,
@@ -27,8 +27,8 @@ import type { WarningCode, WarningDetail } from '../policy/validate';
 import { accessSummary } from './access-summary';
 import type { Connections } from './connections';
 import { formatValueList, parseValueList } from './grant-text';
-import { pinValues } from './ops/caller-providers';
-import type { GrantLabel } from './ops/grants';
+import { pinValues } from './ops/credential-access-rules';
+import type { IssuerAccessRuleLabel } from './ops/issuer_access_rules';
 import type { FieldError } from './ops/shared';
 import {
   type OperationPreset,
@@ -162,7 +162,7 @@ export function idText(id: string, label: string | null): string {
 
 /**
  * The repository (GitHub) or project (GitLab) typed as `name (ID)`, `name #ID`, or a bare ID that
- * already has a label for this consumer. Null for an empty input; a message that says how to fix
+ * already has a label for this credential access rule. Null for an empty input; a message that says how to fix
  * any other input.
  */
 export function parseRepositoryInput(
@@ -239,12 +239,12 @@ export function ownerPrefix(profile: Pick<IssuerProfile, 'id'>, repositoryLabel:
 
 /**
  * The pinned organization or group a repository belongs to, by label prefix (case-insensitive).
- * A consumer with one unlabelled organization uses it. Null when no pin value matches: the access
+ * A credential access rule with one unlabelled organization uses it. Null when no pin value matches: the access
  * form then asks for `new_owner`.
  */
 export function deriveOwner(
   prefix: string,
-  provider: Pick<CallerProvider, 'tenant_pin'>,
+  provider: Pick<CredentialAccessRule, 'tenant_pin'>,
   profile: Pick<IssuerProfile, 'id'>,
   labels: readonly ClaimLabel[],
 ): IdRef | null {
@@ -263,9 +263,9 @@ export function deriveOwner(
   return null;
 }
 
-/** Values of the owner claim the consumer's pin admits (pin conditions are ANDed). */
+/** Values of the owner claim the credential access rule's pin admits (pin conditions are ANDed). */
 export function pinOwnerValues(
-  provider: Pick<CallerProvider, 'tenant_pin'>,
+  provider: Pick<CredentialAccessRule, 'tenant_pin'>,
   claim: string,
 ): string[] {
   return pinValues(provider.tenant_pin, claim);
@@ -377,11 +377,11 @@ export function readJobsForm(
 
 export interface JobsContext {
   profile: IssuerProfile;
-  /** The consumer the access is for, possibly built in memory (new, or with `new_owner`). */
-  provider: CallerProvider;
-  /** Labels of this consumer. */
+  /** The credential access rule the access is for, possibly built in memory (new, or with `new_owner`). */
+  provider: CredentialAccessRule;
+  /** Labels of this credential access rule. */
   labels: readonly ClaimLabel[];
-  /** Field name prefix of this consumer branch. */
+  /** Field name prefix of this credential access rule branch. */
   prefix: string;
 }
 
@@ -390,9 +390,9 @@ export interface ParsedJobs {
   risks: RiskCode[];
   presetWarnings: string[];
   /** Labels typed with the access (the repository), for claim_labels. */
-  labels: GrantLabel[];
+  labels: IssuerAccessRuleLabel[];
   repository: IdRef | null;
-  /** An organization or group to add to the consumer before the access (A14.4 step 4). */
+  /** An organization or group to add to the credential access rule before the access (A14.4 step 4). */
   newOwner: IdRef | null;
   /** The repository's org or group prefix when it is not pinned: render `new_owner`. */
   unknownOwner: string | null;
@@ -458,8 +458,8 @@ export function parseJobs(form: JobsForm, ctx: JobsContext): ParsedJobs {
     } else {
       out.unknownOwner = prefixText;
       out.errors.push({
-        field: field('new_owner'),
-        message: `${prefixText} is not ${profile.id === 'gitlab-ci' ? 'a group' : 'an organization'} of this consumer yet. Enter its ID below to add it: ${ownerFindCommand(profile, prefixText)}`,
+        field: field('repository'),
+        message: `${prefixText} is not ${profile.id === 'gitlab-ci' ? 'a group' : 'an organization'} of this credential access rule yet. Ask a credential administrator to update the boundary.`,
       });
     }
   } else if (repository.ok) {
@@ -484,7 +484,7 @@ export function parseJobs(form: JobsForm, ctx: JobsContext): ParsedJobs {
   const requireProtectedRef = form.ref_protection !== 'unprotected';
   let built: PresetResult;
   if (profile.id === 'github-actions') {
-    built = githubGrantPreset({
+    built = githubIssuerAccessRulePreset({
       ownerId: ownerId ?? '',
       repositoryId: out.repository?.id ?? null,
       context,
@@ -494,7 +494,7 @@ export function parseJobs(form: JobsForm, ctx: JobsContext): ParsedJobs {
       workflowRef: form.workflow_ref.trim() || null,
     });
   } else {
-    built = gitlabGrantPreset({
+    built = gitlabIssuerAccessRulePreset({
       namespaceId: ownerId ?? '',
       projectId: out.repository?.id ?? null,
       context: context as GitlabPresetContext,
@@ -660,7 +660,7 @@ export function condRows(conditions: readonly Condition[]): CondRow[] {
 }
 
 /** The jobs form of an access: structured when it round-trips, else the rows editor. */
-export function accessFormFromGrant(
+export function accessFormFromIssuerAccessRule(
   grant: { conditions: Condition[] },
   profile: Pick<IssuerProfile, 'id'>,
   labels: readonly ClaimLabel[],
@@ -704,7 +704,7 @@ function partialConditions(
 /** Contexts whose selection accepts a risk; prefill never picks one silently (A7.7.4). */
 const RISKY_CONTEXTS: ReadonlySet<AccessContext> = new Set<AccessContext>(['pull_request', 'any']);
 
-/** The safe context the consumer's accesses use most, else environment (A14.7.3 default). */
+/** The safe context the credential access rule's accesses use most, else environment (A14.7.3 default). */
 export function mostUsedContext(
   shapes: readonly AccessShape[],
   profile: Pick<IssuerProfile, 'id'>,
@@ -1005,10 +1005,10 @@ export function deriveAccessName(
 export function withTypedLabels(
   labels: readonly ClaimLabel[],
   providerId: string,
-  typed: readonly GrantLabel[],
+  typed: readonly IssuerAccessRuleLabel[],
 ): ClaimLabel[] {
   const extra: ClaimLabel[] = typed.map((label) => ({
-    caller_provider_id: providerId,
+    credential_access_rule_id: providerId,
     claim: label.claim,
     value: label.value,
     label: label.label,
@@ -1063,8 +1063,8 @@ function constrainsRef(c: Condition): boolean {
 
 /**
  * True when GitHub or GitLab conditions constrain no ref, environment, protection, commit or event,
- * so every job of the repository matches: the `any_ref` risk (A7.7). validateGrant does not emit
- * it (the ops accept such grants without acknowledgement), so the pages add it from the
+ * so every job of the repository matches: the `any_ref` risk (A7.7). validateIssuerAccessRule does not emit
+ * it (the ops accept such issuer_access_rules without acknowledgement), so the pages add it from the
  * conditions, the same way for the structured form, the rows editor and stored accesses.
  */
 export function isAnyRef(

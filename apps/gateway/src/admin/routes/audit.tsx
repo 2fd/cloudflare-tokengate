@@ -74,11 +74,15 @@ const RANGE_MS: Readonly<Record<AuditRange, number>> = {
 export const AUDIT_CATEGORIES: Readonly<Record<AuditCategory, { label: string } & AuditActionSet>> =
   {
     tokens: {
-      label: 'Tokens',
+      label: 'Credentials',
       prefixes: ['service.', 'credential.', 'keyring.'],
       exact: ['settings.upstream_hosts'],
     },
-    consumers: { label: 'Consumers', prefixes: ['caller_provider.'], exact: [] },
+    consumers: {
+      label: 'Credential access rules',
+      prefixes: ['credential_access_rule.'],
+      exact: [],
+    },
     access: { label: 'Access', prefixes: ['grant.'], exact: [] },
     users: {
       label: 'Users',
@@ -156,18 +160,18 @@ export function registerAuditRoutes(app: App): void {
     const deps = c.get('deps');
     const db = deps.env.DB;
     const q = (name: string) => c.req.query(name);
-    const [people, tokens, consumers, grants] = await Promise.all([
+    const [people, tokens, consumers, issuer_access_rules] = await Promise.all([
       loadAuditPeople(db),
       db
-        .prepare('SELECT id, name FROM services ORDER BY name, id')
+        .prepare('SELECT id, name FROM credentials ORDER BY name, id')
         .all<{ id: string; name: string }>(),
       db
-        .prepare('SELECT id, name FROM caller_providers ORDER BY name, id')
+        .prepare('SELECT id, name FROM credential_access_rules ORDER BY name, id')
         .all<{ id: string; name: string }>(),
       db
         .prepare(
-          `SELECT grants.id, grants.name, services.name AS token FROM grants
-           LEFT JOIN services ON services.id = grants.service_id ORDER BY grants.name, grants.id`,
+          `SELECT issuer_access_rules.id, issuer_access_rules.name, credentials.name AS token FROM issuer_access_rules
+           LEFT JOIN credentials ON credentials.id = issuer_access_rules.service_id ORDER BY issuer_access_rules.name, issuer_access_rules.id`,
         )
         .all<{ id: string; name: string; token: string | null }>(),
     ]);
@@ -247,7 +251,7 @@ export function registerAuditRoutes(app: App): void {
     const names = new Map<string, string>([
       ...tokens.results.map((t) => [t.id, t.name] as [string, string]),
       ...consumers.results.map((r) => [r.id, r.name] as [string, string]),
-      ...grants.results.map((g) => [g.id, g.name] as [string, string]),
+      ...issuer_access_rules.results.map((g) => [g.id, g.name] as [string, string]),
       ...people.map((p) => [p.id, p.email] as [string, string]),
     ]);
     const suspended = new Set(people.filter((p) => p.status === 'suspended').map((p) => p.id));
@@ -255,7 +259,7 @@ export function registerAuditRoutes(app: App): void {
     // then the settings pages and the keyring.
     const targetGroups: FilterOptionGroup[] = [
       {
-        group: 'Tokens',
+        group: 'Credentials',
         options: tokens.results.map((t) => ({
           href: link({ ...params, target: t.id }, {}),
           label: t.name,
@@ -263,7 +267,7 @@ export function registerAuditRoutes(app: App): void {
         })),
       },
       {
-        group: 'Consumers',
+        group: 'Credential access rules',
         options: consumers.results.map((r) => ({
           href: link({ ...params, target: r.id }, {}),
           label: r.name,
@@ -272,7 +276,7 @@ export function registerAuditRoutes(app: App): void {
       },
       {
         group: 'Access',
-        options: grants.results.map((g) => ({
+        options: issuer_access_rules.results.map((g) => ({
           href: link({ ...params, target: g.id }, {}),
           label: g.token ? `${g.name} — ${g.token}` : g.name,
           slug: 'access',
@@ -451,7 +455,7 @@ export function registerAuditRoutes(app: App): void {
   });
 }
 
-/** The chip label of a target filter: its current name, or "Deleted token svc_…" (never free text). */
+/** The chip label of a target filter: its current name, or "Deleted credential svc_…" (never free text). */
 function targetLabel(
   target: string,
   names: ReadonlyMap<string, string>,

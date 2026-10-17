@@ -111,7 +111,9 @@ describe('GET /admin/users/sign-in', () => {
       );
       expect(dialog).not.toContain('name="join_policy"');
     }
-    expect(html).toContain('Anyone Access admits can let a consumer use any service token.');
+    expect(html).toContain(
+      'Anyone Access admits can let a credential access rule use any credential.',
+    );
   });
 
   it('explains the pending policy and links the people waiting', async () => {

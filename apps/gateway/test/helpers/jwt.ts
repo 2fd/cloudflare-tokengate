@@ -3,7 +3,7 @@
 //
 //   const clock = createClock();
 //   const issuer = await createTestIssuer({ now: clock.now });          // GitHub issuer by default
-//   const provider = testCallerProvider(issuer);                         // matching caller provider row
+//   const provider = testCredentialAccessRule(issuer);                         // matching credential access rule row
 //   const token = await issuer.sign(githubClaims({ ref: 'refs/heads/dev' }));
 //   await verifyCallerToken(token, provider, PROFILES[provider.profile], { fetch: issuer.fetch, now: clock.now });
 import {
@@ -14,13 +14,13 @@ import {
   type JWK,
   type KeyObject,
 } from 'jose';
-import type { CallerProvider } from '../../src/db/types';
+import type { CredentialAccessRule } from '../../src/db/types';
 import type { ProfileId } from '../../src/identity/types';
 import type { Condition } from '../../src/policy/types';
 
 export const GITHUB_ISSUER = 'https://token.actions.githubusercontent.com';
 export const GITLAB_ISSUER = 'https://gitlab.com';
-/** Audience shared by test tokens and `testCallerProvider` rows (≥ 16 chars like real ones). */
+/** Audience shared by test tokens and `testCredentialAccessRule` rows (≥ 16 chars like real ones). */
 export const TEST_AUDIENCE = 'tokengate:01JTESTAUD1ENCE0000000000000';
 /** Owner/namespace IDs used by the claim factories and the default tenant pins. */
 export const TEST_GITHUB_OWNER_ID = '4242';
@@ -301,15 +301,17 @@ const DEFAULT_PINS: Record<ProfileId, Condition[]> = {
 };
 
 /**
- * A decoded caller provider row matching `issuer`: profile inferred from the issuer URL, audience
+ * A decoded credential access rule row matching `issuer`: profile inferred from the issuer URL, audience
  * TEST_AUDIENCE, RS256/ES256 per the issuer, 600 s max age, and a tenant pin on the factories' owner.
  */
-export function testCallerProvider(
+export function testCredentialAccessRule(
   issuer: Pick<TestIssuer, 'issuer' | 'jwksUri'> & { alg?: string },
-  overrides: Partial<CallerProvider> = {},
-): CallerProvider {
+  overrides: Partial<CredentialAccessRule> = {},
+): CredentialAccessRule {
   const profile = overrides.profile ?? defaultProfile(issuer.issuer);
   return {
+    credential_id: 'svc_test',
+    conditions: [],
     id: 'cpr_01JTESTPROVIDER0000000000',
     name: `test ${profile}`,
     profile,

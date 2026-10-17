@@ -5,7 +5,7 @@ import { render } from '../render';
 describe('RowPicker', () => {
   it('renders logo rows and nologo rows with a meta column', () => {
     const html = render(
-      <FieldSet id="consumer" legend="Consumer">
+      <FieldSet id="consumer" legend="Credential access rule">
         <RowPicker
           name="consumer"
           value="gh"
@@ -16,7 +16,7 @@ describe('RowPicker', () => {
               meta: 'most used · 6 accesses',
               logo: 'github',
             },
-            { value: 'new', title: 'Another consumer' },
+            { value: 'new', title: 'Another credential access rule' },
           ]}
         />
       </FieldSet>,
@@ -25,7 +25,7 @@ describe('RowPicker', () => {
       '<div class="rlist"><label class="row-pick" data-o="1"><input type="radio" id="consumer-1" name="consumer" value="gh" checked=""/><span class="logo sm lg-github" aria-hidden="true">GH</span><span class="t">GitHub Actions (acme)</span><span class="meta">most used · 6 accesses</span></label>',
     );
     expect(html).toContain(
-      '<label class="row-pick nologo" data-o="2"><input type="radio" id="consumer-2" name="consumer" value="new"/><span class="t">Another consumer</span><span></span></label></div>',
+      '<label class="row-pick nologo" data-o="2"><input type="radio" id="consumer-2" name="consumer" value="new"/><span class="t">Another credential access rule</span><span></span></label></div>',
     );
   });
 

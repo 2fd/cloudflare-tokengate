@@ -1,4 +1,4 @@
-// The last 24 hours of traffic per service token, for the connections map of Consumer access:
+// The last 24 hours of traffic per credential, for the connections map of Issuer access rules:
 // requests, denied and errors per token, and the requests refused before a token was chosen.
 // Stored hourly rollups up to the previous hour, then request_log aggregated live for the previous
 // and the current hour, so nothing counts twice whatever the state of the cron. Monitoring data is
@@ -67,7 +67,7 @@ export interface UnknownIssuer {
 
 /**
  * The issuers of the last 24 hours' `issuer_unknown` refusals, most requests first, for "Callers
- * no consumer trusts" on the consumers list. Display only: empty when TELEMETRY_DB cannot be read.
+ * no consumer trusts" on the credential access rules list. Display only: empty when TELEMETRY_DB cannot be read.
  */
 export async function loadUnknownIssuers(
   deps: Pick<Deps, 'env' | 'now'>,

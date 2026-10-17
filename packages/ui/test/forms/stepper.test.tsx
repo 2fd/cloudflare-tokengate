@@ -12,12 +12,12 @@ describe('FormStep', () => {
   it('renders a fieldset step with a numbered legend and live slot', () => {
     expect(
       render(
-        <FormStep n={1} title="Consumer" live={1} id="consumer">
+        <FormStep n={1} title="Credential access rule" live={1} id="consumer">
           <RowPicker name="consumer" options={[{ value: 'gh', title: 'GitHub Actions (acme)' }]} />
         </FormStep>,
       ),
     ).toBe(
-      '<li class="fstep"><span class="fstep-n" aria-hidden="true">1</span><fieldset class="fstep-b sf1" id="consumer"><legend class="fstep-t"><span class="vh">Step 1: </span>Consumer</legend><div class="rlist"><label class="row-pick nologo" data-o="1"><input type="radio" id="consumer-1" name="consumer" value="gh"/><span class="t">GitHub Actions (acme)</span><span></span></label></div></fieldset></li>',
+      '<li class="fstep"><span class="fstep-n" aria-hidden="true">1</span><fieldset class="fstep-b sf1" id="consumer"><legend class="fstep-t"><span class="vh">Step 1: </span>Credential access rule</legend><div class="rlist"><label class="row-pick nologo" data-o="1"><input type="radio" id="consumer-1" name="consumer" value="gh"/><span class="t">GitHub Actions (acme)</span><span></span></label></div></fieldset></li>',
     );
   });
 

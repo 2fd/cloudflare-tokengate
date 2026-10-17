@@ -21,7 +21,7 @@ describe('ids', () => {
   it('applies migrations to both databases', async () => {
     const { env } = await import('cloudflare:workers');
     const tables = await env.DB.prepare(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'grants'",
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'issuer_access_rules'",
     ).all();
     expect(tables.results).toHaveLength(1);
     const telemetry = await env.TELEMETRY_DB.prepare(

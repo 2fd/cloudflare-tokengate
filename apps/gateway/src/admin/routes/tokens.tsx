@@ -1,4 +1,4 @@
-// Service tokens (A13): the list, the Add token catalog, create, the token page and its forms.
+// Credentials (A13): the list, the Add credential catalog, create, the token page and its forms.
 // The destination (base URL + injection) changes only on /destination, together with the secret
 // (I-CRED-2); /secret rotates with the stored destination; template cards never read the
 // destination from the form (I-SSRF-1). Submitted secrets are never rendered back (I-CRED-1): a
@@ -35,8 +35,8 @@ import { upstreamHostAllowed } from '../../config';
 import { sealedKid } from '../../crypto/envelope';
 import { KID_PATTERN, type KeyringError, loadKeyring } from '../../crypto/keyring';
 import { listAuditEvents } from '../../db/audit';
-import type { GrantUsage } from '../../db/rollups';
-import { getService, listServices } from '../../db/services';
+import { getService, listServices } from '../../db/credentials';
+import type { IssuerAccessRuleUsage } from '../../db/rollups';
 import { getAllowedUpstreamHosts } from '../../db/settings';
 import type { Service } from '../../db/types';
 import { normalizeCredential, normalizeInjection, validateBaseUrl } from '../../policy/validate';
@@ -65,7 +65,7 @@ import {
   storedBinding,
   testServiceCredential,
   updateServiceFields,
-} from '../ops/services';
+} from '../ops/credentials';
 import { type FieldError, fieldError, type OpFailure, type OpFailureReason } from '../ops/shared';
 import { addUpstreamHost, storedHostOutside, storedUpstreamHost } from '../ops/upstream-hosts';
 import type { VerifyOutcome } from '../ops/verify';
@@ -173,17 +173,17 @@ const STATUS_LINKS: Readonly<
 };
 
 export function registerTokensRoutes(app: App): void {
-  app.get('/admin/tokens', listPage);
-  // Registered before `/admin/tokens/:id` so "new" is never taken as an id.
-  app.get('/admin/tokens/new', newPage);
-  app.post('/admin/tokens', create);
-  app.get('/admin/tokens/:id', detailPage);
-  app.post('/admin/tokens/:id', update);
-  app.post('/admin/tokens/:id/secret', rotate);
-  app.post('/admin/tokens/:id/destination', changeDestination);
-  app.post('/admin/tokens/:id/test', testSecret);
-  app.post('/admin/tokens/:id/toggle', toggle);
-  app.post('/admin/tokens/:id/delete', remove);
+  app.get('/admin/credentials', listPage);
+  // Registered before `/admin/credentials/:id` so "new" is never taken as an id.
+  app.get('/admin/credentials/new', newPage);
+  app.post('/admin/credentials', create);
+  app.get('/admin/credentials/:id', detailPage);
+  app.post('/admin/credentials/:id', update);
+  app.post('/admin/credentials/:id/secret', rotate);
+  app.post('/admin/credentials/:id/destination', changeDestination);
+  app.post('/admin/credentials/:id/test', testSecret);
+  app.post('/admin/credentials/:id/toggle', toggle);
+  app.post('/admin/credentials/:id/delete', remove);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -209,9 +209,9 @@ function hostsAddedText(data: TokenNoticeData): string {
 }
 
 const createdText = (data: TokenNoticeData, check: string) =>
-  `${data.service?.name ?? 'Token'} created (slug ${data.service?.slug ?? '?'})${check}.${hostsAddedText(
+  `${data.service?.name ?? 'Credential'} created (slug ${data.service?.slug ?? '?'})${check}.${hostsAddedText(
     data,
-  )} No consumer can use it until someone gives access.`;
+  )} No workload can use it until someone gives access.`;
 
 const TOKEN_NOTICES: NoticeTable<NoticeContext & TokenNoticeData> = {
   created_verified: (ctx) => ({
@@ -260,14 +260,14 @@ function siblingText(ctx: TokenNoticeData): string {
 function giveAccessNext(ctx: NoticeContext & TokenNoticeData) {
   return ctx.service && ctx.view.can('access:write')
     ? {
-        next: { href: paths.accessNew({ token: ctx.service.id }), label: 'Give a consumer access' },
+        next: { href: paths.accessNew({ token: ctx.service.id }), label: 'Add issuer access rule' },
       }
     : {};
 }
 
 const LIST_NOTICES: NoticeTable = {
   deleted: () => ({ text: 'Token deleted.' }),
-  deleted_with_accesses: () => ({ text: 'Token and its consumer access deleted.' }),
+  deleted_with_accesses: () => ({ text: 'Token and its issuer access rules deleted.' }),
   enabled: () => ({ text: 'Token enabled. Consumers with access can use it again.' }),
   disabled: () => ({ text: 'Token disabled. Requests through it are refused from now on.' }),
 };
@@ -322,7 +322,7 @@ const notFound = (c: AdminContext) =>
       status: 404,
       header: (
         <PageHeader
-          crumbs={[{ href: paths.tokens(), label: 'Service tokens' }, { label: 'Not found' }]}
+          crumbs={[{ href: paths.tokens(), label: 'Credentials' }, { label: 'Not found' }]}
           title="Token not found"
           description={notFoundText('token')}
         />
@@ -558,7 +558,7 @@ async function draftFor(
 const QUERY_MAX = 100;
 
 async function listPage(c: AdminContext) {
-  // `?open=add` opened the old "Add a token" accordion: writers go to the catalog, everyone else
+  // `?open=add` opened the old "Add a credential" accordion: writers go to the catalog, everyone else
   // gets the list (not a 403 for an old link).
   if (c.req.query('open') === 'add' && can(c.get('viewer').user.role, 'tokens:write')) {
     return c.redirect(paths.tokenNew(), 302);
@@ -619,25 +619,28 @@ async function listPage(c: AdminContext) {
   return renderPage(
     c,
     {
-      title: 'Service tokens',
+      title: 'Credentials',
       section: 'tokens',
       subsection: 'tokens',
       notice: resolveNotice(LIST_NOTICES, c.req.query('notice'), null),
       header: (ctx) => (
         <PageHeader
-          title="Service tokens"
+          title="Credentials"
           count={tokens.length > 0 ? tokens.length : undefined}
           description={
             <>
               Secrets of the upstream APIs that consumers call through tokengate. Loading a token
-              gives nobody access; consumer access is given separately.
-              <LearnMore path="concepts.md#grant" about="service tokens and consumer access" />
+              gives nobody access; issuer access rules is given separately.
+              <LearnMore
+                path="concepts.md#issuer-access-rule"
+                about="credentials and issuer access rules"
+              />
             </>
           }
           actions={
             ctx.can('tokens:write') && cards.keyringError === null && tokens.length > 0 ? (
               <Button variant="primary" plus href={paths.tokenNew()}>
-                Add token
+                Add credential
               </Button>
             ) : undefined
           }
@@ -665,7 +668,7 @@ async function listPage(c: AdminContext) {
           />
           <Tray
             id="tokens"
-            title={`Service tokens (${rows.length})`}
+            title={`Credentials (${rows.length})`}
             hideTitle
             bar={
               empty ? undefined : (
@@ -767,14 +770,14 @@ async function listPage(c: AdminContext) {
             {empty ? (
               <Panel variant="pad">
                 <UiEmptyState
-                  title="No service tokens yet"
+                  title="No credentials yet"
                   icon="token"
-                  description="A service token holds the secret of one upstream API. Add one, then give a consumer access to it."
+                  description="A credential holds the secret of one upstream API. Add one, then give an issuer access rule to it."
                   actions={
                     canWrite ? (
                       cards.keyringError === null ? (
                         <Button variant="primary" plus href={paths.tokenNew()}>
-                          Add a service token
+                          Add a credential
                         </Button>
                       ) : undefined
                     ) : (
@@ -788,10 +791,10 @@ async function listPage(c: AdminContext) {
                 <Table
                   id="tokens-table"
                   labelledBy="tokens-h"
-                  caption={`Service tokens (${rows.length})`}
+                  caption={`Credentials (${rows.length})`}
                   stackable
                   columns={[
-                    { label: 'Token' },
+                    { label: 'Credential' },
                     { label: 'Secret' },
                     { label: 'Used by' },
                     { label: 'Last used' },
@@ -838,7 +841,7 @@ function TokenRow(props: {
   token: Service;
   facts: TokenFacts;
   edges: AccessEdge[];
-  usage: ReadonlyMap<string, GrantUsage>;
+  usage: ReadonlyMap<string, IssuerAccessRuleUsage>;
   usageAvailable: boolean;
   sampleRate: number;
   now: number;
@@ -950,15 +953,17 @@ function UsedBy(props: { token: Service; edges: AccessEdge[]; now: number }) {
   const { token, edges } = props;
   if (edges.length === 0) return <span class="muted">0 consumers</span>;
   const consumers = new Map<string, AccessEdge['consumer']>();
-  for (const edge of edges) consumers.set(edge.grant.caller_provider_id, edge.consumer);
+  for (const edge of edges) consumers.set(edge.grant.credential_access_rule_id, edge.consumer);
   const usable = new Set(
-    usableAccesses(edges, props.now).map((edge) => edge.grant.caller_provider_id),
+    usableAccesses(edges, props.now).map((edge) => edge.grant.credential_access_rule_id),
   );
   const count = token.enabled ? usable.size : 0;
   const expired = edges.filter((edge) => edge.status === 'expired').length;
   const risky = edges.some((edge) => edge.flags.some((flag) => flag.status === 'risk_accepted'));
   const inactive = edges.find((edge) => edge.status === 'inactive');
-  const names = [...consumers.values()].map((consumer) => consumer?.name ?? 'deleted consumer');
+  const names = [...consumers.values()].map(
+    (consumer) => consumer?.name ?? 'deleted credential access rule',
+  );
   return (
     <Entity
       logoSlot={
@@ -977,7 +982,7 @@ function UsedBy(props: { token: Service; edges: AccessEdge[]; now: number }) {
       }
       name={
         <CountLink href={paths.access({ token: token.id })} srSuffix={`can use ${token.name}`}>
-          {plural(count, 'consumer')}
+          {plural(count, 'credential access rule')}
           {token.enabled ? '' : ' now'} · {plural(edges.length, 'access', 'accesses')}
         </CountLink>
       }
@@ -1032,7 +1037,7 @@ interface ListProblem {
 function expiryConsequence(
   token: Service,
   edges: readonly AccessEdge[],
-  usage: ReadonlyMap<string, GrantUsage> | null,
+  usage: ReadonlyMap<string, IssuerAccessRuleUsage> | null,
   at: number,
 ): string {
   if (usage === null) return 'Replace it before then.';
@@ -1055,7 +1060,7 @@ function ListAlerts(props: {
   keyringError: KeyringError | null;
   edges: (token: Service) => AccessEdge[];
   /** Allowed requests per access in the last 30 days; null when not recorded. */
-  usage: ReadonlyMap<string, GrantUsage> | null;
+  usage: ReadonlyMap<string, IssuerAccessRuleUsage> | null;
 }) {
   const { ctx, tokens, facts } = props;
   const now = ctx.now;
@@ -1225,13 +1230,13 @@ async function renderNew(
   return renderPage(
     c,
     {
-      title: 'Add a service token',
+      title: 'Add a credential',
       section: 'tokens',
       subsection: 'tokens',
       header: (
         <PageHeader
-          crumbs={[{ href: paths.tokens(), label: 'Service tokens' }, { label: 'Add token' }]}
-          title="Add a service token"
+          crumbs={[{ href: paths.tokens(), label: 'Credentials' }, { label: 'Add credential' }]}
+          title="Add a credential"
           description="Pick the API and paste its secret. tokengate checks the secret with the API before it stores it, so a typo never reaches your consumers."
         />
       ),
@@ -1955,7 +1960,7 @@ async function toggle(c: AdminContext) {
       status: FAILURE_STATUS[result.reason],
     });
   }
-  const back = returnPath('POST /admin/tokens/:id/toggle', form._return, { id: service.id });
+  const back = returnPath('POST /admin/credentials/:id/toggle', form._return, { id: service.id });
   return redirectWithNotice(c, back, enabled ? 'enabled' : 'disabled');
 }
 

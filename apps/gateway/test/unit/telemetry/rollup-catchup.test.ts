@@ -55,7 +55,7 @@ function record(ts: number): RequestRecord {
     path: '/',
     service_slug: 'svc',
     service_id: 'svc_A',
-    caller_provider_id: 'cpr_A',
+    credential_access_rule_id: 'cpr_A',
     grant_id: 'grt_A',
     claims_verified: 1,
     caller_subject: null,
@@ -189,7 +189,7 @@ describe('rollup catch-up', () => {
     expect(await rolledUp(at(4))).toBe(1);
   });
 
-  // The consumer leaves records of the last 2 closed hours to the next cron run; when that run is
+  // The credential access rule leaves records of the last 2 closed hours to the next cron run; when that run is
   // skipped or fails, the watermark must still cover their hour.
   it.each([
     ['did not fire', false],

@@ -1,6 +1,6 @@
 # Credential rotation
 
-This page explains how to replace the secret of a service token (an API key or token) without
+This page explains how to replace the secret of a credential (an API key or token) without
 downtime. It is for token managers, admins and owners.
 
 The gateway reads the secret from D1 on every request; nothing is cached. A new secret is used
@@ -11,7 +11,7 @@ secret, so no workflow changes.
 
 - On a schedule, or before the expiry date. The gateway helps:
   - The token page shows the secret status ("Expires in N days" within 14 days, "Expired").
-  - The Overview and Service tokens › Tokens show a warning 14 days before expiry and an error after
+  - The Overview and Credentials › Tokens show a warning 14 days before expiry and an error after
     it, each with a link to the token's **Secret** section.
   - The hourly job writes one `credential.expiring` audit event per token when the secret crosses
     14 days and 3 days before expiry ([observability](../observability.md#audit-log)).
@@ -29,12 +29,12 @@ You need the token manager, admin or owner role.
 
 1. At the upstream, create a new key or token with the same permissions as the current one. Keep the
    current one active.
-2. Open **Service tokens** and select the token (or follow the expiry warning, which opens its
+2. Open **Credentials** and select the token (or follow the expiry warning, which opens its
    **Secret** section).
 3. Note the stored hint under **Secret** (last 4 characters and length, for secrets of 20
    characters or more).
 4. Under **Replace secret**, paste the new value. The destination is not part of this form: the
-   stored base URL and injection are kept (`POST /admin/tokens/:id/secret`). The hint names the
+   stored base URL and injection are kept (`POST /admin/credentials/:id/secret`). The hint names the
    host the secret is sent to. If someone changed the destination after you opened the page, the
    form is refused and nothing is sent: check the destination, then paste the secret again.
 5. **New secret expires on** is prefilled with the stored expiry when it is more than 14 days away.
@@ -82,7 +82,7 @@ the export ([I-CRED-1](../threat-model.md#i-cred-1)).
 
 The sealed secret is bound to the token id, base URL and injection
 ([I-CRED-2](../threat-model.md#i-cred-2)). To change the base URL or "How the secret is sent", open
-**Change destination** on the token page (`POST /admin/tokens/:id/destination`) and enter the secret
+**Change destination** on the token page (`POST /admin/credentials/:id/destination`) and enter the secret
 again in the same save. **Replace secret** never takes a destination.
 
 - When the stored secret does not open, or no secret is stored, the form is open from the start,
@@ -90,7 +90,7 @@ again in the same save. **Replace secret** never takes a destination.
   in code, and you type the destination host under **Confirm destination host**. Nothing is sent
   upstream until it matches. A kept draft never counts as the confirmation, and a draft made for
   one base URL or injection does not open for another.
-- The new base URL must pass Service tokens › Allowed hosts when it is set
+- The new base URL must pass Credentials › Allowed hosts when it is set
   ([I-SSRF-1](../threat-model.md#i-ssrf-1)). An owner can tick **Also allow <host>** in the same
   form.
 - The token's type label follows the destination: a token that no longer points where its template

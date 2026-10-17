@@ -33,8 +33,8 @@ export type OutcomeClass = 'allowed' | 'denied' | 'error';
 export interface RequestFilter {
   /** A token id; null for requests refused before a token was resolved. */
   service_id?: string | null;
-  /** A consumer id; null for requests with no resolved consumer. */
-  caller_provider_id?: string | null;
+  /** A credential access rule id; null for requests with no resolved consumer. */
+  credential_access_rule_id?: string | null;
   grant_id?: string;
   /** Exact stored outcome. */
   outcome?: Outcome;
@@ -93,14 +93,14 @@ export async function listRequests(
 export const PROBLEMS_TERM = "(outcome <> 'allowed' OR status >= 500)";
 
 /**
- * True when one index serves the whole filter: the token, the repository or the consumer access
+ * True when one index serves the whole filter: the token, the repository or the issuer access rules
  * on its own (each has an `(x, id)` index), or the denied or error class (request_log_problems).
  * Time bounds and keyset cursors are id ranges and keep a filter indexed.
  */
 export function requestFilterIndexed(filter: RequestFilter): boolean {
   const terms = [
     filter.service_id !== undefined,
-    filter.caller_provider_id !== undefined,
+    filter.credential_access_rule_id !== undefined,
     filter.grant_id !== undefined,
     filter.outcome !== undefined,
     filter.outcomeClass !== undefined,
@@ -136,9 +136,9 @@ export async function searchRequests(
   };
   if (filter.service_id === null) where.push('service_id IS NULL');
   else if (filter.service_id !== undefined) add('service_id = ?', filter.service_id);
-  if (filter.caller_provider_id === null) where.push('caller_provider_id IS NULL');
-  else if (filter.caller_provider_id !== undefined) {
-    add('caller_provider_id = ?', filter.caller_provider_id);
+  if (filter.credential_access_rule_id === null) where.push('credential_access_rule_id IS NULL');
+  else if (filter.credential_access_rule_id !== undefined) {
+    add('credential_access_rule_id = ?', filter.credential_access_rule_id);
   }
   if (filter.grant_id !== undefined) add('grant_id = ?', filter.grant_id);
   if (filter.outcome) add('outcome = ?', filter.outcome);
@@ -215,7 +215,7 @@ export function requestFromRow(row: Record<string, unknown>): RequestRecord {
     path: String(row.path),
     service_slug: strOrNull(row.service_slug),
     service_id: strOrNull(row.service_id),
-    caller_provider_id: strOrNull(row.caller_provider_id),
+    credential_access_rule_id: strOrNull(row.credential_access_rule_id),
     grant_id: strOrNull(row.grant_id),
     claims_verified: Number(row.claims_verified) === 1 ? 1 : 0,
     caller_subject: strOrNull(row.caller_subject),

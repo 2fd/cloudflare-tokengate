@@ -75,7 +75,7 @@ describe('proxy: allowed requests', () => {
       path: '/items/1',
       service_slug: 'echo',
       service_id: fx.serviceId,
-      caller_provider_id: fx.providerId,
+      credential_access_rule_id: fx.providerId,
       grant_id: fx.grantId,
       claims_verified: 1,
       caller_repository: 'acme/app',
@@ -148,14 +148,14 @@ describe('proxy: allowed requests', () => {
 
     const path = await setupProxy({
       service: {
-        baseUrl: 'https://hooks.upstream.test/services',
+        baseUrl: 'https://hooks.upstream.test/credentials',
         injection: { kind: 'path' },
         secret: 'T000/B000/XYZ123',
       },
     });
     expect((await path.call('')).status).toBe(200);
     expect(path.upstreamCalls[0]?.url).toBe(
-      'https://hooks.upstream.test/services/T000/B000/XYZ123',
+      'https://hooks.upstream.test/credentials/T000/B000/XYZ123',
     );
   });
 

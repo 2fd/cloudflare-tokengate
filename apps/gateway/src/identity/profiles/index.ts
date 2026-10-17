@@ -1,4 +1,4 @@
-// Registry of issuer profiles. A caller provider row stores a ProfileId; unknown ids resolve to null
+// Registry of issuer profiles. A credential access rule row stores a ProfileId; unknown ids resolve to null
 // so callers fail closed instead of falling back to a default profile. Profiles are frozen: code
 // that mutates trust configuration by accident throws instead of changing it for the isolate.
 import type { IssuerProfile, ProfileId } from '../types';
@@ -17,7 +17,7 @@ export function getProfile(id: string): IssuerProfile | null {
 }
 
 /**
- * Issuers that sign tokens for every tenant (I-TEN-1). Applies to every caller provider whatever
+ * Issuers that sign tokens for every tenant (I-TEN-1). Applies to every credential access rule whatever
  * its profile, so a `generic` provider on GitHub's issuer still needs a tenant pin. Exact strings:
  * jose compares `iss` exactly, so any other spelling never verifies these issuers' tokens.
  */

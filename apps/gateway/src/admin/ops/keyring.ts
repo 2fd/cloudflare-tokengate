@@ -13,7 +13,7 @@ import {
   credentialCountsByKid,
   listSealedCredentials,
   rewrapCredentialStatement,
-} from '../../db/services';
+} from '../../db/credentials';
 import { confirmKeyCheckValueStatement } from '../../db/settings';
 import type { Actor } from '../../db/types';
 import type { Deps } from '../../deps';
@@ -110,7 +110,7 @@ export interface RewrapResult {
  * src/health.ts); when all of them open, the new check value is recorded, which clears the
  * keyring alert. This is the only path that replaces a recorded check value.
  * All-or-nothing on problems: if any candidate is malformed, uses a key missing from the keyring,
- * or fails to open, nothing is written and the affected services are listed. With no candidates
+ * or fails to open, nothing is written and the affected credentials are listed. With no candidates
  * it returns early: nothing changes, so there is nothing to audit.
  */
 export async function rewrapCredentials(

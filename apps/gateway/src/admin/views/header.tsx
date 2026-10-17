@@ -4,7 +4,7 @@ import { docsUrl } from './docs';
 
 /**
  * "Learn more" after a header description: a docs link whose hidden suffix names the topic
- * ("Learn more about service tokens (GitHub docs)"). The space before it is added.
+ * ("Learn more about credentials (GitHub docs)"). The space before it is added.
  */
 export function LearnMore(props: { path: string; about: string }) {
   return (

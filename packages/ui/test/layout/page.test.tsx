@@ -22,13 +22,13 @@ describe('PageHeader', () => {
   it('renders title, count, description and actions', () => {
     const html = render(
       <PageHeader
-        title="Service tokens"
+        title="Credentials"
         count={6}
         description="Secrets."
         actions={<a href="#">Add</a>}
       />,
     );
-    expect(html).toContain('<h1>Service tokens<span class="count">6</span></h1>');
+    expect(html).toContain('<h1>Credentials<span class="count">6</span></h1>');
     expect(html).toContain('<p class="desc">Secrets.</p>');
     expect(html).toContain('<div class="ph-actions"><a href="#">Add</a></div>');
     expect(html).not.toContain('crumbs');
@@ -82,8 +82,8 @@ describe('Tray header bar', () => {
   });
 
   it('keeps the visible title block when the title is shown', () => {
-    expect(render(<Tray id="q" title="Tokens" bar={<nav>q</nav>} />)).toContain(
-      '<div class="t"><h2 id="q-h">Tokens</h2></div><nav>q</nav>',
+    expect(render(<Tray id="q" title="Credentials" bar={<nav>q</nav>} />)).toContain(
+      '<div class="t"><h2 id="q-h">Credentials</h2></div><nav>q</nav>',
     );
   });
 });

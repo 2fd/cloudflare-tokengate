@@ -78,11 +78,11 @@ describe('ConfirmDialog', () => {
   const html = render(
     <ConfirmDialog
       id="dlg-del"
-      title="Delete Slack and its 3 consumer accesses?"
+      title="Delete Slack and its 3 issuer access rules?"
       description="This cannot be undone."
-      action="/admin/tokens/svc_1/delete"
+      action="/admin/credentials/svc_1/delete"
       confirmLabel="Delete Slack"
-      consequences={['The secret is erased.', '3 consumer accesses are deleted.']}
+      consequences={['The secret is erased.', '3 issuer access rules are deleted.']}
       affected={['acme/api · environment production']}
       confirmText={{
         value: 'slack',
@@ -97,7 +97,7 @@ describe('ConfirmDialog', () => {
 
   it('lists the consequences and the affected objects', () => {
     expect(html).toContain(
-      '<div class="dlg-b"><ul class="conseq"><li>The secret is erased.</li><li>3 consumer accesses are deleted.</li></ul><ul class="dlg-list"><li>acme/api · environment production</li></ul><p>extra</p>',
+      '<div class="dlg-b"><ul class="conseq"><li>The secret is erased.</li><li>3 issuer access rules are deleted.</li></ul><ul class="dlg-list"><li>acme/api · environment production</li></ul><p>extra</p>',
     );
   });
 
@@ -157,11 +157,11 @@ describe('ConfirmDialog', () => {
         action="/x"
         confirmLabel="Go"
         open
-        cancelHref="/admin/tokens/slack"
+        cancelHref="/admin/credentials/slack"
       />,
     );
     expect(out).toContain('open=""');
-    expect(out).toContain('<a class="btn secondary" href="/admin/tokens/slack">Cancel</a>');
+    expect(out).toContain('<a class="btn secondary" href="/admin/credentials/slack">Cancel</a>');
   });
 
   it('escapes the title and the confirm text', () => {

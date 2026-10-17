@@ -3,13 +3,13 @@ import type { Foundation } from './types';
 
 const SCALE: ReadonlyArray<{ key: string; size: string; use: string; sample: string }> = [
   { key: '4xl', size: '30 / 36', use: 'KPI and pipeline numbers', sample: '8,214' },
-  { key: '3xl', size: '24 / 32', use: 'Page H1', sample: 'Service tokens' },
+  { key: '3xl', size: '24 / 32', use: 'Page H1', sample: 'Credentials' },
   { key: '2xl', size: '20 / 28', use: 'Entity H1 on detail pages', sample: 'Slack' },
   {
     key: 'xl',
     size: '18 / 26',
     use: 'Dialog titles',
-    sample: 'Delete Slack and its 3 consumer accesses?',
+    sample: 'Delete Slack and its 3 issuer access rules?',
   },
   { key: 'lg', size: '16 / 24', use: 'Tray titles, step titles', sample: 'Who can use it' },
   {

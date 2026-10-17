@@ -1,9 +1,9 @@
-// Short human description of a consumer access (a grant): who may call ("acme/api"), in which
+// Short human description of an issuer access rule (a grant): who may call ("acme/api"), in which
 // context ("environment production") and what ("POST /chat.postMessage"). Derived from the stored
 // conditions and rules only, with claim labels for numeric IDs. Display only: it never decides
 // anything, and an unrecognised condition set still gets a truthful (if generic) summary.
 import { labelFor } from '../db/claim-labels';
-import type { ClaimLabel, Grant } from '../db/types';
+import type { ClaimLabel, IssuerAccessRule } from '../db/types';
 import type { Condition, Rule } from '../policy/types';
 
 export interface AccessSummary {
@@ -15,9 +15,9 @@ export interface AccessSummary {
   operations: string[];
 }
 
-/** `labels` should be those of the grant's consumer (caller provider). */
+/** `labels` should be those of the grant's consumer (credential access rule). */
 export function accessSummary(
-  grant: Pick<Grant, 'conditions' | 'rules'>,
+  grant: Pick<IssuerAccessRule, 'conditions' | 'rules'>,
   labels: readonly ClaimLabel[],
 ): AccessSummary {
   return {
@@ -62,7 +62,9 @@ function subjectOf(conditions: readonly Condition[], labels: readonly ClaimLabel
   const subjects = values(conditions, 'sub');
   if (subjects.length > 0) return subjects.join(', ');
   const first = conditions.find((c) => c.negate !== true && c.match === 'exact');
-  return first ? `${first.claim} ${first.values.join(', ')}` : 'any caller of the consumer';
+  return first
+    ? `${first.claim} ${first.values.join(', ')}`
+    : 'any caller of the credential access rule';
 }
 
 function contextOf(conditions: readonly Condition[]): string {

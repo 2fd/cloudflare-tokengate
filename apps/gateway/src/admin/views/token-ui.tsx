@@ -1,9 +1,9 @@
-// Small view helpers shared by the Service tokens pages: logos as ui LogoSpecs, the stored secret
+// Small view helpers shared by the Credentials pages: logos as ui LogoSpecs, the stored secret
 // hint as its parts, names of types and hosts, and counted words.
 import type { LogoSpec } from '@tokengate/ui';
 import type { ServiceTemplate } from '../service-templates';
 
-/** The tile of a token type: the brand, with other letters for a second type of one brand. */
+/** The tile of a credential type: the brand, with other letters for a second type of one brand. */
 export function templateLogo(
   template: Pick<ServiceTemplate, 'id'> | null,
   o: { disabled?: boolean } = {},

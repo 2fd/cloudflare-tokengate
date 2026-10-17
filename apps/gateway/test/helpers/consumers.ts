@@ -1,4 +1,4 @@
-// Fixtures for the service consumer and consumer access integration tests: a fresh control plane,
+// Fixtures for the credential access rule and issuer access rules integration tests: a fresh control plane,
 // an app over a fake network that records every outbound call, sessions per role, and seeders for
 // labels and request records.
 import { env } from 'cloudflare:workers';
@@ -66,9 +66,9 @@ export async function seedLabel(
   label: string,
 ): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO claim_labels (caller_provider_id, claim, value, label, updated_at, updated_by)
+    `INSERT INTO claim_labels (credential_access_rule_id, claim, value, label, updated_at, updated_by)
      VALUES (?, ?, ?, ?, 1, NULL)
-     ON CONFLICT (caller_provider_id, claim, value) DO UPDATE SET label = excluded.label`,
+     ON CONFLICT (credential_access_rule_id, claim, value) DO UPDATE SET label = excluded.label`,
   )
     .bind(providerId, claim, value, label)
     .run();
@@ -77,7 +77,7 @@ export async function seedLabel(
 export async function labels(providerId?: string): Promise<Array<Record<string, unknown>>> {
   const statement = providerId
     ? env.DB.prepare(
-        'SELECT claim, value, label FROM claim_labels WHERE caller_provider_id = ? ORDER BY claim, value',
+        'SELECT claim, value, label FROM claim_labels WHERE credential_access_rule_id = ? ORDER BY claim, value',
       ).bind(providerId)
     : env.DB.prepare('SELECT claim, value, label FROM claim_labels ORDER BY claim, value');
   return (await statement.all<Record<string, unknown>>()).results;
@@ -111,7 +111,7 @@ export function requestRecord(overrides: Partial<RequestRecord> & { id: string }
     path: '/repos/acme/app',
     service_slug: 'github',
     service_id: null,
-    caller_provider_id: null,
+    credential_access_rule_id: null,
     grant_id: null,
     claims_verified: 1,
     caller_subject: null,

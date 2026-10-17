@@ -10,31 +10,31 @@ Use the GitHub Actions or GitLab CI profile for those platforms: issuers on `tok
 The gateway accepts a token only if all of these hold (`apps/gateway/src/identity/jwt.ts`, [I-JWT-1](../threat-model.md#i-jwt-1)):
 
 - It is a compact JWS (three base64url parts) of at most 16 KiB.
-- Its header has an `alg` that the consumer allows and a `kid` of 1-128 characters from `A-Z a-z 0-9 . _ -`.
+- Its header has an `alg` that the credential access rule allows and a `kid` of 1-128 characters from `A-Z a-z 0-9 . _ -`.
 - It is signed with an asymmetric algorithm: `RS256`, `RS384`, `RS512`, `PS256`, `PS384`, `PS512`, `ES256`, `ES384` or `EdDSA`. `none` and HMAC algorithms are never accepted.
-- `iss` equals the consumer's **Issuer** exactly.
-- `aud` contains the consumer's **Audience**.
+- `iss` equals the credential access rule's **Issuer** exactly.
+- `aud` contains the credential access rule's **Audience**.
 - It carries `sub`, `iat`, `exp` and every anchor claim.
 - `iat` is no older than **Maximum token age** (default 600 s, at most 3600 s). The gateway allows 30 s of clock skew.
 - The issuer publishes its keys at an `https` JWKS URI that the public internet can reach. The Worker only fetches public addresses (`global_fetch_strictly_public`).
 
-## Add the service consumer (admin)
+## Add the credential access rule (admin)
 
-1. In the admin UI, open **Service consumers** and open **Add a consumer**.
+1. In the admin UI, open **Credential access rules** and open **Add a credential access rule**.
 2. Choose **Generic OIDC**.
 3. In **Issuer**, enter the `iss` value of the tokens exactly, for example `https://agent.buildkite.com`. When you save, the gateway reads `<issuer>/.well-known/openid-configuration`; the discovery document must name the same issuer.
 4. **Anchor claims**: 1 to 8 claims that identify a workload and never change, separated by commas (for example `pipeline_id`). Leave it empty for the issuer's usual claim: `pipeline_id` for Buildkite, `oidc.circleci.com/project-id` for CircleCI, else `sub`.
 5. **Pin claim** and **Pin value** (the tenant pin, recommended): a claim that every token of your organization carries and its exact value, for example `organization_id` and your organization's UUID. For Buildkite and CircleCI, the claim name can stay empty: the form uses `organization_id` or `oidc.circleci.com/org-id`.
-6. Select **Add consumer**.
+6. Select **Add credential access rule**.
 
-The gateway derives the name (the issuer host and path), the JWKS URI and the signature algorithms from the discovery document (only the algorithms of [I-JWT-1](../threat-model.md#i-jwt-1), `RS256` when it lists none), a maximum token age of 10 minutes and a random audience. The consumer page shows the audience under **Connect your jobs**. To change the issuer, the JWKS URI, the audience, the algorithms, the token age or the anchor claims later, open **Advanced trust settings** on the consumer page. More pin conditions are under **Tenant pin › Change the pin**.
+The gateway derives the name (the issuer host and path), the JWKS URI and the signature algorithms from the discovery document (only the algorithms of [I-JWT-1](../threat-model.md#i-jwt-1), `RS256` when it lists none), a maximum token age of 10 minutes and a random audience. The credential access rule page shows the audience under **Connect your jobs**. To change the issuer, the JWKS URI, the audience, the algorithms, the token age or the anchor claims later, open **Advanced trust settings** on the credential access rule page. More pin conditions are under **Tenant pin › Change the pin**.
 
 An issuer without a discovery document cannot be added from this form: the form has no JWKS URI field, so that the keys always come from the issuer itself.
 
 ### Tenant pin
 
 The gateway does not know whether a generic issuer is shared by other companies.
-If you leave the tenant pin empty, the consumer page shows the risk: "no tenant pin: every token this issuer signs for this audience reaches grant evaluation".
+If you leave the tenant pin empty, the credential access rule page shows the risk: "no tenant pin: every token this issuer signs for this audience reaches grant evaluation".
 
 - Leave it empty only if the issuer signs tokens for your company alone (for example your own Kubernetes cluster).
 - For a SaaS issuer shared by many customers, pin your organization's immutable ID.
@@ -42,7 +42,7 @@ If you leave the tenant pin empty, the consumer page shows the risk: "no tenant 
 
 ### Anchor claims
 
-Every access of this consumer needs an exact, non-negated condition on at least one anchor claim ([I-AUTHZ-2](../threat-model.md#i-authz-2)).
+Every access of this credential access rule needs an exact, non-negated condition on at least one anchor claim ([I-AUTHZ-2](../threat-model.md#i-authz-2)).
 Pick numeric or UUID identifiers, not names that can be renamed and registered again.
 
 Changing anchor claims or the tenant pin is refused while an enabled access would no longer be valid under the new values.
@@ -58,7 +58,7 @@ The save also carries a SQL guard on the checked access set. If an access is ena
 - The generic profile has no event guard. If the issuer reports how a job was triggered, add your own conditions on that claim.
 - A branch or ref claim is only as strong as the issuer makes it. Check whether a user who can start jobs can choose its value. The gateway has no `ref_protected` check for generic issuers (see [Buildkite](#buildkite)).
 
-Accesses of a generic consumer use the rows editor of **Give a consumer access**: one row per condition, with the anchor claims prefilled. Full semantics: [policies.md](../policies.md).
+Accesses of a generic consumer use the rows editor of **Give an issuer access rule**: one row per condition, with the anchor claims prefilled. Full semantics: [policies.md](../policies.md).
 
 The request log stores only `sub`, the anchor claims and the tenant pin claims ([I-LOG-1](../threat-model.md#i-log-1)).
 

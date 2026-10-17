@@ -5,14 +5,14 @@ export { docsUrl } from './docs';
 
 /**
  * Plain-language meaning of every reason the proxy records (gateway codes plus finer reasons), in
- * the admin UI's names (token, secret, service consumer, consumer access). The gateway's own
+ * the admin UI's names (token, secret, credential access rule, issuer access rules). The gateway's own
  * error messages (lib/errors.ts) are the API's wording and stay as they are.
  */
 const REASON_TEXT: Readonly<Record<string, string>> = {
   ...Object.fromEntries(Object.entries(GATEWAY_ERRORS).map(([code, e]) => [code, e.message])),
-  issuer_unknown: 'the token issuer is not a configured service consumer',
-  no_matching_grant: 'no consumer access allows this call',
-  event_not_trusted: 'the triggering event needs an explicit opt-in in the consumer access',
+  issuer_unknown: 'the token issuer is not a configured credential access rule',
+  no_matching_grant: 'no issuer access rules allows this call',
+  event_not_trusted: 'the triggering event needs an explicit opt-in in the issuer access rules',
   service_not_found: 'unknown or disabled token slug',
   credential_unavailable: "the token's secret is not available",
   service_disabled: 'the token exists but is disabled',
@@ -27,7 +27,7 @@ const REASON_TEXT: Readonly<Record<string, string>> = {
   query_invalid: 'the query string is not allowed',
   upstream_invalid_status:
     'the upstream API answered with an HTTP status outside 200-599; it may have processed the request',
-  profile_unknown: 'the service consumer uses an unknown consumer type',
+  profile_unknown: 'the credential access rule uses an unknown issuer type',
   keyring_absent: 'no keyring is configured (TOKENGATE_KEK or TOKENGATE_KEYRING)',
   keyring_malformed: 'the keyring secret is malformed',
   active_kid_missing: 'the keyring has no active key',
@@ -44,7 +44,7 @@ export function reasonText(reason: string | null): string | null {
 }
 
 /**
- * Denial reasons that a new consumer access can fix. Only verified records with one of these
+ * Denial reasons that a new issuer access rules can fix. Only verified records with one of these
  * reasons offer "Give access from this request", and only they prefill the access form (I-LOG-2).
  */
 export const ACCESS_FIXABLE_REASONS: readonly string[] = ['no_matching_grant', 'event_not_trusted'];
@@ -76,10 +76,13 @@ export const REASON_GROUPS: ReadonlyArray<{ group: string; codes: readonly strin
     ],
   },
   {
-    group: 'Service consumer',
+    group: 'Credential access rule',
     codes: ['issuer_unknown', 'tenant_mismatch', 'jwks_unavailable', 'profile_unknown'],
   },
-  { group: 'Consumer access', codes: ['no_matching_grant', 'event_not_trusted', 'rate_limited'] },
+  {
+    group: 'Issuer access rules',
+    codes: ['no_matching_grant', 'event_not_trusted', 'rate_limited'],
+  },
   {
     group: 'Token configuration',
     codes: [
@@ -114,7 +117,7 @@ export const REASON_GROUPS: ReadonlyArray<{ group: string; codes: readonly strin
   { group: 'Gateway', codes: ['internal_error', 'not_configured'] },
 ];
 
-/** "no consumer access allows this call (no_matching_grant)": the label of a reason option. */
+/** "no issuer access rules allows this call (no_matching_grant)": the label of a reason option. */
 export function reasonLabel(code: string): string {
   const text = reasonText(code);
   return text ? `${text} (${code})` : code;

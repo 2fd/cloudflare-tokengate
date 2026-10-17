@@ -4,8 +4,8 @@ import { render } from '../render';
 
 describe('IdChip', () => {
   it('shows the full ID with the kind as tooltip', () => {
-    expect(render(<IdChip kind="Token">svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C</IdChip>)).toBe(
-      '<span class="idchip" title="Token ID">svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C</span>',
+    expect(render(<IdChip kind="Credential">svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C</IdChip>)).toBe(
+      '<span class="idchip" title="Credential ID">svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C</span>',
     );
   });
 

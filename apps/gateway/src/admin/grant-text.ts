@@ -1,4 +1,4 @@
-// Text forms of consumer access (grant) conditions and rules for the admin UI: the read-only
+// Text forms of issuer access rules (grant) conditions and rules for the admin UI: the read-only
 // "Exact conditions" copy, the comma-separated value lists of the rows editor, and the event
 // summary shown next to an access. The UI has no condition or rule text syntax to type: values
 // are parsed one field at a time (parseValueList); shapes, anchors and warnings are checked by

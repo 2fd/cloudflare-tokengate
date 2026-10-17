@@ -90,8 +90,8 @@ export const select: ComponentDoc = {
                 {
                   group: 'Access',
                   options: [
-                    { value: 'token', label: 'Service tokens' },
-                    { value: 'consumer', label: 'Service consumers' },
+                    { value: 'token', label: 'Credentials' },
+                    { value: 'consumer', label: 'Credential access rules' },
                     { value: 'user', label: 'Users' },
                   ],
                 },
@@ -109,8 +109,8 @@ export const select: ComponentDoc = {
       { value: 'login', label: 'Login' },
     ] },
     { group: 'Access', options: [
-      { value: 'token', label: 'Service tokens' },
-      { value: 'consumer', label: 'Service consumers' },
+      { value: 'token', label: 'Credentials' },
+      { value: 'consumer', label: 'Credential access rules' },
       { value: 'user', label: 'Users' },
     ] },
   ]} />

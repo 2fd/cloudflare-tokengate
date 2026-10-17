@@ -7,9 +7,9 @@ import type { Role } from '../../db/types';
 
 export type Permission =
   | 'read'
-  /** Services (service tokens): create, edit, enter and test credentials, toggle, delete. */
+  /** Credentials and their access boundaries: create, edit, toggle and delete. */
   | 'tokens:write'
-  /** Caller providers (service consumers) and grants (consumer access). */
+  /** Issuer access rules: grant access within credential boundaries. */
   | 'access:write'
   /** The configuration export: every user's email and both halves of the policy. */
   | 'config:export'
@@ -108,48 +108,48 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, RoutePermission>> = Obje
   'POST /admin/users/:id/dismiss-attempt': usersWrite,
 
   // == tokens ==
-  'GET /admin/tokens/hosts': read,
-  'POST /admin/tokens/hosts': settingsWrite,
-  'GET /admin/tokens/keys': read,
-  'POST /admin/tokens/keys/rewrap': rewrap,
-  'GET /admin/tokens': read,
-  'GET /admin/tokens/new': tokensForm,
+  'GET /admin/credentials/hosts': read,
+  'POST /admin/credentials/hosts': settingsWrite,
+  'GET /admin/credentials/keys': read,
+  'POST /admin/credentials/keys/rewrap': rewrap,
+  'GET /admin/credentials': read,
+  'GET /admin/credentials/new': tokensForm,
   // Allowing the destination host on the way edits the upstream host allowlist (owners only).
-  'POST /admin/tokens': { ...tokensWrite, fieldPermissions: { allow_host: 'settings:write' } },
-  'GET /admin/tokens/:id': read,
-  'POST /admin/tokens/:id': tokensWrite,
+  'POST /admin/credentials': { ...tokensWrite, fieldPermissions: { allow_host: 'settings:write' } },
+  'GET /admin/credentials/:id': read,
+  'POST /admin/credentials/:id': tokensWrite,
   // Rotate only: the destination is read from the stored row, never from the form.
-  'POST /admin/tokens/:id/secret': tokensWrite,
+  'POST /admin/credentials/:id/secret': tokensWrite,
   // A new destination needs the secret again (I-CRED-2); allowing its host edits the allowlist.
-  'POST /admin/tokens/:id/destination': {
+  'POST /admin/credentials/:id/destination': {
     ...tokensWrite,
     fieldPermissions: { allow_host: 'settings:write' },
   },
-  'POST /admin/tokens/:id/test': tokensWrite,
-  'POST /admin/tokens/:id/toggle': tokensWrite,
-  // Deleting the consumer access of the token with it is an access change.
-  'POST /admin/tokens/:id/delete': {
+  'POST /admin/credentials/:id/test': tokensWrite,
+  'POST /admin/credentials/:id/toggle': tokensWrite,
+  // Deleting the issuer access rules of the token with it is an access change.
+  'POST /admin/credentials/:id/delete': {
     ...tokensWrite,
     fieldPermissions: { with_accesses: 'access:write' },
   },
 
   // == consumers ==
-  'GET /admin/consumers': read,
-  'GET /admin/consumers/new': accessForm,
-  'POST /admin/consumers': accessWrite,
-  'GET /admin/consumers/:id': read,
-  'POST /admin/consumers/:id': accessWrite,
-  'POST /admin/consumers/:id/tenants': accessWrite,
-  'POST /admin/consumers/:id/toggle': accessWrite,
-  'POST /admin/consumers/:id/delete': accessWrite,
-  'GET /admin/access': read,
-  'GET /admin/access/new': accessForm,
-  'POST /admin/access': accessWrite,
-  'GET /admin/access/:id': read,
-  'POST /admin/access/:id': accessWrite,
-  'POST /admin/access/:id/copy': accessWrite,
-  'POST /admin/access/:id/toggle': accessWrite,
-  'POST /admin/access/:id/delete': accessWrite,
+  'GET /admin/credential-access-rules': read,
+  'GET /admin/credential-access-rules/new': tokensForm,
+  'POST /admin/credential-access-rules': tokensWrite,
+  'GET /admin/credential-access-rules/:id': read,
+  'POST /admin/credential-access-rules/:id': tokensWrite,
+  'POST /admin/credential-access-rules/:id/tenants': tokensWrite,
+  'POST /admin/credential-access-rules/:id/toggle': tokensWrite,
+  'POST /admin/credential-access-rules/:id/delete': tokensWrite,
+  'GET /admin/issuer-access-rules': read,
+  'GET /admin/issuer-access-rules/new': accessForm,
+  'POST /admin/issuer-access-rules': accessWrite,
+  'GET /admin/issuer-access-rules/:id': read,
+  'POST /admin/issuer-access-rules/:id': accessWrite,
+  'POST /admin/issuer-access-rules/:id/copy': accessWrite,
+  'POST /admin/issuer-access-rules/:id/toggle': accessWrite,
+  'POST /admin/issuer-access-rules/:id/delete': accessWrite,
 
   // == global ==
   // No secrets (I-CRED-1), but every user's email and the full policy: admins and owners only.

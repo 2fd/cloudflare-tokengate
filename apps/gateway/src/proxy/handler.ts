@@ -1,10 +1,10 @@
-// Proxy pipeline (docs/architecture.md, "Proxy pipeline"): verify the caller token, authorize it against grants, swap
+// Proxy pipeline (docs/architecture.md, "Proxy pipeline"): verify the caller token, authorize it against issuer_access_rules, swap
 // it for the service credential, stream the upstream response back. I-TOK-1/2, I-TEN-1, I-AUTHZ-1,
 // I-PATH-1, I-INJ-1, I-CRED-2, I-SSRF-1, I-REDIR-1, I-RESP-1, I-LOG-1/2.
 import { credentialAad, openCredential } from '../crypto/envelope';
 import { loadKeyring } from '../crypto/keyring';
 import { loadProxyContext, type ProxyContext } from '../db/proxy-context';
-import type { CallerProvider, Service } from '../db/types';
+import type { CredentialAccessRule, Service } from '../db/types';
 import type { Deps } from '../deps';
 import {
   buildCallerIdentity,
@@ -17,8 +17,9 @@ import { getProfile } from '../identity/profiles';
 import type { CallerIdentity, IssuerProfile } from '../identity/types';
 import { type GatewayErrorCode, gatewayError } from '../lib/errors';
 import { newId } from '../lib/ids';
+import { boundaryHolds, conditionsWithin } from '../policy/boundaries';
 import { claimText } from '../policy/conditions';
-import { evaluateGrants } from '../policy/evaluate';
+import { evaluateIssuerAccessRules } from '../policy/evaluate';
 import type { Injection, TraceEntry } from '../policy/types';
 import { PROXY_METHODS } from '../policy/types';
 import { normalizeInjection, validateBaseUrl } from '../policy/validate';
@@ -42,7 +43,7 @@ const EVENT_HINT_MAX_LENGTH = 64;
 /** What the pipeline learned; becomes the request record. */
 interface Progress {
   untrustedIss: string | null;
-  provider: CallerProvider | null;
+  provider: CredentialAccessRule | null;
   service: Service | null;
   /** Set only after signature verification AND the tenant pin passed. */
   caller: { identity: CallerIdentity; logClaims: readonly string[] } | null;
@@ -137,73 +138,99 @@ async function runPipeline(
   if (unverified === null) return fail('token_malformed');
   progress.untrustedIss = unverified.iss;
 
-  // Step 5. `iss` is untrusted here: it only selects which caller provider verifies the token.
-  const provider = context.callerProviders.find((p) => p.issuer === unverified.iss);
-  if (provider === undefined) {
-    const hint =
-      unverified.iss === null
-        ? undefined
-        : `the token issuer ${JSON.stringify(unverified.iss.slice(0, HINT_MAX_LENGTH))} is not a configured caller provider`;
-    return fail('issuer_unknown', { hint });
-  }
-  progress.provider = provider;
-  const profile = getProfile(provider.profile);
-  if (profile === null) return fail('not_configured', { reason: 'profile_unknown' });
-
-  // Step 6: unverified header (alg, kid) against the provider.
-  if (!headerAcceptable(unverified, provider)) return fail('token_malformed');
-
-  // Step 7: signature, issuer, audience, age and required claims.
-  const verified = await verifyCallerToken(token, provider, profile, deps);
-  if (!verified.ok) {
-    const hint =
-      verified.code === 'audience_mismatch'
-        ? `the token audience must be ${JSON.stringify(provider.audience)}`
-        : undefined;
-    return fail(verified.code, { hint });
-  }
-
-  // Step 8. Caller claims are recorded only once the tenant pin holds (I-TEN-1, I-LOG-2).
-  if (!tenantPinHolds(provider, verified.claims)) return fail('tenant_mismatch');
-  const logClaims = profile.logClaimAllowlist(provider);
-  progress.caller = {
-    identity: buildCallerIdentity(provider, profile, verified.claims),
-    logClaims,
-  };
-
-  // Step 9. Only now may the caller learn whether the service exists (I-TEN-1).
-  const service = context.service;
-  if (service === null) {
-    return fail('service_not_found', {
-      reason: context.serviceDisabled ? 'service_disabled' : 'service_not_found',
-    });
-  }
-  progress.service = service;
-
-  // Step 10: canonical path (I-PATH-1).
-  const canonical = canonicalizePath(params.rawPath);
-  if (!canonical.ok) return fail('path_invalid');
-
-  // Step 11: grant evaluation (I-AUTHZ-1).
-  const decision = evaluateGrants(
-    context.grants.filter((grant) => grant.caller_provider_id === provider.id),
-    {
-      claims: verified.claims,
-      profile,
-      provider,
-      method,
-      path: canonical.path,
-      matchPath: canonical.matchPath,
-      revealClaims: new Set(logClaims),
-    },
+  // An issuer is a value in each credential boundary. Several boundaries may trust the
+  // same issuer, with different audiences and filters; never choose only the first one.
+  const candidates = context.credentialAccessRules.filter(
+    (rule) =>
+      rule.issuer === unverified.iss &&
+      (context.service === null || rule.credential_id === context.service.id),
   );
-  if (decision.decision === 'deny') {
-    progress.trace = decision.trace;
-    return fail(decision.code, {
-      hint: decision.code === 'event_not_trusted' ? eventHint(profile, verified.claims) : undefined,
+  if (candidates.length === 0)
+    return fail('issuer_unknown', {
+      hint:
+        unverified.iss === null
+          ? undefined
+          : `the token issuer ${JSON.stringify(unverified.iss.slice(0, HINT_MAX_LENGTH))} has no credential access rule for this destination`,
     });
+  const canonical = canonicalizePath(params.rawPath);
+  let refusal: Result = fail('no_matching_grant');
+  let selected: { provider: CredentialAccessRule; profile: IssuerProfile; grantId: string } | null =
+    null;
+  for (const provider of candidates) {
+    const profile = getProfile(provider.profile);
+    if (!profile) {
+      refusal = fail('not_configured', { reason: 'profile_unknown' });
+      continue;
+    }
+    if (!headerAcceptable(unverified, provider)) {
+      refusal = fail('token_malformed');
+      continue;
+    }
+    const verified = await verifyCallerToken(token, provider, profile, deps);
+    if (!verified.ok) {
+      refusal = fail(verified.code, {
+        hint:
+          verified.code === 'audience_mismatch'
+            ? `the token audience must be ${JSON.stringify(provider.audience)}`
+            : undefined,
+      });
+      continue;
+    }
+    if (!tenantPinHolds(provider, verified.claims)) {
+      refusal = fail('tenant_mismatch');
+      continue;
+    }
+    const logClaims = profile.logClaimAllowlist(provider);
+    progress.provider = provider;
+    progress.caller = {
+      identity: buildCallerIdentity(provider, profile, verified.claims),
+      logClaims,
+    };
+    if (context.service === null)
+      return fail('service_not_found', {
+        reason: context.serviceDisabled ? 'service_disabled' : 'service_not_found',
+      });
+    progress.service = context.service;
+    if (!canonical.ok) return fail('path_invalid');
+    if (!boundaryHolds(provider.conditions, verified.claims)) {
+      refusal = fail('no_matching_grant');
+      continue;
+    }
+    const decision = evaluateIssuerAccessRules(
+      context.issuer_access_rules.filter(
+        (rule) =>
+          rule.credential_access_rule_id === provider.id &&
+          rule.service_id === provider.credential_id &&
+          conditionsWithin(rule.conditions, provider.conditions),
+      ),
+      {
+        claims: verified.claims,
+        profile,
+        provider,
+        method,
+        path: canonical.path,
+        matchPath: canonical.matchPath,
+        revealClaims: new Set(logClaims),
+      },
+    );
+    if (decision.decision === 'deny') {
+      progress.trace = decision.trace;
+      refusal = fail(decision.code, {
+        hint:
+          decision.code === 'event_not_trusted' ? eventHint(profile, verified.claims) : undefined,
+      });
+      continue;
+    }
+    selected = { provider, profile, grantId: decision.grant.id };
+    progress.trace = null;
+    break;
   }
-  progress.grantId = decision.grant.id;
+  if (selected === null) return refusal;
+  if (!canonical.ok) return fail('path_invalid');
+  const service = context.service;
+  if (service === null) return fail('service_not_found');
+  progress.service = service;
+  progress.grantId = selected.grantId;
 
   // Step 12. A failing limiter binding does not block traffic: it caps blast radius, it does not
   // authorize.
@@ -211,7 +238,7 @@ async function runPipeline(
   if (limiter) {
     let allowed = true;
     try {
-      allowed = (await limiter.limit({ key: `grant:${decision.grant.id}` })).success;
+      allowed = (await limiter.limit({ key: `grant:${selected.grantId}` })).success;
     } catch (error) {
       console.error(
         JSON.stringify({
@@ -414,7 +441,7 @@ function scheduleRecord(deps: Deps, ctx: RecordContext): void {
       reason: result.reason,
       status,
       serviceId: progress.service?.id ?? null,
-      callerProviderId: progress.provider?.id ?? null,
+      credentialAccessRuleId: progress.provider?.id ?? null,
       grantId: progress.grantId,
       untrustedIss: progress.untrustedIss,
       caller: progress.caller

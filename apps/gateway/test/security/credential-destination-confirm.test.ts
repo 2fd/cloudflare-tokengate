@@ -1,13 +1,13 @@
 // I-CRED-2: a D1 writer who repoints a service cannot get the credential by waiting for an admin
 // to re-enter it. A stored credential that does not open under the stored row, or no stored
 // credential at all, makes the stored destination unattested: the token page says so and does not
-// prefill it, and a save on Change destination (POST /admin/tokens/:id/destination) requires the
+// prefill it, and a save on Change destination (POST /admin/credentials/:id/destination) requires the
 // admin to type the destination host before anything is sent upstream. A sealed draft of the
 // secret (A13.6) never satisfies the confirmation and never follows a destination change.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { destinationFingerprint, setServiceCredential } from '../../src/admin/ops/services';
-import { getService } from '../../src/db/services';
+import { destinationFingerprint, setServiceCredential } from '../../src/admin/ops/credentials';
+import { getService } from '../../src/db/credentials';
 import {
   createAdminWorldApp,
   resetAdminWorld,
@@ -30,7 +30,7 @@ const VERIFY = { method: 'GET' as const, path: '/rate_limit', expect_status: 200
 const ATTACKER = 'https://attacker.example';
 
 async function repoint(id: string): Promise<void> {
-  await env.DB.prepare('UPDATE services SET base_url = ? WHERE id = ?').bind(ATTACKER, id).run();
+  await env.DB.prepare('UPDATE credentials SET base_url = ? WHERE id = ?').bind(ATTACKER, id).run();
 }
 
 const sentTo = (calls: Array<{ url: string }>, origin: string) =>
@@ -103,10 +103,10 @@ describe('I-CRED-2: re-entering a credential after a D1 repoint needs a confirme
   });
 
   it.each([
-    ['damaged', "UPDATE services SET credential_sealed = '{}', base_url = ? WHERE id = ?"],
+    ['damaged', "UPDATE credentials SET credential_sealed = '{}', base_url = ? WHERE id = ?"],
     [
       'unknown key id',
-      `UPDATE services SET credential_sealed = json_set(credential_sealed, '$.kid', 'gone'), base_url = ? WHERE id = ?`,
+      `UPDATE credentials SET credential_sealed = json_set(credential_sealed, '$.kid', 'gone'), base_url = ? WHERE id = ?`,
     ],
   ])('also requires the confirmation for a %s stored credential', async (_, sql) => {
     const network = fakeNetwork();
@@ -167,7 +167,7 @@ describe('I-CRED-2: the service page flags an unattested destination', () => {
     const world = await seedAdminWorld(app);
     const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
     await repoint(world.serviceId);
-    const path = `/admin/tokens/${world.serviceId}`;
+    const path = `/admin/credentials/${world.serviceId}`;
 
     const page = await (await adminGet(app, session, path)).text();
     expect(page).toContain('was changed outside the admin UI');
@@ -219,7 +219,9 @@ describe('I-CRED-2: the service page flags an unattested destination', () => {
     const app = createAdminWorldApp();
     const world = await seedAdminWorld(app);
     const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
-    const page = await (await adminGet(app, session, `/admin/tokens/${world.serviceId}`)).text();
+    const page = await (
+      await adminGet(app, session, `/admin/credentials/${world.serviceId}`)
+    ).text();
     expect(page).not.toContain('outside the admin UI');
     expect(page).not.toContain('not confirmed');
     expect(page).not.toContain('name="confirm_destination"');
@@ -236,7 +238,7 @@ describe('I-CRED-2: a token without a stored secret confirms its destination fir
     const id = await seedService(app.deps, { slug: 'bare', verify: VERIFY });
     await repoint(id);
     const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
-    const page = await (await adminGet(app, session, `/admin/tokens/${id}`)).text();
+    const page = await (await adminGet(app, session, `/admin/credentials/${id}`)).text();
     expect(page).toMatch(/<details[^>]*id="destination-edit"[^>]*open=""/);
     expect(page).toContain('name="confirm_destination"');
     expect(page).not.toMatch(/name="base_url"[^>]*value="https:\/\/attacker/);
@@ -244,7 +246,7 @@ describe('I-CRED-2: a token without a stored secret confirms its destination fir
       /<datalist id="f-destination-base_url-list">[\s\S]*?<\/datalist>/.exec(page)?.[0] ?? '';
     expect(datalist).not.toContain('attacker');
 
-    const refused = await adminPost(app, session, `/admin/tokens/${id}/destination`, {
+    const refused = await adminPost(app, session, `/admin/credentials/${id}/destination`, {
       base_url: ATTACKER,
       injection_kind: 'bearer',
       credential: SECRET,
@@ -263,7 +265,7 @@ describe('I-CRED-2: a sealed draft never stands in for the confirmation', () => 
     const world = await seedAdminWorld(app);
     const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
     await repoint(world.serviceId);
-    return { network, app, session, path: `/admin/tokens/${world.serviceId}/destination` };
+    return { network, app, session, path: `/admin/credentials/${world.serviceId}/destination` };
   }
 
   const draftOf = (html: string) => /name="credential_draft" value="([^"]+)"/.exec(html)?.[1] ?? '';

@@ -54,9 +54,9 @@ const attention: AttentionItem[] = [
   {
     level: 'warn',
     title: 'The secret of OpenAI expires on 21 Oct 2026 (in 6 days).',
-    body: 'Its 1 consumer access stops working then.',
+    body: 'Its 1 issuer access rules stops working then.',
     actions: (
-      <a class="btn sm secondary" href="/admin/tokens/openai#secret">
+      <a class="btn sm secondary" href="/admin/credentials/openai#secret">
         Replace secret
       </a>
     ),
@@ -74,7 +74,7 @@ const attention: AttentionItem[] = [
       subject: 'sam@acme.dev',
       roles: [
         { value: 'viewer', label: 'Viewer' },
-        { value: 'token_manager', label: 'Token manager' },
+        { value: 'token_manager', label: 'Credential manager' },
         { value: 'access_manager', label: 'Access manager' },
         { value: 'admin', label: 'Admin' },
       ],
@@ -86,7 +86,7 @@ const attention: AttentionItem[] = [
     title:
       'Access “Slack for platform/deploy-tools (environment production)” expires on 24 Oct 2026.',
     actions: (
-      <a class="btn sm secondary" href="/admin/access/acc_07#expiry">
+      <a class="btn sm secondary" href="/admin/issuer-access-rules/acc_07#expiry">
         Extend
       </a>
     ),
@@ -138,7 +138,7 @@ const stages: PipelineStage[] = [
     drop: {
       count: 182,
       unit: 'not recognized',
-      why: 'Unknown issuer: no service consumer trusts it.',
+      why: 'Unknown issuer: no credential access rule trusts it.',
       href: '/admin/requests?reason=issuer_unknown',
     },
   },
@@ -150,7 +150,7 @@ const stages: PipelineStage[] = [
     drop: {
       count: 59,
       unit: 'no access',
-      why: 'Verified callers that no consumer access allows.',
+      why: 'Verified callers that no issuer access rules allows.',
       href: '/admin/requests?reason=no_matching_grant',
     },
   },
@@ -172,13 +172,13 @@ const stages: PipelineStage[] = [
 const deniedReasons: Reason[] = [
   {
     count: 182,
-    label: 'Unknown issuer: no service consumer trusts it',
+    label: 'Unknown issuer: no credential access rule trusts it',
     short: 'unknown issuer',
     meta: '1 caller',
   },
   {
     count: 59,
-    label: 'No consumer access allows this call',
+    label: 'No issuer access rules allows this call',
     short: 'no access',
     meta: '2 callers',
   },
@@ -239,10 +239,16 @@ const giveAccess = (
     ]}
     actions={
       <>
-        <a class="btn primary" href="/admin/access/new?from_request=req_01JB8Z5K2Q7W3N4M6P8R9T0V1X">
+        <a
+          class="btn primary"
+          href="/admin/issuer-access-rules/new?from_request=req_01JB8Z5K2Q7W3N4M6P8R9T0V1X"
+        >
           Give access from this request
         </a>
-        <a class="btn secondary" href="/admin/access?consumer=github-acme&amp;token=slack">
+        <a
+          class="btn secondary"
+          href="/admin/issuer-access-rules?consumer=github-acme&amp;token=slack"
+        >
           Compare with existing accesses
         </a>
       </>
@@ -255,10 +261,13 @@ const giveAccess = (
 /** The Map | Matrix switch of an example; `example` tells the landmarks of several apart. */
 const viewSwitch = (current: 'map' | 'matrix', example: string) => (
   <nav class="seg sm" aria-label={`View (${example})`}>
-    <a href="/admin/access" aria-current={current === 'map' ? 'page' : undefined}>
+    <a href="/admin/issuer-access-rules" aria-current={current === 'map' ? 'page' : undefined}>
       Map
     </a>
-    <a href="/admin/access?view=matrix" aria-current={current === 'matrix' ? 'page' : undefined}>
+    <a
+      href="/admin/issuer-access-rules?view=matrix"
+      aria-current={current === 'matrix' ? 'page' : undefined}
+    >
       Matrix
     </a>
   </nav>
@@ -335,19 +344,19 @@ export const viz: readonly ComponentDoc[] = [
     <NeedsAttention items={[
       { level: 'warn',
         title: 'The secret of OpenAI expires on 21 Oct 2026 (in 6 days).',
-        body: 'Its 1 consumer access stops working then.',
-        actions: <a class="btn sm secondary" href="/admin/tokens/openai#secret">Replace secret</a> },
+        body: 'Its 1 issuer access rules stops working then.',
+        actions: <a class="btn sm secondary" href="/admin/credentials/openai#secret">Replace secret</a> },
       { level: 'warn',
         title: '1 person needs a decision.',
         body: <><b>Sam Ito</b> · sam@acme.dev · signed in first 25 min ago. Approve as:</>,
         approve: {
           action: '/admin/users/usr_sam/decide',
           subject: 'sam@acme.dev',
-          roles: [{ value: 'viewer', label: 'Viewer' }, { value: 'token_manager', label: 'Token manager' },
+          roles: [{ value: 'viewer', label: 'Viewer' }, { value: 'token_manager', label: 'Credential manager' },
                   { value: 'access_manager', label: 'Access manager' }, { value: 'admin', label: 'Admin' }],
           more: { href: '/admin/users/usr_sam', label: 'Owner or reject…' } } },
       { level: 'warn', title: 'Access “Slack for platform/deploy-tools …” expires on 24 Oct 2026.',
-        actions: <a class="btn sm secondary" href="/admin/access/acc_07#expiry">Extend</a> },
+        actions: <a class="btn sm secondary" href="/admin/issuer-access-rules/acc_07#expiry">Extend</a> },
       { level: 'info', title: 'Only one active owner.',
         body: 'Invite a second owner so the deployment stays manageable if that account is lost.',
         actions: <a class="btn sm secondary" href="/admin/users/invite">Invite</a> },
@@ -371,7 +380,7 @@ export const viz: readonly ComponentDoc[] = [
                     title: 'Anthropic answered 401 to the last 3 calls.',
                     body: 'The secret was probably revoked upstream. Calls fail until you replace it.',
                     actions: (
-                      <a class="btn sm secondary" href="/admin/tokens/anthropic#secret">
+                      <a class="btn sm secondary" href="/admin/credentials/anthropic#secret">
                         Replace secret
                       </a>
                     ),
@@ -381,7 +390,10 @@ export const viz: readonly ComponentDoc[] = [
                     title: 'Buildkite (acme) has been idle for 41 days.',
                     body: 'Its access to Slack (legacy) is inactive.',
                     actions: (
-                      <a class="btn sm secondary" href="/admin/consumers/buildkite-acme">
+                      <a
+                        class="btn sm secondary"
+                        href="/admin/credential-access-rules/buildkite-acme"
+                      >
                         Review consumer
                       </a>
                     ),
@@ -403,7 +415,7 @@ export const viz: readonly ComponentDoc[] = [
         code: `<NeedsAttention layout="list" items={[
   { level: 'bad', title: 'Anthropic answered 401 to the last 3 calls.',
     body: 'The secret was probably revoked upstream. Calls fail until you replace it.',
-    actions: <a class="btn sm secondary" href="/admin/tokens/anthropic#secret">Replace secret</a> },
+    actions: <a class="btn sm secondary" href="/admin/credentials/anthropic#secret">Replace secret</a> },
   { level: 'warn', title: 'Buildkite (acme) has been idle for 41 days.', … },
   { level: 'info', title: 'Request logs are kept for 30 days.', … },
 ]} />`,
@@ -434,7 +446,7 @@ export const viz: readonly ComponentDoc[] = [
                       hidden: { _csrf: 'csrf-token' },
                       roles: [
                         { value: 'viewer', label: 'Viewer' },
-                        { value: 'token_manager', label: 'Token manager' },
+                        { value: 'token_manager', label: 'Credential manager' },
                         { value: 'access_manager', label: 'Access manager' },
                         { value: 'admin', label: 'Admin' },
                         { value: 'owner', label: 'Owner…', dialog: 'na-ex-dlg-owner' },
@@ -499,7 +511,7 @@ export const viz: readonly ComponentDoc[] = [
                     hidden: { _csrf: 'csrf-token' },
                     roles: [
                       { value: 'viewer', label: 'Viewer' },
-                      { value: 'token_manager', label: 'Token manager' },
+                      { value: 'token_manager', label: 'Credential manager' },
                     ],
                   },
                   actions: (
@@ -517,7 +529,7 @@ export const viz: readonly ComponentDoc[] = [
   body: <><b>Sam Ito</b> · sam@acme.dev · signed in first 25 min ago. Approve as:</>,
   approve: { id: 'approve-sam', action: '/admin/users/usr_sam/decide', subject: 'sam@acme.dev',
     hidden: { _csrf: csrf },
-    roles: [{ value: 'viewer', label: 'Viewer' }, { value: 'token_manager', label: 'Token manager' }] },
+    roles: [{ value: 'viewer', label: 'Viewer' }, { value: 'token_manager', label: 'Credential manager' }] },
   actions: <a class="btn sm ghost" href="/admin/users/usr_sam/dismiss">Dismiss</a>,
 }]} />`,
       },
@@ -670,10 +682,10 @@ export const viz: readonly ComponentDoc[] = [
           { label: 'Errors', count: 12, share: '0.15 %', href: '/admin/requests?outcome=error', kind: 'error' },
         ] },
       { label: 'Caller verified', value: 8032, meta: '97.8 % of received', href: '…',
-        drop: { count: 182, unit: 'not recognized', why: 'Unknown issuer: no service consumer trusts it.',
+        drop: { count: 182, unit: 'not recognized', why: 'Unknown issuer: no credential access rule trusts it.',
                 href: '/admin/requests?reason=issuer_unknown' } },
       { label: 'Access matched', value: 7973, meta: '97.1 % of received', href: '…',
-        drop: { count: 59, unit: 'no access', why: 'Verified callers that no consumer access allows.', href: '…' } },
+        drop: { count: 59, unit: 'no access', why: 'Verified callers that no issuer access rules allows.', href: '…' } },
       { label: 'Upstream OK · allowed', value: 7961, meta: '96.9 % · p50 38 ms · p95 212 ms', href: '…',
         drop: { count: 12, unit: 'upstream errors', kind: 'error',
                 why: 'OpenAI answered 502 (11), Anthropic timed out (1).', href: '…' } },
@@ -764,7 +776,7 @@ export const viz: readonly ComponentDoc[] = [
     ],
     do: [
       'Link every stage and drop to the request list filtered to it.',
-      'Say why calls dropped in words ("Unknown issuer: no service consumer trusts it.").',
+      'Say why calls dropped in words ("Unknown issuer: no credential access rule trusts it.").',
       'Put the reasons bar under the pipeline in the same tray.',
     ],
     dont: [
@@ -1046,8 +1058,8 @@ export const viz: readonly ComponentDoc[] = [
                 { mark: 'wire', label: 'Active' },
                 { mark: 'wire-warn', label: 'Needs attention' },
                 { mark: 'wire-off', label: 'Inactive' },
-                { mark: 'wire-on', label: 'Focused consumer' },
-                { mark: 'wire-dim', label: 'Other consumers' },
+                { mark: 'wire-on', label: 'Focused credential access rule' },
+                { mark: 'wire-dim', label: 'Other credential access rules' },
               ]}
             />
             <Legend
@@ -1064,8 +1076,8 @@ export const viz: readonly ComponentDoc[] = [
         code: `<Legend as="p" items={[{ mark: 'allowed', label: 'Allowed' }, { mark: 'denied', label: 'Denied' },
   { mark: 'error', label: 'Errors' }, { mark: 'bad', label: 'Unknown issuer' }]} />
 <Legend as="p" items={[{ mark: 'wire', label: 'Active' }, { mark: 'wire-warn', label: 'Needs attention' },
-  { mark: 'wire-off', label: 'Inactive' }, { mark: 'wire-on', label: 'Focused consumer' },
-  { mark: 'wire-dim', label: 'Other consumers' }]} />
+  { mark: 'wire-off', label: 'Inactive' }, { mark: 'wire-on', label: 'Focused credential access rule' },
+  { mark: 'wire-dim', label: 'Other credential access rules' }]} />
 <Legend as="p" items={[{ mark: 'cell', label: 'Active' }, { mark: 'cell-warn', label: 'Expiring or risk' },
   { mark: 'cell-bad', label: 'Expired' }, { mark: 'cell-off', label: 'Inactive' }]} />`,
       },
@@ -1229,8 +1241,8 @@ export const viz: readonly ComponentDoc[] = [
         ),
         code: `<Panel variant="pad">
   <ReasonBar title="Denied by reason" reasons={[
-    { count: 182, label: 'Unknown issuer: no service consumer trusts it', short: 'unknown issuer', meta: '1 caller' },
-    { count: 59, label: 'No consumer access allows this call', short: 'no access', meta: '2 callers' },
+    { count: 182, label: 'Unknown issuer: no credential access rule trusts it', short: 'unknown issuer', meta: '1 caller' },
+    { count: 59, label: 'No issuer access rules allows this call', short: 'no access', meta: '2 callers' },
   ]} />
 </Panel>`,
       },
@@ -1320,10 +1332,10 @@ export const viz: readonly ComponentDoc[] = [
     slug: 'connections-map',
     name: 'ConnectionsMap',
     summary:
-      'Service consumers on the left, service tokens on the right, one server-drawn wire per consumer–token pair.',
+      'Credential access rules on the left, credentials on the right, one server-drawn wire per consumer–token pair.',
     usage: {
       when: [
-        'The "Tokens in use" tray of the Overview and the Map view of Consumer access (the same markup on both).',
+        'The "Tokens in use" tray of the Overview and the Map view of Issuer access rules (the same markup on both).',
         'Answering "who can call what" at a glance, with the last 24 hours of traffic on each token.',
       ],
       whenNot: [
@@ -1342,12 +1354,12 @@ export const viz: readonly ComponentDoc[] = [
             id="cm-ex"
             headingLevel={3}
             title="Tokens in use"
-            description="Who calls which token through tokengate, with the last 24 hours of traffic. Each line is a consumer access."
+            description="Who calls which token through tokengate, with the last 24 hours of traffic. Each line is an issuer access rule."
             actions={viewSwitch('map', 'example 1')}
           >
             <ConnectionsMap
               id="cm-ex-map"
-              focusLabel="Focus on a consumer (example 1)"
+              focusLabel="Focus on a credential access rule (example 1)"
               consumers={consumers}
               tokens={tokens}
               accesses={accesses}
@@ -1376,7 +1388,7 @@ export const viz: readonly ComponentDoc[] = [
       {
         title: 'Focused on one consumer',
         description:
-          'focus comes from ?focus=: the consumer and its tokens light up, its wires are drawn on top, the rest dims (still AA) and links to its own focus. The list shows only its accesses.',
+          'focus comes from ?focus=: the credential access rule and its tokens light up, its wires are drawn on top, the rest dims (still AA) and links to its own focus. The list shows only its accesses.',
         layout: 'stack',
         render: () => (
           <Tray
@@ -1388,7 +1400,7 @@ export const viz: readonly ComponentDoc[] = [
           >
             <ConnectionsMap
               id="cm-ex-focus-map"
-              focusLabel="Focus on a consumer (example 2)"
+              focusLabel="Focus on a credential access rule (example 2)"
               consumers={consumers}
               tokens={tokensFocusedOnPlatform}
               accesses={accesses}
@@ -1402,7 +1414,7 @@ export const viz: readonly ComponentDoc[] = [
       {
         title: 'Filtered to one token',
         description:
-          'focusToken comes from ?token= when it is the only filter: every line stays, the token, its wires and the consumers that can use it light up, the rest dims. Each consumer says how many of its accesses reach the token; the focus bar gives way.',
+          'focusToken comes from ?token= when it is the only filter: every line stays, the token, its wires and the credential access rules that can use it light up, the rest dims. Each credential access rule says how many of its accesses reach the token; the focus bar gives way.',
         layout: 'stack',
         render: () => (
           <Tray
@@ -1427,7 +1439,7 @@ export const viz: readonly ComponentDoc[] = [
       {
         title: 'At scale',
         description:
-          '14 consumers, 9 tokens. At most 7 rows per side: the 6 busiest and one group node that opens the matrix filtered to the rest, with a note above the map.',
+          '14 credential access rules, 9 credentials. At most 7 rows per side: the 6 busiest and one group node that opens the matrix filtered to the rest, with a note above the map.',
         layout: 'stack',
         render: () => (
           <Tray
@@ -1439,7 +1451,7 @@ export const viz: readonly ComponentDoc[] = [
           >
             <ConnectionsMap
               id="cm-ex-scale-map"
-              focusLabel="Focus on a consumer (example 3)"
+              focusLabel="Focus on a credential access rule (example 3)"
               consumers={scaleConsumers}
               tokens={scaleTokens}
               accesses={scaleAccesses}
@@ -1464,7 +1476,7 @@ export const viz: readonly ComponentDoc[] = [
           >
             <ConnectionsMap
               id="cm-ex-scale-focus-map"
-              focusLabel="Focus on a consumer (example 4)"
+              focusLabel="Focus on a credential access rule (example 4)"
               consumers={scaleConsumers}
               tokens={scaleTokensFocused}
               accesses={scaleAccesses}
@@ -1495,7 +1507,7 @@ export const viz: readonly ComponentDoc[] = [
           >
             <ConnectionsMap
               id="cm-ex-range-map"
-              focusLabel="Focus on a consumer (example 5)"
+              focusLabel="Focus on a credential access rule (example 5)"
               consumers={consumers}
               tokens={tokens.map((token) => ({
                 ...token,
@@ -1587,7 +1599,7 @@ export const viz: readonly ComponentDoc[] = [
           {
             name: 'baseHref',
             type: 'string',
-            default: "'/admin/access'",
+            default: "'/admin/issuer-access-rules'",
             description:
               'Every link is built from it: ?consumer=, ?token=, ?focus=, ?view=matrix (&consumers=rest, &tokens=rest).',
           },
@@ -1596,7 +1608,7 @@ export const viz: readonly ComponentDoc[] = [
             type: 'string',
             default: 'baseHref',
             description:
-              'Base of the focus bar (All consumers, ?focus=, Clear focus) and of the ?focus= node links, so a map on the Overview keeps its focus there.',
+              'Base of the focus bar (All credential access rules, ?focus=, Clear focus) and of the ?focus= node links, so a map on the Overview keeps its focus there.',
           },
           {
             name: 'rangeLabel',
@@ -1620,7 +1632,7 @@ export const viz: readonly ComponentDoc[] = [
           {
             name: 'focusLabel',
             type: 'string',
-            default: "'Focus on a consumer'",
+            default: "'Focus on a credential access rule'",
             description: 'Name of the focus bar landmark; give a second map on the page its own.',
           },
           {
@@ -1639,7 +1651,7 @@ export const viz: readonly ComponentDoc[] = [
       'Status is in words on the token line ("⌛ Secret expires in 6 days"); the wire color only adds to it.',
     ],
     do: [
-      'Render it from the same data on the Overview and on Consumer access.',
+      'Render it from the same data on the Overview and on Issuer access rules.',
       'Write the token line as the reason the wire needs attention.',
       'Keep the Map | Matrix switch in the tray header.',
     ],
@@ -1691,7 +1703,7 @@ export const viz: readonly ComponentDoc[] = [
       'Consumers’ repositories down, tokens across, one cell per access; empty cells open the prefilled create form.',
     usage: {
       when: [
-        'The Matrix view of Consumer access, and the target of the map’s group nodes.',
+        'The Matrix view of Issuer access rules, and the target of the map’s group nodes.',
         'Finding a gap: which repository has no access to a token yet.',
       ],
       whenNot: [
@@ -1713,7 +1725,7 @@ export const viz: readonly ComponentDoc[] = [
               columns={matrixColumns}
               groups={matrixGroups}
               addHref={(row, column) =>
-                `/admin/access/new?repo=${encodeURIComponent(row.label)}&token=${column.id}`
+                `/admin/issuer-access-rules/new?repo=${encodeURIComponent(row.label)}&token=${column.id}`
               }
             />
             <Legend
@@ -1729,13 +1741,13 @@ export const viz: readonly ComponentDoc[] = [
         ),
         code: `<Matrix label="Access matrix" corner="Consumer › repository"
   columns={[{ id: 'slack', name: 'Slack', logo: { brand: 'slack' },
-              href: '/admin/access?token=slack', meta: '3 accesses · 2,140 req' }, …]}
-  groups={[{ name: 'GitHub Actions (acme)', logo: { brand: 'github' }, href: '/admin/consumers/github-acme',
+              href: '/admin/issuer-access-rules?token=slack', meta: '3 accesses · 2,140 req' }, …]}
+  groups={[{ name: 'GitHub Actions (acme)', logo: { brand: 'github' }, href: '/admin/credential-access-rules/github-acme',
              meta: 'org acme (1234567) · 6 accesses',
-             rows: [{ label: 'acme/api', href: '/admin/access?repo=acme/api', meta: '3 accesses',
-                      cells: { slack: { href: '/admin/access/acc_01', status: 'Active',
+             rows: [{ label: 'acme/api', href: '/admin/issuer-access-rules?repo=acme/api', meta: '3 accesses',
+                      cells: { slack: { href: '/admin/issuer-access-rules/acc_01', status: 'Active',
                                         constraint: 'env production', operations: '1 operation' }, … } }] }, …]}
-  addHref={(row, column) => \`/admin/access/new?repo=\${encodeURIComponent(row.label)}&token=\${column.id}\`} />
+  addHref={(row, column) => \`/admin/issuer-access-rules/new?repo=\${encodeURIComponent(row.label)}&token=\${column.id}\`} />
 <Legend as="p" items={[{ mark: 'cell', label: 'Active' }, { mark: 'cell-warn', label: 'Expiring or risk' },
   { mark: 'cell-bad', label: 'Expired' }, { mark: 'cell-off', label: 'Inactive' }]} />`,
       },
@@ -1759,20 +1771,20 @@ export const viz: readonly ComponentDoc[] = [
               {
                 name: 'GitHub Actions (acme)',
                 logo: { brand: 'github' },
-                href: '/admin/consumers/github-acme',
+                href: '/admin/credential-access-rules/github-acme',
                 rows: [
                   {
                     label: 'acme/api',
                     cells: {
                       slack: [
                         {
-                          href: '/admin/access/acc_01',
+                          href: '/admin/issuer-access-rules/acc_01',
                           status: 'Active',
                           constraint: 'env production',
                           srPrefix: 'acme/api can use Slack:',
                         },
                         {
-                          href: '/admin/access/acc_11',
+                          href: '/admin/issuer-access-rules/acc_11',
                           tone: 'warn',
                           status: 'Expires in 9 days',
                           constraint: 'branch main',
@@ -1785,7 +1797,7 @@ export const viz: readonly ComponentDoc[] = [
               },
             ]}
             addHref={(row, column) =>
-              `/admin/access/new?repo=${encodeURIComponent(row.label)}&token=${column.id}`
+              `/admin/issuer-access-rules/new?repo=${encodeURIComponent(row.label)}&token=${column.id}`
             }
           />
         ),
@@ -1794,9 +1806,9 @@ export const viz: readonly ComponentDoc[] = [
   columns={columns}
   groups={[{ name: 'GitHub Actions (acme)', …, rows: [{ label: 'acme/api', cells: {
     slack: [
-      { href: '/admin/access/acc_01', status: 'Active', constraint: 'env production',
+      { href: '/admin/issuer-access-rules/acc_01', status: 'Active', constraint: 'env production',
         srPrefix: 'acme/api can use Slack:' },
-      { href: '/admin/access/acc_11', tone: 'warn', status: 'Expires in 9 days',
+      { href: '/admin/issuer-access-rules/acc_11', tone: 'warn', status: 'Expires in 9 days',
         constraint: 'branch main', srPrefix: 'acme/api can use Slack:' },
     ] } }] }]}
   addHref={addHref} />`,
@@ -1906,7 +1918,7 @@ export const viz: readonly ComponentDoc[] = [
       },
     ],
     accessibility: [
-      'A real table: column headers are the tokens, row headers the repositories, and each consumer is a row group header, so a screen reader announces "acme/api, Slack" with a cell.',
+      'A real table: column headers are the tokens, row headers the repositories, and each credential access rule is a row group header, so a screen reader announces "acme/api, Slack" with a cell.',
       'The scroll region is focusable and named, so keyboard users can scroll it.',
       'Empty cells are links named "Give acme/web access to Slack"; the + is hidden. In a read-only matrix they are text read as "No access"; the dash is hidden.',
       'Give the table a caption when the page has more than one matrix, and srPrefix when stacked cells need their row and column in the link name.',
@@ -1980,28 +1992,28 @@ export const viz: readonly ComponentDoc[] = [
                   },
                   {
                     state: 'next',
-                    title: 'Add a service token',
+                    title: 'Add a credential',
                     why: 'tokengate keeps the secret; CI jobs never see it.',
-                    action: { href: '/admin/tokens/new', label: 'Add token' },
-                    quickLabel: 'Token types',
+                    action: { href: '/admin/credentials/new', label: 'Add credential' },
+                    quickLabel: 'Credential types',
                     quick: [
                       {
-                        href: '/admin/tokens/new?type=slack',
+                        href: '/admin/credentials/new?type=slack',
                         label: 'Slack',
                         logo: { brand: 'slack' },
                       },
                       {
-                        href: '/admin/tokens/new?type=openai',
+                        href: '/admin/credentials/new?type=openai',
                         label: 'OpenAI',
                         logo: { brand: 'openai' },
                       },
                       {
-                        href: '/admin/tokens/new?type=anthropic',
+                        href: '/admin/credentials/new?type=anthropic',
                         label: 'Anthropic',
                         logo: { brand: 'anthropic' },
                       },
                       {
-                        href: '/admin/tokens/new?type=github',
+                        href: '/admin/credentials/new?type=github',
                         label: 'GitHub',
                         logo: { brand: 'github' },
                       },
@@ -2009,9 +2021,12 @@ export const viz: readonly ComponentDoc[] = [
                   },
                   {
                     state: 'todo',
-                    title: 'Add a service consumer and give it access',
+                    title: 'Add a credential access rule and give it access',
                     why: 'Trust your CI system, then choose which jobs can use the token.',
-                    action: { href: '/admin/consumers/new', label: 'Add consumer' },
+                    action: {
+                      href: '/admin/credential-access-rules/new',
+                      label: 'Add credential access rule',
+                    },
                   },
                 ]}
               />
@@ -2023,12 +2038,12 @@ export const viz: readonly ComponentDoc[] = [
   <Panel>
     <Checklist steps={[
       { state: 'done', title: 'Sign in with Cloudflare Access', why: 'You are signed in as Maya Chen, Owner.' },
-      { state: 'next', title: 'Add a service token', why: 'tokengate keeps the secret; CI jobs never see it.',
-        action: { href: '/admin/tokens/new', label: 'Add token' }, quickLabel: 'Token types',
-        quick: [{ href: '/admin/tokens/new?type=slack', label: 'Slack', logo: { brand: 'slack' } }, …] },
-      { state: 'todo', title: 'Add a service consumer and give it access',
+      { state: 'next', title: 'Add a credential', why: 'tokengate keeps the secret; CI jobs never see it.',
+        action: { href: '/admin/credentials/new', label: 'Add credential' }, quickLabel: 'Credential types',
+        quick: [{ href: '/admin/credentials/new?type=slack', label: 'Slack', logo: { brand: 'slack' } }, …] },
+      { state: 'todo', title: 'Add a credential access rule and give it access',
         why: 'Trust your CI system, then choose which jobs can use the token.',
-        action: { href: '/admin/consumers/new', label: 'Add consumer' } },
+        action: { href: '/admin/credential-access-rules/new', label: 'Add credential access rule' } },
     ]} />
   </Panel>
 </Tray>`,
@@ -2048,15 +2063,15 @@ export const viz: readonly ComponentDoc[] = [
               steps={[
                 {
                   state: 'next',
-                  title: 'Add a service token',
+                  title: 'Add a credential',
                   why: 'tokengate keeps the secret; CI jobs never see it.',
-                  action: { href: '/admin/tokens/new', label: 'Add token' },
+                  action: { href: '/admin/credentials/new', label: 'Add credential' },
                   ask: (
                     <AskSomeone
                       people={['Tom Becker', 'Diego Ruiz']}
                       link={{ href: 'mailto:tom@acme.dev,diego@acme.dev', label: 'Email them' }}
                     >
-                      Only owners and token managers can add tokens.
+                      Only owners and credential managers can add tokens.
                     </AskSomeone>
                   ),
                 },
@@ -2065,10 +2080,10 @@ export const viz: readonly ComponentDoc[] = [
           </Panel>
         ),
         code: `<Checklist steps={[{
-  state: 'next', title: 'Add a service token', why: 'tokengate keeps the secret; CI jobs never see it.',
+  state: 'next', title: 'Add a credential', why: 'tokengate keeps the secret; CI jobs never see it.',
   ask: <AskSomeone people={['Tom Becker', 'Diego Ruiz']}
          link={{ href: 'mailto:tom@acme.dev,diego@acme.dev', label: 'Email them' }}>
-         Only owners and token managers can add tokens.</AskSomeone>,
+         Only owners and credential managers can add tokens.</AskSomeone>,
 }]} />`,
       },
       {
@@ -2088,7 +2103,10 @@ export const viz: readonly ComponentDoc[] = [
                   state: 'next',
                   title: 'Call the token from a CI job',
                   why: 'The job asks tokengate for the call; the secret stays here.',
-                  action: { href: '/admin/consumers/github-acme', label: 'Open the consumer' },
+                  action: {
+                    href: '/admin/credential-access-rules/github-acme',
+                    label: 'Open the credential access rule',
+                  },
                   detail: (
                     <CodeBlock label="Workflow step" caption="Add this step to the workflow:">
                       {`- uses: tokengate/action@v1
@@ -2104,7 +2122,7 @@ export const viz: readonly ComponentDoc[] = [
         code: `<Checklist steps={[{
   state: 'next', title: 'Call the token from a CI job',
   why: 'The job asks tokengate for the call; the secret stays here.',
-  action: { href: '/admin/consumers/github-acme', label: 'Open the consumer' },
+  action: { href: '/admin/credential-access-rules/github-acme', label: 'Open the credential access rule' },
   detail: <CodeBlock label="Workflow step" caption="Add this step to the workflow:">{yaml}</CodeBlock>,
 }]} />`,
       },
@@ -2218,7 +2236,7 @@ export const viz: readonly ComponentDoc[] = [
     prefill={[{ label: 'GitHub Actions (acme)', logo: { brand: 'github' } }, { label: 'acme/web', mono: true },
               { label: <>branch <span class="mono">feature/login-redesign</span></> },
               { label: 'Slack', logo: { brand: 'slack' } }]}
-    actions={<><a class="btn primary" href="/admin/access/new?from_request=req_01JB8Z5K…">Give access from this request</a>
+    actions={<><a class="btn primary" href="/admin/issuer-access-rules/new?from_request=req_01JB8Z5K…">Give access from this request</a>
                <a class="btn secondary" href="…">Compare with existing accesses</a></>}>
     The form opens with these values filled in; you choose only what is missing.
   </NextStep>
@@ -2347,7 +2365,7 @@ export const viz: readonly ComponentDoc[] = [
     summary: 'One delegation on one line: consumer (and repository) → token (and operation).',
     usage: {
       when: [
-        'Access lists on token and consumer pages, and the text form of the connections map.',
+        'Access lists on credential and credential access rule pages, and the text form of the connections map.',
         'A request row: caller → token.',
       ],
       whenNot: ['Many accesses at once: use ConnectionsMap or Matrix.'],
@@ -2356,7 +2374,7 @@ export const viz: readonly ComponentDoc[] = [
       {
         title: 'Plain and linked',
         description:
-          'With href the whole row is one link and the consumer name underlines on hover. Below 48rem it wraps to two lines.',
+          'With href the whole row is one link and the credential access rule name underlines on hover. Below 48rem it wraps to two lines.',
         layout: 'stack',
         render: () => (
           <>
@@ -2373,7 +2391,7 @@ export const viz: readonly ComponentDoc[] = [
               }}
             />
             <ArrowRow
-              href="/admin/access/acc_01"
+              href="/admin/issuer-access-rules/acc_01"
               consumer={{
                 name: 'GitHub Actions (acme) › acme/api',
                 logo: { brand: 'github' },
@@ -2396,7 +2414,7 @@ export const viz: readonly ComponentDoc[] = [
         ),
         code: `<ArrowRow consumer={{ name: 'GitLab CI (platform) › platform/deploy-tools', logo: { brand: 'gitlab' }, context: 'branch main' }}
   token={{ name: 'Discord alerts', logo: { brand: 'discord' }, context: <code>POST /</code> }} />
-<ArrowRow href="/admin/access/acc_01"
+<ArrowRow href="/admin/issuer-access-rules/acc_01"
   consumer={{ name: 'GitHub Actions (acme) › acme/api', logo: { brand: 'github' }, context: 'environment production' }}
   token={{ name: 'Slack', logo: { brand: 'slack' }, context: 'Post messages' }} />
 <ArrowRow consumer={{ name: 'Buildkite (acme) › pipeline deploy', logo: { brand: 'buildkite' } }}
@@ -2406,8 +2424,8 @@ export const viz: readonly ComponentDoc[] = [
         title: 'Consumer only',
         description: (
           <>
-            Without <code>token</code> the row is the consumer side alone, with no arrow and no
-            verb: a caller refused before a token was chosen, an unverified caller.
+            Without <code>token</code> the row is the credential access rule side alone, with no
+            arrow and no verb: a caller refused before a token was chosen, an unverified caller.
           </>
         ),
         layout: 'stack',
@@ -2452,7 +2470,7 @@ export const viz: readonly ComponentDoc[] = [
             name: 'token',
             type: 'ArrowEnd',
             description:
-              'Right side, same shape. Leave out for a consumer-only row: no arrow, no verb.',
+              'Right side, same shape. Leave out for a credential access rule-only row: no arrow, no verb.',
           },
           { name: 'href', type: 'string', description: 'Makes the row one link.' },
           {
@@ -2470,7 +2488,9 @@ export const viz: readonly ComponentDoc[] = [
       'Logos are hidden; names are text.',
       'The "·" before a context is hidden (span.sep), so it is not read; a page-local two-line layout can hide it with .sep.',
     ],
-    do: ['Put the constraint on the consumer side and the operation on the token side.'],
+    do: [
+      'Put the constraint on the credential access rule side and the operation on the token side.',
+    ],
     dont: ['Do not put two links in one row: link the access, filter elsewhere.'],
     classes: ['arrow', 'side-c', 'side-t', 'to', 'ctx', 'sep', 'ent-n'],
   },
@@ -2587,7 +2607,7 @@ export const viz: readonly ComponentDoc[] = [
     slug: 'who-can-use',
     name: 'WhoCanUse',
     summary:
-      'The “Who can use” map of a token page: each consumer, its accesses as rows, and the wires into the token hub, drawn with CSS lines.',
+      'The “Who can use” map of a token page: each credential access rule, its accesses as rows, and the wires into the token hub, drawn with CSS lines.',
     usage: {
       when: [
         'The first tray of a token page: who may call it, under which constraint, and their status.',
@@ -2610,13 +2630,13 @@ export const viz: readonly ComponentDoc[] = [
             count={3}
             description={
               <>
-                Each line is one consumer access. Consumers call <code>/proxy/slack</code>; they
+                Each line is one issuer access rule. Consumers call <code>/proxy/slack</code>; they
                 never see the secret.
               </>
             }
           >
             <WhoCanUse
-              label="Accesses to Slack, grouped by consumer"
+              label="Accesses to Slack, grouped by credential access rule"
               token={{ name: 'Slack', logo: 'slack', path: '/proxy/slack' }}
               groups={whoGroups}
               footer={
@@ -2630,19 +2650,19 @@ export const viz: readonly ComponentDoc[] = [
                   <span class="plus" aria-hidden="true">
                     +
                   </span>
-                  Give another consumer access
+                  Give another issuer access rules
                 </a>
               }
             />
           </Tray>
         ),
         code: `<Tray id="who" title="Who can use Slack" count={3} description={…}>
-  <WhoCanUse label="Accesses to Slack, grouped by consumer"
+  <WhoCanUse label="Accesses to Slack, grouped by credential access rule"
     token={{ name: 'Slack', logo: 'slack', path: '/proxy/slack' }}
     groups={[
       { consumer: { name: 'GitHub Actions (acme)', href: '…', line: 'org acme · 2 accesses', logo: 'github', count: 2 },
         accesses: [
-          { name: 'acme/api', href: '/admin/access/A1', context: 'environment production (protected refs)',
+          { name: 'acme/api', href: '/admin/issuer-access-rules/A1', context: 'environment production (protected refs)',
             meta: <><code>POST /chat.postMessage</code> · never expires · used 2 min ago</>,
             status: <Badge status="active" /> },
           …
@@ -2652,11 +2672,11 @@ export const viz: readonly ComponentDoc[] = [
           status: <Badge status="expiring">Expires in 9 days</Badge>, statusAction: <a class="sm" href="…">Renew</a> }] },
     ]}
     footer={<>Buildkite (acme) has no access to Slack. …</>}
-    footerAction={<a class="btn sm ghost" href="/admin/access/new?token=slack">+ Give another consumer access</a>} />
+    footerAction={<a class="btn sm ghost" href="/admin/issuer-access-rules/new?token=slack">+ Give another issuer access rules</a>} />
 </Tray>`,
       },
       {
-        title: 'No consumer access yet',
+        title: 'No issuer access rules yet',
         description:
           'A dashed ghost stands where the first consumer will appear, with what to do: who can give access, and a link to hand over.',
         layout: 'stack',
@@ -2667,10 +2687,10 @@ export const viz: readonly ComponentDoc[] = [
               token={{ name: 'Slack 2', logo: 'slack', path: '/proxy/slack-2' }}
               groups={[]}
               empty={{
-                title: 'No consumer access yet',
+                title: 'No issuer access rules yet',
                 children: (
                   <p class="ask">
-                    Only access managers can give a consumer access. Ask <b>Tom Becker</b> or{' '}
+                    Only access managers can give an issuer access rule. Ask <b>Tom Becker</b> or{' '}
                     <b>Diego Ruiz</b>.
                   </p>
                 ),
@@ -2680,17 +2700,17 @@ export const viz: readonly ComponentDoc[] = [
         ),
         code: `<WhoCanUse label="Accesses to Slack 2" groups={[]}
   token={{ name: 'Slack 2', logo: 'slack', path: '/proxy/slack-2' }}
-  empty={{ title: 'No consumer access yet', children: <AskSomeone …>Ask <b>Tom Becker</b> or <b>Diego Ruiz</b>.</AskSomeone> }} />`,
+  empty={{ title: 'No issuer access rules yet', children: <AskSomeone …>Ask <b>Tom Becker</b> or <b>Diego Ruiz</b>.</AskSomeone> }} />`,
       },
       {
         title: 'At scale',
         description:
-          'The server caps the rows per consumer and the consumers per token: a dashed “+ 5 more accesses” row, and one group node for the rest that opens the matrix. note says what the map leaves out, under the map.',
+          'The server caps the rows per consumer and the credential access rules per token: a dashed “+ 5 more accesses” row, and one group node for the rest that opens the matrix. note says what the map leaves out, under the map.',
         layout: 'stack',
         render: () => (
           <Tray id="wcu-ex-scale" title="Who can use Slack" count={31}>
             <WhoCanUse
-              label="Accesses to Slack, grouped by consumer, most requests first"
+              label="Accesses to Slack, grouped by credential access rule, most requests first"
               token={{ name: 'Slack', logo: 'slack', path: '/proxy/slack' }}
               groups={[
                 {
@@ -2712,7 +2732,7 @@ export const viz: readonly ComponentDoc[] = [
               ]}
               rest={{
                 href: '#',
-                label: '+ 13 more consumers · 23 accesses',
+                label: '+ 13 more credential access rules · 23 accesses',
                 line: 'Open them in the matrix, filtered to Slack',
               }}
               note={
@@ -2726,10 +2746,10 @@ export const viz: readonly ComponentDoc[] = [
         ),
         code: `<WhoCanUse … groups={busiest.map((g) => ({ …g, accesses: g.accesses.slice(0, 2),
   more: { href: '…', label: '+ 6 more accesses', srSuffix: 'of GitHub Actions (acme) to Slack', meta: '1 expiring' } }))}
-  rest={{ href: '/admin/access?token=slack&view=matrix&rest=1', label: '+ 13 more consumers · 23 accesses',
+  rest={{ href: '/admin/issuer-access-rules?token=slack&view=matrix&rest=1', label: '+ 13 more credential access rules · 23 accesses',
     line: 'Open them in the matrix, filtered to Slack' }}
   note={<><b>14 consumers, 31 accesses.</b> The map draws the busiest consumer and groups the rest.{' '}
-    <a href="/admin/access?token=slack&view=matrix">Open the matrix</a> to see all 31 accesses.</>} />`,
+    <a href="/admin/issuer-access-rules?token=slack&view=matrix">Open the matrix</a> to see all 31 accesses.</>} />`,
       },
     ],
     props: [
@@ -2758,7 +2778,8 @@ export const viz: readonly ComponentDoc[] = [
           {
             name: 'rest',
             type: '{ href: string; label: Child; line?: Child }',
-            description: 'The consumers not drawn, as one group node (opens the matrix).',
+            description:
+              'The credential access rules not drawn, as one group node (opens the matrix).',
           },
           {
             name: 'empty',
@@ -2788,14 +2809,14 @@ export const viz: readonly ComponentDoc[] = [
       },
     ],
     accessibility: [
-      'The map is a list of groups, each a consumer link and a list of access links: it is its own text form, there is nothing to hide.',
+      'The map is a list of groups, each a credential access rule link and a list of access links: it is its own text form, there is nothing to hide.',
       'The hub and the wires are decorative (aria-hidden); the tray title names the token.',
       'Status is a word in a badge; the warn ring and dashed wires only add to it.',
-      'The “+ 6 more accesses” link names its consumer and token with srSuffix.',
+      'The “+ 6 more accesses” link names its credential access rule and credential with srSuffix.',
     ],
     do: [
       'Cap the rows per consumer and say how many are left, with a link to all of them.',
-      'Keep the status a short word: a long one (Inactive: token disabled) moves under the access text in a narrow row.',
+      'Keep the status a short word: a long one (Inactive: credential disabled) moves under the access text in a narrow row.',
     ],
     dont: ['Do not draw more than about 3 consumers: group the rest into the matrix node.'],
     classes: [

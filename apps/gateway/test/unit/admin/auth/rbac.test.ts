@@ -40,38 +40,38 @@ const DOCUMENTED_ADMIN_ROUTES = [
   'POST /admin/users/:id/dismiss-attempt',
 
   // == tokens ==
-  'GET /admin/tokens/hosts',
-  'POST /admin/tokens/hosts',
-  'GET /admin/tokens/keys',
-  'POST /admin/tokens/keys/rewrap',
-  'GET /admin/tokens',
-  'GET /admin/tokens/new',
-  'POST /admin/tokens',
-  'GET /admin/tokens/:id',
-  'POST /admin/tokens/:id',
-  'POST /admin/tokens/:id/secret',
-  'POST /admin/tokens/:id/destination',
-  'POST /admin/tokens/:id/test',
-  'POST /admin/tokens/:id/delete',
-  'POST /admin/tokens/:id/toggle',
+  'GET /admin/credentials/hosts',
+  'POST /admin/credentials/hosts',
+  'GET /admin/credentials/keys',
+  'POST /admin/credentials/keys/rewrap',
+  'GET /admin/credentials',
+  'GET /admin/credentials/new',
+  'POST /admin/credentials',
+  'GET /admin/credentials/:id',
+  'POST /admin/credentials/:id',
+  'POST /admin/credentials/:id/secret',
+  'POST /admin/credentials/:id/destination',
+  'POST /admin/credentials/:id/test',
+  'POST /admin/credentials/:id/delete',
+  'POST /admin/credentials/:id/toggle',
 
   // == consumers ==
-  'GET /admin/consumers',
-  'GET /admin/consumers/new',
-  'GET /admin/consumers/:id',
-  'POST /admin/consumers',
-  'POST /admin/consumers/:id',
-  'POST /admin/consumers/:id/delete',
-  'POST /admin/consumers/:id/tenants',
-  'POST /admin/consumers/:id/toggle',
-  'GET /admin/access',
-  'GET /admin/access/new',
-  'GET /admin/access/:id',
-  'POST /admin/access',
-  'POST /admin/access/:id',
-  'POST /admin/access/:id/copy',
-  'POST /admin/access/:id/delete',
-  'POST /admin/access/:id/toggle',
+  'GET /admin/credential-access-rules',
+  'GET /admin/credential-access-rules/new',
+  'GET /admin/credential-access-rules/:id',
+  'POST /admin/credential-access-rules',
+  'POST /admin/credential-access-rules/:id',
+  'POST /admin/credential-access-rules/:id/delete',
+  'POST /admin/credential-access-rules/:id/tenants',
+  'POST /admin/credential-access-rules/:id/toggle',
+  'GET /admin/issuer-access-rules',
+  'GET /admin/issuer-access-rules/new',
+  'GET /admin/issuer-access-rules/:id',
+  'POST /admin/issuer-access-rules',
+  'POST /admin/issuer-access-rules/:id',
+  'POST /admin/issuer-access-rules/:id/copy',
+  'POST /admin/issuer-access-rules/:id/delete',
+  'POST /admin/issuer-access-rules/:id/toggle',
 
   // == global ==
   'POST /admin/export',
@@ -80,9 +80,9 @@ const DOCUMENTED_ADMIN_ROUTES = [
 /** Field permissions per route, in the same section blocks. */
 const FIELD_PERMISSIONS: Record<string, Record<string, Permission>> = {
   // == tokens ==
-  'POST /admin/tokens': { allow_host: 'settings:write' },
-  'POST /admin/tokens/:id/destination': { allow_host: 'settings:write' },
-  'POST /admin/tokens/:id/delete': { with_accesses: 'access:write' },
+  'POST /admin/credentials': { allow_host: 'settings:write' },
+  'POST /admin/credentials/:id/destination': { allow_host: 'settings:write' },
+  'POST /admin/credentials/:id/delete': { with_accesses: 'access:write' },
 };
 
 const ROLES: Role[] = ['viewer', 'token_manager', 'access_manager', 'admin', 'owner'];
@@ -136,29 +136,37 @@ describe('I-RBAC-1: permission matrix and route table', () => {
   it('token routes need tokens:write, consumer and access routes need access:write', () => {
     for (const [key, rule] of Object.entries(ROUTE_PERMISSIONS)) {
       if (key.startsWith('GET ') && rule.permission === 'read') continue;
-      if (/^\w+ \/admin\/tokens(?!\/(hosts|keys))/.test(key))
+      if (/^\w+ \/admin\/credentials(?!\/(hosts|keys))/.test(key))
         expect(rule.permission, key).toBe('tokens:write');
       if (/^\w+ \/admin\/(consumers|access)/.test(key)) {
         expect(rule.permission, key).toBe('access:write');
       }
     }
-    expect(routePermission('GET', '/admin/tokens/new')?.permission).toBe('tokens:write');
-    expect(routePermission('GET', '/admin/access/new')?.permission).toBe('access:write');
-    expect(routePermission('GET', '/admin/consumers/new')?.permission).toBe('access:write');
+    expect(routePermission('GET', '/admin/credentials/new')?.permission).toBe('tokens:write');
+    expect(routePermission('GET', '/admin/issuer-access-rules/new')?.permission).toBe(
+      'access:write',
+    );
+    expect(routePermission('GET', '/admin/credential-access-rules/new')?.permission).toBe(
+      'tokens:write',
+    );
   });
 
   it('owner-only operations', () => {
     expect(routePermission('POST', '/admin/users')?.permission).toBe('users:write');
     expect(routePermission('POST', '/admin/users/:id/revoke-sessions')).toBeNull();
     expect(routePermission('POST', '/admin/retention')?.permission).toBe('settings:write');
-    expect(routePermission('POST', '/admin/tokens/hosts')?.permission).toBe('settings:write');
+    expect(routePermission('POST', '/admin/credentials/hosts')?.permission).toBe('settings:write');
     expect(routePermission('POST', '/admin/users/sign-in/hosts')?.permission).toBe(
       'settings:write',
     );
-    expect(routePermission('POST', '/admin/tokens/keys/rewrap')?.permission).toBe('keyring:rewrap');
+    expect(routePermission('POST', '/admin/credentials/keys/rewrap')?.permission).toBe(
+      'keyring:rewrap',
+    );
     for (const [key, rule] of Object.entries(ROUTE_PERMISSIONS)) {
       const ownerOnly = rolesWith(rule.permission).join() === 'owner';
-      const expected = /^POST \/admin\/(users|retention|tokens\/hosts|tokens\/keys)/.test(key);
+      const expected = /^POST \/admin\/(users|retention|credentials\/hosts|credentials\/keys)/.test(
+        key,
+      );
       expect(ownerOnly, key).toBe(expected);
     }
   });
@@ -182,9 +190,9 @@ describe('I-RBAC-1: permission matrix and route table', () => {
 
   it('denies unknown routes, other methods and prototype keys', () => {
     expect(routePermission('GET', '/admin/nope')).toBeNull();
-    expect(routePermission('DELETE', '/admin/tokens/:id')).toBeNull();
+    expect(routePermission('DELETE', '/admin/credentials/:id')).toBeNull();
     expect(routePermission('ALL', '/admin/*')).toBeNull();
-    expect(routePermission('GET', '/admin/tokens/abc')).toBeNull();
+    expect(routePermission('GET', '/admin/credentials/abc')).toBeNull();
     expect(routePermission('constructor', '')).toBeNull();
     expect(routePermission('__proto__', '')).toBeNull();
   });
@@ -219,8 +227,8 @@ describe('rolesWith and rolesWithAll', () => {
 });
 
 describe('I-RBAC-1: requestPermissions adds the field permissions of submitted fields', () => {
-  const create = ROUTE_PERMISSIONS['POST /admin/tokens'];
-  const remove = ROUTE_PERMISSIONS['POST /admin/tokens/:id/delete'];
+  const create = ROUTE_PERMISSIONS['POST /admin/credentials'];
+  const remove = ROUTE_PERMISSIONS['POST /admin/credentials/:id/delete'];
   if (!create || !remove) throw new Error('routes missing');
 
   it('is only the route permission when no listed field is submitted', () => {

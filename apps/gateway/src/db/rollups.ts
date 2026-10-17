@@ -180,7 +180,7 @@ export function upstreamAuthFailuresStatement(
     .bind(idLowerBound('req', sinceMs), minFailures, minRatio);
 }
 
-export interface GrantUsage {
+export interface IssuerAccessRuleUsage {
   grant_id: string;
   /** Newest hour with an allowed request. */
   last_hour: number;
@@ -191,7 +191,7 @@ export interface GrantUsage {
 /**
  * Allowed requests per grant in stored rollups for hours in [sinceHour, beforeHour) (a primary-key
  * range scan: `hour` leads the key). The hours not rolled up yet come from
- * aggregateRequestLogStatement; mergeGrantUsage combines both. The rollup retention minimum
+ * aggregateRequestLogStatement; mergeIssuerAccessRuleUsage combines both. The rollup retention minimum
  * (30 days, SETTING_BOUNDS) keeps a 30-day window available.
  */
 export function grantUsageStatement(
@@ -213,11 +213,11 @@ export function grantUsageStatement(
  * Usage per grant id from grantUsageStatement rows plus live aggregates (rollupFromRow of
  * aggregateRequestLogStatement) for the hours after them. Live rows count at their window start.
  */
-export function mergeGrantUsage(
+export function mergeIssuerAccessRuleUsage(
   stored: ReadonlyArray<Record<string, unknown>>,
   live: readonly RollupRow[],
-): Map<string, GrantUsage> {
-  const usage = new Map<string, GrantUsage>();
+): Map<string, IssuerAccessRuleUsage> {
+  const usage = new Map<string, IssuerAccessRuleUsage>();
   const add = (grantId: string, hour: number, requests: number) => {
     if (grantId === '' || requests <= 0) return;
     const current = usage.get(grantId);
@@ -305,7 +305,7 @@ export function seriesFromRow(row: Record<string, unknown>): SeriesRow {
 /** Denied records grouped by caller, token and reason (Top denials). */
 export interface DenialGroup {
   /** '' when no consumer was resolved. */
-  caller_provider_id: string;
+  credential_access_rule_id: string;
   /** '' when no token was resolved. */
   service_id: string;
   service_slug: string | null;
@@ -340,13 +340,13 @@ export function denialGroupsStatement(
   return db
     .prepare(
       `WITH scanned AS (
-         SELECT id, ts, reason, service_id, service_slug, caller_provider_id, claims_verified,
+         SELECT id, ts, reason, service_id, service_slug, credential_access_rule_id, claims_verified,
            caller_repository, caller_subject, untrusted_iss, weight
          FROM request_log
          WHERE (outcome <> 'allowed' OR status >= 500) AND outcome = 'denied' AND id >= ?1
          ORDER BY id DESC LIMIT ?2
        )
-       SELECT COALESCE(caller_provider_id, '') AS caller_provider_id,
+       SELECT COALESCE(credential_access_rule_id, '') AS credential_access_rule_id,
          COALESCE(service_id, '') AS service_id, MAX(service_slug) AS service_slug, reason,
          claims_verified,
          COALESCE(caller_repository, caller_subject, untrusted_iss) AS caller,
@@ -368,7 +368,7 @@ export function denialGroupFromRow(row: Record<string, unknown>): DenialGroup {
   const text = (value: unknown) => (typeof value === 'string' ? value : null);
   const kind = row.caller_kind;
   return {
-    caller_provider_id: text(row.caller_provider_id) ?? '',
+    credential_access_rule_id: text(row.credential_access_rule_id) ?? '',
     service_id: text(row.service_id) ?? '',
     service_slug: text(row.service_slug),
     reason: text(row.reason),

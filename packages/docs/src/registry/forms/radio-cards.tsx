@@ -145,7 +145,7 @@ export const radioCards: ComponentDoc = {
                   value: 'managers',
                   title: 'Owners and access managers',
                   description:
-                    'Access managers can give and remove consumer access, never see the secret.',
+                    'Access managers can give and remove issuer access rules, never see the secret.',
                 },
               ]}
             />
@@ -158,7 +158,7 @@ export const radioCards: ComponentDoc = {
     {
       title: 'Type cards with a logo',
       description:
-        'A logo above the title, for a choice of types (“Add a consumer”); “✓ Selected” moves to the top right corner.',
+        'A logo above the title, for a choice of types (“Add a credential access rule”); “✓ Selected” moves to the top right corner.',
       render: () => (
         <RadioCards
           id="rc-logo"

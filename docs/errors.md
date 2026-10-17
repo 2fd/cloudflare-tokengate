@@ -29,7 +29,7 @@ Headers: `content-type: application/json`, `cache-control: no-store`, `x-tokenga
 - The top-level `message` lets SDKs that print `message` show the error.
 - Most messages are fixed texts. Three codes add a hint: `issuer_unknown` (the token's `iss`),
   `audience_mismatch` (the expected audience) and `event_not_trusted` (the event). Messages never name
-  grants, conditions or other claims.
+  issuer_access_rules, conditions or other claims.
 - If the upstream API answered, the response has `x-tokengate-source: upstream`. Its status and body are
   the upstream's, even for errors such as 401 or 500.
 - A response without `x-tokengate-request-id` did not come from the gateway's proxy. Usually the
@@ -95,29 +95,29 @@ configured sample rate. See [observability.md](observability.md).
 
 ## token_malformed
 
-**Status 401.** The token is not a JWT this caller provider can verify.
+**Status 401.** The token is not a JWT this credential access rule can verify.
 
 - **Causes:**
   - The value is not a compact JWS (three non-empty base64url parts), or it is longer than 16 KiB. A real
     upstream API key sent as `Authorization: Bearer` is a common case. An empty value, such as
     `Authorization: Bearer` with an empty token variable, is another.
   - The JWT header or payload cannot be decoded.
-  - The `alg` is not in the caller provider's signature algorithms, or is not asymmetric
+  - The `alg` is not in the credential access rule's signature algorithms, or is not asymmetric
     (`none` and `HS*` are never accepted).
   - The `kid` is missing or not 1–128 characters of `A-Z a-z 0-9 . _ -`.
 - **Caller:** send the OIDC token itself, unmodified.
-- **Admin:** pre-trust record. Check the caller provider's "Signature algorithms".
+- **Admin:** pre-trust record. Check the credential access rule's "Signature algorithms".
 
 ## issuer_unknown
 
-**Status 401.** No enabled caller provider has the token's issuer.
+**Status 401.** No enabled credential access rule has the token's issuer.
 
 - **Causes:**
-  - No caller provider exists for this `iss`, or it is disabled.
+  - No credential access rule exists for this `iss`, or it is disabled.
   - The issuer differs in spelling. Issuers are compared exactly; a trailing `/` matters.
   - The token has no `iss` claim. The message then has no hint.
 - **Caller:** check the issuer in the message. It is the token's own `iss`.
-- **Admin:** pre-trust record that keeps the untrusted `iss`. Add or enable the caller provider.
+- **Admin:** pre-trust record that keeps the untrusted `iss`. Add or enable the credential access rule.
 
 ## audience_mismatch
 
@@ -126,10 +126,10 @@ configured sample rate. See [observability.md](observability.md).
 - **Causes:**
   - The job requested a different `aud`. GitHub's default audience is the owner URL, which the gateway
     never accepts.
-  - The caller provider's audience changed.
+  - The credential access rule's audience changed.
 - **Caller:** request a token with the audience shown in the message. With the get-token action, set
   its `audience` input ([actions/get-token/README.md](../actions/get-token/README.md)).
-- **Admin:** pre-trust record. The audience is on the caller provider page.
+- **Admin:** pre-trust record. The audience is on the credential access rule page.
 
 ## token_expired
 
@@ -142,13 +142,13 @@ configured sample rate. See [observability.md](observability.md).
 
 ## token_too_old
 
-**Status 401.** The token was issued (`iat`) longer ago than the caller provider's maximum token age,
+**Status 401.** The token was issued (`iat`) longer ago than the credential access rule's maximum token age,
 even though it has not expired.
 
 - **Causes:** a token reused within a long job. GitLab tokens live as long as the job timeout, so this
   check limits their reuse. The default maximum age is 600 seconds.
 - **Caller:** mint a fresh token right before each call.
-- **Admin:** pre-trust record. "Maximum token age (seconds)" is on the caller provider form.
+- **Admin:** pre-trust record. "Maximum token age (seconds)" is on the credential access rule form.
 
 ## signature_invalid
 
@@ -159,10 +159,10 @@ even though it has not expired.
     issuer that uses the same `iss` text, or was forged.
   - The issuer has just rotated keys. The gateway fetches a key set for one JWKS URI at most once per
     30 seconds.
-  - The caller provider's JWKS URI points to the wrong key set.
+  - The credential access rule's JWKS URI points to the wrong key set.
   - The key is unusable, for example an RSA key shorter than 2048 bits.
 - **Caller:** if the issuer just rotated keys, retry after 30 seconds. Otherwise contact the admins.
-- **Admin:** pre-trust record. Check the caller provider's issuer and JWKS URI.
+- **Admin:** pre-trust record. Check the credential access rule's issuer and JWKS URI.
 
 ## claims_invalid
 
@@ -172,10 +172,10 @@ even though it has not expired.
   - A claim the profile requires is missing. GitHub Actions requires `sub`, `jti`, `iat`, `exp`,
     `repository_id`, `repository_owner_id`, `event_name` and `ref`; GitLab CI requires `sub`, `jti`,
     `iat`, `exp`, `project_id`, `namespace_id`, `pipeline_source` and `ref`; generic requires `sub`, `iat`,
-    `exp` and every anchor claim. See [policies.md](policies.md#caller-providers-and-profiles).
+    `exp` and every anchor claim. See [policies.md](policies.md#credential-access-rules-and-profiles).
   - `nbf` or `iat` is in the future by more than 30 seconds.
 - **Caller:** use a token from the platform's standard OIDC mechanism.
-- **Admin:** pre-trust record. For a generic caller provider, check its anchor claims.
+- **Admin:** pre-trust record. For a generic credential access rule, check its anchor claims.
 
 ## jwks_unavailable
 
@@ -187,27 +187,27 @@ even though it has not expired.
   - After a failed fetch, the gateway waits 30 seconds before it fetches again for that JWKS URI.
   - The stored JWKS URI is not https.
 - **Caller:** retry after a short wait.
-- **Admin:** pre-trust record with outcome `error`. If it persists, check the caller provider's JWKS URI
+- **Admin:** pre-trust record with outcome `error`. If it persists, check the credential access rule's JWKS URI
   and the issuer's status.
 
 ## tenant_mismatch
 
-**Status 401.** The verified token is outside the tenant pinned on the caller provider.
+**Status 401.** The verified token is outside the tenant pinned on the credential access rule.
 
 - **Causes:** the workflow runs in an organization, enterprise or GitLab group that the tenant pin does
   not list. On GitHub's and gitlab.com's shared issuers, anyone can mint a valid token; this check keeps
   them out ([I-TEN-1](threat-model.md#i-ten-1)).
 - **Caller:** run the job in an allowed organization or group, or ask the admins to add it.
 - **Admin:** pre-trust record. It has no claims and no user agent. It keeps the untrusted `iss`, the
-  caller provider, the method, the path (cut to 256 characters) and the client IP. Edit "Allowed organization IDs", "Enterprise ID (optional)" or "Allowed group
-  (namespace) IDs" on the caller provider.
+  credential access rule, the method, the path (cut to 256 characters) and the client IP. Edit "Allowed organization IDs", "Enterprise ID (optional)" or "Allowed group
+  (namespace) IDs" on the credential access rule.
 
 ## service_not_found
 
 **Status 404.** No enabled service has the slug in `/proxy/<slug>/...`.
 
 - **Causes:** a typo in the slug, or the service is disabled (reason `service_disabled`). This check runs
-  only after the token and tenant pin are verified, so outsiders cannot list services.
+  only after the token and tenant pin are verified, so outsiders cannot list credentials.
 - **Caller:** check the slug in the URL.
 - **Admin:** the record has reason `service_not_found` or `service_disabled`.
 
@@ -226,7 +226,7 @@ even though it has not expired.
     `x-method-override` (case-insensitive; names after `;` and PHP-style variants count);
   - a parameter name that cannot be decoded or contains a control character;
   - characters outside printable ASCII;
-  - for services that inject the credential as a query parameter, that parameter name after a `;`.
+  - for credentials that inject the credential as a query parameter, that parameter name after a `;`.
 - **Caller:** fix the URL. Do not send method overrides; use the real HTTP method.
 - **Admin:** the record has reason `path_invalid` or `query_invalid`.
 
@@ -305,8 +305,8 @@ does not opt in to it ([I-AUTHZ-3](threat-model.md#i-authz-3)).
     and the Worker is not in development mode (`AUTH_ACCESS_DEVELOPMENT` set, no Access variable).
     Set a key of your own ([configuration.md](configuration.md#development-key)).
   - `base_url_invalid`: the service's base URL is no longer allowed, for example after a change to
-    the upstream host allowlist (Service tokens › Allowed hosts) or the admin hosts (Users › Sign-in) ([I-SSRF-1](threat-model.md#i-ssrf-1)).
-  - `profile_unknown`: the caller provider names a profile this version does not know. This check
+    the upstream host allowlist (Credentials › Allowed hosts) or the admin hosts (Users › Sign-in) ([I-SSRF-1](threat-model.md#i-ssrf-1)).
+  - `profile_unknown`: the credential access rule names a profile this version does not know. This check
     runs before the token is verified, so these records are pre-trust records.
 - **Caller:** contact the admins with the request ID.
 - **Admin:** record with outcome `error`. See [configuration.md](configuration.md) and Settings >
@@ -381,7 +381,7 @@ The reason is the gateway error code, or a finer reason for some codes:
 | `both_kek_and_keyring_set` | `not_configured` | Both `TOKENGATE_KEK` and `TOKENGATE_KEYRING` are set |
 | `dev_placeholder_key` | `not_configured` | The keyring holds the development key from `.dev.vars.example` |
 | `base_url_invalid` | `not_configured` | The service's base URL is no longer allowed |
-| `profile_unknown` | `not_configured` | The caller provider uses an unknown profile |
+| `profile_unknown` | `not_configured` | The credential access rule uses an unknown profile |
 | `internal_error` | `internal_error` | The gateway failed to process the request |
 | `upstream_unreachable` | `upstream_unreachable` | The upstream API could not be reached |
 | `upstream_invalid_status` | `upstream_unreachable` | The upstream answered with a status outside 200-599; it may have processed the request |

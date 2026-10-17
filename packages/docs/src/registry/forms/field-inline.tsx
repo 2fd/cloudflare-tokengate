@@ -9,7 +9,7 @@ export const fieldInline: ComponentDoc = {
   usage: {
     when: [
       'Find one thing by its exact ID: “Find a request” by request ID or a pasted log line (GET, a search landmark).',
-      'A one-field action: “Add organizations” on a consumer page (POST, with its _csrf in hidden).',
+      'A one-field action: “Add organizations” on a credential access rule page (POST, with its _csrf in hidden).',
     ],
     whenNot: [
       'Filtering a table: a filter bar.',
@@ -84,7 +84,7 @@ export const fieldInline: ComponentDoc = {
             submit="Add"
             method="post"
             labelledBy="fi-add-l"
-            action="/admin/consumers/github-acme/orgs"
+            action="/admin/credential-access-rules/github-acme/orgs"
             hidden={{ _csrf: 'csrf-token' }}
             describedBy="fi-add-h"
             placeholder="acme-labs"
@@ -96,7 +96,7 @@ export const fieldInline: ComponentDoc = {
       ),
       code: `<span class="lbl" id="add-l">Add organizations</span>
 <FieldInline id="add-org" label="Organization" name="orgs" submit="Add"
-  method="post" labelledBy="add-l" action="/admin/consumers/github-acme/orgs"
+  method="post" labelledBy="add-l" action="/admin/credential-access-rules/github-acme/orgs"
   hidden={{ _csrf: csrf }} describedBy="add-org-h" placeholder="acme-labs" />
 <span class="hint" id="add-org-h">The GitHub login or numeric ID …</span>`,
     },

@@ -83,7 +83,7 @@ describe('RailKeyValue', () => {
         <RailKeyValue
           items={[
             {
-              label: 'Token ID',
+              label: 'Credential ID',
               value: 'svc_01JB8Z5K2Q7W3N4M6P8R9T7Q2M',
               mono: true,
               copyable: true,
@@ -94,7 +94,7 @@ describe('RailKeyValue', () => {
       ),
     ).toBe(
       '<dl class="rkv">' +
-        '<div><dt>Token ID</dt><dd class="mono copyable">svc_01JB8Z5K2Q7W3N4M6P8R9T7Q2M</dd></div>' +
+        '<div><dt>Credential ID</dt><dd class="mono copyable">svc_01JB8Z5K2Q7W3N4M6P8R9T7Q2M</dd></div>' +
         '<div><dt>Created</dt><dd>3 Oct 2026<small>by Priya Natarajan</small></dd></div></dl>',
     );
   });

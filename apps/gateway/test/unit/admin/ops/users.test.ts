@@ -523,7 +523,7 @@ describe('I-LINK-1: inviting an email again', () => {
     });
     const rows = await audits();
     expect(rows.map((r) => r.action)).toEqual(['user.invite']);
-    expect(rows[0]?.summary).toBe('Invited again@example.com again as Token manager');
+    expect(rows[0]?.summary).toBe('Invited again@example.com again as Credential manager');
   });
 
   it('never re-invites a user who signed in (has an identity), whatever their status', async () => {
@@ -670,7 +670,7 @@ describe('join policy (I-LINK-1: any role except owner)', () => {
     expect(again).toMatchObject({ ok: true, changed: false, auditId: null });
     const rows = await audits();
     expect(rows.map((row) => row.action)).toEqual(['user.join_defaults']);
-    expect(rows[0]?.summary).toBe('New people: Let them in as Token manager');
+    expect(rows[0]?.summary).toBe('New people: Let them in as Credential manager');
   });
 
   it('stores the role viewer unless people are let in', async () => {

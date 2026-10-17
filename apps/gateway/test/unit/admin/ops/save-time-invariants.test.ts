@@ -3,20 +3,25 @@
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import {
-  type CallerProviderCreateInput,
-  createCallerProvider,
-  updateCallerProvider,
-} from '../../../../src/admin/ops/caller-providers';
-import { createGrant, setGrantEnabled, updateGrant } from '../../../../src/admin/ops/grants';
+  type CredentialAccessRuleCreateInput,
+  createCredentialAccessRule,
+  updateCredentialAccessRule,
+} from '../../../../src/admin/ops/credential-access-rules';
 import {
   checkServiceCredential,
   createService,
   rotateServiceSecret,
   setServiceCredential,
-} from '../../../../src/admin/ops/services';
-import { getGrant } from '../../../../src/db/grants';
+} from '../../../../src/admin/ops/credentials';
+import {
+  createIssuerAccessRule,
+  setIssuerAccessRuleEnabled,
+  updateIssuerAccessRule,
+} from '../../../../src/admin/ops/issuer_access_rules';
+import { getIssuerAccessRule } from '../../../../src/db/issuer_access_rules';
 import type { Condition } from '../../../../src/policy/types';
 import { setUpstreamHosts } from '../../../helpers/app';
+import { testCredentialId } from './helpers';
 import {
   ACTOR,
   anchoredConditions,
@@ -30,7 +35,7 @@ import {
   racingDeps,
   resetControlPlane,
   seedGithubProvider,
-  seedGrant,
+  seedIssuerAccessRule,
   seedService,
   serviceInput,
 } from './helpers';
@@ -54,7 +59,10 @@ async function expectRefusedQuietly(
 }
 
 describe('I-TEN-1: shared issuers need a tenant pin', () => {
-  const cases: Array<[string, CallerProviderCreateInput]> = [
+  beforeEach(async () => {
+    await testCredentialId(opsDeps());
+  });
+  const cases: Array<[string, CredentialAccessRuleCreateInput]> = [
     ['github-actions without a pin', { name: 'gh', profile: 'github-actions' }],
     ['gitlab-ci without a pin', { name: 'gl', profile: 'gitlab-ci' }],
     [
@@ -94,8 +102,11 @@ describe('I-TEN-1: shared issuers need a tenant pin', () => {
   ];
   it.each(cases)('refuses %s before discovery', async (_, input) => {
     const network = fakeNetwork();
-    await expectRefusedQuietly(network, () =>
-      createCallerProvider(opsDeps({ fetch: network.fetch }), ACTOR, input),
+    await expectRefusedQuietly(network, async () =>
+      createCredentialAccessRule(opsDeps({ fetch: network.fetch }), ACTOR, {
+        ...input,
+        credential_id: await testCredentialId(opsDeps()),
+      }),
     );
   });
 
@@ -103,13 +114,16 @@ describe('I-TEN-1: shared issuers need a tenant pin', () => {
     const network = fakeNetwork();
     const deps = opsDeps({ fetch: network.fetch });
     const provider = await seedGithubProvider(deps);
-    await expectRefusedQuietly(network, () =>
-      updateCallerProvider(deps, ACTOR, provider.id, { tenant_pin: [] }),
+    await expectRefusedQuietly(network, async () =>
+      updateCredentialAccessRule(deps, ACTOR, provider.id, { tenant_pin: [] }),
     );
   });
 });
 
 describe('I-JWT-1: algorithm allowlist, audience and token age are checked at save', () => {
+  beforeEach(async () => {
+    await testCredentialId(opsDeps());
+  });
   const base = { name: 'gh', profile: 'github-actions', tenant_pin: PIN };
   it.each([
     ['alg none', { allowed_algs: ['none'] }],
@@ -121,19 +135,27 @@ describe('I-JWT-1: algorithm allowlist, audience and token age are checked at sa
     ['a token age above the profile limit', { max_token_age_seconds: 3600 }],
   ])('refuses %s', async (_, patch) => {
     const network = fakeNetwork();
-    await expectRefusedQuietly(network, () =>
-      createCallerProvider(opsDeps({ fetch: network.fetch }), ACTOR, { ...base, ...patch }),
+    await expectRefusedQuietly(network, async () =>
+      createCredentialAccessRule(opsDeps({ fetch: network.fetch }), ACTOR, {
+        credential_id: await testCredentialId(opsDeps({ fetch: network.fetch })),
+        ...base,
+        ...patch,
+      }),
     );
   });
 
   it('never stores an empty audience', async () => {
-    const result = await createCallerProvider(opsDeps(), ACTOR, { ...base, audience: '  ' });
+    const result = await createCredentialAccessRule(opsDeps(), ACTOR, {
+      credential_id: await testCredentialId(opsDeps()),
+      ...base,
+      audience: '  ',
+    });
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.callerProvider.audience).toMatch(/^tokengate:[a-z2-7]{26}$/);
+    if (result.ok) expect(result.credentialAccessRule.audience).toMatch(/^tokengate:[a-z2-7]{26}$/);
   });
 });
 
-describe('I-AUTHZ-2: grants must pin an anchor rule exactly', () => {
+describe('I-AUTHZ-2: issuer_access_rules must pin an anchor rule exactly', () => {
   let deps: ReturnType<typeof opsDeps>;
   let providerId: string;
   let serviceId: string;
@@ -154,9 +176,9 @@ describe('I-AUTHZ-2: grants must pin an anchor rule exactly', () => {
     ['a repository outside the tenant pin', [{ ...owner, values: ['1'] }, repo]],
   ])('refuses %s', async (_, conditions) => {
     const audits = await auditCount();
-    const result = await createGrant(deps, ACTOR, {
+    const result = await createIssuerAccessRule(deps, ACTOR, {
       name: 'g',
-      caller_provider_id: providerId,
+      credential_access_rule_id: providerId,
       service_id: serviceId,
       conditions,
       rules,
@@ -167,32 +189,32 @@ describe('I-AUTHZ-2: grants must pin an anchor rule exactly', () => {
   });
 
   it('refuses an update that drops the anchor', async () => {
-    const grant = await seedGrant(deps, providerId, serviceId);
-    const result = await updateGrant(deps, ACTOR, grant.id, { conditions: [owner] });
+    const grant = await seedIssuerAccessRule(deps, providerId, serviceId);
+    const result = await updateIssuerAccessRule(deps, ACTOR, grant.id, { conditions: [owner] });
     expect(result).toMatchObject({ ok: false, reason: 'invalid' });
   });
 
   it('refuses to enable a grant whose stored conditions were edited in D1', async () => {
-    const grant = await seedGrant(deps, providerId, serviceId);
-    expect((await setGrantEnabled(deps, ACTOR, grant.id, false)).ok).toBe(true);
-    await env.DB.prepare('UPDATE grants SET conditions = ? WHERE id = ?')
+    const grant = await seedIssuerAccessRule(deps, providerId, serviceId);
+    expect((await setIssuerAccessRuleEnabled(deps, ACTOR, grant.id, false)).ok).toBe(true);
+    await env.DB.prepare('UPDATE issuer_access_rules SET conditions = ? WHERE id = ?')
       .bind(JSON.stringify([owner]), grant.id)
       .run();
-    expect(await setGrantEnabled(deps, ACTOR, grant.id, true)).toMatchObject({
+    expect(await setIssuerAccessRuleEnabled(deps, ACTOR, grant.id, true)).toMatchObject({
       ok: false,
       reason: 'invalid',
     });
   });
 
   it('a caller provider change between validation and write discards the grant write', async () => {
-    const grant = await seedGrant(deps, providerId, serviceId);
+    const grant = await seedIssuerAccessRule(deps, providerId, serviceId);
     // Concurrently the caller provider changes, so the grant was validated against a stale version.
     const racing = racingDeps(deps, () =>
-      updateCallerProvider(deps, ACTOR, providerId, { max_token_age_seconds: 120 }),
+      updateCredentialAccessRule(deps, ACTOR, providerId, { max_token_age_seconds: 120 }),
     );
-    const result = await updateGrant(racing, ACTOR, grant.id, { name: 'renamed' });
+    const result = await updateIssuerAccessRule(racing, ACTOR, grant.id, { name: 'renamed' });
     expect(result).toMatchObject({ ok: false, reason: 'conflict' });
-    expect((await getGrant(env.DB, grant.id))?.name).toBe(grant.name);
+    expect((await getIssuerAccessRule(env.DB, grant.id))?.name).toBe(grant.name);
   });
 });
 
@@ -212,7 +234,7 @@ describe('I-SSRF-1: base URLs are validated before the credential is used or sto
 
   it.each(bad)('createService refuses %s without calling it', async (baseUrl) => {
     const network = fakeNetwork();
-    await expectRefusedQuietly(network, () =>
+    await expectRefusedQuietly(network, async () =>
       createService(
         opsDeps({ fetch: network.fetch }),
         ACTOR,
@@ -226,7 +248,7 @@ describe('I-SSRF-1: base URLs are validated before the credential is used or sto
     const network = fakeNetwork();
     const deps = opsDeps({ fetch: network.fetch });
     const id = await seedService(deps, { verify: VERIFY });
-    await expectRefusedQuietly(network, () =>
+    await expectRefusedQuietly(network, async () =>
       setServiceCredential(
         deps,
         ACTOR,
@@ -243,7 +265,7 @@ describe('I-SSRF-1: base URLs are validated before the credential is used or sto
     const id = await seedService(deps, { verify: VERIFY });
     await setUpstreamHosts(['*.github.com']);
     onTestFinished(() => setUpstreamHosts(null));
-    await expectRefusedQuietly(network, () =>
+    await expectRefusedQuietly(network, async () =>
       setServiceCredential(
         deps,
         ACTOR,
@@ -263,7 +285,7 @@ describe('I-SSRF-1 and I-CRED-2: rotation and the destination pre-check send not
     const deps = opsDeps({ fetch: network.fetch });
     const id = await seedService(deps, { secret: SECRET, verify: VERIFY });
     await setUpstreamHosts(['*.openai.com']);
-    await expectRefusedQuietly(network, () =>
+    await expectRefusedQuietly(network, async () =>
       rotateServiceSecret(deps, ACTOR, id, { secret: `${SECRET}x` }, CONTEXT),
     );
   });
@@ -273,7 +295,7 @@ describe('I-SSRF-1 and I-CRED-2: rotation and the destination pre-check send not
     const deps = opsDeps({ fetch: network.fetch });
     const id = await seedService(deps, { secret: SECRET, verify: VERIFY });
     const broken = opsDeps({ fetch: network.fetch, env: { TOKENGATE_KEK: '' } });
-    await expectRefusedQuietly(network, () =>
+    await expectRefusedQuietly(network, async () =>
       rotateServiceSecret(broken, ACTOR, id, { secret: 'two\nlines' }, CONTEXT),
     );
   });
@@ -288,14 +310,16 @@ describe('I-SSRF-1 and I-CRED-2: rotation and the destination pre-check send not
       injection: { kind: 'bearer' },
       secret: SECRET,
     };
-    await expectRefusedQuietly(network, () => checkServiceCredential(deps, id, openai, CONTEXT));
+    await expectRefusedQuietly(network, async () =>
+      checkServiceCredential(deps, id, openai, CONTEXT),
+    );
     const before = await dumpControlPlane();
     const calls = network.calls.length;
     expect(await checkServiceCredential(deps, id, openai, CONTEXT, { hostAllowed: true })).toEqual({
       ok: true,
       warnings: [],
     });
-    await expectRefusedQuietly(network, () =>
+    await expectRefusedQuietly(network, async () =>
       checkServiceCredential(
         deps,
         id,

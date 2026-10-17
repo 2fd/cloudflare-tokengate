@@ -89,7 +89,7 @@ describe('stripProblems', () => {
       {
         title: 'Encryption keys are not loaded.',
         detail: 'Token requests fail with 503 and secrets cannot change (keyring_absent).',
-        fix: { href: '/admin/tokens/keys', label: 'Open encryption keys' },
+        fix: { href: '/admin/credentials/keys', label: 'Open encryption keys' },
       },
       {
         title: 'Database DB is missing migrations.',

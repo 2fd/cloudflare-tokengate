@@ -13,7 +13,7 @@ export interface ChecklistQuickLink {
 export interface ChecklistStep {
   /** `done`, `next` (the one step with the primary button) or `todo`. */
   state: 'done' | 'next' | 'todo';
-  /** The step, as an instruction ("Add a service token"). */
+  /** The step, as an instruction ("Add a credential"). */
   title: Child;
   /** Why it matters, or what was done. */
   why: Child;

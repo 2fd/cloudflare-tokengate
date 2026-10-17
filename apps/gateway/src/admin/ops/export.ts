@@ -1,7 +1,7 @@
-// Configuration export (POST /admin/export): caller providers, services, grants, claim labels and
+// Configuration export (POST /admin/export): credential access rules, credentials, issuer_access_rules, claim labels and
 // users as deterministic JSON keyed by name/slug. No row ids, no sealed values and no secrets (I-CRED-1):
 // credentials appear only as hint and timestamps. Downloading an export is audited (I-AUDIT-1).
-import { callerProviderFromRow, grantFromRow, serviceFromRow } from '../../db/rows';
+import { credentialAccessRuleFromRow, grantFromRow, serviceFromRow } from '../../db/rows';
 import type { Actor, LabelledClaim, Role, UserStatus } from '../../db/types';
 import type { Deps } from '../../deps';
 import type { ProfileId } from '../../identity/types';
@@ -9,12 +9,14 @@ import { canonicalJson } from '../../lib/json';
 import type { Condition, Injection, Rule, VerifyCheck } from '../../policy/types';
 import { commitOrConstraintFailure, type OpFailure } from './shared';
 
-/** 2: `template_id` per service, `claim_labels`, the token_manager and access_manager roles. */
-export const EXPORT_SCHEMA_VERSION = 2;
+/** 3: Credentials and the two access rule entities, including credential boundaries. */
+export const EXPORT_SCHEMA_VERSION = 3;
 
 export interface ExportDocument {
   schema_version: typeof EXPORT_SCHEMA_VERSION;
-  caller_providers: Array<{
+  credential_access_rules: Array<{
+    credential: string;
+    conditions: Condition[];
     name: string;
     profile: ProfileId;
     issuer: string;
@@ -26,7 +28,7 @@ export interface ExportDocument {
     anchor_claims: string[];
     enabled: boolean;
   }>;
-  services: Array<{
+  credentials: Array<{
     slug: string;
     name: string;
     description: string;
@@ -44,21 +46,21 @@ export interface ExportDocument {
       expires_at: number | null;
     } | null;
   }>;
-  grants: Array<{
+  issuer_access_rules: Array<{
     name: string;
     description: string;
-    /** Caller provider name. */
-    caller_provider: string;
-    /** Service slug. */
-    service: string;
+    /** Credential access rule name. */
+    credential_access_rule: string;
+    /** Credential slug. */
+    credential: string;
     conditions: Condition[];
     rules: Rule[];
     enabled: boolean;
     expires_at: number | null;
   }>;
-  /** Display labels of numeric claim IDs, per caller provider name. */
+  /** Display labels of numeric claim IDs, per credential access rule name. */
   claim_labels: Array<{
-    caller_provider: string;
+    credential_access_rule: string;
     claim: LabelledClaim;
     value: string;
     label: string;
@@ -72,42 +74,42 @@ export async function buildExport(db: D1Database): Promise<ExportDocument> {
   const [providerRows, serviceRows, grantRows, labelRows, userRows] = await db.batch<
     Record<string, unknown>
   >([
-    db.prepare('SELECT * FROM caller_providers'),
-    db.prepare('SELECT * FROM services'),
-    db.prepare('SELECT * FROM grants'),
-    db.prepare('SELECT caller_provider_id, claim, value, label FROM claim_labels'),
+    db.prepare('SELECT * FROM credential_access_rules'),
+    db.prepare('SELECT * FROM credentials'),
+    db.prepare('SELECT * FROM issuer_access_rules'),
+    db.prepare('SELECT credential_access_rule_id, claim, value, label FROM claim_labels'),
     db.prepare('SELECT email, role, status FROM users'),
   ]);
-  const providers = (providerRows?.results ?? []).map(callerProviderFromRow);
-  const services = (serviceRows?.results ?? []).map(serviceFromRow);
-  const grants = (grantRows?.results ?? []).map(grantFromRow);
+  const providers = (providerRows?.results ?? []).map(credentialAccessRuleFromRow);
+  const credentials = (serviceRows?.results ?? []).map(serviceFromRow);
+  const issuer_access_rules = (grantRows?.results ?? []).map(grantFromRow);
   const users = (userRows?.results ?? []).map((row) => ({
     email: String(row.email),
     role: row.role as Role,
     status: row.status as UserStatus,
   }));
   const providerNames = new Map(providers.map((p) => [p.id, p.name]));
-  const serviceSlugs = new Map(services.map((s) => [s.id, s.slug]));
+  const serviceSlugs = new Map(credentials.map((s) => [s.id, s.slug]));
 
-  const exportedGrants = grants
+  const exportedIssuerAccessRules = issuer_access_rules
     .map((grant) => ({
       sortKey: [grant.created_at, grant.id] as const,
       value: {
         name: grant.name,
         description: grant.description,
-        caller_provider: providerNames.get(grant.caller_provider_id) ?? '',
-        service: serviceSlugs.get(grant.service_id) ?? '',
+        credential_access_rule: providerNames.get(grant.credential_access_rule_id) ?? '',
+        credential: serviceSlugs.get(grant.service_id) ?? '',
         conditions: grant.conditions,
         rules: grant.rules,
         enabled: grant.enabled,
         expires_at: grant.expires_at,
       },
     }))
-    // Service, caller provider, name; ties keep evaluation order (created_at, id).
+    // Service, credential access rule, name; ties keep evaluation order (created_at, id).
     .sort(
       (a, b) =>
-        compare(a.value.service, b.value.service) ||
-        compare(a.value.caller_provider, b.value.caller_provider) ||
+        compare(a.value.credential, b.value.credential) ||
+        compare(a.value.credential_access_rule, b.value.credential_access_rule) ||
         compare(a.value.name, b.value.name) ||
         a.sortKey[0] - b.sortKey[0] ||
         compare(a.sortKey[1], b.sortKey[1]),
@@ -116,8 +118,10 @@ export async function buildExport(db: D1Database): Promise<ExportDocument> {
 
   return {
     schema_version: EXPORT_SCHEMA_VERSION,
-    caller_providers: providers
+    credential_access_rules: providers
       .map((p) => ({
+        credential: serviceSlugs.get(p.credential_id) ?? '',
+        conditions: p.conditions,
         name: p.name,
         profile: p.profile,
         issuer: p.issuer,
@@ -130,7 +134,7 @@ export async function buildExport(db: D1Database): Promise<ExportDocument> {
         enabled: p.enabled,
       }))
       .sort((a, b) => compare(a.name, b.name)),
-    services: services
+    credentials: credentials
       .map((s) => ({
         slug: s.slug,
         name: s.name,
@@ -152,17 +156,17 @@ export async function buildExport(db: D1Database): Promise<ExportDocument> {
               },
       }))
       .sort((a, b) => compare(a.slug, b.slug)),
-    grants: exportedGrants,
+    issuer_access_rules: exportedIssuerAccessRules,
     claim_labels: (labelRows?.results ?? [])
       .map((row) => ({
-        caller_provider: providerNames.get(String(row.caller_provider_id)) ?? '',
+        credential_access_rule: providerNames.get(String(row.credential_access_rule_id)) ?? '',
         claim: String(row.claim) as LabelledClaim,
         value: String(row.value),
         label: String(row.label),
       }))
       .sort(
         (a, b) =>
-          compare(a.caller_provider, b.caller_provider) ||
+          compare(a.credential_access_rule, b.credential_access_rule) ||
           compare(a.claim, b.claim) ||
           compare(a.value, b.value),
       ),
@@ -193,9 +197,9 @@ export async function exportConfiguration(
       summary: 'Downloaded the configuration export',
       diff: {
         counts: {
-          caller_providers: document.caller_providers.length,
-          services: document.services.length,
-          grants: document.grants.length,
+          credential_access_rules: document.credential_access_rules.length,
+          credentials: document.credentials.length,
+          issuer_access_rules: document.issuer_access_rules.length,
           claim_labels: document.claim_labels.length,
           users: document.users.length,
         },

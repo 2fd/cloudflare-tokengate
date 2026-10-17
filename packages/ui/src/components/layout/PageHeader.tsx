@@ -22,7 +22,7 @@ export interface ListPageHeaderProps extends PageHeaderBase {
    * that many levels deeper, styled the same.
    */
   title: Child;
-  /** Count after the title ("Service tokens 6"). */
+  /** Count after the title ("Credentials 6"). */
   count?: number | string;
   /** One or two sentences under the title (`.desc`, max 70ch). */
   description?: Child;

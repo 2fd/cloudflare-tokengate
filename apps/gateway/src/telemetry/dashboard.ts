@@ -165,19 +165,19 @@ export interface AlertService {
   has_credential: boolean;
 }
 
-export interface AlertGrant {
+export interface AlertIssuerAccessRule {
   id: string;
   name: string;
   service_id: string;
-  caller_provider_id: string;
+  credential_access_rule_id: string;
   enabled: boolean;
   expires_at: number | null;
 }
 
 export interface AlertData {
   now: number;
-  services: AlertService[];
-  grants: AlertGrant[];
+  credentials: AlertService[];
+  issuer_access_rules: AlertIssuerAccessRule[];
   /** Sealed kid per token with a credential; null for a value that is not sealed JSON. */
   sealedKids: Array<{ id: string; slug: string; name: string; kid: string | null }>;
   keyring: KeyringHealth;
@@ -216,10 +216,10 @@ export async function loadAlertData(deps: Pick<Deps, 'env' | 'now'>): Promise<Al
       db.prepare(
         `SELECT id, slug, name, enabled, base_url, credential_expires_at,
            credential_sealed IS NOT NULL AS has_credential
-         FROM services ORDER BY name, id`,
+         FROM credentials ORDER BY name, id`,
       ),
       db.prepare(
-        'SELECT id, name, service_id, caller_provider_id, enabled, expires_at FROM grants ORDER BY name, id',
+        'SELECT id, name, service_id, credential_access_rule_id, enabled, expires_at FROM issuer_access_rules ORDER BY name, id',
       ),
       db.prepare(`SELECT COUNT(*) AS n FROM users WHERE role = 'owner' AND status = 'active'`),
       upstreamHostsStatement(db),
@@ -246,7 +246,7 @@ export async function loadAlertData(deps: Pick<Deps, 'env' | 'now'>): Promise<Al
   for (const row of sealedKids) kidCounts.set(row.kid, (kidCounts.get(row.kid) ?? 0) + 1);
   return {
     now,
-    services: rowsOf<Record<string, unknown>>(serviceRows).map((row) => ({
+    credentials: rowsOf<Record<string, unknown>>(serviceRows).map((row) => ({
       id: String(row.id),
       slug: String(row.slug),
       name: String(row.name),
@@ -256,11 +256,11 @@ export async function loadAlertData(deps: Pick<Deps, 'env' | 'now'>): Promise<Al
         row.credential_expires_at == null ? null : Number(row.credential_expires_at),
       has_credential: Number(row.has_credential) === 1,
     })),
-    grants: rowsOf<Record<string, unknown>>(grantRows).map((row) => ({
+    issuer_access_rules: rowsOf<Record<string, unknown>>(grantRows).map((row) => ({
       id: String(row.id),
       name: String(row.name),
       service_id: String(row.service_id),
-      caller_provider_id: String(row.caller_provider_id),
+      credential_access_rule_id: String(row.credential_access_rule_id),
       enabled: Number(row.enabled) === 1,
       expires_at: row.expires_at == null ? null : Number(row.expires_at),
     })),
@@ -341,7 +341,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
     add('', {
       code: 'keyring_unavailable',
       level: 'error',
-      title: `Encryption keys are not loaded (${keyring.error}): token requests fail with 503 and secrets cannot change.`,
+      title: `Encryption keys are not loaded (${keyring.error}): credential requests fail with 503 and secrets cannot change.`,
       detail: 'Set TOKENGATE_KEK or TOKENGATE_KEYRING.',
       objects: [
         { href: paths.tokenKeys(), label: 'Encryption keys' },
@@ -357,7 +357,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
     add(affected[0]?.name ?? '', {
       code: 'key_missing',
       level: 'error',
-      title: `${count(affected.length, 'token uses', 'tokens use')} ${keyring.missingKids.length === 1 ? 'key' : 'keys'} ${kids}, which the keyring no longer has: ${names(affected)}.`,
+      title: `${count(affected.length, 'credential uses', 'credentials use')} ${keyring.missingKids.length === 1 ? 'key' : 'keys'} ${kids}, which the keyring no longer has: ${names(affected)}.`,
       detail: 'Restore the key in the keyring.',
       objects: [
         ...tokenLinks(affected, () => paths.tokens({ status: 'credential_unreadable' })),
@@ -409,7 +409,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
     });
   }
 
-  const withCredential = data.services.filter(
+  const withCredential = data.credentials.filter(
     (s) => s.has_credential && s.credential_expires_at !== null,
   );
   const expired = withCredential.filter((s) => (s.credential_expires_at as number) <= now);
@@ -428,7 +428,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       title:
         expired.length === 1
           ? `The secret of ${firstExpired.name} expired on ${formatDate(firstExpired.credential_expires_at as number)}.`
-          : `The secrets of ${expired.length} tokens expired: ${expired.map((s) => `${s.name} (${formatDate(s.credential_expires_at as number)})`).join(', ')}.`,
+          : `The secrets of ${expired.length} credentials expired: ${expired.map((s) => `${s.name} (${formatDate(s.credential_expires_at as number)})`).join(', ')}.`,
       detail: '',
       objects: tokenLinks(expired, () => paths.tokens({ status: 'expiring' })),
       fix: {
@@ -449,7 +449,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       title:
         expiring.length === 1
           ? `The secret of ${firstExpiring.name} expires on ${formatDate(firstExpiring.credential_expires_at as number)} (in ${count(days(firstExpiring), 'day', 'days')}).`
-          : `The secrets of ${expiring.length} tokens expire soon: ${expiring.map((s) => `${s.name} (${formatDate(s.credential_expires_at as number)})`).join(', ')}.`,
+          : `The secrets of ${expiring.length} credentials expire soon: ${expiring.map((s) => `${s.name} (${formatDate(s.credential_expires_at as number)})`).join(', ')}.`,
       detail: '',
       objects: tokenLinks(expiring, () => paths.tokens({ status: 'expiring' })),
       fix: {
@@ -461,11 +461,11 @@ export function overviewAlerts(data: AlertData): Alert[] {
     });
   }
   const accessCount = new Map<string, number>();
-  for (const grant of data.grants) {
+  for (const grant of data.issuer_access_rules) {
     if (grant.enabled)
       accessCount.set(grant.service_id, (accessCount.get(grant.service_id) ?? 0) + 1);
   }
-  const missing = data.services.filter(
+  const missing = data.credentials.filter(
     (s) => !s.has_credential && (accessCount.get(s.id) ?? 0) > 0,
   );
   const [firstMissing] = missing;
@@ -477,7 +477,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       title:
         missing.length === 1
           ? `Token ${firstMissing.name} has no secret, so its ${accesses(firstMissing)} cannot work.`
-          : `${missing.length} tokens have no secret, so their accesses cannot work: ${missing.map((s) => `${s.name} (${accesses(s)})`).join(', ')}.`,
+          : `${missing.length} credentials have no secret, so their accesses cannot work: ${missing.map((s) => `${s.name} (${accesses(s)})`).join(', ')}.`,
       detail: '',
       objects: tokenLinks(missing, () => paths.tokens({ status: 'no_credential' })),
       fix: {
@@ -488,7 +488,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       },
     });
   }
-  const serviceById = new Map(data.services.map((s) => [s.id, s]));
+  const serviceById = new Map(data.credentials.map((s) => [s.id, s]));
   const rejected = data.upstreamAuthFailures.filter((row) => row.service_id !== '');
   const [firstRejected] = rejected;
   if (firstRejected) {
@@ -501,8 +501,8 @@ export function overviewAlerts(data: AlertData): Alert[] {
       level: 'warning',
       title:
         rejected.length === 1
-          ? `The upstream rejected token ${label(firstRejected)}: ${text(firstRejected)} got 401/403 in 15 min.`
-          : `The upstream rejected ${rejected.length} tokens in the last 15 min: ${rejected.map((row) => `${label(row)} (${text(row)})`).join(', ')}.`,
+          ? `The upstream rejected credential ${label(firstRejected)}: ${text(firstRejected)} got 401/403 in 15 min.`
+          : `The upstream rejected ${rejected.length} credentials in the last 15 min: ${rejected.map((row) => `${label(row)} (${text(row)})`).join(', ')}.`,
       detail: 'The secret may be revoked or expired.',
       objects: rejected.flatMap((row) => [
         { href: paths.token(row.service_id), label: label(row) },
@@ -519,13 +519,15 @@ export function overviewAlerts(data: AlertData): Alert[] {
       },
     });
   }
-  const outside = data.services.filter((s) => outsideAllowedHosts(s.base_url, data.allowedHosts));
+  const outside = data.credentials.filter((s) =>
+    outsideAllowedHosts(s.base_url, data.allowedHosts),
+  );
   const [firstOutside] = outside;
   if (firstOutside) {
     add(firstOutside.name, {
       code: 'outside_hosts',
       level: 'warning',
-      title: `${count(outside.length, 'token points', 'tokens point')} at hosts that Allowed hosts refuses: ${names(outside)}.`,
+      title: `${count(outside.length, 'credential points', 'credentials point')} at hosts that Allowed hosts refuses: ${names(outside)}.`,
       detail: '',
       objects: [
         ...tokenLinks(outside, () => paths.tokens({ status: 'outside_hosts' })),
@@ -619,7 +621,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
     });
   }
 
-  const expiringAccess = data.grants
+  const expiringAccess = data.issuer_access_rules
     .filter(
       (g) =>
         g.enabled &&
@@ -686,7 +688,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
 
 /**
  * The alerts of one object page: a token's own secret, key and host problems (plus a keyring that
- * did not load, when it holds a secret), or the expiry of a consumer's or one access. Deployment-
+ * did not load, when it holds a secret), or the expiry of a credential access rule's or one access. Deployment-
  * wide problems stay on the Overview and the health strip.
  */
 export function alertsFor(
@@ -695,8 +697,8 @@ export function alertsFor(
 ): Alert[] {
   const quiet: AlertData = {
     ...data,
-    services: [],
-    grants: [],
+    credentials: [],
+    issuer_access_rules: [],
     sealedKids: [],
     keyring: {
       ...data.keyring,
@@ -725,8 +727,8 @@ export function alertsFor(
     const has = sealed.length > 0;
     return overviewAlerts({
       ...quiet,
-      services: data.services.filter((s) => s.id === target.tokenId),
-      grants: data.grants.filter((g) => g.service_id === target.tokenId),
+      credentials: data.credentials.filter((s) => s.id === target.tokenId),
+      issuer_access_rules: data.issuer_access_rules.filter((g) => g.service_id === target.tokenId),
       sealedKids: sealed,
       keyring: {
         ...data.keyring,
@@ -741,11 +743,13 @@ export function alertsFor(
       ),
     }).filter((alert) => alert.code !== 'access_expiring');
   }
-  const grants =
+  const issuer_access_rules =
     'consumerId' in target
-      ? data.grants.filter((g) => g.caller_provider_id === target.consumerId)
-      : data.grants.filter((g) => g.id === target.accessId);
-  return overviewAlerts({ ...quiet, grants }).filter((alert) => alert.code === 'access_expiring');
+      ? data.issuer_access_rules.filter((g) => g.credential_access_rule_id === target.consumerId)
+      : data.issuer_access_rules.filter((g) => g.id === target.accessId);
+  return overviewAlerts({ ...quiet, issuer_access_rules }).filter(
+    (alert) => alert.code === 'access_expiring',
+  );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -776,7 +780,7 @@ export interface OverviewData {
   series: SeriesBucket[];
   /** Per token (and '' for requests refused before a token was chosen), by requests. */
   tokens: TokenTraffic[];
-  /** Requests per consumer access in the range. */
+  /** Requests per issuer access rules in the range. */
   accessRequests: Map<string, number>;
   denials: { groups: DenialGroup[]; bounded: boolean };
   recentChanges: AuditEvent[];

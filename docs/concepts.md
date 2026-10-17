@@ -4,17 +4,17 @@ This page defines the terms that the code, the admin UI and the documentation us
 
 ## How the terms relate
 
-![Concepts: a profile (code) defines the rules for a caller provider; a caller provider has many grants; each grant targets one service; a service has zero or one credential, encrypted by the keyring (Worker secret); Cloudflare Access signs in users; each user change writes an audit event; grant decisions are recorded as request records in TELEMETRY_DB. Caller providers, grants, services, credentials, users and audit events live in the D1 control-plane database.](diagrams/domain-model.svg)
+![Concepts: a profile (code) defines the rules for a credential access rule; a credential access rule has many issuer_access_rules; each grant targets one service; a service has zero or one credential, encrypted by the keyring (Worker secret); Cloudflare Access signs in users; each user change writes an audit event; grant decisions are recorded as request records in TELEMETRY_DB. Credential access rules, issuer_access_rules, credentials, credentials, users and audit events live in the D1 control-plane database.](diagrams/domain-model.svg)
 
 <sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
 A request flows through these terms in a fixed order. The full pipeline is in [architecture.md](architecture.md).
 
-1. The caller sends a token. Its issuer selects a **caller provider**.
-2. The **profile** of that caller provider says how to verify the token.
+1. The caller sends a token. Its issuer selects a **credential access rule**.
+2. The **profile** of that credential access rule says how to verify the token.
 3. The **tenant pin** decides whether the caller belongs to your company.
 4. The URL slug selects a **service**.
-5. The **grants** that connect this caller provider and this service are evaluated. A grant matches when all its **conditions** hold and one of its **rules** allows the method and path. **Anchor claims** and **trusted events** constrain which grants are valid.
+5. The **issuer_access_rules** that connect this credential access rule and this service are evaluated. A grant matches when all its **conditions** hold and one of its **rules** allows the method and path. **Anchor claims** and **trusted events** constrain which issuer_access_rules are valid.
 6. The gateway decrypts the **credential** with the **keyring**, attaches it by **injection**, and forwards the request.
 7. The gateway writes a **request record**.
 
@@ -24,28 +24,28 @@ The admin UI uses task names for some terms. The code, the database, the audit l
 
 | Admin UI name | Term in the code and the database | Admin UI page |
 |---|---|---|
-| Service token | [service](#service-token), plus its credential | Service tokens (`/admin/tokens`) |
-| Secret | [credential](#credential) | The token page |
-| Service consumer | [caller provider](#service-consumer) | Service consumers (`/admin/consumers`) |
-| Consumer type | [profile](#profile) | The consumer page |
-| Organization / Group | the values of the [tenant pin](#tenant-pin) | The consumer page |
-| Consumer access | [grant](#grant) | Service consumers › Consumer access (`/admin/access`) |
+| Credential | [service](#credential), plus its credential | Credentials (`/admin/credentials`) |
+| Secret | [secret](#secret) | The credential page |
+| Credential access rule | [credential access rule](#credential-access-rule) | Credential access rules (`/admin/credential-access-rules`) |
+| Issuer type | [profile](#profile) | The credential access rule page |
+| Organization / Group | the values of the [tenant pin](#tenant-pin) | The credential access rule page |
+| Issuer access rules | [issuer access rule](#issuer-access-rule) | Access Rules › Issuer Access Rules (`/admin/issuer-access-rules`) |
 | Constraints | the grant [conditions](#condition) | The access page |
 | Allowed operations | the grant [rules](#rule) | The access page |
 | Accepted risks | acknowledged grant warnings | The access page |
-| Display label | a row in `claim_labels` ([display label](#display-label)) | The consumer and access pages |
+| Display label | a row in `claim_labels` ([display label](#display-label)) | The credential access rule and access pages |
 
-The admin UI has four sections, in the order of its sidebar: Monitoring (Overview, Requests, Audit log, Data retention), Service tokens (Tokens, Allowed hosts, Encryption keys), Service consumers (Consumers, Consumer access) and Users (People, Sign-in). See [ADR 0019](adr/0019-admin-information-architecture.md) and [ADR 0022](adr/0022-admin-ui-on-design-system-d.md).
+The admin UI has four sections, in the order of its sidebar: Monitoring (Overview, Requests, Audit log, Data retention), Credentials (Credentials, Allowed hosts, Encryption keys), Access Rules (Credential Access Rules, Issuer Access Rules) and Users (People, Sign-in). See [ADR 0019](adr/0019-admin-information-architecture.md) and [ADR 0022](adr/0022-admin-ui-on-design-system-d.md).
 
 ## Glossary
 
-### Service token
-
-A service token (in the code and the database: a service, plus its credential) is one upstream API that callers reach through the gateway. It has a slug, a fixed `https` base URL, an injection, an optional credential, a timeout, an optional list of extra request headers to forward, and an optional credential check. Callers address it as `/proxy/<slug>/<path>`; the gateway appends `<path>` to the base URL and never leaves it ([I-PATH-1](threat-model.md#i-path-1)). The slug is 1 to 63 characters of `a-z`, `0-9` and `-` and cannot change. The base URL must use `https`, must not be an IP address, localhost, a `workers.dev` host or the gateway itself, and must match the upstream host allowlist when an owner has set one (Service tokens › Allowed hosts). The gateway checks this when the service is saved and again on every request ([I-SSRF-1](threat-model.md#i-ssrf-1)). Disabling a service refuses its requests from the next request on. IDs start with `svc_`. Admin UI: Service tokens (`/admin/tokens`). Code: `apps/gateway/src/admin/ops/services.ts`, `apps/gateway/src/db/services.ts`.
-
 ### Credential
 
-A credential is the secret of a service, for example an API key, a bot token or the token part of a webhook URL. The admin UI accepts it once and never shows it again; pages show only its length and last 4 characters. The gateway stores it encrypted with AES-256-GCM envelope encryption: a fresh data key per credential, wrapped by the active key of the keyring. Both layers are bound to the service ID, the base URL and the injection, so a credential only decrypts for the destination it was saved for. Changing the base URL or the injection requires entering the credential again, and a database edit of either makes decryption fail closed ([I-CRED-2](threat-model.md#i-cred-2)). The credential never appears in gateway responses, logs, audit events, the UI or exports ([I-CRED-1](threat-model.md#i-cred-1)). An optional expiry date makes the Overview warn 14 days before; the gateway does not enforce it. Admin UI: Secret, on the token page. Code: `apps/gateway/src/crypto/envelope.ts`.
+A credential combines a stored secret with the upstream API destination and authentication settings for using it. The database table is `credentials`; some internal helpers retain the historical name `service`. It has a slug, a fixed `https` base URL, an injection, an optional credential, a timeout, an optional list of extra request headers to forward, and an optional credential check. Callers address it as `/proxy/<slug>/<path>`; the gateway appends `<path>` to the base URL and never leaves it ([I-PATH-1](threat-model.md#i-path-1)). The slug is 1 to 63 characters of `a-z`, `0-9` and `-` and cannot change. The base URL must use `https`, must not be an IP address, localhost, a `workers.dev` host or the gateway itself, and must match the upstream host allowlist when an owner has set one (Credentials › Allowed hosts). The gateway checks this when the service is saved and again on every request ([I-SSRF-1](threat-model.md#i-ssrf-1)). Disabling a service refuses its requests from the next request on. IDs start with `svc_`. Admin UI: Credentials (`/admin/credentials`). Code: `apps/gateway/src/admin/ops/credentials.ts`, `apps/gateway/src/db/credentials.ts`.
+
+### Secret
+
+A secret is the secret of a service, for example an API key, a bot token or the token part of a webhook URL. The admin UI accepts it once and never shows it again; pages show only its length and last 4 characters. The gateway stores it encrypted with AES-256-GCM envelope encryption: a fresh data key per credential, wrapped by the active key of the keyring. Both layers are bound to the service ID, the base URL and the injection, so a credential only decrypts for the destination it was saved for. Changing the base URL or the injection requires entering the credential again, and a database edit of either makes decryption fail closed ([I-CRED-2](threat-model.md#i-cred-2)). The credential never appears in gateway responses, logs, audit events, the UI or exports ([I-CRED-1](threat-model.md#i-cred-1)). An optional expiry date makes the Overview warn 14 days before; the gateway does not enforce it. Admin UI: Secret, on the credential page. Code: `apps/gateway/src/crypto/envelope.ts`.
 
 ### Injection
 
@@ -61,25 +61,37 @@ The injection is how the gateway attaches the credential to the outbound request
 
 The gateway removes any copy of the injected header or query parameter that the caller sends, so a caller cannot replace or observe the credential ([I-INJ-1](threat-model.md#i-inj-1)). Code: `apps/gateway/src/proxy/inject.ts`, `apps/gateway/src/proxy/path.ts`.
 
-### Service consumer
+### Issuer
 
-A service consumer (in the code and the database: a caller provider) is a workload-identity issuer that the gateway trusts, for example "GitHub Actions in organization 1234567". It stores the profile, the exact issuer (`iss`), the JWKS URI, the audience, the allowed signature algorithms, the maximum token age, the tenant pin and, for the `generic` profile, the anchor claims. The issuer is unique: the unverified `iss` of a token only selects which caller provider verifies it. The audience is random by default (`tokengate:` plus 26 characters), so tokens minted for other services do not work here. The gateway verifies the signature, the exact issuer, the audience, the algorithm allowlist (never `none` or `HS*`), the maximum token age and the required claims ([I-JWT-1](threat-model.md#i-jwt-1)). Disabling a caller provider refuses its tokens from the next request on. IDs start with `cpr_`. Admin UI: Service consumers (`/admin/consumers`). Code: `apps/gateway/src/admin/ops/caller-providers.ts`, `apps/gateway/src/identity/jwt.ts`.
+An issuer is the exact `iss` URL in a workload identity token, such as `https://token.actions.githubusercontent.com`. It is a value in an access rule, not a separate resource. It is unrelated to the login provider used by people signing in to the admin app.
+
+### Credential access rule
+
+A credential access rule belongs to one credential and defines which issuer and identity filters may receive access to it. Credential administrators manage these boundaries. Each rule carries the issuer verification settings (profile, JWKS URI, audience, algorithms and maximum token age), organization restrictions and any additional mandatory filters. Several boundaries may use the same issuer. Adding a boundary grants nobody access.
+
+For example, a boundary for the production Slack credential can require GitHub organization ID `1234567` and `environment exact production`. An issuer access rule may select one repository within that organization, but cannot admit another organization or staging. Limits are checked when an access is created, edited or enabled, and again on each request. Tightening or disabling a boundary takes effect on the next request.
+
+Admin UI: Access Rules → Credential Access Rules (`/admin/credential-access-rules`). Database: `credential_access_rules`. Issuers have no table of their own.
 
 ### Profile
 
-A profile is code-reviewed knowledge about one issuer type. There are three: `github-actions`, `gitlab-ci` and `generic`. A profile defines the default issuer and algorithms, the maximum token age limit, the claim that names the triggering event, the trusted events, the claims a tenant pin may use, the shared issuers, the anchor rules, the claims a token must carry, and the claims copied into request records. Admins choose a profile when they create a caller provider and cannot change it later. Issuers on `token.actions.githubusercontent.com` or `gitlab.com` must use their platform profile. Admin UI: Consumer type. Code: `apps/gateway/src/identity/profiles/github-actions.ts`, `gitlab-ci.ts`, `generic.ts`.
+A profile is code-reviewed knowledge about one issuer type. There are three: `github-actions`, `gitlab-ci` and `generic`. A profile defines the default issuer and algorithms, the maximum token age limit, the claim that names the triggering event, the trusted events, the claims a tenant pin may use, the shared issuers, the anchor rules, the claims a token must carry, and the claims copied into request records. Admins choose a profile when they create a credential access rule and cannot change it later. Issuers on `token.actions.githubusercontent.com` or `gitlab.com` must use their platform profile. Admin UI: Issuer type. Code: `apps/gateway/src/identity/profiles/github-actions.ts`, `gitlab-ci.ts`, `generic.ts`.
 
 ### Tenant pin
 
-A tenant pin is a list of exact claim conditions that every token of a caller provider must satisfy. It answers "is this caller in my company?" before any grant is read. For GitHub Actions it uses the numeric `repository_owner_id` (UI: "Allowed organization IDs") and optionally `enterprise_id`; for GitLab CI it uses `namespace_id` (UI: "Allowed group (namespace) IDs"); for `generic` it may use any claim. Shared issuers (`https://token.actions.githubusercontent.com`, `https://gitlab.com`) sign tokens for anyone on the platform, so a caller provider for them must have a tenant pin. A token outside the pin gets `401 tenant_mismatch` before the gateway reveals whether the service exists, and none of its claims are stored ([I-TEN-1](threat-model.md#i-ten-1), [I-LOG-2](threat-model.md#i-log-2)).
+A tenant pin is a list of exact claim conditions that every token of a credential access rule must satisfy. It answers "is this caller in my company?" before any grant is read. For GitHub Actions it uses the numeric `repository_owner_id` (UI: "Allowed organization IDs") and optionally `enterprise_id`; for GitLab CI it uses `namespace_id` (UI: "Allowed group (namespace) IDs"); for `generic` it may use any claim. Shared issuers (`https://token.actions.githubusercontent.com`, `https://gitlab.com`) sign tokens for anyone on the platform, so a credential access rule for them must have a tenant pin. A token outside the pin gets `401 tenant_mismatch` before the gateway reveals whether the service exists, and none of its claims are stored ([I-TEN-1](threat-model.md#i-ten-1), [I-LOG-2](threat-model.md#i-log-2)).
 
 ### Caller
 
 A caller is a workload, for example a CI job, that presents a verified token. The gateway does not store callers. A caller exists only in request records, as the allowlisted claims of its token.
 
-### Grant
+### Issuer access rule
 
-A grant lets the callers of one caller provider whose claims match its conditions call one service with operations that match its rules. A grant can be disabled or have an expiry time; both take effect on the next request, because the gateway reads grants from D1 on every request. Grants only allow: the gateway evaluates the enabled grants in creation order, the first match wins, and a request that no grant matches gets `403` ([I-AUTHZ-1](threat-model.md#i-authz-1)). Saving a grant can show warnings, for example for a broad glob or a missing `ref_protected exact true`; the admin must acknowledge them. IDs start with `grt_`. Admin UI: Consumer access (`/admin/access`); the acknowledged warnings are its Accepted risks. Details: [policies.md](policies.md). Code: `apps/gateway/src/policy/evaluate.ts`, `apps/gateway/src/admin/ops/grants.ts`.
+An issuer access rule grants workloads access to one credential for specified methods and paths. It references a credential access rule for that same credential and selects identity filters within its limits. Access managers can create these rules, but cannot expand the credential's boundary. A rule may be disabled or expire.
+
+Every mandatory filter must be preserved or demonstrably narrowed. Exact values may narrow a glob; arbitrary glob-to-glob containment is not inferred. Keep the boundary's glob unchanged and add more filters when needed. If a boundary is later tightened so an existing access rule is no longer contained, that access rule stops authorizing requests until corrected.
+
+Admin UI: Access Rules → Issuer Access Rules (`/admin/issuer-access-rules`). Database: `issuer_access_rules`. Authorization remains allow-only: no matching rule means denial.
 
 ### Condition
 
@@ -109,7 +121,7 @@ An anchor claim is an identity claim that a grant must pin exactly, usually an i
 |---|---|
 | `github-actions` | `repository_owner_id` + `repository_id`, or `repository_owner_id` + `job_workflow_ref` |
 | `gitlab-ci` | `namespace_id` + `project_id`, or `namespace_id` + `ci_config_ref_uri` |
-| `generic` | any one of the caller provider's anchor claims |
+| `generic` | any one of the credential access rule's anchor claims |
 
 Numeric IDs are used because names can be renamed and registered again by someone else. The workflow pins `job_workflow_ref` and `ci_config_ref_uri` are the exception: they are path-based, follow repository and project names, and admit every repository or project that runs the pinned file ([policies.md](policies.md#anchor-rules)). The gateway checks anchors when a grant is saved and again on every request; a grant that no longer satisfies them is skipped.
 
@@ -141,16 +153,16 @@ There are five roles. Token duties and access duties are separate roles ([ADR 00
 | Role | Permissions | Can |
 |---|---|---|
 | `viewer` | `read` | Read every page. No page shows secret material. |
-| `token_manager` | `read`, `tokens:write` | Also create, change, disable and delete services; enter, rotate and test credentials. Cannot give any caller access to a service. |
-| `access_manager` | `read`, `access:write` | Also create, change and delete caller providers and grants, for any service. Never sees a credential. |
+| `token_manager` | `read`, `tokens:write` | Also create, change, disable and delete credentials; enter, rotate and test credentials. Cannot give any caller access to a service. |
+| `access_manager` | `read`, `access:write` | Also create, change and delete credential access rules and issuer_access_rules, for any service. Never sees a credential. |
 | `admin` | `read`, `tokens:write`, `access:write`, `config:export` | Token manager and access manager together, plus the configuration export. |
 | `owner` | The admin's, plus `users:write`, `settings:write`, `keyring:rewrap` | Also invite, approve and reject users, change roles and statuses, reset logins, set the role and status of new users, change settings (including the upstream host allowlist and the admin hosts), re-encrypt credentials. |
 
-Some form fields need a further permission, on top of the route's: allowing a new upstream host while saving a service needs `settings:write`, and deleting a service together with its grants needs `access:write`. Every admin route has an entry in the permission table, and unknown routes are denied ([I-RBAC-1](threat-model.md#i-rbac-1)). The database refuses to remove the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). IDs start with `usr_`. Admin UI: Users › People (`/admin/users`). Code: `apps/gateway/src/admin/auth/rbac.ts`.
+Some form fields need a further permission, on top of the route's: allowing a new upstream host while saving a service needs `settings:write`, and deleting a service together with its issuer_access_rules needs `access:write`. Every admin route has an entry in the permission table, and unknown routes are denied ([I-RBAC-1](threat-model.md#i-rbac-1)). The database refuses to remove the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). IDs start with `usr_`. Admin UI: Users › People (`/admin/users`). Code: `apps/gateway/src/admin/auth/rbac.ts`.
 
 ### Team
 
-A team (an admin team) is a named set of users that holds global permissions and a scope of service tokens and consumers. Its members get these powers. Teams replace the roles ([ADR 0023](adr/0023-teams-replace-roles.md)). A team is **not** the Cloudflare Access *team domain*: the docs always write "Access team domain" for that one, and the variable stays `AUTH_ACCESS_TEAM_DOMAIN`. "Team" alone always means an admin team. A user can be in several teams; the effective permissions are the union of the teams. A holder of `users:write` creates custom teams, sets their powers and adds people, but never more power than they hold themselves (I-RBAC-2). Teams are not tenants: slugs, names, issuers, settings and the keyring stay deployment-wide. IDs start with `tea_`. Admin UI: Users › Teams (`/admin/users/teams`).
+A team (an admin team) is a named set of users that holds global permissions and a scope of credentials and consumers. Its members get these powers. Teams replace the roles ([ADR 0023](adr/0023-teams-replace-roles.md)). A team is **not** the Cloudflare Access *team domain*: the docs always write "Access team domain" for that one, and the variable stays `AUTH_ACCESS_TEAM_DOMAIN`. "Team" alone always means an admin team. A user can be in several teams; the effective permissions are the union of the teams. A holder of `users:write` creates custom teams, sets their powers and adds people, but never more power than they hold themselves (I-RBAC-2). Teams are not tenants: slugs, names, issuers, settings and the keyring stay deployment-wide. IDs start with `tea_`. Admin UI: Users › Teams (`/admin/users/teams`).
 
 ### Built-in team
 
@@ -166,7 +178,7 @@ A global permission is a power that is not tied to one token or consumer: `token
 
 ### Level
 
-A level is what a team may do with one token or consumer: `1` view, `2` edit, `3` delete. Each level includes the lower ones. Creating is a global permission of the kind, not a level. A consumer access (grant) has no level of its own: changing it needs edit on its consumer and view on its token.
+A level is what a team may do with one token or consumer: `1` view, `2` edit, `3` delete. Each level includes the lower ones. Creating is a global permission of the kind, not a level. A issuer access rules (grant) has no level of its own: changing it needs edit on its consumer and view on its token.
 
 ### Scope
 
@@ -174,7 +186,7 @@ A scope is the set of tokens, or of consumers, that a team can reach, with a lev
 
 ### Visible
 
-A token or consumer is visible to a person when one of their teams can at least view it. Anything else is hidden everywhere in the admin UI: lists, details, the access map, requests, the audit log, the Overview, the export and the sidebar counts. Its URL answers 404, the same page as for an ID that does not exist (I-SCOPE-1). A consumer access is visible when its consumer and its token are both visible. A request record is visible when its consumer is visible and its token is unset or visible.
+A token or consumer is visible to a person when one of their teams can at least view it. Anything else is hidden everywhere in the admin UI: lists, details, the access map, requests, the audit log, the Overview, the export and the sidebar counts. Its URL answers 404, the same page as for an ID that does not exist (I-SCOPE-1). A issuer access rules is visible when its consumer and its token are both visible. A request record is visible when its consumer is visible and its token is unset or visible.
 
 ### Global viewer
 
@@ -182,7 +194,7 @@ A global viewer is a person who can view all tokens and all consumers through an
 
 ### Reveal
 
-Reveal (admin UI: "Copy secret") is a flag on a team's access to a token. It includes view. It allows `POST /admin/tokens/:id/reveal`, which sends the credential to the browser encrypted to a key of the browser, after an audit row, at most 20 times per hour per person. The browser copies it to the clipboard and never shows it. Among the built-in teams only Owners hold reveal. A person with reveal can always extract the credential: "copy only" is a UI choice, not a control ([ADR 0024](adr/0024-secret-reveal-over-ecdh.md)). Not the same as the `Reveal` component of `@tokengate/ui`, which shows a branch of a form without JavaScript.
+Reveal (admin UI: "Copy secret") is a flag on a team's access to a token. It includes view. It allows `POST /admin/credentials/:id/reveal`, which sends the credential to the browser encrypted to a key of the browser, after an audit row, at most 20 times per hour per person. The browser copies it to the clipboard and never shows it. Among the built-in teams only Owners hold reveal. A person with reveal can always extract the credential: "copy only" is a UI choice, not a control ([ADR 0024](adr/0024-secret-reveal-over-ecdh.md)). Not the same as the `Reveal` component of `@tokengate/ui`, which shows a branch of a form without JavaScript.
 
 ### Default team
 
@@ -194,7 +206,7 @@ The receiving team is the team that gets access to a token or consumer when some
 
 ### Secret ends
 
-The secret ends are the first 4 and the last 4 characters of a credential. The token page shows them only to a person with reveal on that token, and only when the secret part (without a username or prefix) has at least 20 characters. They are derived when the page renders and never stored: the database holds only the length of the credential. Everyone else sees a mask and the length.
+The secret ends are the first 4 and the last 4 characters of a credential. The credential page shows them only to a person with reveal on that token, and only when the secret part (without a username or prefix) has at least 20 characters. They are derived when the page renders and never stored: the database holds only the length of the credential. Everyone else sees a mask and the length.
 
 ### Login provider
 
@@ -202,7 +214,7 @@ Users sign in through Cloudflare Access (login provider `access`), configured wi
 
 ### Request record
 
-A request record is one row in `request_log` in `TELEMETRY_DB` for a call to `/proxy/...`. It holds the outcome (`allowed`, `denied` or `error`), the reason code, the HTTP status, the service, the caller provider, the matched grant, the allowlisted claims of the verified caller and the policy evaluation trace. Denied and error records of verified callers are always kept. Allowed records are sampled by the setting "Share of allowed requests to record". Rejections that happen before the token is verified and the tenant pin holds are recorded at a limited rate and without claims. Raw tokens and credentials never reach a record, and only the profile's allowlisted claims are stored ([I-LOG-1](threat-model.md#i-log-1), [I-LOG-2](threat-model.md#i-log-2)). Records are kept 14 days by default (Monitoring › Data retention) and summarized in hourly rollups. Admin UI: Monitoring › Requests. IDs start with `req_`; the same ID is in the `x-tokengate-request-id` response header. Details: [observability.md](observability.md).
+A request record is one row in `request_log` in `TELEMETRY_DB` for a call to `/proxy/...`. It holds the outcome (`allowed`, `denied` or `error`), the reason code, the HTTP status, the service, the credential access rule, the matched grant, the allowlisted claims of the verified caller and the policy evaluation trace. Denied and error records of verified callers are always kept. Allowed records are sampled by the setting "Share of allowed requests to record". Rejections that happen before the token is verified and the tenant pin holds are recorded at a limited rate and without claims. Raw tokens and credentials never reach a record, and only the profile's allowlisted claims are stored ([I-LOG-1](threat-model.md#i-log-1), [I-LOG-2](threat-model.md#i-log-2)). Records are kept 14 days by default (Monitoring › Data retention) and summarized in hourly rollups. Admin UI: Monitoring › Requests. IDs start with `req_`; the same ID is in the `x-tokengate-request-id` response header. Details: [observability.md](observability.md).
 
 ### Audit event
 
@@ -210,8 +222,8 @@ An audit event is one row in `audit_log` in `DB` for every admin change, and for
 
 ### Keyring
 
-The keyring holds the key-encryption keys (KEKs) that protect credentials. It comes from one of two Worker secrets: `TOKENGATE_KEK` (one base64 32-byte key, key ID `k1`) or `TOKENGATE_KEYRING` (JSON with an active key ID and several keys, for rotation). Setting both is a configuration error. If the keyring is missing or invalid, requests that a grant allows get `503 not_configured` and credential changes are refused; admin sign-in still works ([I-CFG-1](threat-model.md#i-cfg-1)). Generate the KEK outside Cloudflare and keep it in your vault: Worker secrets cannot be read back, and losing the KEK loses every credential. Each key is bound to the login variables `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` and `AUTH_ACCESS_DEVELOPMENT`: a change to any of them makes every stored credential impossible to decrypt ([I-CRED-3](threat-model.md#i-cred-3)). The public development key in `.dev.vars.example` works only for local development (`dev_placeholder_key`). Rotation: [operations/key-rotation.md](operations/key-rotation.md). Admin UI: Service tokens › Encryption keys (`/admin/tokens/keys`). Code: `apps/gateway/src/crypto/keyring.ts`.
+The keyring holds the key-encryption keys (KEKs) that protect credentials. It comes from one of two Worker secrets: `TOKENGATE_KEK` (one base64 32-byte key, key ID `k1`) or `TOKENGATE_KEYRING` (JSON with an active key ID and several keys, for rotation). Setting both is a configuration error. If the keyring is missing or invalid, requests that a grant allows get `503 not_configured` and credential changes are refused; admin sign-in still works ([I-CFG-1](threat-model.md#i-cfg-1)). Generate the KEK outside Cloudflare and keep it in your vault: Worker secrets cannot be read back, and losing the KEK loses every credential. Each key is bound to the login variables `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` and `AUTH_ACCESS_DEVELOPMENT`: a change to any of them makes every stored credential impossible to decrypt ([I-CRED-3](threat-model.md#i-cred-3)). The public development key in `.dev.vars.example` works only for local development (`dev_placeholder_key`). Rotation: [operations/key-rotation.md](operations/key-rotation.md). Admin UI: Credentials › Encryption keys (`/admin/credentials/keys`). Code: `apps/gateway/src/crypto/keyring.ts`.
 
 ### Display label
 
-A display label is a human name for one numeric claim ID of one caller provider, for example `repository_id` 987654321 → `acme/api`. The admin UI shows and accepts IDs as `name (ID)`, for example `acme/api (987654321)`. Labels are stored in the `claim_labels` table and are written only when an admin saves a consumer or an access. They are for display and for form input only: policy evaluation never reads them, and the saved conditions always keep the numeric ID, so changing a label never changes what a saved grant allows. One exception at save time: an operation preset whose path contains the repository (for example `GET /repos/{repo}/**`) is saved with the label text in the path, as a literal rule that the access page shows. Code: `apps/gateway/src/db/claim-labels.ts`.
+A display label is a human name for one numeric claim ID of one credential access rule, for example `repository_id` 987654321 → `acme/api`. The admin UI shows and accepts IDs as `name (ID)`, for example `acme/api (987654321)`. Labels are stored in the `claim_labels` table and are written only when an admin saves a credential access rule or an access. They are for display and for form input only: policy evaluation never reads them, and the saved conditions always keep the numeric ID, so changing a label never changes what a saved grant allows. One exception at save time: an operation preset whose path contains the repository (for example `GET /repos/{repo}/**`) is saved with the label text in the path, as a literal rule that the access page shows. Code: `apps/gateway/src/db/claim-labels.ts`.

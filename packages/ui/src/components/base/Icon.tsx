@@ -13,12 +13,12 @@ const ICONS = {
   ],
   /** Sidebar: Monitoring. */
   monitoring: [['path', { d: 'M3 12h4l3-7 4 14 3-7h4' }]],
-  /** Sidebar: Service tokens; the OIDC logo tile. */
+  /** Sidebar: Credentials; the OIDC logo tile. */
   token: [
     ['circle', { cx: '8', cy: '15', r: '4' }],
     ['path', { d: 'M11 12l9-9M16 7l3 3' }],
   ],
-  /** Sidebar: Service consumers; the empty consumer access state. */
+  /** Sidebar: Credential access rules; the empty issuer access rules state. */
   consumer: [
     ['rect', { x: '3', y: '3', width: '7', height: '7', rx: '1.5' }],
     ['rect', { x: '14', y: '14', width: '7', height: '7', rx: '1.5' }],

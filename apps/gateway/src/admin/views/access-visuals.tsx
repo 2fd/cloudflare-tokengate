@@ -1,22 +1,22 @@
-// Shared visuals of the service consumer and consumer access pages (design D): the logo tile of a
+// Shared visuals of the credential access rule and issuer access rules pages (design D): the logo tile of a
 // consumer and of a token, the row form of an access status (`.st`, dot + word), and the
 // ErrorSummary target of a choice group that a page renders with ui choices directly. Display only:
 // nothing here decides what an access allows.
 import { firstChoiceId, Logo, type LogoSpec, Status, type Tone } from '@tokengate/ui';
 import { useContext } from 'hono/jsx';
 import { labelFor } from '../../db/claim-labels';
-import type { CallerProvider, ClaimLabel, Service } from '../../db/types';
+import type { CredentialAccessRule, ClaimLabel, Service } from '../../db/types';
 import { getProfile } from '../../identity/profiles';
 import { operationText } from '../access-summary';
 import type { AccessEdge } from '../connections';
-import { pinValues, tenantClaimOf } from '../ops/caller-providers';
+import { pinValues, tenantClaimOf } from '../ops/credential-access-rules';
 import { REPO_PLACEHOLDER, templateForService } from '../service-templates';
 import { fieldId, FocusTargets } from './components';
 import { STATUS, type StatusKey, statusLabel } from './status';
 
-/** The tile of a consumer: its CI system (github, gitlab, buildkite), else the OIDC key. */
+/** The tile of a credential access rule: its CI system (github, gitlab, buildkite), else the OIDC key. */
 export function consumerLogo(
-  provider: Pick<CallerProvider, 'profile' | 'issuer' | 'enabled'> | null,
+  provider: Pick<CredentialAccessRule, 'profile' | 'issuer' | 'enabled'> | null,
 ): LogoSpec {
   if (!provider) return 'oidc';
   let brand: 'github' | 'gitlab' | 'buildkite' | 'oidc' = 'oidc';
@@ -58,7 +58,7 @@ function initials(name: string): string {
   return letters.toUpperCase() || '?';
 }
 
-/** The host a consumer's jobs run on, as people know it: github.com for GitHub Actions. */
+/** The host a credential access rule's jobs run on, as people know it: github.com for GitHub Actions. */
 export function issuerHost(issuer: string): string {
   const host = hostOf(issuer);
   return host === 'token.actions.githubusercontent.com' ? 'github.com' : host;
@@ -232,8 +232,8 @@ export function useFocusTarget(
   );
 }
 
-/** "acme (1234567), acme-labs (7654321)", "org_id=77", or "No pin": what a consumer trusts. */
-export function tenantsText(consumer: CallerProvider, labels: readonly ClaimLabel[]): string {
+/** "acme (1234567), acme-labs (7654321)", "org_id=77", or "No pin": what a credential access rule trusts. */
+export function tenantsText(consumer: CredentialAccessRule, labels: readonly ClaimLabel[]): string {
   const claim = tenantClaimOf(consumer.profile);
   if (claim === null) {
     return consumer.tenant_pin.length === 0
@@ -249,7 +249,7 @@ export function tenantsText(consumer: CallerProvider, labels: readonly ClaimLabe
 }
 
 /** "org acme (1234567)", "group acme-group (5678901)", or the type of a generic consumer. */
-export function trustLine(consumer: CallerProvider, labels: readonly ClaimLabel[]): string {
+export function trustLine(consumer: CredentialAccessRule, labels: readonly ClaimLabel[]): string {
   const claim = tenantClaimOf(consumer.profile);
   if (claim === null || pinValues(consumer.tenant_pin, claim).length === 0) {
     return getProfile(consumer.profile)?.label ?? consumer.profile;

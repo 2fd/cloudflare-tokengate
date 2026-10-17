@@ -1,6 +1,6 @@
-// Admin pages: service consumers (caller providers, the CI systems whose jobs call the gateway).
-// Every change goes through ops/caller-providers.ts (validation, tenant pin I-TEN-1, anchors
-// I-AUTHZ-2, audit I-AUDIT-1). Adding a consumer asks only what cannot be derived (its
+// Admin pages: credential access rules (credential access rules, the CI systems whose jobs call the gateway).
+// Every change goes through ops/credential-access-rules.ts (validation, tenant pin I-TEN-1, anchors
+// I-AUTHZ-2, audit I-AUDIT-1). Adding a credential access rule asks only what cannot be derived (its
 // organizations, groups or issuer); an issuer/JWKS change under enabled accesses needs the confirm
 // checkbox; disabling never validates; deleting with accesses is one confirmed cascade.
 import {
@@ -38,17 +38,18 @@ import {
 } from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
 import type { App } from '../../app';
-import { getCallerProvider } from '../../db/caller-providers';
 import { labelFor, listClaimLabels } from '../../db/claim-labels';
-import { listGrants } from '../../db/grants';
-import type { CallerProvider, ClaimLabel, Grant, Service } from '../../db/types';
+import { getCredentialAccessRule } from '../../db/credential-access-rules';
+import { listIssuerAccessRules } from '../../db/issuer_access_rules';
+import type { CredentialAccessRule, ClaimLabel, IssuerAccessRule, Service } from '../../db/types';
 import { getProfile } from '../../identity/profiles';
 import { GITHUB_ACTIONS_ISSUER } from '../../identity/profiles/github-actions';
 import { GITLAB_COM_ISSUER } from '../../identity/profiles/gitlab-ci';
 import type { IssuerProfile, ProfileId } from '../../identity/types';
 import type { Condition } from '../../policy/types';
-import { ALLOWED_ALGS, validateCallerProvider } from '../../policy/validate';
+import { ALLOWED_ALGS, validateCredentialAccessRule } from '../../policy/validate';
 import { loadUnknownIssuers, type UnknownIssuer } from '../access-traffic';
+import { parseBoundaryFilters } from '../boundary-filters';
 import { type AccessEdge, type Connections, loadConnections } from '../connections';
 import {
   all,
@@ -59,20 +60,20 @@ import {
   text,
   withAnyRefFlags,
 } from '../consumer-access';
-import { formatValueList, parseValueList } from '../grant-text';
+import { formatConditions, formatValueList, parseValueList } from '../grant-text';
 import { type NoticeContext, type NoticeTable, resolveNotice } from '../notice';
 import {
   addTenantValue,
-  type CallerProviderUpdateInput,
+  type CredentialAccessRuleUpdateInput,
   createOrMergeConsumer,
-  deleteCallerProvider,
+  deleteCredentialAccessRule,
   grantsUsingPinValue,
   pinValues,
   removeTenantValue,
-  setCallerProviderEnabled,
+  setCredentialAccessRuleEnabled,
   tenantClaimOf,
-  updateCallerProvider,
-} from '../ops/caller-providers';
+  updateCredentialAccessRule,
+} from '../ops/credential-access-rules';
 import type { FieldError, OpFailure } from '../ops/shared';
 import { paths, returnPath } from '../paths';
 import {
@@ -132,40 +133,42 @@ import { RepeatingRows } from '../views/rows';
 import { statusLabel } from '../views/status';
 
 export function registerConsumersRoutes(app: App): void {
-  app.get('/admin/consumers', listPage);
-  app.get('/admin/consumers/new', newPage);
-  app.post('/admin/consumers', create);
-  app.get('/admin/consumers/:id', detailPage);
-  app.post('/admin/consumers/:id', update);
-  app.post('/admin/consumers/:id/tenants', tenants);
-  app.post('/admin/consumers/:id/toggle', toggle);
-  app.post('/admin/consumers/:id/delete', remove);
+  app.get('/admin/credential-access-rules', listPage);
+  app.get('/admin/credential-access-rules/new', newPage);
+  app.post('/admin/credential-access-rules', create);
+  app.get('/admin/credential-access-rules/:id', detailPage);
+  app.post('/admin/credential-access-rules/:id', update);
+  app.post('/admin/credential-access-rules/:id/tenants', tenants);
+  app.post('/admin/credential-access-rules/:id/toggle', toggle);
+  app.post('/admin/credential-access-rules/:id/delete', remove);
 }
 
 // ---------------------------------------------------------------------------------------------
 // Notices
 
 interface ConsumerNoticeData {
-  consumer: CallerProvider | null;
+  consumer: CredentialAccessRule | null;
 }
 
 const NOTICES: NoticeTable<NoticeContext & ConsumerNoticeData> = {
   created: () => ({
-    text: 'Consumer created. Add the snippet below to your workflow, then give it access to a token.',
+    text: 'Credential access rule created. Add the snippet below to your workflow, then create an issuer access rule for this credential.',
   }),
   tenant_added: ({ consumer }) => ({
-    text: `${consumer?.name ?? 'The consumer'} can now be used by the added organizations or groups.`,
+    text: `${consumer?.name ?? 'The credential access rule'} can now be used by the added organizations or groups.`,
   }),
   tenant_removed: () => ({
-    text: 'Removed from the consumer. Its tokens are refused from the next request on.',
+    text: 'Removed from the credential access rule. Its tokens are refused from the next request on.',
   }),
-  renamed: () => ({ text: 'Consumer renamed.' }),
+  renamed: () => ({ text: 'Credential access rule renamed.' }),
   trust_saved: () => ({ text: 'Trust settings saved.' }),
   unchanged: () => ({ text: 'Nothing changed: the submitted values are the current ones.' }),
   label_changed: () => ({ text: 'Saved. A display name of an ID changed everywhere it is shown.' }),
-  enabled: () => ({ text: 'Consumer enabled. Its accesses work again from the next request on.' }),
+  enabled: () => ({
+    text: 'Credential access rule enabled. Its accesses work again from the next request on.',
+  }),
   disabled: ({ consumer }) => ({
-    text: 'Consumer disabled. Its jobs are refused from the next request on.',
+    text: 'Credential access rule disabled. Its jobs are refused from the next request on.',
     ...(consumer && !consumer.enabled
       ? {
           undo: {
@@ -177,11 +180,13 @@ const NOTICES: NoticeTable<NoticeContext & ConsumerNoticeData> = {
         }
       : {}),
   }),
-  deleted: () => ({ text: 'Consumer deleted.' }),
-  deleted_with_accesses: () => ({ text: 'Consumer and its accesses deleted.' }),
+  deleted: () => ({ text: 'Credential access rule deleted.' }),
+  deleted_with_accesses: () => ({
+    text: 'Credential access rule and its issuer access rules deleted.',
+  }),
 };
 
-function pageNotice(c: AdminContext, consumer: CallerProvider | null) {
+function pageNotice(c: AdminContext, consumer: CredentialAccessRule | null) {
   return resolveNotice(NOTICES, c.req.query('notice'), null, { consumer });
 }
 
@@ -189,7 +194,7 @@ function pageNotice(c: AdminContext, consumer: CallerProvider | null) {
 // Shared facts
 
 /** "Organization", "Groups", the pin claims of a generic consumer, or null without a pin. */
-function trustKind(consumer: CallerProvider): string | null {
+function trustKind(consumer: CredentialAccessRule): string | null {
   const claim = tenantClaimOf(consumer.profile);
   if (claim === null) {
     return consumer.tenant_pin.length === 0
@@ -202,8 +207,8 @@ function trustKind(consumer: CallerProvider): string | null {
   return count === 1 ? word : `${word}s`;
 }
 
-/** "organization", "groups": the word for a consumer's pinned owners in a sentence. */
-function ownerWord(consumer: CallerProvider, count: number): string {
+/** "organization", "groups": the word for a credential access rule's pinned owners in a sentence. */
+function ownerWord(consumer: CredentialAccessRule, count: number): string {
   const word = consumer.profile === 'gitlab-ci' ? 'group' : 'organization';
   return count === 1 ? word : `${word}s`;
 }
@@ -223,9 +228,9 @@ function lastCall(
 function byConsumer(accesses: readonly AccessEdge[]): Map<string, AccessEdge[]> {
   const map = new Map<string, AccessEdge[]>();
   for (const edge of accesses) {
-    const list = map.get(edge.grant.caller_provider_id) ?? [];
+    const list = map.get(edge.grant.credential_access_rule_id) ?? [];
     list.push(edge);
-    map.set(edge.grant.caller_provider_id, list);
+    map.set(edge.grant.credential_access_rule_id, list);
   }
   return map;
 }
@@ -257,30 +262,30 @@ async function listPage(c: AdminContext) {
           .
         </>
       )}
-      <LearnMore path="concepts.md#service-consumer" about="service consumers" />
+      <LearnMore path="concepts.md#credential-access-rule" about="credential access rules" />
     </>
   );
   return renderPage(
     c,
     {
-      title: 'Service consumers',
+      title: 'Credential access rules',
       section: 'consumers',
       subsection: 'consumers',
       notice: pageNotice(c, null),
       header: (ctx) => (
         <PageHeader
-          title="Service consumers"
+          title="Credential access rules"
           count={consumers.length}
           description={description}
           actions={
-            ctx.can('access:write') ? (
+            ctx.can('tokens:write') ? (
               <>
                 {connections.tokens.length > 0 ? (
-                  <Button href={paths.accessNew()}>Give a consumer access</Button>
+                  <Button href={paths.accessNew()}>Add issuer access rule</Button>
                 ) : null}
                 {consumers.length > 0 ? (
                   <Button variant="primary" plus href={paths.consumerNew()}>
-                    Add consumer
+                    Add credential access rule
                   </Button>
                 ) : null}
               </>
@@ -301,21 +306,20 @@ async function listPage(c: AdminContext) {
 function ConsumerList(props: { connections: Connections; ctx: ViewContext }) {
   const { connections, ctx } = props;
   const { consumers } = connections;
-  const canWrite = ctx.can('access:write');
-  const hasTokens = connections.tokens.length > 0;
-  const rowAction = canWrite && hasTokens;
+  const canWrite = ctx.can('tokens:write');
+  const rowAction = ctx.can('access:write') && connections.tokens.length > 0;
   const edges = byConsumer(connections.accesses);
   const tokenCount = new Set(connections.accesses.map((edge) => edge.grant.service_id)).size;
   const sorted = busiestFirst(consumers, (id) => edges.get(id)?.length ?? 0);
   return (
     <Tray
       id="cl"
-      title="All consumers"
+      title="All credential access rules"
       count={consumers.length}
       description={
         consumers.length === 0
           ? undefined
-          : `${accessesText(connections.accesses.length)} to ${tokenCount} ${tokenCount === 1 ? 'token' : 'tokens'}. A chip opens that consumer's accesses for the token.`
+          : `${accessesText(connections.accesses.length)} to ${tokenCount} ${tokenCount === 1 ? 'token' : 'tokens'}. A chip opens that credential access rule's accesses for the token.`
       }
       actions={
         consumers.length > 0 ? (
@@ -331,7 +335,7 @@ function ConsumerList(props: { connections: Connections; ctx: ViewContext }) {
           labelledBy="cl-h"
           stackable
           columns={[
-            { label: 'Consumer' },
+            { label: 'Credential access rule' },
             { label: 'Trusts' },
             { label: 'Can use' },
             { label: 'Last call', num: true },
@@ -342,7 +346,7 @@ function ConsumerList(props: { connections: Connections; ctx: ViewContext }) {
           {sorted.map((consumer) => {
             const own = edges.get(consumer.id) ?? [];
             const labels = connections.labels.filter(
-              (label) => label.caller_provider_id === consumer.id,
+              (label) => label.credential_access_rule_id === consumer.id,
             );
             const profile = getProfile(consumer.profile);
             const kind = trustKind(consumer);
@@ -389,28 +393,19 @@ function ConsumerList(props: { connections: Connections; ctx: ViewContext }) {
         </Table>
         {consumers.length === 0 ? (
           <UiEmptyState
-            title="No consumers yet."
-            description={
-              canWrite ? (
-                <>
-                  Add the CI system whose jobs will call the gateway.
-                  {hasTokens ? (
-                    <>
-                      {' '}
-                      Or do it in one step:{' '}
-                      <a href={paths.accessNew({ consumer: 'new' })}>Give a consumer access</a>.
-                    </>
-                  ) : null}
-                </>
-              ) : undefined
-            }
+            title="No credential access rules yet."
+            description="Define the issuers and identity filters that may receive access to each credential."
             actions={
               canWrite ? (
                 <Button variant="primary" plus href={paths.consumerNew()}>
-                  Add consumer
+                  Add credential access rule
                 </Button>
               ) : (
-                <AskSomeone permission="access:write" ctx={ctx} verb="add a service consumer" />
+                <AskSomeone
+                  permission="tokens:write"
+                  ctx={ctx}
+                  verb="add a credential access rule"
+                />
               )
             }
           />
@@ -458,12 +453,12 @@ function UnknownIssuers(props: { issuers: UnknownIssuer[]; ctx: ViewContext }) {
                   </>
                 }
               />
-              {ctx.can('access:write') ? (
+              {ctx.can('tokens:write') ? (
                 <Button
                   href={paths.consumerNew(type ? { type } : undefined)}
                   srSuffix={`: ${item.issuer}`}
                 >
-                  Add consumer
+                  Add credential access rule
                 </Button>
               ) : null}
             </div>
@@ -493,7 +488,7 @@ function claimWords(claim: string): string {
  * What a consumer trusts, as one short mono line plus its kind: the pinned owners of GitHub and
  * GitLab, or a generic pin's value under the words of its claim. The full value is in the title.
  */
-function TrustsCell(props: { consumer: CallerProvider; labels: ClaimLabel[]; kind: string }) {
+function TrustsCell(props: { consumer: CredentialAccessRule; labels: ClaimLabel[]; kind: string }) {
   const { consumer } = props;
   const full = tenantsText(consumer, props.labels);
   const [only] = consumer.tenant_pin;
@@ -526,9 +521,9 @@ function TrustsCell(props: { consumer: CallerProvider; labels: ClaimLabel[]; kin
 const CHIPS_SHOWN = 4;
 
 /** The tokens one consumer can use: a chip per token (its accesses grouped), then the facts. */
-function CanUse(props: { consumer: CallerProvider; edges: readonly AccessEdge[] }) {
+function CanUse(props: { consumer: CredentialAccessRule; edges: readonly AccessEdge[] }) {
   const { consumer, edges } = props;
-  if (edges.length === 0) return <span class="meta">No token yet</span>;
+  if (edges.length === 0) return <span class="meta">No credential yet</span>;
   const tokens = new Map<string, { token: Service | null; edges: AccessEdge[] }>();
   for (const edge of edges) {
     const entry = tokens.get(edge.grant.service_id) ?? { token: edge.token, edges: [] };
@@ -544,7 +539,7 @@ function CanUse(props: { consumer: CallerProvider; edges: readonly AccessEdge[] 
   return (
     <>
       <Chips
-        label={`Tokens ${consumer.name} can use`}
+        label={`Credentials allowed by ${consumer.name}`}
         more={
           rest > 0
             ? { href: paths.access({ consumer: consumer.id }), label: `+${rest} more` }
@@ -562,7 +557,7 @@ function CanUse(props: { consumer: CallerProvider; edges: readonly AccessEdge[] 
               glyph={look.glyph}
               srSuffix={`: ${accessesText(group.edges.length)}${look.words}. Open.`}
             >
-              {group.token?.name ?? 'Deleted token'}
+              {group.token?.name ?? 'Deleted credential'}
             </Chip>
           );
         })}
@@ -638,7 +633,9 @@ function edgeFacts(
 // Add
 
 async function newPage(c: AdminContext) {
-  return renderNew(c, blankConsumerForm(c.req.query('type')), [], 200);
+  const form = blankConsumerForm(c.req.query('type'));
+  form.credential_id = c.req.query('credential') ?? '';
+  return renderNew(c, form, [], 200);
 }
 
 async function renderNew(
@@ -648,23 +645,23 @@ async function renderNew(
   status: 200 | 409 | 422,
 ) {
   const connections = withAnyRefFlags(await loadConnections(c.get('deps')));
-  const hasTokens = connections.tokens.length > 0;
   return renderPage(
     c,
     {
-      title: 'Add a service consumer',
+      title: 'Add a credential access rule',
       section: 'consumers',
       subsection: 'consumers',
       errors,
       status,
-      errorSummary: errors.length > 0 ? { title: 'The consumer was not added' } : undefined,
+      errorSummary:
+        errors.length > 0 ? { title: 'The credential access rule was not added' } : undefined,
       header: (
         <PageHeader
           crumbs={[
-            { label: 'Service consumers', href: paths.consumers() },
-            { label: 'Add consumer' },
+            { label: 'Credential access rules', href: paths.consumers() },
+            { label: 'Add credential access rule' },
           ]}
-          title="Add a service consumer"
+          title="Add a credential access rule"
           description="Tell tokengate which CI system to trust. Adding a consumer gives nobody access; you choose tokens next."
         />
       ),
@@ -674,26 +671,46 @@ async function renderNew(
         id="f-add"
         action={paths.consumers()}
         hidden={ctx.hidden()}
-        rail={<SetForYou existing={connections.consumers} />}
+        rail={<SetForYou existing={[]} />}
       >
+        <div class="field">
+          <label for="credential_id">Credential</label>
+          <select id="credential_id" name="credential_id" required>
+            <option value="">Choose a credential</option>
+            {connections.tokens.map((token) => (
+              <option value={token.id} selected={form.credential_id === token.id}>
+                {token.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div class="field">
+          <label for="boundary_filters">Required identity filters</label>
+          <textarea
+            id="boundary_filters"
+            name="boundary_filters"
+            rows={4}
+            placeholder="environment exact production"
+          >
+            {form.boundary_filters ?? ''}
+          </textarea>
+          <p class="hint">
+            One filter per line: claim, exact or glob, then allowed values. Every filter is
+            required, in addition to the organization below.
+          </p>
+        </div>
         <AddConsumerFields
           prefix=""
           live={1}
           form={form}
           errors={errors}
-          existing={connections.consumers}
+          existing={[]}
           labels={connections.labels}
           anchorSuggestions={genericAnchorSuggestions(connections.consumers)}
         />
-        <SubmitRow
-          hint={
-            hasTokens
-              ? 'Next you land on “Give a consumer access” with this consumer preselected.'
-              : 'Next you get the workflow snippet for this consumer.'
-          }
-        >
+        <SubmitRow hint="Access managers can grant access within these limits after you save them.">
           <Button variant="primary" type="submit">
-            Add consumer
+            Add credential access rule
           </Button>
           <Button href={paths.consumers()}>Cancel</Button>
         </SubmitRow>
@@ -725,11 +742,11 @@ async function detailPage(c: AdminContext) {
 }
 
 interface ConsumerPageModel {
-  provider: CallerProvider;
+  provider: CredentialAccessRule;
   profile: IssuerProfile;
   connections: Connections;
   labels: ClaimLabel[];
-  grants: Grant[];
+  issuer_access_rules: IssuerAccessRule[];
   origin: string;
   warnings: string[];
   state: DetailState;
@@ -737,24 +754,24 @@ interface ConsumerPageModel {
 
 async function renderDetail(
   c: AdminContext,
-  provider: CallerProvider,
+  provider: CredentialAccessRule,
   profile: IssuerProfile,
   state: DetailState,
 ) {
   const deps = c.get('deps');
-  const [connections, labels, grants] = await Promise.all([
+  const [connections, labels, issuer_access_rules] = await Promise.all([
     loadConnections(deps, { consumerId: provider.id }).then(withAnyRefFlags),
     listClaimLabels(deps.env.DB, provider.id),
-    listGrants(deps.env.DB, { caller_provider_id: provider.id }),
+    listIssuerAccessRules(deps.env.DB, { credential_access_rule_id: provider.id }),
   ]);
-  const stored = validateCallerProvider(provider, profile, provider);
+  const stored = validateCredentialAccessRule(provider, profile, provider);
   const errors = state.errors ?? [];
   const model: ConsumerPageModel = {
     provider,
     profile,
     connections,
     labels,
-    grants,
+    issuer_access_rules,
     origin: new URL(c.req.url).origin,
     warnings: [...stored.errors, ...stored.warnings],
     state,
@@ -790,39 +807,50 @@ function ConsumerHeader(props: { model: ConsumerPageModel; ctx: ViewContext }) {
   const owners = claim === null ? [] : pinValues(provider.tenant_pin, claim);
   return (
     <PageHeader
-      crumbs={[{ label: 'Service consumers', href: paths.consumers() }, { label: provider.name }]}
+      crumbs={[
+        { label: 'Credential access rules', href: paths.consumers() },
+        { label: provider.name },
+      ]}
       identity={
         <Identity
           logo={consumerLogo(provider)}
           title={provider.name}
           status={<StatusBadge status={provider.enabled ? 'active' : 'disabled'} />}
           type={`${profile.label} · ${issuerHost(provider.issuer)}`}
-          entityId={{ value: provider.id, kind: 'Consumer' }}
+          entityId={{ value: provider.id, kind: 'Credential access rule' }}
           facts={[`Created ${formatTime(new Date(provider.created_at), 'date')}`]}
         />
       }
       actions={
-        ctx.can('access:write') ? (
-          <>
-            <DialogTrigger dialog="dlg-rename-consumer">Rename…</DialogTrigger>
-            <ActionButton
-              action={`${paths.consumer(provider.id)}/toggle`}
-              csrf={ctx.csrf}
-              label={provider.enabled ? 'Disable' : 'Enable'}
-              context={provider.name}
-              fields={{ enabled: provider.enabled ? '0' : '1' }}
-              returnTo="detail"
-            />
-            <Button variant="primary" plus href={paths.accessNew({ consumer: provider.id })}>
-              Give access to a token
+        <>
+          {ctx.can('tokens:write') ? (
+            <>
+              <DialogTrigger dialog="dlg-rename-consumer">Rename…</DialogTrigger>
+              <ActionButton
+                action={`${paths.consumer(provider.id)}/toggle`}
+                csrf={ctx.csrf}
+                label={provider.enabled ? 'Disable' : 'Enable'}
+                context={provider.name}
+                fields={{ enabled: provider.enabled ? '0' : '1' }}
+                returnTo="detail"
+              />
+            </>
+          ) : null}
+          {ctx.can('access:write') ? (
+            <Button
+              variant="primary"
+              plus
+              href={paths.accessNew({ consumer: provider.id, token: provider.credential_id })}
+            >
+              Add issuer access rule
             </Button>
-          </>
-        ) : undefined
+          ) : null}
+        </>
       }
     >
       <RelationLine>
         {edges.length === 0 ? (
-          'Cannot use any token yet.'
+          'No issuer access rules use this boundary yet.'
         ) : (
           <>
             Can use{' '}
@@ -855,15 +883,15 @@ function ConsumerHeader(props: { model: ConsumerPageModel; ctx: ViewContext }) {
 
 function ConsumerPage(props: { model: ConsumerPageModel; ctx: ViewContext }) {
   const { model, ctx } = props;
-  const { provider, profile, connections, labels, grants, state } = model;
-  const canWrite = ctx.can('access:write');
+  const { provider, profile, connections, labels, issuer_access_rules, state } = model;
+  const canWrite = ctx.can('tokens:write');
   const edges = connections.accesses;
   const slugs = [
     ...new Set(edges.map((edge) => edge.token?.slug).filter((slug): slug is string => !!slug)),
   ];
   const errors = state.errors ?? [];
   const err = (name: string) => errors.find((error) => error.field === name)?.message ?? null;
-  const deleteDialog = deleteDialogProps(ctx, provider, grants, connections);
+  const deleteDialog = deleteDialogProps(ctx, provider, issuer_access_rules, connections);
   return (
     <>
       {model.warnings.map((warning) => (
@@ -871,12 +899,46 @@ function ConsumerPage(props: { model: ConsumerPageModel; ctx: ViewContext }) {
           {warning}
         </Callout>
       ))}
-      <DetailLayout railLabel="Consumer facts" rail={<ConsumerRail model={model} ctx={ctx} />}>
+      <DetailLayout
+        railLabel="Credential access rule"
+        rail={<ConsumerRail model={model} ctx={ctx} />}
+      >
+        <Tray id="boundary" title="Credential access limits">
+          <p>
+            This boundary applies to{' '}
+            <a href={paths.token(provider.credential_id)}>
+              {connections.tokens.find((token) => token.id === provider.credential_id)?.name ??
+                provider.credential_id}
+            </a>
+            . It does not grant access by itself.
+          </p>
+          <pre>
+            {formatConditions(provider.conditions) ||
+              'No additional filters beyond the organization limits.'}
+          </pre>
+          {canWrite ? (
+            <PostForm action={paths.consumer(provider.id)} csrf={ctx.csrf}>
+              <VersionField value={String(provider.updated_at)} />
+              <input type="hidden" name="intent" value="boundary" />
+              <label for="boundary_filters">Required identity filters</label>
+              <textarea id="boundary_filters" name="boundary_filters" rows={4}>
+                {formatConditions(provider.conditions)}
+              </textarea>
+              <p class="hint">
+                For example: environment exact production. Changes apply to existing access rules on
+                the next request.
+              </p>
+              <Button type="submit" variant="primary">
+                Save limits
+              </Button>
+            </PostForm>
+          ) : null}
+        </Tray>
         <Tray
           id="access"
           title="Accesses by repository"
           count={edges.length}
-          description="Each row is one consumer access: which jobs, which token, what they may call."
+          description="Each row is one issuer access rule: which jobs, which token, what they may call."
           actions={
             edges.length > 0 ? (
               <Button size="sm" href={paths.access({ consumer: provider.id })}>
@@ -887,7 +949,7 @@ function ConsumerPage(props: { model: ConsumerPageModel; ctx: ViewContext }) {
           footer={
             <span>
               <a href={paths.access({ consumer: provider.id })}>
-                All consumer access of {provider.name}
+                All issuer access rules of {provider.name}
               </a>{' '}
               · <a href={paths.requests({ consumer: provider.id })}>Requests</a> ·{' '}
               <a href={paths.audit({ target: provider.id })}>History</a>
@@ -917,7 +979,7 @@ function ConsumerPage(props: { model: ConsumerPageModel; ctx: ViewContext }) {
             </Table>
             {edges.length === 0 ? (
               <UiEmptyState
-                title="This consumer cannot use any token yet."
+                title="This credential access rule cannot use any token yet."
                 description="Give it access to a token; the snippet below then names the token."
               />
             ) : null}
@@ -927,7 +989,7 @@ function ConsumerPage(props: { model: ConsumerPageModel; ctx: ViewContext }) {
         <Tray
           id="snippet"
           title="Connect your jobs"
-          description="Add this step to a workflow in any repository above. The audience is unique to this consumer."
+          description="Add this step to a workflow in any repository above. The audience is unique to this credential access rule."
         >
           <Panel variant="pad">
             <ConsumerSnippet consumer={provider} origin={model.origin} slugs={slugs} />
@@ -939,7 +1001,7 @@ function ConsumerPage(props: { model: ConsumerPageModel; ctx: ViewContext }) {
           provider={provider}
           profile={profile}
           labels={labels}
-          grants={grants}
+          issuer_access_rules={issuer_access_rules}
           state={state}
         />
 
@@ -947,7 +1009,7 @@ function ConsumerPage(props: { model: ConsumerPageModel; ctx: ViewContext }) {
           ctx={ctx}
           provider={provider}
           profile={profile}
-          grants={grants}
+          issuer_access_rules={issuer_access_rules}
           state={state}
           tokens={connections}
         />
@@ -955,10 +1017,10 @@ function ConsumerPage(props: { model: ConsumerPageModel; ctx: ViewContext }) {
         {canWrite ? (
           <DangerZone id="danger">
             <DangerRow
-              title="Delete this consumer"
+              title="Delete this credential access rule"
               description={
-                grants.length > 0
-                  ? `Removes ${provider.name} and its ${accessesText(grants.length).replace('access', 'consumer access')}. To pause it instead, use Disable at the top; you can enable it again.`
+                issuer_access_rules.length > 0
+                  ? `Removes ${provider.name} and its ${issuer_access_rules.length} issuer access rules. To pause it instead, use Disable at the top; you can enable it again.`
                   : 'The audit log keeps a copy of its configuration. To stop its jobs for now, disable it instead.'
               }
               action={<ConfirmTrigger {...deleteDialog} />}
@@ -1003,28 +1065,31 @@ function ConsumerPage(props: { model: ConsumerPageModel; ctx: ViewContext }) {
 
 function deleteDialogProps(
   ctx: ViewContext,
-  provider: CallerProvider,
-  grants: readonly Grant[],
+  provider: CredentialAccessRule,
+  issuer_access_rules: readonly IssuerAccessRule[],
   connections: Connections,
 ): ConfirmDialogProps {
-  const ids = grants.map((grant) => grant.id).sort();
-  const count = grants.length;
+  const ids = issuer_access_rules.map((grant) => grant.id).sort();
+  const count = issuer_access_rules.length;
   const tokenNames = [
     ...new Set(
-      grants.map(
+      issuer_access_rules.map(
         (grant) => connections.tokens.find((token) => token.id === grant.service_id)?.name,
       ),
     ),
   ].filter((name): name is string => !!name);
   const requests = connections.usageAvailable
-    ? grants.reduce((sum, grant) => sum + (connections.usage.get(grant.id)?.requests ?? 0), 0)
+    ? issuer_access_rules.reduce(
+        (sum, grant) => sum + (connections.usage.get(grant.id)?.requests ?? 0),
+        0,
+      )
     : null;
   return {
     id: 'delete-consumer',
     trigger: `Delete ${provider.name}…`,
     title:
       count > 0
-        ? `Delete ${provider.name} and its ${count} consumer ${count === 1 ? 'access' : 'accesses'}?`
+        ? `Delete ${provider.name} and its ${count} issuer access ${count === 1 ? 'rule' : 'rules'}?`
         : `Delete ${provider.name}?`,
     body:
       count > 0
@@ -1037,7 +1102,7 @@ function deleteDialogProps(
       ...(count > 0 && requests !== null
         ? [`${formatCount(requests)} allowed requests used it in 30 days.`]
         : []),
-      ...grants.map((grant) => <a href={paths.accessItem(grant.id)}>{grant.name}</a>),
+      ...issuer_access_rules.map((grant) => <a href={paths.accessItem(grant.id)}>{grant.name}</a>),
     ],
     confirmLabel:
       count > 0
@@ -1111,7 +1176,7 @@ function protectedRefs(edge: AccessEdge): boolean {
 function AccessBlocks(props: {
   edges: AccessEdge[];
   labels: ClaimLabel[];
-  provider: CallerProvider;
+  provider: CredentialAccessRule;
   canWrite: boolean;
   connections: Connections;
   now: number;
@@ -1181,7 +1246,7 @@ function AccessBlocks(props: {
                         ) : undefined,
                       }}
                       token={{
-                        name: edge.token?.name ?? 'Deleted token',
+                        name: edge.token?.name ?? 'Deleted credential',
                         logo: tokenLogo(edge.token),
                         context: operationsText(edge),
                       }}
@@ -1229,14 +1294,14 @@ export function AccessStatus(props: { edge: AccessEdge; now: number; expiry?: bo
 
 function TenantsSection(props: {
   ctx: ViewContext;
-  provider: CallerProvider;
+  provider: CredentialAccessRule;
   profile: IssuerProfile;
   labels: ClaimLabel[];
-  grants: Grant[];
+  issuer_access_rules: IssuerAccessRule[];
   state: DetailState;
 }) {
-  const { ctx, provider, profile, labels, grants, state } = props;
-  const canWrite = ctx.can('access:write');
+  const { ctx, provider, profile, labels, issuer_access_rules, state } = props;
+  const canWrite = ctx.can('tokens:write');
   const claim = tenantClaimOf(provider.profile);
   const errors = state.errors ?? [];
   const err = (name: string) => errors.find((error) => error.field === name)?.message ?? null;
@@ -1348,7 +1413,7 @@ function TenantsSection(props: {
           {values.map((value, index) => {
             const label = labelFor(labels, claim, value);
             const shown = label ? `${label} (${value})` : value;
-            const users = grantsUsingPinValue(grants, profile, provider, claim, value);
+            const users = grantsUsingPinValue(issuer_access_rules, profile, provider, claim, value);
             const blocked = users.enabled.length > 0;
             const last = values.length === 1;
             const whyId = blocked || last ? `tn-${index}-why` : undefined;
@@ -1376,8 +1441,7 @@ function TenantsSection(props: {
                           (<a href={paths.access({ consumer: provider.id })}>see them</a>)
                         </>
                       )}
-                      , so it cannot be removed now. Disable or change{' '}
-                      {users.enabled.length === 1 ? 'it' : 'them'} first.
+                      . Removing this organization revokes its access on the next request.
                     </p>
                   ) : last ? (
                     <p class="hint" id={whyId}>
@@ -1400,7 +1464,7 @@ function TenantsSection(props: {
                       type="submit"
                       name="remove"
                       value={value}
-                      disabled={blocked || last}
+                      disabled={last}
                       describedBy={whyId}
                       srSuffix={shown}
                     >
@@ -1456,8 +1520,8 @@ function ageOptions(
     .map((value) => ({ value: String(value), label: ageText(value) }));
 }
 
-/** True when the issuer of this consumer can be edited (generic, GHE slug, self-managed GitLab). */
-function issuerEditable(provider: CallerProvider): boolean {
+/** True when the issuer of this credential access rule can be edited (generic, GHE slug, self-managed GitLab). */
+function issuerEditable(provider: CredentialAccessRule): boolean {
   if (provider.profile === 'generic') return true;
   if (provider.profile === 'github-actions') return provider.issuer !== GITHUB_ACTIONS_ISSUER;
   return provider.issuer !== GITLAB_COM_ISSUER;
@@ -1465,23 +1529,24 @@ function issuerEditable(provider: CallerProvider): boolean {
 
 function TrustSection(props: {
   ctx: ViewContext;
-  provider: CallerProvider;
+  provider: CredentialAccessRule;
   profile: IssuerProfile;
-  grants: Grant[];
+  issuer_access_rules: IssuerAccessRule[];
   state: DetailState;
   tokens: Connections;
 }) {
-  const { ctx, provider, profile, grants, state } = props;
+  const { ctx, provider, profile, issuer_access_rules, state } = props;
   const errors = state.errors ?? [];
   const err = (name: string) => errors.find((error) => error.field === name)?.message ?? null;
   const trust = state.trust;
   const value = (name: string, fallback: string) => (trust ? text(trust, name) : fallback);
-  const enabledGrants = grants.filter((grant) => grant.enabled);
-  const tokenName = (grant: Grant) =>
-    props.tokens.tokens.find((token) => token.id === grant.service_id)?.name ?? 'a deleted token';
+  const enabledIssuerAccessRules = issuer_access_rules.filter((grant) => grant.enabled);
+  const tokenName = (grant: IssuerAccessRule) =>
+    props.tokens.tokens.find((token) => token.id === grant.service_id)?.name ??
+    'a deleted credential';
   const enterprise = pinValues(provider.tenant_pin, 'enterprise_id')[0] ?? '';
   const algs = trust ? all(trust, 'allowed_algs') : provider.allowed_algs;
-  if (!ctx.can('access:write')) {
+  if (!ctx.can('tokens:write')) {
     return (
       <Tray id="trust" title="Trust settings">
         <Panel variant="pad">
@@ -1531,7 +1596,7 @@ function TrustSection(props: {
           hint="issuer, audience, algorithms, max token age"
           open={state.open === 'trust'}
         >
-          <p class="hint">Changing them affects every job of this consumer.</p>
+          <p class="hint">Changing them affects every job of this credential access rule.</p>
           <PostForm action={paths.consumer(provider.id)} csrf={ctx.csrf} class="con-stack">
             <VersionField value={String(provider.updated_at)} />
             {fixedFacts.length > 0 ? <KeyValue items={fixedFacts} /> : null}
@@ -1543,7 +1608,7 @@ function TrustSection(props: {
                 mono
                 value={value('issuer', provider.issuer)}
                 example={provider.issuer}
-                hint="Changing it makes every access of this consumer trust a new issuer."
+                hint="Changing it makes every access of this credential access rule trust a new issuer."
                 error={err('issuer')}
                 autocomplete="off"
                 conditional
@@ -1625,22 +1690,22 @@ function TrustSection(props: {
               />
             ) : null}
             {/* Only the issuer (editable here) or the JWKS URI (generic) can need the confirmation. */}
-            {enabledGrants.length > 0 &&
+            {enabledIssuerAccessRules.length > 0 &&
             (issuerEditable(provider) || provider.profile === 'generic') ? (
               <div class="con-confirm">
                 <Checkbox
                   name="confirm_trust_change"
                   label={
-                    enabledGrants.length === 1
+                    enabledIssuerAccessRules.length === 1
                       ? 'I understand that this enabled access will trust the new issuer or keys'
-                      : `I understand that these ${enabledGrants.length} enabled accesses will trust the new issuer or keys`
+                      : `I understand that these ${enabledIssuerAccessRules.length} enabled accesses will trust the new issuer or keys`
                   }
                   hint="Needed only when the issuer or the JWKS URI changes."
                   checked={trust ? flag(trust, 'confirm_trust_change') : false}
                   error={err('confirm_trust_change')}
                 />
                 <ul>
-                  {enabledGrants.map((grant) => (
+                  {enabledIssuerAccessRules.map((grant) => (
                     <li>
                       <a href={paths.accessItem(grant.id)}>{grant.name}</a> ({tokenName(grant)})
                     </li>
@@ -1661,7 +1726,7 @@ function TrustSection(props: {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Add consumer: errors and the create route
+// Add credential access rule: errors and the create route
 
 /** Field of an op error of the add form, so the summary links to the input that fixes it. */
 function consumerErrorField(form: ConsumerForm, message: string, prefix = ''): string | null {
@@ -1695,7 +1760,7 @@ function consumerErrorField(form: ConsumerForm, message: string, prefix = ''): s
 /** Plain-language fix for an op error of the add form. */
 function consumerErrorMessage(message: string): string {
   if (message.includes('already has this issuer')) {
-    return 'Another consumer already uses this issuer: open it under Service consumers and add access there.';
+    return 'Another credential access rule already uses this issuer: open it under Credential access rules and add access there.';
   }
   if (message.startsWith('JWKS discovery failed')) {
     return `The gateway could not read the issuer's OpenID configuration (${message.slice(23)}). Check the URL and save again.`;
@@ -1720,7 +1785,13 @@ async function create(c: AdminContext) {
   const form = readConsumerForm(fields, '');
   const parsed = parseConsumerForm(form, '');
   if (!parsed.ok) return renderNew(c, form, parsed.errors, 422);
-  const result = await createOrMergeConsumer(deps, adminActor(c), parsed.input);
+  const boundary = parseBoundaryFilters(form.boundary_filters ?? '');
+  if (!boundary.ok)
+    return renderNew(c, form, [{ field: 'boundary_filters', message: boundary.error }], 422);
+  const result = await createOrMergeConsumer(deps, adminActor(c), {
+    ...parsed.input,
+    conditions: boundary.conditions,
+  });
   if (!result.ok) {
     return renderNew(c, form, consumerFailureErrors(form, result), failureStatus(result));
   }
@@ -1732,34 +1803,17 @@ async function create(c: AdminContext) {
       [
         {
           field,
-          message: `${tenantList(parsed.input.tenants)} ${parsed.input.tenants.length === 1 ? 'is' : 'are'} already allowed for ${result.callerProvider.name}.`,
+          message: `${tenantList(parsed.input.tenants)} ${parsed.input.tenants.length === 1 ? 'is' : 'are'} already allowed for ${result.credentialAccessRule.name}.`,
         },
       ],
       422,
     );
   }
-  const id = result.callerProvider.id;
-  const hasTokens = (await loadTokenCount(c)) > 0;
-  if (hasTokens) {
-    return redirectWithNotice(
-      c,
-      paths.accessNew({ consumer: id }),
-      result.merged ? 'tenant_added' : 'consumer_created',
-    );
-  }
-  return redirectWithNotice(c, paths.consumer(id), result.merged ? 'tenant_added' : 'created');
+  return redirectWithNotice(c, paths.consumer(result.credentialAccessRule.id), 'created');
 }
 
 function tenantList(entries: ReadonlyArray<{ value: string; label: string }>): string {
   return entries.map((entry) => `${entry.label} (${entry.value})`).join(', ');
-}
-
-async function loadTokenCount(c: AdminContext): Promise<number> {
-  const row = await c
-    .get('deps')
-    .env.DB.prepare('SELECT count(*) AS n FROM services')
-    .first<{ n: number }>();
-  return Number(row?.n ?? 0);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1774,9 +1828,26 @@ async function update(c: AdminContext) {
   const actor = adminActor(c);
   const deps = c.get('deps');
   const version = submittedVersion(text(fields, 'expected_updated_at'));
+  if (intent === 'boundary') {
+    const parsed = parseBoundaryFilters(text(fields, 'boundary_filters'));
+    if (!parsed.ok)
+      return renderDetail(c, provider, profile, {
+        status: 422,
+        errors: [{ field: 'boundary_filters', message: parsed.error }],
+      });
+    const result = await updateCredentialAccessRule(deps, actor, provider.id, {
+      conditions: parsed.conditions,
+      expected_updated_at: version,
+    });
+    if (result.ok) return redirectWithNotice(c, paths.consumer(provider.id), 'updated');
+    return renderDetail(c, provider, profile, {
+      status: failureStatus(result),
+      errors: result.errors.map((message) => ({ field: null, message })),
+    });
+  }
   if (intent === 'rename') {
     const name = text(fields, 'name');
-    const result = await updateCallerProvider(deps, actor, provider.id, {
+    const result = await updateCredentialAccessRule(deps, actor, provider.id, {
       name,
       expected_updated_at: version,
     });
@@ -1792,7 +1863,7 @@ async function update(c: AdminContext) {
       errors: result.errors.map((message) => ({
         field: message.startsWith('name') || message.includes('this name') ? 'name' : null,
         message: message.includes('this name')
-          ? 'Another consumer already uses this name: choose a different name.'
+          ? 'Another credential access rule already uses this name: choose a different name.'
           : message,
       })),
       open: 'rename',
@@ -1807,7 +1878,7 @@ async function update(c: AdminContext) {
     });
   }
   if (fields.pin_rows !== undefined) return savePin(c, provider, profile, fields, version);
-  const input: CallerProviderUpdateInput = { expected_updated_at: version };
+  const input: CredentialAccessRuleUpdateInput = { expected_updated_at: version };
   const fieldErrors: FieldError[] = [];
   if (issuerEditable(provider) && fields.issuer !== undefined)
     input.issuer = text(fields, 'issuer');
@@ -1857,7 +1928,7 @@ async function update(c: AdminContext) {
       status: 422,
     });
   }
-  const result = await updateCallerProvider(deps, actor, provider.id, input);
+  const result = await updateCredentialAccessRule(deps, actor, provider.id, input);
   if (result.ok) {
     return redirectWithNotice(
       c,
@@ -1891,7 +1962,7 @@ function trustErrorField(message: string): string | null {
     ['signing algorithm', 'allowed_algs'],
     ['maximum token age', 'max_token_age_seconds'],
     ['anchor', 'anchor_claims'],
-    ['generic caller providers need', 'anchor_claims'],
+    ['generic credential access rules need', 'anchor_claims'],
   ] as const) {
     if (message.startsWith(prefix)) return field;
   }
@@ -1900,7 +1971,7 @@ function trustErrorField(message: string): string | null {
 
 async function savePin(
   c: AdminContext,
-  provider: CallerProvider,
+  provider: CredentialAccessRule,
   profile: IssuerProfile,
   fields: Fields,
   version: number | undefined,
@@ -1939,7 +2010,7 @@ async function savePin(
     }
   }
   if (errors.length === 0) {
-    const result = await updateCallerProvider(c.get('deps'), adminActor(c), provider.id, {
+    const result = await updateCredentialAccessRule(c.get('deps'), adminActor(c), provider.id, {
       tenant_pin: pin,
       expected_updated_at: version,
     });
@@ -2031,9 +2102,9 @@ async function toggle(c: AdminContext) {
   const id = c.req.param('id') ?? '';
   const form = await formData(c);
   const enabled = flag(form, 'enabled');
-  const result = await setCallerProviderEnabled(c.get('deps'), adminActor(c), id, enabled);
+  const result = await setCredentialAccessRuleEnabled(c.get('deps'), adminActor(c), id, enabled);
   if (result.ok) {
-    const back = returnPath('POST /admin/consumers/:id/toggle', form._return, { id });
+    const back = returnPath('POST /admin/credential-access-rules/:id/toggle', form._return, { id });
     return redirectWithNotice(c, back, enabled ? 'enabled' : 'disabled');
   }
   return rerenderDetail(c, result);
@@ -2054,10 +2125,15 @@ async function remove(c: AdminContext) {
     .flatMap((value) => value.split(','))
     .map((value) => value.trim())
     .filter((value) => value !== '');
-  const result = await deleteCallerProvider(c.get('deps'), adminActor(c), loaded.provider.id, {
-    withAccesses,
-    accessIds,
-  });
+  const result = await deleteCredentialAccessRule(
+    c.get('deps'),
+    adminActor(c),
+    loaded.provider.id,
+    {
+      withAccesses,
+      accessIds,
+    },
+  );
   if (result.ok) {
     return redirectWithNotice(
       c,
@@ -2069,7 +2145,7 @@ async function remove(c: AdminContext) {
     ...result,
     errors: result.errors.map((message) =>
       message.includes('delete them first')
-        ? 'This consumer still has consumer accesses: delete it from the Delete dialog, which deletes them too.'
+        ? 'This credential access rule still has issuer access rules: delete it from the Delete dialog, which deletes them too.'
         : message,
     ),
   });
@@ -2089,8 +2165,8 @@ async function rerenderDetail(c: AdminContext, failure: OpFailure) {
 
 async function loadProvider(
   c: AdminContext,
-): Promise<{ provider: CallerProvider; profile: IssuerProfile } | null> {
-  const provider = await getCallerProvider(c.get('deps').env.DB, c.req.param('id') ?? '');
+): Promise<{ provider: CredentialAccessRule; profile: IssuerProfile } | null> {
+  const provider = await getCredentialAccessRule(c.get('deps').env.DB, c.req.param('id') ?? '');
   const profile = provider ? getProfile(provider.profile) : null;
   return provider && profile ? { provider, profile } : null;
 }
@@ -2099,14 +2175,17 @@ function notFound(c: AdminContext) {
   return renderPage(
     c,
     {
-      title: 'Consumer not found',
+      title: 'Credential access rule not found',
       section: 'consumers',
       subsection: 'consumers',
       status: 404,
       header: (
         <PageHeader
-          crumbs={[{ href: paths.consumers(), label: 'Service consumers' }, { label: 'Not found' }]}
-          title="Consumer not found"
+          crumbs={[
+            { href: paths.consumers(), label: 'Credential access rules' },
+            { label: 'Not found' },
+          ]}
+          title="Credential access rule not found"
           description={notFoundText('consumer')}
         />
       ),
@@ -2119,7 +2198,7 @@ function failureStatus(failure: OpFailure): 409 | 422 {
   return failure.reason === 'conflict' ? 409 : 422;
 }
 
-/** Label of a consumer type, for other pages. */
+/** Label of a credential access rule type, for other pages. */
 export function consumerTypeLabel(profile: ProfileId): string {
   return getProfile(profile)?.label ?? profile;
 }

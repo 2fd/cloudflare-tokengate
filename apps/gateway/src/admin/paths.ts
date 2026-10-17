@@ -32,7 +32,7 @@ export const paths = {
     outcome?: 'allowed' | 'denied' | 'error';
     /** A token id, or `none` for requests refused before the token was looked up. */
     token?: string;
-    /** A consumer id, or `none` for requests with no verified consumer. */
+    /** A credential access rule id, or `none` for requests with no verified consumer. */
     consumer?: string;
     access?: string;
     repo?: string;
@@ -67,25 +67,26 @@ export const paths = {
     /** Name or slug search. */
     q?: string;
     hash?: 'add';
-  }) => build('/admin/tokens', { status: f?.status, key: f?.key, q: f?.q }, f?.hash),
+  }) => build('/admin/credentials', { status: f?.status, key: f?.key, q: f?.q }, f?.hash),
   /** `template`: a service template id, or `custom`. */
-  tokenNew: (o?: { template?: string }) => build('/admin/tokens/new', o),
+  tokenNew: (o?: { template?: string }) => build('/admin/credentials/new', o),
   token: (
     tokenId: string,
     o?: {
       open?: 'destination' | 'details';
       hash?: 'consumers' | 'secret' | 'use' | 'destination' | 'details' | 'danger';
     },
-  ) => build(`/admin/tokens/${id(tokenId)}`, { open: o?.open }, o?.hash),
-  tokenHosts: () => '/admin/tokens/hosts',
-  tokenKeys: (hash?: 'rewrap') => build('/admin/tokens/keys', undefined, hash),
+  ) => build(`/admin/credentials/${id(tokenId)}`, { open: o?.open }, o?.hash),
+  tokenHosts: () => '/admin/credentials/hosts',
+  tokenKeys: (hash?: 'rewrap') => build('/admin/credentials/keys', undefined, hash),
 
-  consumers: (o?: { hash?: 'add' }) => build('/admin/consumers', undefined, o?.hash),
-  consumerNew: (o?: { type?: ProfileId }) => build('/admin/consumers/new', o),
+  consumers: (o?: { hash?: 'add' }) => build('/admin/credential-access-rules', undefined, o?.hash),
+  consumerNew: (o?: { type?: ProfileId; credential?: string }) =>
+    build('/admin/credential-access-rules/new', o),
   consumer: (
     consumerId: string,
     o?: { open?: 'trust'; hash?: 'access' | 'tenants' | 'trust' | 'snippet' | 'danger' },
-  ) => build(`/admin/consumers/${id(consumerId)}`, { open: o?.open }, o?.hash),
+  ) => build(`/admin/credential-access-rules/${id(consumerId)}`, { open: o?.open }, o?.hash),
 
   access: (f?: {
     /** Map (default; `list` is an alias) or Matrix. */
@@ -94,25 +95,25 @@ export const paths = {
     token?: string;
     repository?: string;
     status?: 'active' | 'inactive' | 'expiring' | 'expired' | 'unused' | 'risk';
-    /** A consumer id the connections map focuses on. */
+    /** A credential access rule id the connections map focuses on. */
     focus?: string;
     /** The matrix of the nodes the map grouped ("+ N more"). */
     consumers?: 'rest';
     tokens?: 'rest';
-  }) => build('/admin/access', f),
+  }) => build('/admin/issuer-access-rules', f),
   accessNew: (p?: {
-    /** A consumer id, or `new` to add the consumer inside the access form. */
+    /** A credential access rule id, or `new` to add the credential access rule inside the access form. */
     consumer?: string;
     token?: string;
     repository?: string;
     copy?: string;
     from_request?: string;
     mode?: 'rows';
-  }) => build('/admin/access/new', p),
+  }) => build('/admin/issuer-access-rules/new', p),
   accessItem: (
     accessId: string,
     o?: { open?: 'edit'; hash?: 'use' | 'edit' | 'copy' | 'danger' },
-  ) => build(`/admin/access/${id(accessId)}`, { open: o?.open }, o?.hash),
+  ) => build(`/admin/issuer-access-rules/${id(accessId)}`, { open: o?.open }, o?.hash),
 
   docs: (path: string) => docsUrl(path),
 };
@@ -123,21 +124,21 @@ export const paths = {
  * falls back to the route's default (the first entry). No open redirect.
  */
 export const RETURN_PATHS = {
-  'POST /admin/tokens/keys/rewrap': {
+  'POST /admin/credentials/keys/rewrap': {
     detail: () => paths.tokenKeys(),
     overview: () => paths.overview(),
   },
   'POST /admin/users/:id/approve': { list: () => paths.users(), overview: () => paths.overview() },
   'POST /admin/users/:id/reject': { list: () => paths.users(), overview: () => paths.overview() },
-  'POST /admin/tokens/:id/toggle': {
+  'POST /admin/credentials/:id/toggle': {
     detail: (p: { id: string }) => paths.token(p.id),
     list: () => paths.tokens(),
   },
-  'POST /admin/consumers/:id/toggle': {
+  'POST /admin/credential-access-rules/:id/toggle': {
     detail: (p: { id: string }) => paths.consumer(p.id),
     list: () => paths.consumers(),
   },
-  'POST /admin/access/:id/toggle': {
+  'POST /admin/issuer-access-rules/:id/toggle': {
     detail: (p: { id: string }) => paths.accessItem(p.id),
     list: () => paths.access({ view: 'list' }),
     matrix: () => paths.access(),

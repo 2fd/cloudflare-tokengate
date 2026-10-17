@@ -389,29 +389,29 @@ const MOVED_PAGES: ReadonlyArray<{
   links?: () => NotFoundLinks;
 }> = [
   {
-    prefix: '/admin/services',
+    prefix: '/admin/tokens',
     title: 'This page moved',
     description: () => (
       <>
-        Services are now <a href={paths.tokens()}>Service tokens</a>.
+        Services are now <a href={paths.tokens()}>Credentials</a>.
       </>
     ),
   },
   {
-    prefix: '/admin/caller-providers',
+    prefix: '/admin/consumers',
     title: 'This page moved',
     description: () => (
       <>
-        Caller providers are now <a href={paths.consumers()}>Service consumers</a>.
+        Service consumers are now <a href={paths.consumers()}>Credential access rules</a>.
       </>
     ),
   },
   {
-    prefix: '/admin/grants',
+    prefix: '/admin/access',
     title: 'This page moved',
     description: () => (
       <>
-        Grants are now <a href={paths.access()}>Consumer access</a>.
+        Consumer access is now <a href={paths.access()}>Issuer access rules</a>.
       </>
     ),
   },

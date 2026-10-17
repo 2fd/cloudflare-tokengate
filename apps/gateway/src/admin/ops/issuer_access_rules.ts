@@ -1,33 +1,42 @@
-// Grant (consumer access) mutations. Saving or enabling validates against the caller provider
-// version the write is guarded on (I-AUTHZ-2); warnings need acknowledgement and go in the audit
-// row with the risks the admin accepted (I-AUDIT-1, I-AUTHZ-3). Display labels of numeric IDs
-// (claim_labels) are written in the same batch as the save that typed them. Disabling and
-// deleting skip validation, so revocation always works (I-AUTHZ-1).
-import { callerProviderVersionGuard, getCallerProvider } from '../../db/caller-providers';
 import {
   type ClaimLabelInput,
   changedLabels,
   listClaimLabels,
   upsertClaimLabelStatement,
 } from '../../db/claim-labels';
+// IssuerAccessRule (issuer access rules) mutations. Saving or enabling validates against the credential access rule
+// version the write is guarded on (I-AUTHZ-2); warnings need acknowledgement and go in the audit
+// row with the risks the admin accepted (I-AUDIT-1, I-AUTHZ-3). Display labels of numeric IDs
+// (claim_labels) are written in the same batch as the save that typed them. Disabling and
+// deleting skip validation, so revocation always works (I-AUTHZ-1).
 import {
-  deleteGrantStatement,
-  type GrantValues,
-  getGrant,
+  credentialAccessRuleVersionGuard,
+  getCredentialAccessRule,
+} from '../../db/credential-access-rules';
+import { getService, serviceExistsGuard } from '../../db/credentials';
+import {
+  deleteIssuerAccessRuleStatement,
+  type IssuerAccessRuleValues,
+  getIssuerAccessRule,
   grantExistsGuard,
   grantVersionGuard,
-  insertGrantStatement,
-  setGrantEnabledStatement,
-  updateGrantStatement,
-} from '../../db/grants';
-import { getService, serviceExistsGuard } from '../../db/services';
-import type { Actor, CallerProvider, ClaimLabel, Grant, LabelledClaim } from '../../db/types';
+  insertIssuerAccessRuleStatement,
+  setIssuerAccessRuleEnabledStatement,
+  updateIssuerAccessRuleStatement,
+} from '../../db/issuer_access_rules';
+import type {
+  Actor,
+  CredentialAccessRule,
+  ClaimLabel,
+  IssuerAccessRule,
+  LabelledClaim,
+} from '../../db/types';
 import type { Deps } from '../../deps';
 import { getProfile } from '../../identity/profiles';
 import { newId } from '../../lib/ids';
 import { canonicalJson } from '../../lib/json';
 import type { Condition, Rule } from '../../policy/types';
-import { validateGrant, type WarningDetail } from '../../policy/validate';
+import { validateIssuerAccessRule, type WarningDetail } from '../../policy/validate';
 import {
   allOf,
   booleanErrors,
@@ -49,16 +58,16 @@ import {
 } from './shared';
 
 /** A display label typed with an access (repository, project, organization or group). */
-export interface GrantLabel {
+export interface IssuerAccessRuleLabel {
   claim: LabelledClaim;
   value: string;
   label: string;
 }
 
-export interface GrantCreateInput {
+export interface IssuerAccessRuleCreateInput {
   name: string;
   description?: string;
-  caller_provider_id: string;
+  credential_access_rule_id: string;
   service_id: string;
   conditions: Condition[];
   rules: Rule[];
@@ -69,30 +78,30 @@ export interface GrantCreateInput {
   /** The risk codes the admin accepted by selection or acknowledgement; recorded in the audit. */
   accepted_risks?: string[];
   /** Labels of IDs in the conditions, upserted in the same batch. */
-  labels?: GrantLabel[];
+  labels?: IssuerAccessRuleLabel[];
 }
 
-export type GrantOpResult =
+export type IssuerAccessRuleOpResult =
   | {
       ok: true;
-      grant: Grant;
+      grant: IssuerAccessRule;
       warnings: string[];
-      /** updateGrant only: false when the submitted values matched and nothing was written. */
+      /** updateIssuerAccessRule only: false when the submitted values matched and nothing was written. */
       changed?: boolean;
       /** True when the save changed a stored label (notice `label_changed`). */
       labelsChanged?: boolean;
     }
   | OpFailure;
 
-export async function createGrant(
+export async function createIssuerAccessRule(
   deps: Deps,
   actor: Actor,
-  input: GrantCreateInput,
-): Promise<GrantOpResult> {
-  return insertGrant(deps, actor, input, { action: 'grant.create', sourceId: null });
+  input: IssuerAccessRuleCreateInput,
+): Promise<IssuerAccessRuleOpResult> {
+  return insertIssuerAccessRule(deps, actor, input, { action: 'grant.create', sourceId: null });
 }
 
-export interface GrantUpdateInput {
+export interface IssuerAccessRuleUpdateInput {
   name?: string;
   description?: string;
   conditions?: Condition[];
@@ -101,12 +110,12 @@ export interface GrantUpdateInput {
   expires_at?: number | null;
   acknowledge_warnings?: boolean;
   accepted_risks?: string[];
-  labels?: GrantLabel[];
+  labels?: IssuerAccessRuleLabel[];
   /** `updated_at` the edit form was opened at; a newer stored version is a conflict. */
   expected_updated_at?: number;
 }
 
-const UPDATABLE_KEYS: ReadonlyArray<keyof GrantUpdateInput> = [
+const UPDATABLE_KEYS: ReadonlyArray<keyof IssuerAccessRuleUpdateInput> = [
   'name',
   'description',
   'conditions',
@@ -120,26 +129,26 @@ const UPDATABLE_KEYS: ReadonlyArray<keyof GrantUpdateInput> = [
 ];
 
 /** Keys that describe the request, not the grant content. */
-const META_KEYS: ReadonlyArray<keyof GrantUpdateInput> = [
+const META_KEYS: ReadonlyArray<keyof IssuerAccessRuleUpdateInput> = [
   'acknowledge_warnings',
   'accepted_risks',
   'labels',
   'expected_updated_at',
 ];
 
-/** Updates grant content. The caller provider and service of a grant cannot change. */
-export async function updateGrant(
+/** Updates grant content. The credential access rule and service of a grant cannot change. */
+export async function updateIssuerAccessRule(
   deps: Deps,
   actor: Actor,
   id: string,
-  input: GrantUpdateInput,
-): Promise<GrantOpResult> {
+  input: IssuerAccessRuleUpdateInput,
+): Promise<IssuerAccessRuleOpResult> {
   const rejected = Object.keys(input).filter(
     (key) => !(UPDATABLE_KEYS as readonly string[]).includes(key),
   );
   if (rejected.length > 0) {
     return opFailure('invalid', [
-      `${rejected.join(', ')} cannot be changed; create a new grant for another caller provider or service`,
+      `${rejected.join(', ')} cannot be changed; create a new grant for another credential access rule or service`,
     ]);
   }
   const flagErrors = [
@@ -147,22 +156,22 @@ export async function updateGrant(
     ...booleanErrors('acknowledge_warnings', input.acknowledge_warnings),
   ];
   if (flagErrors.length > 0) return opFailure('invalid', flagErrors);
-  // A pure enable/disable goes through setGrantEnabled, so disabling never depends on validation.
+  // A pure enable/disable goes through setIssuerAccessRuleEnabled, so disabling never depends on validation.
   const keys = Object.keys(input).filter(
     (key) =>
       !(META_KEYS as readonly string[]).includes(key) &&
-      input[key as keyof GrantUpdateInput] !== undefined,
+      input[key as keyof IssuerAccessRuleUpdateInput] !== undefined,
   );
   if (keys.length === 1 && input.enabled !== undefined) {
-    return setGrantEnabled(deps, actor, id, input.enabled);
+    return setIssuerAccessRuleEnabled(deps, actor, id, input.enabled);
   }
   const db = deps.env.DB;
-  const existing = await getGrant(db, id);
+  const existing = await getIssuerAccessRule(db, id);
   if (!existing) return opFailure('not_found', ['grant not found']);
   const stale = staleEdit('the grant', input.expected_updated_at, existing.updated_at);
   if (stale) return stale;
 
-  const next: GrantValues = {
+  const next: IssuerAccessRuleValues = {
     name: input.name !== undefined ? trimmed(input.name) : existing.name,
     description:
       input.description !== undefined ? trimmed(input.description) : existing.description,
@@ -172,15 +181,21 @@ export async function updateGrant(
     enabled: input.enabled ?? existing.enabled,
     expires_at: input.expires_at !== undefined ? input.expires_at : existing.expires_at,
   };
-  const checked = await checkGrant(deps, existing.caller_provider_id, existing.service_id, next, {
-    expiryChanged: next.expires_at !== existing.expires_at,
-    acknowledged: input.acknowledge_warnings === true,
-  });
+  const checked = await checkIssuerAccessRule(
+    deps,
+    existing.credential_access_rule_id,
+    existing.service_id,
+    next,
+    {
+      expiryChanged: next.expires_at !== existing.expires_at,
+      acknowledged: input.acknowledge_warnings === true,
+    },
+  );
   if (!checked.ok) return checked;
-  const labels = await labelChangesFor(db, existing.caller_provider_id, input.labels);
+  const labels = await labelChangesFor(db, existing.credential_access_rule_id, input.labels);
   if (!labels.ok) return labels;
 
-  const changed = (Object.keys(next) as Array<keyof GrantValues>).filter(
+  const changed = (Object.keys(next) as Array<keyof IssuerAccessRuleValues>).filter(
     (key) => canonicalJson(next[key]) !== canonicalJson(existing[key]),
   );
   // A save that changes nothing writes nothing: no audit row, no version bump.
@@ -188,7 +203,10 @@ export async function updateGrant(
     return { ok: true, grant: existing, warnings: checked.warnings, changed: false };
   }
   const now = deps.now();
-  const guard = allOf(grantVersionGuard(existing), callerProviderVersionGuard(checked.provider));
+  const guard = allOf(
+    grantVersionGuard(existing),
+    credentialAccessRuleVersionGuard(checked.provider),
+  );
   const outcome = await commitOrConstraintFailure(
     deps,
     actor,
@@ -209,11 +227,11 @@ export async function updateGrant(
     [
       // Labels first: the update changes the version the guard checks.
       ...labelStatements(deps, actor, labels.changes, guard),
-      updateGrantStatement(db, id, next, now, guard),
+      updateIssuerAccessRuleStatement(db, id, next, now, guard),
     ],
   );
   if (!outcome.ok) return outcome;
-  if (!outcome.committed) return concurrentChange('the grant or its caller provider');
+  if (!outcome.committed) return concurrentChange('the grant or its credential access rule');
   return {
     ok: true,
     grant: { ...existing, ...next, updated_at: nextVersion(existing.updated_at, now) },
@@ -224,27 +242,27 @@ export async function updateGrant(
 }
 
 /**
- * Enabling re-validates the grant against the current caller provider (errors block; warnings
+ * Enabling re-validates the grant against the current credential access rule (errors block; warnings
  * were acknowledged when it was saved). Disabling always succeeds and takes effect on the next
  * proxied request.
  */
-export async function setGrantEnabled(
+export async function setIssuerAccessRuleEnabled(
   deps: Deps,
   actor: Actor,
   id: string,
   enabled: boolean,
-): Promise<GrantOpResult> {
+): Promise<IssuerAccessRuleOpResult> {
   if (typeof enabled !== 'boolean') return opFailure('invalid', ['enabled must be true or false']);
   const db = deps.env.DB;
-  const existing = await getGrant(db, id);
+  const existing = await getIssuerAccessRule(db, id);
   if (!existing) return opFailure('not_found', ['grant not found']);
 
   let guard = grantExistsGuard(id);
   let warnings: string[] = [];
   if (enabled) {
-    const checked = await checkGrant(
+    const checked = await checkIssuerAccessRule(
       deps,
-      existing.caller_provider_id,
+      existing.credential_access_rule_id,
       existing.service_id,
       existing,
       {
@@ -253,7 +271,7 @@ export async function setGrantEnabled(
       },
     );
     if (!checked.ok) return checked;
-    guard = allOf(grantVersionGuard(existing), callerProviderVersionGuard(checked.provider));
+    guard = allOf(grantVersionGuard(existing), credentialAccessRuleVersionGuard(checked.provider));
     warnings = checked.warnings;
   }
 
@@ -269,10 +287,10 @@ export async function setGrantEnabled(
       diff: { before: { enabled: existing.enabled }, after: { enabled }, warnings },
     },
     guard,
-    [setGrantEnabledStatement(db, id, enabled, now, guard)],
+    [setIssuerAccessRuleEnabledStatement(db, id, enabled, now, guard)],
   );
   if (!outcome.ok) return outcome;
-  if (!outcome.committed) return concurrentChange('the grant or its caller provider');
+  if (!outcome.committed) return concurrentChange('the grant or its credential access rule');
   return {
     ok: true,
     grant: { ...existing, enabled, updated_at: nextVersion(existing.updated_at, now) },
@@ -280,13 +298,13 @@ export async function setGrantEnabled(
   };
 }
 
-export async function deleteGrant(
+export async function deleteIssuerAccessRule(
   deps: Deps,
   actor: Actor,
   id: string,
 ): Promise<{ ok: true } | OpFailure> {
   const db = deps.env.DB;
-  const existing = await getGrant(db, id);
+  const existing = await getIssuerAccessRule(db, id);
   if (!existing) return opFailure('not_found', ['grant not found']);
   const guard = grantExistsGuard(id);
   const outcome = await commitOrConstraintFailure(
@@ -300,7 +318,7 @@ export async function deleteGrant(
       diff: { before: existing },
     },
     guard,
-    [deleteGrantStatement(db, id, guard)],
+    [deleteIssuerAccessRuleStatement(db, id, guard)],
   );
   if (!outcome.ok) return outcome;
   if (!outcome.committed) return concurrentChange('the grant');
@@ -313,7 +331,7 @@ export interface DuplicateOverrides {
   /** The copy's conditions (another repository); default the source's. */
   conditions?: Condition[];
   rules?: Rule[];
-  labels?: GrantLabel[];
+  labels?: IssuerAccessRuleLabel[];
   /** Default: "<source name> (copy)". */
   name?: string;
   /**
@@ -329,22 +347,22 @@ export interface DuplicateOverrides {
  * consumer and optionally another token, repository, rules or name. The copy is validated against
  * its target like a new grant.
  */
-export async function duplicateGrant(
+export async function duplicateIssuerAccessRule(
   deps: Deps,
   actor: Actor,
   id: string,
   overrides: DuplicateOverrides = {},
-): Promise<GrantOpResult> {
-  const source = await getGrant(deps.env.DB, id);
+): Promise<IssuerAccessRuleOpResult> {
+  const source = await getIssuerAccessRule(deps.env.DB, id);
   if (!source) return opFailure('not_found', ['grant not found']);
   const name = overrides.name?.trim() || `${source.name} (copy)`.slice(0, NAME_MAX_LENGTH);
-  return insertGrant(
+  return insertIssuerAccessRule(
     deps,
     actor,
     {
       name,
       description: source.description,
-      caller_provider_id: source.caller_provider_id,
+      credential_access_rule_id: source.credential_access_rule_id,
       service_id: overrides.service_id ?? source.service_id,
       conditions: overrides.conditions ?? source.conditions,
       rules: overrides.rules ?? source.rules,
@@ -359,15 +377,15 @@ export async function duplicateGrant(
   );
 }
 
-async function insertGrant(
+async function insertIssuerAccessRule(
   deps: Deps,
   actor: Actor,
-  input: GrantCreateInput,
+  input: IssuerAccessRuleCreateInput,
   meta: { action: 'grant.create' | 'grant.duplicate'; sourceId: string | null },
-): Promise<GrantOpResult> {
+): Promise<IssuerAccessRuleOpResult> {
   const flagErrors = booleanErrors('enabled', input.enabled);
   if (flagErrors.length > 0) return opFailure('invalid', flagErrors);
-  const values: GrantValues = {
+  const values: IssuerAccessRuleValues = {
     name: trimmed(input.name),
     description: input.description === undefined ? '' : trimmed(input.description),
     conditions: normalizeConditions(input.conditions),
@@ -375,26 +393,32 @@ async function insertGrant(
     enabled: input.enabled ?? true,
     expires_at: input.expires_at ?? null,
   };
-  const checked = await checkGrant(deps, input.caller_provider_id, input.service_id, values, {
-    expiryChanged: values.expires_at !== null,
-    acknowledged: input.acknowledge_warnings === true,
-  });
+  const checked = await checkIssuerAccessRule(
+    deps,
+    input.credential_access_rule_id,
+    input.service_id,
+    values,
+    {
+      expiryChanged: values.expires_at !== null,
+      acknowledged: input.acknowledge_warnings === true,
+    },
+  );
   if (!checked.ok) return checked;
-  const labels = await labelChangesFor(deps.env.DB, input.caller_provider_id, input.labels);
+  const labels = await labelChangesFor(deps.env.DB, input.credential_access_rule_id, input.labels);
   if (!labels.ok) return labels;
 
   const now = deps.now();
-  const grant: Grant = {
+  const grant: IssuerAccessRule = {
     ...values,
     id: newId('grt', now, deps.random),
-    caller_provider_id: input.caller_provider_id,
+    credential_access_rule_id: input.credential_access_rule_id,
     service_id: input.service_id,
     created_by: actor.email ?? actor.id,
     created_at: now,
     updated_at: now,
   };
   const guard = allOf(
-    callerProviderVersionGuard(checked.provider),
+    credentialAccessRuleVersionGuard(checked.provider),
     serviceExistsGuard(input.service_id),
   );
   const outcome = await commitOrConstraintFailure(
@@ -418,12 +442,12 @@ async function insertGrant(
     },
     guard,
     [
-      insertGrantStatement(deps.env.DB, grant, guard),
+      insertIssuerAccessRuleStatement(deps.env.DB, grant, guard),
       ...labelStatements(deps, actor, labels.changes, guard),
     ],
   );
   if (!outcome.ok) return outcome;
-  if (!outcome.committed) return concurrentChange('the caller provider or service');
+  if (!outcome.committed) return concurrentChange('the credential access rule or service');
   return {
     ok: true,
     grant,
@@ -443,7 +467,7 @@ const LABELLED: readonly string[] = [
 async function labelChangesFor(
   db: D1Database,
   providerId: string,
-  labels: GrantLabel[] | undefined,
+  labels: IssuerAccessRuleLabel[] | undefined,
 ): Promise<
   { ok: true; changes: Array<{ input: ClaimLabelInput; before: string | null }> } | OpFailure
 > {
@@ -457,7 +481,7 @@ async function labelChangesFor(
     else if (text === '' || text.length > 256) errors.push('a label must be 1-256 characters');
     else
       inputs.push({
-        caller_provider_id: providerId,
+        credential_access_rule_id: providerId,
         claim: label.claim,
         value: label.value,
         label: text,
@@ -495,34 +519,45 @@ function riskDiff(accepted: string[] | undefined) {
   return accepted && accepted.length > 0 ? { accepted_risks: [...new Set(accepted)].sort() } : {};
 }
 
-export type CheckGrantResult =
-  | { ok: true; provider: CallerProvider; warnings: string[]; warningDetails: WarningDetail[] }
+export type CheckIssuerAccessRuleResult =
+  | {
+      ok: true;
+      provider: CredentialAccessRule;
+      warnings: string[];
+      warningDetails: WarningDetail[];
+    }
   | OpFailure;
 
 /**
- * Loads the grant's caller provider and service and validates `values` against them. Returns the
+ * Loads the grant's credential access rule and service and validates `values` against them. Returns the
  * provider so the write can be guarded on the version that was validated against. `provider`
- * replaces the stored one: the access form validates an access against a consumer that it will
+ * replaces the stored one: the access form validates an access against a credential access rule that it will
  * create or extend in the same submit, before anything is written.
  */
-export async function checkGrant(
+export async function checkIssuerAccessRule(
   deps: Deps,
-  callerProviderId: string,
+  credentialAccessRuleId: string,
   serviceId: string,
-  values: GrantValues,
-  options: { expiryChanged: boolean; acknowledged: boolean; provider?: CallerProvider },
-): Promise<CheckGrantResult> {
+  values: IssuerAccessRuleValues,
+  options: { expiryChanged: boolean; acknowledged: boolean; provider?: CredentialAccessRule },
+): Promise<CheckIssuerAccessRuleResult> {
   const db = deps.env.DB;
   const [stored, service] = await Promise.all([
-    options.provider ? Promise.resolve(options.provider) : getCallerProvider(db, callerProviderId),
+    options.provider
+      ? Promise.resolve(options.provider)
+      : getCredentialAccessRule(db, credentialAccessRuleId),
     getService(db, serviceId),
   ]);
   const provider = stored;
   const errors: string[] = [];
-  if (!provider) errors.push('caller provider not found');
-  if (!service) errors.push('service not found');
+  if (!provider) errors.push('credential access rule not found');
+  if (!service) errors.push('credential not found');
+  if (provider && provider.credential_id !== serviceId)
+    errors.push('The credential access rule belongs to another credential.');
+  if (provider && !provider.enabled) errors.push('The credential access rule is disabled.');
   const profile = provider ? getProfile(provider.profile) : null;
-  if (provider && !profile) errors.push(`caller provider profile ${provider.profile} is unknown`);
+  if (provider && !profile)
+    errors.push(`credential access rule profile ${provider.profile} is unknown`);
 
   errors.push(...nameErrors(values.name));
   errors.push(...descriptionErrors(values.description));
@@ -538,7 +573,7 @@ export async function checkGrant(
   }
   if (!provider || !profile) return opFailure('invalid', errors);
 
-  const validation = validateGrant(
+  const validation = validateIssuerAccessRule(
     { conditions: values.conditions, rules: values.rules },
     profile,
     provider,

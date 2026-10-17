@@ -5,13 +5,13 @@ import { render } from '../render';
 const sections = [
   { label: 'Monitoring', href: '/admin', current: true },
   {
-    label: 'Service tokens',
-    href: '/admin/tokens',
+    label: 'Credentials',
+    href: '/admin/credentials',
     count: 6,
     open: true,
     items: [
-      { label: 'Tokens', href: '/admin/tokens', current: true },
-      { label: 'Allowed hosts', href: '/admin/tokens/hosts' },
+      { label: 'Credentials', href: '/admin/credentials', current: true },
+      { label: 'Allowed hosts', href: '/admin/credentials/hosts' },
     ],
   },
   { label: 'Users', href: '/admin/users', pill: { label: '1 pending', srSuffix: ': decide' } },
@@ -22,8 +22,10 @@ describe('SideNav', () => {
 
   it('marks the current page and shows only the open section items', () => {
     expect(html).toContain('<a class="nav-item" href="/admin" aria-current="page">');
-    expect(html).toContain('<a class="nav-item is-open" href="/admin/tokens">');
-    expect(html).toContain('<li><a href="/admin/tokens" aria-current="page">Tokens</a></li>');
+    expect(html).toContain('<a class="nav-item is-open" href="/admin/credentials">');
+    expect(html).toContain(
+      '<li><a href="/admin/credentials" aria-current="page">Credentials</a></li>',
+    );
     expect(html.match(/<ul class="nav-sub">/g)).toHaveLength(1);
   });
 
@@ -34,22 +36,26 @@ describe('SideNav', () => {
         sections={[
           { label: 'Monitoring', href: '/admin', current: 'true' },
           {
-            label: 'Service tokens',
-            href: '/admin/tokens',
+            label: 'Credentials',
+            href: '/admin/credentials',
             open: true,
             items: [
-              { label: 'Tokens', href: '/admin/tokens', current: 'true' },
-              { label: 'Keys', href: '/admin/tokens/keys', current: 'page' },
-              { label: 'Hosts', href: '/admin/tokens/hosts', current: false },
+              { label: 'Credentials', href: '/admin/credentials', current: 'true' },
+              { label: 'Keys', href: '/admin/credentials/keys', current: 'page' },
+              { label: 'Hosts', href: '/admin/credentials/hosts', current: false },
             ],
           },
         ]}
       />,
     );
     expect(deeper).toContain('<a class="nav-item" href="/admin" aria-current="true">');
-    expect(deeper).toContain('<li><a href="/admin/tokens" aria-current="true">Tokens</a></li>');
-    expect(deeper).toContain('<li><a href="/admin/tokens/keys" aria-current="page">Keys</a></li>');
-    expect(deeper).toContain('<li><a href="/admin/tokens/hosts">Hosts</a></li>');
+    expect(deeper).toContain(
+      '<li><a href="/admin/credentials" aria-current="true">Credentials</a></li>',
+    );
+    expect(deeper).toContain(
+      '<li><a href="/admin/credentials/keys" aria-current="page">Keys</a></li>',
+    );
+    expect(deeper).toContain('<li><a href="/admin/credentials/hosts">Hosts</a></li>');
   });
 
   it('renders counts and the pill with its screen reader text', () => {

@@ -37,9 +37,9 @@ export const actionCards: ComponentDoc = {
               },
               {
                 value: 'token_manager',
-                title: 'Token manager',
+                title: 'Credential manager',
                 srPrefix: 'Invite as',
-                description: 'Adds, rotates, tests, disables and deletes service tokens.',
+                description: 'Adds, rotates, tests, disables and deletes credentials.',
                 footnote: <Badge tone="accent">Loads keys</Badge>,
               },
               {
@@ -53,7 +53,7 @@ export const actionCards: ComponentDoc = {
                 value: 'admin',
                 title: 'Admin',
                 srPrefix: 'Invite as',
-                description: 'Token manager and Access manager together, plus the export.',
+                description: 'Credential manager and Access manager together, plus the export.',
                 footnote: <Badge>Both duties</Badge>,
               },
             ]}
@@ -99,8 +99,8 @@ export const actionCards: ComponentDoc = {
               },
               {
                 value: 'active:token_manager',
-                title: 'Let them in as Token manager…',
-                description: 'Anyone Access admits can add, replace and delete service tokens.',
+                title: 'Let them in as Credential manager…',
+                description: 'Anyone Access admits can add, replace and delete credentials.',
                 risk: true,
                 dialog: 'ac-dlg-tm',
                 go: 'Confirm next →',
@@ -109,7 +109,7 @@ export const actionCards: ComponentDoc = {
           />
           <ConfirmDialog
             id="ac-dlg-tm"
-            title="Let everyone Access admits in as Token manager?"
+            title="Let everyone Access admits in as Credential manager?"
             action="#"
             confirmLabel="Let them in"
             hidden={{ _csrf: 'csrf-token', join_policy: 'active:token_manager' }}
@@ -119,7 +119,7 @@ export const actionCards: ComponentDoc = {
       code: `<ActionCards name="join_policy" go="Save →" columns={1} labelledBy="policy-h" cards={[
   { value: 'closed', title: 'Only invited people', description: '…' },
   { value: 'ask', title: 'Ask an owner first', description: '…', current: true },
-  { value: 'active:token_manager', title: 'Let them in as Token manager…', description: '…',
+  { value: 'active:token_manager', title: 'Let them in as Credential manager…', description: '…',
     risk: true, dialog: 'dlg-pol-tm', go: 'Confirm next →' },
 ]} />`,
     },

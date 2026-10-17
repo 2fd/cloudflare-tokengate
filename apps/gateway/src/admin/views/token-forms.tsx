@@ -1,4 +1,4 @@
-// Service token forms: the submitted values as strings (so a rejected form re-renders what was
+// Credential forms: the submitted values as strings (so a rejected form re-renders what was
 // typed), their parsing into op inputs, and the field groups the create cards and the token page
 // share, built on @tokengate/ui. The secret is never part of the values and never rendered back
 // (I-CRED-1); a re-render carries a sealed draft instead (A13.6, ADR 0020). Field ids carry a
@@ -808,7 +808,7 @@ export function AdvancedFields(props: {
                 </code>
               </>
             ))}{' '}
-            (set by the token type; kept).
+            (set by the credential type; kept).
           </p>
         ) : null}
       </FieldSet>

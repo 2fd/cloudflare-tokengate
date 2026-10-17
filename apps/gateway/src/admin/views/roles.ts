@@ -6,9 +6,9 @@ import { type Permission, rolesWith } from '../auth/rbac';
 
 export interface RoleInfo {
   label: string;
-  /** Who to ask, as a phrase: "a token manager". */
+  /** Who to ask, as a phrase: "a credential manager". */
   noun: string;
-  /** Everyone with the role, as a phrase: "token managers" ("Only token managers can …"). */
+  /** Everyone with the role, as a phrase: "credential managers" ("Only credential managers can …"). */
   plural: string;
   description: string;
   /** The duty in two or three words, for badges and menu facts: "Loads keys". */
@@ -27,28 +27,28 @@ export const ROLE_INFO: Readonly<Record<Role, RoleInfo>> = {
     short: 'Sees every page. Changes nothing.',
   },
   token_manager: {
-    label: 'Token manager',
-    noun: 'a token manager',
-    plural: 'token managers',
+    label: 'Credential manager',
+    noun: 'a credential manager',
+    plural: 'credential managers',
     description:
-      'Adds, rotates, tests, disables and deletes service tokens. Cannot give any consumer access to them.',
+      'Manages credentials and their allowed issuers and identity filters. Cannot grant access.',
     tag: 'Loads keys',
-    short: 'Adds, rotates and deletes service tokens.',
+    short: 'Adds, rotates and deletes credentials.',
   },
   access_manager: {
     label: 'Access manager',
     noun: 'an access manager',
     plural: 'access managers',
     description:
-      "Adds service consumers and decides which of them may use which token, and under which constraints. Never sees a token's secret.",
+      'Creates issuer access rules within the limits set by credential managers. Never sees a secret.',
     tag: 'Grants access',
-    short: 'Grants consumers access to tokens. Never sees a secret.',
+    short: 'Grants access within credential limits. Never sees a secret.',
   },
   admin: {
     label: 'Admin',
     noun: 'an admin',
     plural: 'admins',
-    description: 'Token manager and Access manager together, plus the configuration export.',
+    description: 'Credential manager and Access manager together, plus the configuration export.',
     tag: 'Both duties',
     short: 'Both duties, plus the configuration export.',
   },
@@ -63,13 +63,13 @@ export const ROLE_INFO: Readonly<Record<Role, RoleInfo>> = {
   },
 };
 
-/** What each role can change, as short nouns for a role diff ("+ service tokens"). */
+/** What each role can change, as short nouns for a role diff ("+ credentials"). */
 export const ROLE_POWERS: Readonly<Record<Role, readonly string[]>> = {
   viewer: [],
-  token_manager: ['service tokens'],
-  access_manager: ['consumer access'],
-  admin: ['service tokens', 'consumer access', 'export'],
-  owner: ['service tokens', 'consumer access', 'export', 'people', 'settings'],
+  token_manager: ['credentials'],
+  access_manager: ['issuer access rules'],
+  admin: ['credentials', 'issuer access rules', 'export'],
+  owner: ['credentials', 'issuer access rules', 'export', 'people', 'settings'],
 };
 
 /** What a person gains and loses when their role changes from `from` to `to`. */
@@ -89,11 +89,11 @@ export const CAPABILITIES: ReadonlyArray<{ text: string; roles: readonly Role[] 
     roles: ['viewer', 'token_manager', 'access_manager', 'admin', 'owner'],
   },
   {
-    text: 'Add, rotate, test, disable and delete service tokens',
+    text: 'Add, rotate, test, disable and delete credentials',
     roles: ['token_manager', 'admin', 'owner'],
   },
-  { text: 'Add and change service consumers', roles: ['access_manager', 'admin', 'owner'] },
-  { text: 'Create and change consumer access', roles: ['access_manager', 'admin', 'owner'] },
+  { text: 'Add and change credential access rules', roles: ['token_manager', 'admin', 'owner'] },
+  { text: 'Create and change issuer access rules', roles: ['access_manager', 'admin', 'owner'] },
   { text: 'Download the configuration export', roles: ['admin', 'owner'] },
   { text: 'People, roles, sign-in policy, admin hosts', roles: ['owner'] },
   { text: 'Allowed hosts, data retention, re-encrypt secrets', roles: ['owner'] },
@@ -118,7 +118,7 @@ export function rolesFor(permission: Permission): Role[] {
   return ROLE_ORDER.filter((role) => holders.has(role));
 }
 
-/** "Token manager, Admin or Owner": the labels of the roles that hold `permission`. */
+/** "Credential manager, Admin or Owner": the labels of the roles that hold `permission`. */
 export function roleLabelsFor(permission: Permission): string {
   const labels = rolesFor(permission).map(roleLabel);
   if (labels.length <= 1) return labels.join('');
@@ -128,15 +128,15 @@ export function roleLabelsFor(permission: Permission): string {
 /** What a permission lets its holder change, as the subject of "… needs the X role." */
 export const PERMISSION_SUBJECT: Readonly<Record<Permission, string>> = {
   read: 'Seeing the admin console',
-  'tokens:write': 'Changing service tokens',
-  'access:write': 'Changing service consumers and consumer access',
+  'tokens:write': 'Changing credentials',
+  'access:write': 'Changing issuer access rules',
   'config:export': 'Downloading the configuration export',
   'users:write': 'Changing people and how they sign in',
   'settings:write': 'Changing this setting',
   'keyring:rewrap': 'Re-encrypting secrets',
 };
 
-/** "Changing service tokens needs the Token manager, Admin or Owner role." */
+/** "Changing credentials needs the Credential manager, Admin or Owner role." */
 export function permissionSentence(permission: Permission): string {
   return `${PERMISSION_SUBJECT[permission]} needs the ${roleLabelsFor(permission)} role.`;
 }

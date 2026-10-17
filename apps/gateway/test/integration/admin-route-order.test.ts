@@ -32,23 +32,26 @@ describe('I-RBAC-1: static admin routes are registered before their :id siblings
     ['POST /admin/users/sign-in/hosts', 'POST /admin/users/:id'],
     ['POST /admin/users/sign-in/policy', 'POST /admin/users/:id'],
     ['GET /admin/users/sign-in', 'GET /admin/users/:id'],
-    ['GET /admin/tokens/hosts', 'GET /admin/tokens/:id'],
-    ['POST /admin/tokens/hosts', 'POST /admin/tokens/:id'],
-    ['GET /admin/tokens/keys', 'GET /admin/tokens/:id'],
-    ['GET /admin/tokens/new', 'GET /admin/tokens/:id'],
-    ['GET /admin/consumers/new', 'GET /admin/consumers/:id'],
-    ['GET /admin/access/new', 'GET /admin/access/:id'],
+    ['GET /admin/credentials/hosts', 'GET /admin/credentials/:id'],
+    ['POST /admin/credentials/hosts', 'POST /admin/credentials/:id'],
+    ['GET /admin/credentials/keys', 'GET /admin/credentials/:id'],
+    ['GET /admin/credentials/new', 'GET /admin/credentials/:id'],
+    ['GET /admin/credential-access-rules/new', 'GET /admin/credential-access-rules/:id'],
+    ['GET /admin/issuer-access-rules/new', 'GET /admin/issuer-access-rules/:id'],
   ])('%s comes before %s', (first, second) => {
     expect(position(first)).toBeLessThan(position(second));
   });
 
   it.each([
-    ['/admin/tokens/keys', '<title>Encryption keys – Service tokens – tokengate</title>'],
-    ['/admin/tokens/hosts', '<title>Allowed hosts – Service tokens – tokengate</title>'],
-    ['/admin/access/new', '<title>Give a consumer access – Service consumers – tokengate</title>'],
+    ['/admin/credentials/keys', '<title>Encryption keys – Credentials – tokengate</title>'],
+    ['/admin/credentials/hosts', '<title>Allowed hosts – Credentials – tokengate</title>'],
     [
-      '/admin/consumers/new',
-      '<title>Add a service consumer – Service consumers – tokengate</title>',
+      '/admin/issuer-access-rules/new',
+      '<title>Add issuer access rule – Access Rules – tokengate</title>',
+    ],
+    [
+      '/admin/credential-access-rules/new',
+      '<title>Add a credential access rule – Access Rules – tokengate</title>',
     ],
     ['/admin/users/sign-in', '<title>Sign-in – Users – tokengate</title>'],
   ])('GET %s renders its own page', async (path, title) => {
@@ -58,13 +61,13 @@ describe('I-RBAC-1: static admin routes are registered before their :id siblings
     expect(await res.text()).toContain(title);
   });
 
-  it('POST /admin/tokens/hosts is the allowlist route, not a token edit', async () => {
+  it('POST /admin/credentials/hosts is the allowlist route, not a token edit', async () => {
     const app = createTestApp();
     const fields = { mode: 'list', other_hosts: 'api.example.com' };
     const refused = await adminPost(
       app,
       await sessionFor(app, 'token_manager'),
-      '/admin/tokens/hosts',
+      '/admin/credentials/hosts',
       fields,
     );
     expect(refused.status).toBe(403);
@@ -74,11 +77,11 @@ describe('I-RBAC-1: static admin routes are registered before their :id siblings
     const saved = await adminPost(
       app,
       await sessionFor(app, 'owner'),
-      '/admin/tokens/hosts',
+      '/admin/credentials/hosts',
       fields,
     );
     expect(saved.status).toBe(303);
-    expect(saved.headers.get('location')).toBe('/admin/tokens/hosts?notice=hosts_saved');
+    expect(saved.headers.get('location')).toBe('/admin/credentials/hosts?notice=hosts_saved');
     expect(await getAllowedUpstreamHosts(env.DB)).toEqual(['api.example.com']);
   });
 });

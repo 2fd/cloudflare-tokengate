@@ -65,7 +65,7 @@ const SNIPPET_RENDER = `import { AppShell, Page, PageHeader, SideNav, Tray, Pane
 
 <AppShell brand={{ name: 'tokengate', href: '/admin' }} nav={<SideNav label="Sections" sections={sections} />}>
   <Page>
-    <PageHeader title="Service tokens" count={6} description="…" />
+    <PageHeader title="Credentials" count={6} description="…" />
     <Tray id="all-tokens" title="All tokens">
       <Panel variant="flush">…</Panel>
     </Tray>

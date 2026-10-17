@@ -1,5 +1,5 @@
 // Profile for any OIDC issuer (Buildkite, CircleCI, Kubernetes, ...). The gateway knows nothing about
-// its claims, so anchors (I-AUTHZ-2) come from the caller provider's `anchor_claims` and no event
+// its claims, so anchors (I-AUTHZ-2) come from the credential access rule's `anchor_claims` and no event
 // guard applies. Also exports the display helpers shared by all profiles.
 import { claimText } from '../../policy/conditions';
 import type { Condition } from '../../policy/types';

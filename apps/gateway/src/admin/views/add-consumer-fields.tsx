@@ -1,12 +1,10 @@
-// "Add a consumer" fields (A14.1, A14.7.1), shared by /admin/consumers/new and the access form
+// "Add a credential access rule" fields (A14.1, A14.7.1), shared by /admin/credential-access-rules/new and the access form
 // (prefix `new.`): the type as logo cards and each type's few inputs in its branch. Everything else
-// (name, issuer, JWKS, algorithms, token age, audience) is derived, and the Add consumer rail says
+// (name, issuer, JWKS, algorithms, token age, audience) is derived, and the Add credential access rule rail says
 // so (SetForYou). Every input sits in a hidden branch, so none carries native validation (A7.6);
 // the server checks them.
 import {
   Badge,
-  Button,
-  Callout,
   FieldSet,
   type LogoSpec,
   More,
@@ -17,17 +15,15 @@ import {
   Tray,
 } from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
-import { labelFor } from '../../db/claim-labels';
-import type { CallerProvider, ClaimLabel } from '../../db/types';
+import type { CredentialAccessRule, ClaimLabel } from '../../db/types';
 import { PROFILES } from '../../identity/profiles';
 import { GITHUB_ACTIONS_ISSUER } from '../../identity/profiles/github-actions';
 import { GITLAB_COM_ISSUER } from '../../identity/profiles/gitlab-ci';
 import type { ProfileId } from '../../identity/types';
 import { CLAIM_NAME_MAX_LENGTH } from '../../policy/conditions';
-import { type Fields, idText, ownerFindCommand, parseOwnerList, text } from '../consumer-access';
-import { type ConsumerInput, pinValues, tenantClaimOf } from '../ops/caller-providers';
+import { type Fields, ownerFindCommand, parseOwnerList, text } from '../consumer-access';
+import { type ConsumerInput } from '../ops/credential-access-rules';
 import type { FieldError } from '../ops/shared';
-import { paths } from '../paths';
 import { Breakable, useFocusTarget } from './access-visuals';
 import { Field, fieldId, IdWithLabelField } from './components';
 
@@ -64,7 +60,7 @@ export const GENERIC_PRESETS: ReadonlyArray<{ host: string; anchor: string; pin:
 ];
 
 /** Anchor claim suggestions: those of the existing generic consumers, the presets, then `sub`. */
-export function genericAnchorSuggestions(consumers: readonly CallerProvider[]): string[] {
+export function genericAnchorSuggestions(consumers: readonly CredentialAccessRule[]): string[] {
   return [
     ...new Set([
       ...consumers
@@ -76,15 +72,6 @@ export function genericAnchorSuggestions(consumers: readonly CallerProvider[]): 
   ];
 }
 
-/** "acme (1234567), acme-labs (7654321)": the organizations or groups a consumer already has. */
-function alreadyAdded(provider: CallerProvider, labels: readonly ClaimLabel[]): string {
-  const claim = tenantClaimOf(provider.profile);
-  if (claim === null) return '';
-  return pinValues(provider.tenant_pin, claim)
-    .map((value) => idText(value, labelFor(labels, claim, value)))
-    .join(', ');
-}
-
 export const GENERIC_ISSUER_EXAMPLES: readonly string[] = [
   'https://agent.buildkite.com',
   'https://oidc.circleci.com/org/0c9f3e1a-7b2d-4c5e-9f10-123456789abc',
@@ -92,6 +79,8 @@ export const GENERIC_ISSUER_EXAMPLES: readonly string[] = [
 
 /** Raw values of the add-consumer fields, kept as text for a re-render. */
 export interface ConsumerForm {
+  credential_id?: string;
+  boundary_filters?: string;
   type: string;
   github_org: string;
   github_enterprise_slug: string;
@@ -105,6 +94,8 @@ export interface ConsumerForm {
 }
 
 const KEYS: ReadonlyArray<keyof ConsumerForm> = [
+  'credential_id',
+  'boundary_filters',
   'type',
   'github_org',
   'github_enterprise_slug',
@@ -155,7 +146,10 @@ export function parseConsumerForm(
   const errors: FieldError[] = [];
   const type = CONSUMER_TYPES.find((id) => id === form.type);
   if (!type)
-    return { ok: false, errors: [{ field: field('type'), message: 'Choose a consumer type.' }] };
+    return {
+      ok: false,
+      errors: [{ field: field('type'), message: 'Choose a credential access rule type.' }],
+    };
   if (type === 'github-actions') {
     const orgs = parseOwnerList(form.github_org, { id: type });
     if (!orgs.ok) errors.push({ field: field('github_org'), message: orgs.message });
@@ -177,6 +171,7 @@ export function parseConsumerForm(
     return {
       ok: true,
       input: {
+        credential_id: form.credential_id ?? '',
         profile: type,
         issuer: slug === '' ? GITHUB_ACTIONS_ISSUER : `${GITHUB_ACTIONS_ISSUER}/${slug}`,
         tenants: orgs.entries.map((entry) => ({ value: entry.id, label: entry.label })),
@@ -199,6 +194,7 @@ export function parseConsumerForm(
     return {
       ok: true,
       input: {
+        credential_id: form.credential_id ?? '',
         profile: type,
         issuer: url === '' ? GITLAB_COM_ISSUER : url,
         tenants: groups.entries.map((entry) => ({ value: entry.id, label: entry.label })),
@@ -250,6 +246,7 @@ export function parseConsumerForm(
   return {
     ok: true,
     input: {
+      credential_id: form.credential_id ?? '',
       profile: 'generic',
       issuer,
       tenants: [],
@@ -271,30 +268,17 @@ function presetFor(issuer: string): (typeof GENERIC_PRESETS)[number] | null {
 /** How the type cards take part in the form: a live slot of the page, or a scoped branch. */
 export type ConsumerFieldsLive = 1 | 'scoped';
 
-/** The existing consumers a GitHub or GitLab add merges into (the one of the same issuer). */
-function mergeTargets(existing: readonly CallerProvider[]) {
-  return {
-    github: existing.find(
-      (provider) =>
-        provider.profile === 'github-actions' && provider.issuer === GITHUB_ACTIONS_ISSUER,
-    ),
-    gitlab: existing.find(
-      (provider) => provider.profile === 'gitlab-ci' && provider.issuer === GITLAB_COM_ISSUER,
-    ),
-  };
-}
-
 /**
  * The fields. The type is a FieldSet of logo cards; each type's inputs sit in its branch: a ui
- * Reveal of live slot 1 on the Add consumer page, a scoped branch (`.ga-tbranch`, page-local CSS)
+ * Reveal of live slot 1 on the Add credential access rule page, a scoped branch (`.ga-tbranch`, page-local CSS)
  * in the access form, where `jobs` adds the type's "Which jobs" fields after its inputs.
  */
 export function AddConsumerFields(props: {
   prefix: string;
   form: ConsumerForm;
   errors: readonly FieldError[];
-  /** Existing consumers: a GitHub or GitLab add merges into the one of the same issuer. */
-  existing: readonly CallerProvider[];
+  /** Existing credential boundaries, used only for suggestions. */
+  existing: readonly CredentialAccessRule[];
   /** Labels of the existing consumers, for the organizations and groups they already have. */
   labels?: readonly ClaimLabel[];
   /** Existing generic anchor claims, offered as suggestions. */
@@ -307,10 +291,7 @@ export function AddConsumerFields(props: {
   const scoped = props.live === 'scoped';
   const error = (name: keyof ConsumerForm) =>
     props.errors.find((item) => item.field === `${prefix}${name}`)?.message ?? null;
-  const { github, gitlab } = mergeTargets(props.existing);
   const genericIssuers = props.existing.filter((provider) => provider.profile === 'generic');
-  const labelsOf = (provider: CallerProvider) =>
-    (props.labels ?? []).filter((label) => label.caller_provider_id === provider.id);
   const typeId = fieldId(`${prefix}type`);
   const options = CONSUMER_TYPES.map((type, index) => ({
     value: type,
@@ -369,19 +350,6 @@ export function AddConsumerFields(props: {
       {branch(
         'github-actions',
         <>
-          {github ? (
-            <Callout
-              title={`${github.name} already exists.`}
-              actions={
-                <Button size="sm" href={paths.consumer(github.id)} srSuffix={github.name}>
-                  Open it
-                </Button>
-              }
-            >
-              Saving adds these organizations to it{github.enabled ? '' : ' (disabled)'}. Already
-              added: {alreadyAdded(github, labelsOf(github)) || 'none'}.
-            </Callout>
-          ) : null}
           <IdWithLabelField
             kind="github_owner_list"
             name={`${prefix}github_org`}
@@ -448,19 +416,6 @@ export function AddConsumerFields(props: {
       {branch(
         'gitlab-ci',
         <>
-          {gitlab ? (
-            <Callout
-              title={`${gitlab.name} already exists.`}
-              actions={
-                <Button size="sm" href={paths.consumer(gitlab.id)} srSuffix={gitlab.name}>
-                  Open it
-                </Button>
-              }
-            >
-              Saving adds these groups to it{gitlab.enabled ? '' : ' (disabled)'}. Already added:{' '}
-              {alreadyAdded(gitlab, labelsOf(gitlab)) || 'none'}.
-            </Callout>
-          ) : null}
           <IdWithLabelField
             kind="gitlab_group_list"
             name={`${prefix}gitlab_group`}
@@ -584,17 +539,16 @@ export function AddConsumerFields(props: {
 }
 
 /**
- * The rail of the Add consumer page: what tokengate derives for the chosen type, so the form asks
+ * The rail of the Add credential access rule page: what tokengate derives for the chosen type, so the form asks
  * only for what it cannot derive. One Reveal of live slot 1 per type.
  */
-export function SetForYou(props: { existing: readonly CallerProvider[] }) {
-  const { github, gitlab } = mergeTargets(props.existing);
+export function SetForYou(_props: { existing: readonly CredentialAccessRule[] }) {
   const age = (type: ProfileId) => `${PROFILES[type].defaults.maxTokenAgeSeconds / 60} minutes`;
   const keys = 'Read from the issuer, refreshed automatically';
-  const audience = (existing: CallerProvider | undefined) =>
-    existing
-      ? { label: 'Audience', value: <Breakable text={existing.audience} />, mono: true }
-      : { label: 'Audience', value: 'A new value only for this consumer' };
+  const audience = () => ({
+    label: 'Audience',
+    value: 'A new value only for this credential access rule',
+  });
   return (
     <aside class="rail" aria-labelledby="ad-set-h">
       <Tray
@@ -606,16 +560,10 @@ export function SetForYou(props: { existing: readonly CallerProvider[] }) {
           <Reveal field={1} option={1} box={false}>
             <RailKeyValue
               items={[
-                github
-                  ? {
-                      label: 'Name',
-                      value: github.name,
-                      note: 'Kept. The new organizations join it.',
-                    }
-                  : { label: 'Name', value: 'GitHub Actions (first organization)' },
+                { label: 'Name', value: 'GitHub Actions (first organization)' },
                 { label: 'Issuer', value: <Breakable text={GITHUB_ACTIONS_ISSUER} />, mono: true },
                 { label: 'Signing keys', value: keys },
-                audience(github),
+                audience(),
                 { label: 'Max token age', value: age('github-actions') },
               ]}
             />
@@ -623,9 +571,7 @@ export function SetForYou(props: { existing: readonly CallerProvider[] }) {
           <Reveal field={1} option={2} box={false}>
             <RailKeyValue
               items={[
-                gitlab
-                  ? { label: 'Name', value: gitlab.name, note: 'Kept. The new groups join it.' }
-                  : { label: 'Name', value: 'GitLab (first group)' },
+                { label: 'Name', value: 'GitLab (first group)' },
                 {
                   label: 'Issuer',
                   value: GITLAB_COM_ISSUER,
@@ -633,7 +579,7 @@ export function SetForYou(props: { existing: readonly CallerProvider[] }) {
                   note: 'Or your GitLab URL (self-managed)',
                 },
                 { label: 'Signing keys', value: keys },
-                audience(gitlab),
+                audience(),
                 { label: 'Max token age', value: age('gitlab-ci') },
               ]}
             />
@@ -643,7 +589,7 @@ export function SetForYou(props: { existing: readonly CallerProvider[] }) {
               items={[
                 { label: 'Name', value: 'From the issuer host' },
                 { label: 'Signing keys', value: keys },
-                { label: 'Audience', value: 'A new value only for this consumer' },
+                { label: 'Audience', value: 'A new value only for this credential access rule' },
                 { label: 'Max token age', value: age('generic') },
               ]}
             />

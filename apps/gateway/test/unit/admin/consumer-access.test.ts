@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  accessFormFromGrant,
+  accessFormFromIssuerAccessRule,
   accessWarningDetails,
   blankJobsForm,
   coveredRiskCodes,
@@ -23,7 +23,7 @@ import {
 } from '../../../src/admin/consumer-access';
 import { getServiceTemplate } from '../../../src/admin/service-templates';
 import { ruleSets } from '../../../src/db/suggestions';
-import type { CallerProvider, ClaimLabel } from '../../../src/db/types';
+import type { CredentialAccessRule, ClaimLabel } from '../../../src/db/types';
 import { PROFILES } from '../../../src/identity/profiles';
 import type { Condition } from '../../../src/policy/types';
 import { provider as policyProvider } from '../policy/fixtures';
@@ -34,7 +34,7 @@ const DAY = 86_400_000;
 
 function label(claim: ClaimLabel['claim'], value: string, text: string): ClaimLabel {
   return {
-    caller_provider_id: 'cpr_a',
+    credential_access_rule_id: 'cpr_a',
     claim,
     value,
     label: text,
@@ -49,7 +49,7 @@ const LABELS = [
   label('repository_id', '2000', 'acme/api'),
 ];
 
-function githubProvider(values = ['1000', '1001']): CallerProvider {
+function githubProvider(values = ['1000', '1001']): CredentialAccessRule {
   return policyProvider({
     id: 'cpr_a',
     tenant_pin: [{ claim: 'repository_owner_id', match: 'exact', values }],
@@ -131,7 +131,7 @@ describe('deriveOwner', () => {
     expect(deriveOwner('acme-x', githubProvider(), github, LABELS)).toBeNull();
   });
 
-  it('uses the one unlabelled organization of a consumer', () => {
+  it('uses the one unlabelled organization of a credential access rule', () => {
     expect(deriveOwner('anything', githubProvider(['5']), github, [])).toEqual({
       id: '5',
       label: 'anything',
@@ -153,9 +153,9 @@ describe('parseJobs', () => {
   it('asks for new_owner when the repository is of an unknown organization', () => {
     const parsed = parseJobs(jobs({ repository: 'acme-x/api (3)' }), ctx({ prefix: 'cpr_a.' }));
     expect(parsed.unknownOwner).toBe('acme-x');
-    expect(parsed.errors[0]?.field).toBe('cpr_a.new_owner');
+    expect(parsed.errors[0]?.field).toBe('cpr_a.repository');
     expect(parsed.errors[0]?.message).toContain(
-      'acme-x is not an organization of this consumer yet',
+      'acme-x is not an organization of this credential access rule yet',
     );
     const wrong = parseJobs(
       jobs({ repository: 'acme-x/api (3)', new_owner: 'other (9)' }),
@@ -250,7 +250,7 @@ describe('parseJobs', () => {
 
   it('turns an access back into the form it was built with, or the rows editor', () => {
     const built = parseJobs(jobs({ ref_protection: 'unprotected' }), ctx()).conditions ?? [];
-    const back = accessFormFromGrant({ conditions: built }, github, LABELS);
+    const back = accessFormFromIssuerAccessRule({ conditions: built }, github, LABELS);
     expect(back).toMatchObject({
       editor: 'structured',
       repository: 'acme/api (2000)',
@@ -258,7 +258,7 @@ describe('parseJobs', () => {
       branch: 'main',
       ref_protection: 'unprotected',
     });
-    const odd = accessFormFromGrant(
+    const odd = accessFormFromIssuerAccessRule(
       { conditions: [...built, { claim: 'actor', match: 'exact', values: ['x'] }] },
       github,
       LABELS,

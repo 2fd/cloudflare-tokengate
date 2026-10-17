@@ -38,7 +38,7 @@ const insertTeam = (id: string, name: string, columns: Record<string, unknown> =
 const insertService = (id: string) =>
   db
     .prepare(
-      `INSERT INTO services (id, slug, name, base_url, injection, created_at, updated_at)
+      `INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
        VALUES (?, ?, ?, 'https://api.example.com', '{"kind":"bearer"}', ?, ?)`,
     )
     .bind(id, id.toLowerCase().replace('_', '-'), id, T, T);
@@ -46,9 +46,9 @@ const insertService = (id: string) =>
 const insertConsumer = (id: string) =>
   db
     .prepare(
-      `INSERT INTO caller_providers (id, name, profile, issuer, jwks_uri, audience, allowed_algs,
+      `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
          max_token_age_seconds, created_at, updated_at)
-       VALUES (?, ?, 'generic', ?, 'https://issuer.example.com/jwks', 'tokengate:0123456789abcdef',
+       VALUES (?, (SELECT id FROM credentials ORDER BY id LIMIT 1), ?, 'generic', ?, 'https://issuer.example.com/jwks', 'tokengate:0123456789abcdef',
          '["RS256"]', 900, ?, ?)`,
     )
     .bind(id, id, `https://${id}.example.com`, T, T);
@@ -245,7 +245,9 @@ describe('teams: CHECKs and fixed keys', () => {
     expect(
       await refused(
         db
-          .prepare("UPDATE team_consumers SET caller_provider_id = 'cpr_2' WHERE team_id = ?")
+          .prepare(
+            "UPDATE team_consumers SET credential_access_rule_id = 'cpr_2' WHERE team_id = ?",
+          )
           .bind(team),
       ),
     ).toContain('immutable_row');
@@ -281,7 +283,7 @@ describe('teams: scope_mixed', () => {
   });
 
   it('refuses an explicit consumer row on a team with all-scope consumers, and the reverse', async () => {
-    const all = await createTeam({ name: 'All consumers', consumers: { all: 2 } });
+    const all = await createTeam({ name: 'All credential access rules', consumers: { all: 2 } });
     expect(
       await refused(db.prepare("INSERT INTO team_consumers VALUES (?, 'cpr_1', 1)").bind(all)),
     ).toContain('scope_mixed');
@@ -318,17 +320,20 @@ describe('teams: cascades', () => {
     }
   });
 
-  it('deletes the scope rows of a deleted token or consumer, and the memberships of a deleted user', async () => {
+  it('deletes the scope rows of a deleted credential or consumer, and the memberships of a deleted user', async () => {
     await db.batch([insertService('svc_1'), insertConsumer('cpr_1')]);
     const user = await createUser({ email: 'u@example.com', role: 'viewer' });
     const tokens = await createTeam({
-      name: 'Tokens',
+      name: 'Credentials',
       tokens: { svc_1: { level: 1 } },
       members: [user],
     });
-    const consumers = await createTeam({ name: 'Consumers', consumers: { cpr_1: { level: 1 } } });
-    await db.prepare("DELETE FROM services WHERE id = 'svc_1'").run();
-    await db.prepare("DELETE FROM caller_providers WHERE id = 'cpr_1'").run();
+    const consumers = await createTeam({
+      name: 'Credential access rules',
+      consumers: { cpr_1: { level: 1 } },
+    });
+    await db.prepare("DELETE FROM credentials WHERE id = 'svc_1'").run();
+    await db.prepare("DELETE FROM credential_access_rules WHERE id = 'cpr_1'").run();
     expect(await count('team_tokens')).toBe(0);
     expect(await count('team_consumers')).toBe(0);
     await db.prepare('DELETE FROM users WHERE id = ?').bind(user.id).run();

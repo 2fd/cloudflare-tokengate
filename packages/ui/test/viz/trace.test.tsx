@@ -60,7 +60,7 @@ describe('NextStep', () => {
           { label: 'Slack', logo: { brand: 'slack' } },
         ]}
         actions={
-          <a class="btn primary" href="/admin/access/new">
+          <a class="btn primary" href="/admin/issuer-access-rules/new">
             Give access from this request
           </a>
         }
@@ -69,7 +69,7 @@ describe('NextStep', () => {
       </NextStep>,
     );
     expect(html).toBe(
-      '<div class="todo"><p><b>Give access from this request.</b> The form opens with these values filled in.</p><p class="prefill"><span class="vh">Filled in: </span><span class="chip"><span class="logo xs lg-github" aria-hidden="true">GH</span>GitHub Actions (acme)</span><span class="chip text mono">acme/web</span><span class="chip"><span class="logo xs lg-slack" aria-hidden="true">S</span>Slack</span></p><div class="btn-row"><a class="btn primary" href="/admin/access/new">Give access from this request</a></div></div>',
+      '<div class="todo"><p><b>Give access from this request.</b> The form opens with these values filled in.</p><p class="prefill"><span class="vh">Filled in: </span><span class="chip"><span class="logo xs lg-github" aria-hidden="true">GH</span>GitHub Actions (acme)</span><span class="chip text mono">acme/web</span><span class="chip"><span class="logo xs lg-slack" aria-hidden="true">S</span>Slack</span></p><div class="btn-row"><a class="btn primary" href="/admin/issuer-access-rules/new">Give access from this request</a></div></div>',
     );
   });
 
@@ -102,7 +102,7 @@ describe('ArrowRow', () => {
     );
   });
 
-  it('renders only the consumer side without a token: no arrow, no verb', () => {
+  it('renders only the credential access rule side without a token: no arrow, no verb', () => {
     const html = render(
       <ArrowRow
         consumer={{
@@ -124,7 +124,7 @@ describe('ArrowRow', () => {
   it('is one link when it has href, with a custom verb and class', () => {
     const html = render(
       <ArrowRow
-        href="/admin/access/acc_1"
+        href="/admin/issuer-access-rules/acc_1"
         verb="may call"
         class="x"
         consumer={{ name: 'Buildkite (acme)', logo: { brand: 'oidc' } }}
@@ -132,7 +132,7 @@ describe('ArrowRow', () => {
       />,
     );
     expect(html).toContain(
-      '<a class="arrow x" href="/admin/access/acc_1"><span class="side-c"><span class="logo xs lg-oidc" aria-hidden="true"><svg viewBox="0 0 24 24">',
+      '<a class="arrow x" href="/admin/issuer-access-rules/acc_1"><span class="side-c"><span class="logo xs lg-oidc" aria-hidden="true"><svg viewBox="0 0 24 24">',
     );
     expect(html).toContain('<span class="ent-n">Buildkite (acme)</span>');
     expect(html).toContain('<span class="vh"> may call </span>');

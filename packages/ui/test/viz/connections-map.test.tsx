@@ -84,11 +84,11 @@ describe('ConnectionsMap', () => {
 
   it('links nodes to the access list and builds the list equivalent', () => {
     const html = base();
-    expect(html).toContain('href="/admin/access?consumer=github-acme"');
-    expect(html).toContain('href="/admin/access?token=discord-alerts"');
+    expect(html).toContain('href="/admin/issuer-access-rules?consumer=github-acme"');
+    expect(html).toContain('href="/admin/issuer-access-rules?token=discord-alerts"');
     expect(html).toContain('<summary>Show the map as a list (9 accesses)</summary>');
     expect(html.match(/<li><span class="arrow">|<li><a class="arrow"/g)).toHaveLength(9);
-    expect(html).toContain('<a class="arrow" href="/admin/access/acc_bk1">');
+    expect(html).toContain('<a class="arrow" href="/admin/issuer-access-rules/acc_bk1">');
     expect(html).toContain('<span class="st warn">Expires in 9 days</span>');
     expect(html).toContain('<span class="st off">Inactive: token disabled</span>');
     expect(html).toContain('<span class="st">Active</span>');
@@ -96,14 +96,14 @@ describe('ConnectionsMap', () => {
 
   it('shows the focus bar and the default legend without a scale note', () => {
     const html = base();
-    expect(html).toContain('<nav class="qlinks" aria-label="Focus on a consumer">');
+    expect(html).toContain('<nav class="qlinks" aria-label="Focus on a credential access rule">');
     expect(html).toContain(
-      '<a class="ql" href="/admin/access" aria-current="true">All consumers</a>',
+      '<a class="ql" href="/admin/issuer-access-rules" aria-current="true">All credential access rules</a>',
     );
-    expect(html).toContain('href="/admin/access?focus=gitlab-platform"');
+    expect(html).toContain('href="/admin/issuer-access-rules?focus=gitlab-platform"');
     expect(html).not.toContain('cmap-note');
     expect(html).not.toContain('more in the matrix');
-    expect(html).toContain('Needs attention (the token says why)');
+    expect(html).toContain('Needs attention (the credential says why)');
   });
 
   it('focuses one consumer: its node and tokens on, the rest dim, its wires on top', () => {
@@ -121,18 +121,18 @@ describe('ConnectionsMap', () => {
     );
     expect(html).toContain('<li class="node cnode is-on">');
     expect(html).toContain(
-      '<a class="id" href="/admin/access?consumer=gitlab-platform" aria-current="true"><span class="nm">GitLab CI (platform)</span><span class="nl">Focused · group platform (5678901)</span>',
+      '<a class="id" href="/admin/issuer-access-rules?consumer=gitlab-platform" aria-current="true"><span class="nm">GitLab CI (platform)</span><span class="nl">Focused · group platform (5678901)</span>',
     );
     // dimmed consumers link to their own focus
     expect(html).toContain('<li class="node cnode rs4 dim">');
-    expect(html).toContain('href="/admin/access?focus=github-acme"><span class="nm">');
+    expect(html).toContain('href="/admin/issuer-access-rules?focus=github-acme"><span class="nm">');
     expect(html.match(/class="node tnode[^"]*is-on"/g)).toHaveLength(2);
     const drawn = wires(html);
     expect(drawn.slice(-2).map((w) => w.cls)).toEqual(['wire warn on', 'wire on']);
     expect(drawn.slice(0, -2).every((w) => w.cls.endsWith('dim'))).toBe(true);
-    expect(html).toContain('<a class="sm" href="/admin/access">Clear focus</a>');
+    expect(html).toContain('<a class="sm" href="/admin/issuer-access-rules">Clear focus</a>');
     expect(html).toContain('<summary>Show GitLab CI (platform) as a list (2 accesses)</summary>');
-    expect(html).toContain('Focused consumer');
+    expect(html).toContain('Focused credential access rule');
   });
 
   it('focuses one token: it, its wires and its consumers on, the rest dim, no focus bar', () => {
@@ -173,28 +173,30 @@ describe('ConnectionsMap', () => {
     expect(html.match(/class="node cnode/g)).toHaveLength(6);
     expect(html.match(/class="node tnode/g)).toHaveLength(6);
     expect(html).toContain(
-      '<a class="id" href="/admin/access?view=matrix&amp;consumers=rest"><span class="nm">+ 8 more consumers</span><span class="nl">9 accesses · open in the matrix</span>',
+      '<a class="id" href="/admin/issuer-access-rules?view=matrix&amp;consumers=rest"><span class="nm">+ 8 more credential access rules</span><span class="nl">9 accesses · open in the matrix</span>',
     );
-    expect(html).toContain('<span class="nm">+ 3 more tokens</span>');
+    expect(html).toContain('<span class="nm">+ 3 more credentials</span>');
     // H = 7 * 64 - 8 and the group rows (index 6) center at 412
     expect(html).toContain('height="440"');
     expect(wires(html).some((w) => w.d === 'M0 412 C50 412 50 412 100 412')).toBe(true);
     expect(html).toContain(
-      '<p class="cmap-note"><b>14 consumers, 9 tokens.</b> The map draws the 6 busiest on each side',
+      '<p class="cmap-note"><b>14 credential access rules, 9 credentials.</b> The map draws the 6 busiest on each side',
     );
     expect(html).toContain('15 accesses');
     expect(html).toContain(
-      '<a class="ql" href="/admin/access?view=matrix">11 more in the matrix</a>',
+      '<a class="ql" href="/admin/issuer-access-rules?view=matrix">11 more in the matrix</a>',
     );
   });
 
   it('always shows the focused consumer and its tokens, even outside the busiest 6', () => {
     const data = atScale();
     const html = render(<ConnectionsMap id="cm" {...data} focus="c13" />);
-    expect(html).toContain('<span class="nm">Consumer 13</span>');
-    expect(html).toContain('<span class="nm">Token 8</span>');
+    expect(html).toContain('<span class="nm">Credential access rule 13</span>');
+    expect(html).toContain('<span class="nm">Credential 8</span>');
     expect(html.match(/class="node cnode/g)).toHaveLength(6);
-    expect(html).toContain('aria-current="true">Consumer 13 <span class="n">2</span></a>');
+    expect(html).toContain(
+      'aria-current="true">Credential access rule 13 <span class="n">2</span></a>',
+    );
   });
 
   it('honors maxRows, baseHref, focusLinks and footer, and escapes names', () => {
@@ -204,7 +206,7 @@ describe('ConnectionsMap', () => {
         consumers={[{ ...consumers[0]!, name: '<b>x</b>' }]}
         tokens={tokens.slice(0, 1)}
         accesses={[{ consumer: 'gitlab-platform', token: 'slack', status: 'Active' }]}
-        baseHref="/admin/access?env=prod"
+        baseHref="/admin/issuer-access-rules?env=prod"
         focusLinks={0}
         footer="Refused before a token was chosen: 182"
         class="extra"
@@ -212,7 +214,9 @@ describe('ConnectionsMap', () => {
     );
     expect(html).not.toContain('<b>x</b>');
     expect(html).toContain('&lt;b&gt;x&lt;/b&gt;');
-    expect(html).toContain('href="/admin/access?env=prod&amp;consumer=gitlab-platform"');
+    expect(html).toContain(
+      'href="/admin/issuer-access-rules?env=prod&amp;consumer=gitlab-platform"',
+    );
     expect(html).not.toContain('cmap-bar');
     expect(html).toContain(
       '<div class="tray-f"><span>Refused before a token was chosen: 182</span>',
@@ -258,13 +262,15 @@ describe('ConnectionsMap', () => {
         focusHref="/admin"
       />,
     );
-    expect(html).toContain('<a class="ql" href="/admin">All consumers</a>');
+    expect(html).toContain('<a class="ql" href="/admin">All credential access rules</a>');
     expect(html).toContain('href="/admin?focus=github-acme"');
     expect(html).toContain('<a class="sm" href="/admin">Clear focus</a>');
     // the other consumer nodes refocus on focusHref; the focused one and the tokens stay on baseHref
     expect(html).toContain('<a class="id" href="/admin?focus=buildkite-acme">');
-    expect(html).toContain('href="/admin/access?consumer=gitlab-platform" aria-current="true"');
-    expect(html).toContain('href="/admin/access?token=openai"');
+    expect(html).toContain(
+      'href="/admin/issuer-access-rules?consumer=gitlab-platform" aria-current="true"',
+    );
+    expect(html).toContain('href="/admin/issuer-access-rules?token=openai"');
     expect(html).toContain(
       '<span class="m keep"><a href="/admin/requests?token=openai">3,902<span class="vh"> requests in 24 hours</span></a><span class="u" aria-hidden="true"> req</span></span>',
     );

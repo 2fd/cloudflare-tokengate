@@ -76,7 +76,7 @@ export interface ConnectionsMapProps {
    * can use it light up, the rest dims, and the focus bar gives way. Ignored with `focus`.
    */
   focusToken?: string;
-  /** The access page every link points at, with query parameters. Default `/admin/access`. */
+  /** The access page every link points at, with query parameters. Default `/admin/issuer-access-rules`. */
   baseHref?: string;
   /**
    * Base of the focus bar and `?focus=` links, so a map on another page keeps its focus there
@@ -93,7 +93,7 @@ export interface ConnectionsMapProps {
   /** Consumers offered in the focus bar, busiest first. Default 3; 0 hides the bar. */
   focusLinks?: number;
   /**
-   * Name of the focus bar landmark. Default "Focus on a consumer"; give a second map on the same
+   * Name of the focus bar landmark. Default "Focus on a credential access rule"; give a second map on the same
    * page its own name.
    */
   focusLabel?: string;
@@ -175,7 +175,7 @@ function Num(props: { href: string | undefined; children: Child }) {
 }
 
 /**
- * The connections map (`.cmap`): service consumers on the left, service tokens on the right,
+ * The connections map (`.cmap`): credential access rules on the left, credentials on the right,
  * one server-drawn SVG wire per consumer–token pair. Applies the scale rule (at most `maxRows`
  * rows per side, the rest in a group node that opens the matrix) and the focus rule (`?focus=`).
  * Below 64rem the wires drop out and the sides stack as lists. A text list of every access
@@ -185,7 +185,7 @@ function Num(props: { href: string | undefined; children: Child }) {
  * panel. Put it in a `Tray` whose actions hold the Map | Matrix switch.
  */
 export function ConnectionsMap(props: ConnectionsMapProps) {
-  const base = props.baseHref ?? '/admin/access';
+  const base = props.baseHref ?? '/admin/issuer-access-rules';
   const focusBase = props.focusHref ?? base;
   const range = props.rangeLabel ?? { short: 'Req 24 h', long: 'requests in 24 hours' };
   // the narrow-screen unit stays outside a count link
@@ -311,9 +311,9 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
     <>
       {focusLinks > 0 && !focusedToken ? (
         <div class="cmap-bar">
-          <nav class="qlinks" aria-label={props.focusLabel ?? 'Focus on a consumer'}>
+          <nav class="qlinks" aria-label={props.focusLabel ?? 'Focus on a credential access rule'}>
             <a class="ql" href={focusBase} aria-current={focused ? undefined : 'true'}>
-              All consumers
+              All credential access rules
             </a>
             {barConsumers.map((c) => (
               <a
@@ -340,8 +340,8 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
       {truncated[0] || truncated[1] ? (
         <p class="cmap-note">
           <b>
-            {plural(consumers.length, 'consumer', 'consumers')},{' '}
-            {plural(tokens.length, 'token', 'tokens')}.
+            {plural(consumers.length, 'credential access rule', 'credential access rules')},{' '}
+            {plural(tokens.length, 'credential', 'credentials')}.
           </b>{' '}
           The map draws {busiest} and groups the rest. <a href={matrixHref}>Open the matrix</a> to
           see all {plural(accesses.length, 'access', 'accesses')}.
@@ -361,7 +361,7 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
       >
         <div class="cmap-col">
           <div class="cmap-h">
-            Service consumers <span class="n">{fmt(consumers.length)}</span>
+            Credential access rules <span class="n">{fmt(consumers.length)}</span>
           </div>
           <ul class="nodes">
             {leftRows.map(({ node, span }) => {
@@ -371,7 +371,12 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
                   <li class={cx('node group', spanCls)}>
                     <a class="id" href={link(base, { view: 'matrix', consumers: 'rest' })}>
                       <span class="nm">
-                        + {plural(left.hidden.length, 'more consumer', 'more consumers')}
+                        +{' '}
+                        {plural(
+                          left.hidden.length,
+                          'more credential access rule',
+                          'more credential access rules',
+                        )}
                       </span>
                       <span class="nl">
                         {plural(hiddenAccesses('consumer', left.hidden), 'access', 'accesses')} ·
@@ -456,7 +461,7 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
         <div class="cmap-col">
           <div class="cmap-h tok-h">
             <span>
-              Service tokens <span class="n">{fmt(tokens.length)}</span>
+              Credentials <span class="n">{fmt(tokens.length)}</span>
             </span>
             <span />
             <span class="keep">{range.short}</span>
@@ -472,7 +477,7 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
                   <li class={cx('node group', spanCls)}>
                     <a class="id" href={link(base, { view: 'matrix', tokens: 'rest' })}>
                       <span class="nm">
-                        + {plural(right.hidden.length, 'more token', 'more tokens')}
+                        + {plural(right.hidden.length, 'more credential', 'more credentials')}
                       </span>
                       <span class="nl">
                         {plural(hiddenAccesses('token', right.hidden), 'access', 'accesses')} · open
@@ -575,8 +580,8 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
           <>
             <Legend
               items={[
-                { mark: 'wire-on', label: 'Focused consumer' },
-                { mark: 'wire-dim', label: 'Other consumers' },
+                { mark: 'wire-on', label: 'Focused credential access rule' },
+                { mark: 'wire-dim', label: 'Other credential access rules' },
                 ...(left.hidden.length || right.hidden.length
                   ? [
                       {
@@ -594,7 +599,7 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
             <Legend
               items={[
                 { mark: 'wire', label: 'Active' },
-                { mark: 'wire-warn', label: 'Needs attention (the token says why)' },
+                { mark: 'wire-warn', label: 'Needs attention (the credential says why)' },
                 { mark: 'wire-off', label: 'Inactive' },
               ]}
             />

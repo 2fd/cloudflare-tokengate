@@ -46,7 +46,7 @@ describe('RowMenu', () => {
         hidden={{ _csrf: 't' }}
         srPrefix="Make diego@acme.dev"
         keyFact="Reads only"
-        detail="− service tokens"
+        detail="− credentials"
       >
         Viewer
       </MenuItem>
@@ -67,7 +67,7 @@ describe('RowMenu', () => {
 
   it('renders two-line items with a key fact and a detail line', () => {
     expect(html).toContain(
-      '<form method="post" action="/admin/users/usr_diego"><input type="hidden" name="_csrf" value="t"/><button class="menu-item two" type="submit" name="role" value="viewer"><b><span class="vh">Make diego@acme.dev </span>Viewer</b><span class="k">Reads only</span><span class="s">− service tokens</span></button></form>',
+      '<form method="post" action="/admin/users/usr_diego"><input type="hidden" name="_csrf" value="t"/><button class="menu-item two" type="submit" name="role" value="viewer"><b><span class="vh">Make diego@acme.dev </span>Viewer</b><span class="k">Reads only</span><span class="s">− credentials</span></button></form>',
     );
   });
 

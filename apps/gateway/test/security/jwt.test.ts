@@ -1,6 +1,6 @@
 import { base64url, exportJWK } from 'jose';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CallerProvider } from '../../src/db/types';
+import type { CredentialAccessRule } from '../../src/db/types';
 import {
   isCompactJws,
   JWKS_REFETCH_GATE_MS,
@@ -21,16 +21,20 @@ import {
   TEST_AUDIENCE,
   TEST_EPOCH_MS,
   type TestIssuer,
-  testCallerProvider,
+  testCredentialAccessRule,
   unsecuredToken,
 } from '../helpers/jwt';
 
 let clock: ReturnType<typeof createClock>;
 let github: TestIssuer;
-let provider: CallerProvider;
+let provider: CredentialAccessRule;
 const nowSeconds = () => Math.floor(clock.now() / 1000);
 
-function verify(token: string, target: CallerProvider = provider, issuer: TestIssuer = github) {
+function verify(
+  token: string,
+  target: CredentialAccessRule = provider,
+  issuer: TestIssuer = github,
+) {
   return verifyCallerToken(token, target, PROFILES[target.profile], {
     fetch: issuer.fetch,
     now: clock.now,
@@ -48,7 +52,7 @@ beforeEach(async () => {
   resetJwksCacheForTests();
   clock = createClock();
   github = await createTestIssuer({ issuer: GITHUB_ISSUER, now: clock.now });
-  provider = testCallerProvider(github);
+  provider = testCredentialAccessRule(github);
 });
 
 afterEach(() => {
@@ -222,9 +226,9 @@ describe('I-JWT-1: only correctly signed, fresh, audience-bound tokens of the ex
     expect(await verify(token)).toEqual({ ok: false, code: 'claims_invalid' });
   });
 
-  it('rejects a token from issuer A verified against caller provider B', async () => {
+  it('rejects a token from issuer A verified against credential access rule B', async () => {
     const gitlab = await createTestIssuer({ issuer: GITLAB_ISSUER, now: clock.now });
-    const gitlabProvider = testCallerProvider(gitlab);
+    const gitlabProvider = testCredentialAccessRule(gitlab);
     // Both issuers publish kid "test-key-1"; only B's key is trusted for B.
     expect(github.kid).toBe(gitlab.kid);
     const fromGithub = await github.sign(githubClaims());
@@ -292,7 +296,7 @@ describe('I-JWT-1: only correctly signed, fresh, audience-bound tokens of the ex
     async (claim) => {
       const gitlab = await createTestIssuer({ issuer: GITLAB_ISSUER, now: clock.now });
       const token = await gitlab.sign(gitlabClaims({ [claim]: undefined }), omitting(claim));
-      expect(await verify(token, testCallerProvider(gitlab), gitlab)).toEqual({
+      expect(await verify(token, testCredentialAccessRule(gitlab), gitlab)).toEqual({
         ok: false,
         code: 'claims_invalid',
       });
@@ -301,7 +305,7 @@ describe('I-JWT-1: only correctly signed, fresh, audience-bound tokens of the ex
 
   it('rejects a generic-profile token missing an anchor claim', async () => {
     const issuer = await createTestIssuer({ issuer: 'https://ci.example.com', now: clock.now });
-    const generic = testCallerProvider(issuer, { anchor_claims: ['sub', 'pipeline_id'] });
+    const generic = testCredentialAccessRule(issuer, { anchor_claims: ['sub', 'pipeline_id'] });
     const token = await issuer.sign({ sub: 'pipeline:1', aud: generic.audience });
     expect(await verify(token, generic, issuer)).toEqual({ ok: false, code: 'claims_invalid' });
   });
@@ -484,7 +488,7 @@ describe('I-JWT-2: JWKS refetch is gated per jwks_uri', () => {
     github.failJwks(500);
     expect((await verify(await github.sign(githubClaims()))).ok).toBe(false);
     const gitlabToken = await gitlab.sign(gitlabClaims());
-    expect((await verify(gitlabToken, testCallerProvider(gitlab), gitlab)).ok).toBe(true);
+    expect((await verify(gitlabToken, testCredentialAccessRule(gitlab), gitlab)).ok).toBe(true);
   });
 
   it('a concurrent flood of unknown kids on a warm isolate causes one fetch', async () => {
@@ -707,7 +711,7 @@ describe('I-TEN-1: tenant pin is exact and fails closed', () => {
   it('fails closed on a shared issuer with an empty pin, whatever the profile', () => {
     for (const issuer of [GITHUB_ISSUER, GITLAB_ISSUER]) {
       for (const profile of ['github-actions', 'gitlab-ci', 'generic'] as const) {
-        const row = testCallerProvider({ issuer, jwksUri: `${issuer}/jwks` }, { profile });
+        const row = testCredentialAccessRule({ issuer, jwksUri: `${issuer}/jwks` }, { profile });
         expect(tenantPinHolds({ ...row, tenant_pin: [] }, claims)).toBe(false);
       }
     }

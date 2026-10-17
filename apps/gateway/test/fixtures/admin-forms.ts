@@ -5,17 +5,18 @@
 //
 //   await resetAdminWorld();
 //   const world = await seedAdminWorld(createAdminWorldApp());
-//   const request = await MUTATION_FIXTURES['POST /admin/access']?.(world);
+//   const request = await MUTATION_FIXTURES['POST /admin/issuer-access-rules']?.(world);
 //   await adminPost(world.app, ownerSession, request.path, request.fields);
 import { env } from 'cloudflare:workers';
-import { createCallerProvider } from '../../src/admin/ops/caller-providers';
-import { createGrant } from '../../src/admin/ops/grants';
+import { createCredentialAccessRule } from '../../src/admin/ops/credential-access-rules';
+import { createIssuerAccessRule } from '../../src/admin/ops/issuer_access_rules';
 import { insertRequestRecordsStatements } from '../../src/db/requests';
-import type { CallerProvider } from '../../src/db/types';
+import type { CredentialAccessRule } from '../../src/db/types';
 import { newId } from '../../src/lib/ids';
 import type { RequestRecord } from '../../src/telemetry/types';
 import { createUser, resetControlPlane } from '../helpers/admin-auth';
 import { createTestApp, type TestApp } from '../helpers/app';
+import { testCredentialId } from '../unit/admin/ops/helpers';
 import {
   ACTOR,
   fakeNetwork,
@@ -24,7 +25,7 @@ import {
   OWNER_ID,
   REPOSITORY_ID,
   seedGithubProvider,
-  seedGrant,
+  seedIssuerAccessRule,
   seedService,
 } from '../unit/admin/ops/helpers';
 
@@ -33,7 +34,7 @@ export const WORLD_VERIFY = { method: 'GET' as const, path: '/rate_limit', expec
 
 export interface AdminWorld {
   app: TestApp;
-  provider: CallerProvider;
+  provider: CredentialAccessRule;
   /** Service with a sealed credential and a verify check that passes against the fake network. */
   serviceId: string;
   grantId: string;
@@ -66,10 +67,10 @@ export function expectedActions(request: MutationRequest): readonly string[] {
 /** Empties both databases' admin-visible tables. */
 export async function resetAdminWorld(): Promise<void> {
   await env.DB.batch([
-    env.DB.prepare('DELETE FROM grants'),
+    env.DB.prepare('DELETE FROM issuer_access_rules'),
     env.DB.prepare('DELETE FROM claim_labels'),
-    env.DB.prepare('DELETE FROM services'),
-    env.DB.prepare('DELETE FROM caller_providers'),
+    env.DB.prepare('DELETE FROM credential_access_rules'),
+    env.DB.prepare('DELETE FROM credentials'),
   ]);
   await resetControlPlane();
   await env.TELEMETRY_DB.batch([
@@ -84,9 +85,9 @@ export function createAdminWorldApp(fetchImpl: typeof fetch = fakeNetwork().fetc
 }
 
 export async function seedAdminWorld(app: TestApp): Promise<AdminWorld> {
-  const provider = await seedGithubProvider(app.deps);
   const serviceId = await seedService(app.deps, { secret: WORLD_SECRET, verify: WORLD_VERIFY });
-  const grant = await seedGrant(app.deps, provider.id, serviceId);
+  const provider = await seedGithubProvider(app.deps);
+  const grant = await seedIssuerAccessRule(app.deps, provider.id, serviceId);
   const requestId = newId('req', Date.now(), app.deps.random);
   await env.TELEMETRY_DB.batch(
     insertRequestRecordsStatements(env.TELEMETRY_DB, [
@@ -113,7 +114,7 @@ function worldRequestRecord(ids: {
     path: '/repos/acme/app',
     service_slug: 'github',
     service_id: ids.service_id,
-    caller_provider_id: ids.provider_id,
+    credential_access_rule_id: ids.provider_id,
     grant_id: null,
     claims_verified: 1,
     caller_subject: 'repo:acme/app:ref:refs/heads/main',
@@ -264,15 +265,15 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
   },
 
   // == tokens ==
-  'POST /admin/tokens/hosts': async () => ({
-    path: '/admin/tokens/hosts',
+  'POST /admin/credentials/hosts': async () => ({
+    path: '/admin/credentials/hosts',
     action: 'settings.upstream_hosts',
     fields: { mode: 'list', host: [`${unique('host')}.example.com`] },
   }),
   // A rewrap with nothing to re-encrypt changes nothing and is not audited, so this request is
   // served with a rotated keyring: the world credential, sealed under k1, moves to k2.
-  'POST /admin/tokens/keys/rewrap': async () => ({
-    path: '/admin/tokens/keys/rewrap',
+  'POST /admin/credentials/keys/rewrap': async () => ({
+    path: '/admin/credentials/keys/rewrap',
     action: 'keyring.rewrap',
     fields: {},
     app: createTestApp({
@@ -282,13 +283,13 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
   }),
   // A template card: the destination, headers and check come from the template; slug and name
   // are derived (openai, openai-2, …).
-  'POST /admin/tokens': async () => ({
-    path: '/admin/tokens',
+  'POST /admin/credentials': async () => ({
+    path: '/admin/credentials',
     action: 'service.create',
     fields: { template: 'openai', credential: 'sk-proj-fixtureCreate0123456789abcdef' },
   }),
-  'POST /admin/tokens/:id': async (w) => ({
-    path: `/admin/tokens/${w.serviceId}`,
+  'POST /admin/credentials/:id': async (w) => ({
+    path: `/admin/credentials/${w.serviceId}`,
     action: 'service.update',
     fields: {
       name: 'Renamed service',
@@ -302,14 +303,14 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
   }),
   // Rotate: only the secret; the destination is the stored one, named by the digest the form
   // carries (imported here so the shared import list stays untouched).
-  'POST /admin/tokens/:id/secret': async (w) => {
-    const { destinationFingerprint } = await import('../../src/admin/ops/services');
-    const row = await env.DB.prepare('SELECT base_url, injection FROM services WHERE id = ?')
+  'POST /admin/credentials/:id/secret': async (w) => {
+    const { destinationFingerprint } = await import('../../src/admin/ops/credentials');
+    const row = await env.DB.prepare('SELECT base_url, injection FROM credentials WHERE id = ?')
       .bind(w.serviceId)
       .first<{ base_url: string; injection: string }>();
     if (!row) throw new Error('world service missing');
     return {
-      path: `/admin/tokens/${w.serviceId}/secret`,
+      path: `/admin/credentials/${w.serviceId}/secret`,
       action: 'service.credential.set',
       fields: {
         expected_destination: await destinationFingerprint({
@@ -320,8 +321,8 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
       },
     };
   },
-  'POST /admin/tokens/:id/destination': async (w) => ({
-    path: `/admin/tokens/${w.serviceId}/destination`,
+  'POST /admin/credentials/:id/destination': async (w) => ({
+    path: `/admin/credentials/${w.serviceId}/destination`,
     action: 'service.credential.set',
     fields: {
       base_url: 'https://api.github.com',
@@ -330,35 +331,36 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
       confirm_destination: 'api.github.com',
     },
   }),
-  'POST /admin/tokens/:id/test': async (w) => ({
-    path: `/admin/tokens/${w.serviceId}/test`,
+  'POST /admin/credentials/:id/test': async (w) => ({
+    path: `/admin/credentials/${w.serviceId}/test`,
     action: 'service.credential.test',
     fields: {},
     // The result is rendered once, not redirected to.
     successStatus: [200],
   }),
-  'POST /admin/tokens/:id/toggle': async (w) => ({
-    path: `/admin/tokens/${w.serviceId}/toggle`,
+  'POST /admin/credentials/:id/toggle': async (w) => ({
+    path: `/admin/credentials/${w.serviceId}/toggle`,
     action: 'service.disable',
     fields: { enabled: '0' },
   }),
-  'POST /admin/tokens/:id/delete': async (w) => {
+  'POST /admin/credentials/:id/delete': async (w) => {
     const id = await seedService(w.app.deps, { slug: unique('doomed') });
     return {
-      path: `/admin/tokens/${id}/delete`,
+      path: `/admin/credentials/${id}/delete`,
       action: 'service.delete',
       fields: { confirm: '1' },
     };
   },
 
   // == consumers ==
-  'POST /admin/consumers': async () => {
+  'POST /admin/credential-access-rules': async (w) => {
     const issuer = `https://${unique('idp')}.acme.example`;
     return {
-      path: '/admin/consumers',
-      action: 'caller_provider.create',
+      path: '/admin/credential-access-rules',
+      action: 'credential_access_rule.create',
       app: discoveringApp(issuer),
       fields: {
+        credential_id: w.serviceId,
         type: 'generic',
         generic_issuer: issuer,
         generic_anchor_claims: 'sub',
@@ -367,27 +369,28 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
       },
     };
   },
-  'POST /admin/consumers/:id': async (w) => ({
-    path: `/admin/consumers/${w.provider.id}`,
-    action: 'caller_provider.update',
+  'POST /admin/credential-access-rules/:id': async (w) => ({
+    path: `/admin/credential-access-rules/${w.provider.id}`,
+    action: 'credential_access_rule.update',
     fields: {
       intent: 'rename',
       name: unique('GitHub Actions renamed'),
       expected_updated_at: String(w.provider.updated_at),
     },
   }),
-  'POST /admin/consumers/:id/tenants': async (w) => ({
-    path: `/admin/consumers/${w.provider.id}/tenants`,
-    action: 'caller_provider.update',
+  'POST /admin/credential-access-rules/:id/tenants': async (w) => ({
+    path: `/admin/credential-access-rules/${w.provider.id}/tenants`,
+    action: 'credential_access_rule.update',
     fields: { intent: 'add', tenant: 'acme-labs (7654321)' },
   }),
-  'POST /admin/consumers/:id/toggle': async (w) => ({
-    path: `/admin/consumers/${w.provider.id}/toggle`,
-    action: 'caller_provider.disable',
+  'POST /admin/credential-access-rules/:id/toggle': async (w) => ({
+    path: `/admin/credential-access-rules/${w.provider.id}/toggle`,
+    action: 'credential_access_rule.disable',
     fields: { enabled: '0' },
   }),
-  'POST /admin/consumers/:id/delete': async (w) => {
-    const created = await createCallerProvider(w.app.deps, ACTOR, {
+  'POST /admin/credential-access-rules/:id/delete': async (w) => {
+    const created = await createCredentialAccessRule(w.app.deps, ACTOR, {
+      credential_id: await testCredentialId(w.app.deps),
       name: unique('doomed'),
       profile: 'generic',
       issuer: `https://${unique('doomed')}.example.org`,
@@ -395,22 +398,22 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
       anchor_claims: ['sub'],
     });
     if (!created.ok) throw new Error(`fixture: ${created.errors.join('; ')}`);
-    const grant = await createGrant(w.app.deps, ACTOR, {
+    const grant = await createIssuerAccessRule(w.app.deps, ACTOR, {
       name: unique('doomed access'),
-      caller_provider_id: created.callerProvider.id,
+      credential_access_rule_id: created.credentialAccessRule.id,
       service_id: w.serviceId,
       conditions: [{ claim: 'sub', match: 'exact', values: ['job-1'] }],
       rules: [{ methods: ['GET'], path: '/repos/**' }],
     });
     if (!grant.ok) throw new Error(`fixture: ${grant.errors.join('; ')}`);
     return {
-      path: `/admin/consumers/${created.callerProvider.id}/delete`,
-      action: 'caller_provider.delete',
+      path: `/admin/credential-access-rules/${created.credentialAccessRule.id}/delete`,
+      action: 'credential_access_rule.delete',
       fields: { confirm: '1', with_accesses: '1', access_ids: grant.grant.id },
     };
   },
-  'POST /admin/access': async (w) => ({
-    path: '/admin/access',
+  'POST /admin/issuer-access-rules': async (w) => ({
+    path: '/admin/issuer-access-rules',
     action: 'grant.create',
     fields: {
       consumer_id: w.provider.id,
@@ -423,8 +426,8 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
       expires: 'never',
     },
   }),
-  'POST /admin/access/:id': async (w) => ({
-    path: `/admin/access/${w.grantId}`,
+  'POST /admin/issuer-access-rules/:id': async (w) => ({
+    path: `/admin/issuer-access-rules/${w.grantId}`,
     action: 'grant.update',
     fields: {
       intent: 'save',
@@ -436,28 +439,28 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
       expires: 'keep',
     },
   }),
-  'POST /admin/access/:id/copy': async (w) => {
+  'POST /admin/issuer-access-rules/:id/copy': async (w) => {
     // A source with a stored repository name: without one, its literal operations (which may name
     // the repository) are reviewed in the form first instead of copied in one submit.
     await env.DB.prepare(
-      `INSERT INTO claim_labels (caller_provider_id, claim, value, label, updated_at, updated_by)
+      `INSERT INTO claim_labels (credential_access_rule_id, claim, value, label, updated_at, updated_by)
        VALUES (?, 'repository_id', ?, 'acme/api', 1, NULL) ON CONFLICT DO NOTHING`,
     )
       .bind(w.provider.id, REPOSITORY_ID)
       .run();
     return {
-      path: `/admin/access/${w.grantId}/copy`,
+      path: `/admin/issuer-access-rules/${w.grantId}/copy`,
       action: 'grant.duplicate',
       fields: { repository: 'acme/web (987654322)', token_id: w.serviceId },
     };
   },
-  'POST /admin/access/:id/toggle': async (w) => ({
-    path: `/admin/access/${w.grantId}/toggle`,
+  'POST /admin/issuer-access-rules/:id/toggle': async (w) => ({
+    path: `/admin/issuer-access-rules/${w.grantId}/toggle`,
     action: 'grant.disable',
     fields: { enabled: '0' },
   }),
-  'POST /admin/access/:id/delete': async (w) => ({
-    path: `/admin/access/${w.grantId}/delete`,
+  'POST /admin/issuer-access-rules/:id/delete': async (w) => ({
+    path: `/admin/issuer-access-rules/${w.grantId}/delete`,
     action: 'grant.delete',
     fields: { confirm: '1' },
   }),
@@ -476,7 +479,7 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
 /**
  * Token submissions that use a field permission, for the token tests (each is a second form of a
  * route above): an owner allowing a blocked template host on the way, and an admin deleting a
- * token together with its consumer access.
+ * token together with its issuer access rules.
  */
 export const TOKEN_FIXTURE_VARIANTS = {
   /** settings.upstream_hosts, then service.create (two batches, the allowlist first). */
@@ -487,7 +490,7 @@ export const TOKEN_FIXTURE_VARIANTS = {
        ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
     ).run();
     return {
-      path: '/admin/tokens',
+      path: '/admin/credentials',
       action: ['settings.upstream_hosts', 'service.create'],
       fields: {
         template: 'openai',
@@ -499,12 +502,12 @@ export const TOKEN_FIXTURE_VARIANTS = {
   /** One service.delete row whose diff holds every deleted access. */
   deleteWithAccesses: async (w: AdminWorld): Promise<MutationRequest> => {
     const { results } = await env.DB.prepare(
-      'SELECT id FROM grants WHERE service_id = ? ORDER BY id',
+      'SELECT id FROM issuer_access_rules WHERE service_id = ? ORDER BY id',
     )
       .bind(w.serviceId)
       .all<{ id: string }>();
     return {
-      path: `/admin/tokens/${w.serviceId}/delete`,
+      path: `/admin/credentials/${w.serviceId}/delete`,
       action: 'service.delete',
       fields: {
         confirm: '1',
@@ -523,10 +526,10 @@ const READ_IDS: Readonly<Record<string, Readonly<Record<string, (world: AdminWor
   {
     monitoring: { '/admin/requests/:id': (w) => w.requestId },
     users: { '/admin/users/:id': (w) => w.userId },
-    tokens: { '/admin/tokens/:id': (w) => w.serviceId },
+    tokens: { '/admin/credentials/:id': (w) => w.serviceId },
     consumers: {
-      '/admin/consumers/:id': (w) => w.provider.id,
-      '/admin/access/:id': (w) => w.grantId,
+      '/admin/credential-access-rules/:id': (w) => w.provider.id,
+      '/admin/issuer-access-rules/:id': (w) => w.grantId,
     },
     global: {},
   };

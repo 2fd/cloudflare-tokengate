@@ -7,7 +7,7 @@ describe('Chip', () => {
     expect(
       render(
         <Chip
-          href="/admin/access?token=slack"
+          href="/admin/issuer-access-rules?token=slack"
           logo="slack"
           count={2}
           srSuffix=": 2 accesses. Open."
@@ -16,7 +16,7 @@ describe('Chip', () => {
         </Chip>,
       ),
     ).toBe(
-      '<a class="chip" href="/admin/access?token=slack"><span class="logo xs lg-slack" aria-hidden="true">S</span>Slack <span class="n">2</span><span class="vh">: 2 accesses. Open.</span></a>',
+      '<a class="chip" href="/admin/issuer-access-rules?token=slack"><span class="logo xs lg-slack" aria-hidden="true">S</span>Slack <span class="n">2</span><span class="vh">: 2 accesses. Open.</span></a>',
     );
   });
 
@@ -87,12 +87,12 @@ describe('Chips', () => {
   it('wraps chips and ends with the more link', () => {
     expect(
       render(
-        <Chips more={{ href: '/admin/consumers/gha', label: '+1 more' }} class="x">
+        <Chips more={{ href: '/admin/credential-access-rules/gha', label: '+1 more' }} class="x">
           <Chip>a</Chip>
         </Chips>,
       ),
     ).toBe(
-      '<div class="chips x"><span class="chip text">a</span><a class="more-link" href="/admin/consumers/gha">+1 more</a></div>',
+      '<div class="chips x"><span class="chip text">a</span><a class="more-link" href="/admin/credential-access-rules/gha">+1 more</a></div>',
     );
   });
 });

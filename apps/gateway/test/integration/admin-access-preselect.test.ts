@@ -1,10 +1,10 @@
 // The access form asks only for what cannot be preselected: a single consumer or token is fixed,
 // several are radio cards whose reveals hold their own prefixed fields, many are a select, and no
-// consumer at all means the consumer is added in the same submit.
+// consumer at all means the credential access rule is added in the same submit.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createCallerProvider } from '../../src/admin/ops/caller-providers';
-import { getGrant, listGrants } from '../../src/db/grants';
+import { createCredentialAccessRule } from '../../src/admin/ops/credential-access-rules';
+import { getIssuerAccessRule, listIssuerAccessRules } from '../../src/db/issuer_access_rules';
 import { WORLD_SECRET } from '../fixtures/admin-forms';
 import { adminGet, adminPost } from '../helpers/admin-auth';
 import {
@@ -15,6 +15,7 @@ import {
   inputValue,
   locationOf,
 } from '../helpers/consumers';
+import { testCredentialId } from '../unit/admin/ops/helpers';
 import { ACTOR, OWNER_ID, seedGithubProvider, seedService } from '../unit/admin/ops/helpers';
 
 let world: ConsumersWorld;
@@ -26,28 +27,33 @@ beforeEach(async () => {
 const session = () => world.sessions.access_manager;
 
 async function githubConsumer(org: string, id: string) {
-  const created = await createCallerProvider(world.app.deps, ACTOR, {
+  const created = await createCredentialAccessRule(world.app.deps, ACTOR, {
+    credential_id: await testCredentialId(world.app.deps),
     profile: 'github-actions',
     issuer: `https://token.actions.githubusercontent.com`,
     tenant_pin: [{ claim: 'repository_owner_id', match: 'exact', values: [id] }],
     tenant_labels: [{ claim: 'repository_owner_id', value: id, label: org }],
   });
   if (!created.ok) throw new Error(created.errors.join('; '));
-  return created.callerProvider;
+  return created.credentialAccessRule;
 }
 
-describe('consumer access form: preselection', () => {
-  it('fixes a preselected consumer and token and links to change them', async () => {
+describe('issuer access rules form: preselection', () => {
+  it('fixes a preselected credential access rule and credential and links to change them', async () => {
     const provider = await seedGithubProvider(world.app.deps);
     const a = await seedService(world.app.deps, { slug: 'a', name: 'A' });
     await seedService(world.app.deps, { slug: 'b', name: 'B' });
     const html = await (
-      await adminGet(world.app, session(), `/admin/access/new?consumer=${provider.id}&token=${a}`)
+      await adminGet(
+        world.app,
+        session(),
+        `/admin/issuer-access-rules/new?consumer=${provider.id}&token=${a}`,
+      )
     ).text();
     expect(inputValue(html, 'consumer_id')).toBe(provider.id);
     expect(inputValue(html, 'token_id')).toBe(a);
     expect(html).toContain('Change<span class="vh"> token</span>');
-    expect(html).toContain('Add a new consumer');
+    expect(html).not.toContain('Add a new credential access rule');
     expect(inputValue(html, 'token_view')).toBe('fixed');
   });
 
@@ -59,32 +65,41 @@ describe('consumer access form: preselection', () => {
       secret: WORLD_SECRET,
     });
     await seedService(world.app.deps, { slug: 'b', name: 'B' });
-    const html = await (await adminGet(world.app, session(), '/admin/access/new')).text();
-    const hint = await env.DB.prepare('SELECT credential_hint FROM services WHERE id = ?')
+    const html = await (
+      await adminGet(world.app, session(), '/admin/issuer-access-rules/new')
+    ).text();
+    const hint = await env.DB.prepare('SELECT credential_hint FROM credentials WHERE id = ?')
       .bind(withSecret)
       .first<{ credential_hint: string }>();
     expect(hint?.credential_hint).toBeTruthy();
     expect(html).toContain('Secret set');
-    expect(html).toContain('No secret yet: calls fail until a token manager sets it');
+    expect(html).toContain('No secret yet: calls fail until a credential manager sets it');
     expect(html).not.toContain(hint?.credential_hint ?? 'x');
   });
 
-  it('nests each consumer and token branch, and reads only the chosen ones', async () => {
+  it('nests each credential access rule and token branch, and reads only the chosen ones', async () => {
     const acme = await githubConsumer('acme', OWNER_ID);
-    await env.DB.prepare("UPDATE caller_providers SET issuer = issuer || '/acme-corp' WHERE id = ?")
+    await env.DB.prepare(
+      "UPDATE credential_access_rules SET issuer = issuer || '/acme-corp' WHERE id = ?",
+    )
       .bind(acme.id)
       .run();
     const other = await githubConsumer('other', '777');
     const a = await seedService(world.app.deps, { slug: 'a', name: 'A' });
     const b = await seedService(world.app.deps, { slug: 'b', name: 'B' });
-    const html = await (await adminGet(world.app, session(), '/admin/access/new')).text();
+    await env.DB.prepare('UPDATE credential_access_rules SET credential_id = ? WHERE id = ?')
+      .bind(a, acme.id)
+      .run();
+    const html = await (
+      await adminGet(world.app, session(), '/admin/issuer-access-rules/new')
+    ).text();
     expect(html).toContain(`name="consumer_id" value="${acme.id}"`);
-    expect(html).toContain(`name="consumer_id" value="new"`);
+    expect(html).not.toContain(`name="consumer_id" value="new"`);
     expect(html).toContain(`name="${acme.id}.repository"`);
     expect(html).toContain(`name="${other.id}.repository"`);
     expect(html).toContain(`name="${a}.op"`);
-    expect(html).toContain(`name="new.github-actions.repository"`);
-    const res = await adminPost(world.app, session(), '/admin/access', {
+    expect(html).not.toContain(`name="new.github-actions.repository"`);
+    const res = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       consumer_id: acme.id,
       token_id: a,
       [`${acme.id}.repository`]: 'acme/api (5)',
@@ -100,8 +115,8 @@ describe('consumer access form: preselection', () => {
       expires: 'never',
     });
     expect(res.status).toBe(303);
-    const grant = await getGrant(env.DB, idFromLocation(locationOf(res)));
-    expect(grant?.caller_provider_id).toBe(acme.id);
+    const grant = await getIssuerAccessRule(env.DB, idFromLocation(locationOf(res)));
+    expect(grant?.credential_access_rule_id).toBe(acme.id);
     expect(grant?.service_id).toBe(a);
     expect(grant?.rules).toEqual([{ methods: ['POST'], path: '/a' }]);
     expect(JSON.stringify(grant)).not.toContain('decoy');
@@ -112,24 +127,27 @@ describe('consumer access form: preselection', () => {
     });
   });
 
-  it('uses a select for seven or more consumers and shows the fields after refresh', async () => {
+  it('uses a select for seven or more credential access rules and shows the fields after refresh', async () => {
     const consumers = [];
     for (let i = 0; i < 7; i++) {
-      const created = await createCallerProvider(world.app.deps, ACTOR, {
+      const created = await createCredentialAccessRule(world.app.deps, ACTOR, {
+        credential_id: await testCredentialId(world.app.deps),
         profile: 'generic',
         issuer: `https://idp${i}.example.org`,
         jwks_uri: `https://idp${i}.example.org/keys`,
         anchor_claims: ['sub'],
       });
       if (!created.ok) throw new Error(created.errors.join('; '));
-      consumers.push(created.callerProvider);
+      consumers.push(created.credentialAccessRule);
     }
     const token = await seedService(world.app.deps);
     const chosen = consumers[3]?.id ?? '';
-    const html = await (await adminGet(world.app, session(), '/admin/access/new')).text();
+    const html = await (
+      await adminGet(world.app, session(), '/admin/issuer-access-rules/new')
+    ).text();
     expect(html).toContain('<select class="select" id="f-consumer_id" name="consumer_id"');
     expect(html).not.toContain(`name="${chosen}.cond.0.claim"`);
-    const refresh = await adminPost(world.app, session(), '/admin/access', {
+    const refresh = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       consumer_id: chosen,
       token_id: token,
       expires: 'never',
@@ -137,8 +155,8 @@ describe('consumer access form: preselection', () => {
     expect(refresh.status).toBe(200);
     const shown = await refresh.text();
     expect(shown).toContain(`name="${chosen}.cond.0.claim"`);
-    expect(await listGrants(env.DB)).toEqual([]);
-    const saved = await adminPost(world.app, session(), '/admin/access', {
+    expect(await listIssuerAccessRules(env.DB)).toEqual([]);
+    const saved = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       consumer_id: chosen,
       token_id: token,
       [`${chosen}.editor`]: 'rows',
@@ -152,14 +170,17 @@ describe('consumer access form: preselection', () => {
   });
 });
 
-describe('consumer access form: no consumer yet', () => {
-  it('adds the consumer and the access in one submit, two audit rows', async () => {
+describe('issuer access rules form: no credential boundary yet', () => {
+  it('requires a credential administrator to define limits before granting access', async () => {
     const token = await seedService(world.app.deps);
-    const html = await (await adminGet(world.app, session(), '/admin/access/new')).text();
-    expect(inputValue(html, 'consumer_id')).toBe('new');
-    expect(html).toContain('name="new.type" value="github-actions"');
-    expect(html).toContain('name="new.github-actions.repository"');
-    const res = await adminPost(world.app, session(), '/admin/access', {
+    const html = await (
+      await adminGet(world.app, session(), '/admin/issuer-access-rules/new')
+    ).text();
+    expect(html).not.toContain('name="new.type"');
+    expect(html).toContain('credential administrator');
+    const before = await auditActions();
+    const calls = world.calls.length;
+    const res = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
       consumer_id: 'new',
       token_id: token,
       'new.type': 'github-actions',
@@ -167,40 +188,12 @@ describe('consumer access form: no consumer yet', () => {
       'new.github-actions.repository': 'acme/api (89012345)',
       'new.github-actions.context': 'environment',
       'new.github-actions.environment': 'production',
-      'new.github-actions.ref_protection': 'protected',
-      op: 'read-repo',
-      expires: 'never',
-    });
-    expect(res.status).toBe(303);
-    expect(await auditActions()).toEqual([
-      'service.create',
-      'caller_provider.create',
-      'grant.create',
-    ]);
-    const grant = await getGrant(env.DB, idFromLocation(locationOf(res)));
-    expect(grant?.name).toBe('GitHub for acme/api (environment production)');
-    expect(grant?.rules).toEqual([{ methods: ['GET'], path: '/repos/acme/api/**' }]);
-  });
-
-  it('writes nothing and calls nothing when the access is invalid', async () => {
-    const token = await seedService(world.app.deps);
-    const before = world.calls.length;
-    const res = await adminPost(world.app, session(), '/admin/access', {
-      consumer_id: 'new',
-      token_id: token,
-      'new.type': 'github-actions',
-      'new.github_org': `acme (${OWNER_ID})`,
-      'new.github-actions.repository': 'acme/api (89012345)',
-      'new.github-actions.context': 'environment',
-      'new.github-actions.environment': 'prod-*',
       op: 'read-repo',
       expires: 'never',
     });
     expect(res.status).toBe(422);
-    const html = await res.text();
-    expect(html).toContain('href="#f-new-github-actions-environment"');
-    expect(html).toContain('value="acme (4242)"');
-    expect(world.calls.length).toBe(before);
-    expect(await auditActions()).toEqual(['service.create']);
+    expect(await listIssuerAccessRules(env.DB)).toEqual([]);
+    expect(await auditActions()).toEqual(before);
+    expect(world.calls.length).toBe(calls);
   });
 });

@@ -3,7 +3,7 @@
 
 export const DOCS_BASE = 'https://github.com/2fd/cloudflare-tokengate/blob/main/docs/';
 
-/** `path` is relative to docs/, for example `concepts.md#grant` or `operations/upgrades.md`. */
+/** `path` is relative to docs/, for example `concepts.md#issuer-access-rule` or `operations/upgrades.md`. */
 export function docsUrl(path: string): string {
   return `${DOCS_BASE}${path.replace(/^\/+/, '')}`;
 }

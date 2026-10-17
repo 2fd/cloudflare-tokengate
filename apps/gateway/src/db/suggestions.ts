@@ -1,10 +1,10 @@
-// Autocomplete sources of the consumer access form: values that this consumer's own accesses and
+// Autocomplete sources of the issuer access rules form: values that this credential access rule's own accesses and
 // tenant pin already use (environments, branches, tags, PR bases, workflow pins, claim values),
 // and the paths and rule sets of one token's accesses. Control-plane data only: never
 // request_log (I-LOG-2) and never an outbound lookup. Every read is bounded.
 import { canonicalJson, parseJson } from '../lib/json';
 import type { Condition, Rule } from '../policy/types';
-import type { CallerProvider } from './types';
+import type { CredentialAccessRule } from './types';
 
 /** Accesses read per consumer or token for suggestions. */
 export const SUGGESTIONS_LIMIT = 200;
@@ -23,7 +23,7 @@ export async function consumerAccessShapes(
   db: D1Database,
   consumerId: string,
 ): Promise<AccessShape[]> {
-  return shapes(db, 'caller_provider_id', consumerId);
+  return shapes(db, 'credential_access_rule_id', consumerId);
 }
 
 /** Conditions and rules of up to SUGGESTIONS_LIMIT accesses of one token, newest first. */
@@ -33,12 +33,12 @@ export async function tokenAccessShapes(db: D1Database, tokenId: string): Promis
 
 async function shapes(
   db: D1Database,
-  column: 'caller_provider_id' | 'service_id',
+  column: 'credential_access_rule_id' | 'service_id',
   id: string,
 ): Promise<AccessShape[]> {
   const { results } = await db
     .prepare(
-      `SELECT conditions, rules FROM grants WHERE ${column} = ? ORDER BY updated_at DESC, id LIMIT ?`,
+      `SELECT conditions, rules FROM issuer_access_rules WHERE ${column} = ? ORDER BY updated_at DESC, id LIMIT ?`,
     )
     .bind(id, SUGGESTIONS_LIMIT)
     .all<{ conditions: string; rules: string }>();
@@ -92,13 +92,13 @@ export interface ConsumerSuggestions {
   tags: string[];
   baseRefs: string[];
   workflowRefs: string[];
-  /** Values of one claim in this consumer's accesses and tenant pin (rows editor). */
+  /** Values of one claim in this credential access rule's accesses and tenant pin (rows editor). */
   claimValues: (claim: string) => string[];
 }
 
 export function consumerSuggestions(
   shapes: readonly AccessShape[],
-  provider: Pick<CallerProvider, 'tenant_pin'> | null,
+  provider: Pick<CredentialAccessRule, 'tenant_pin'> | null,
 ): ConsumerSuggestions {
   return {
     environments: ranked(positive(shapes, 'environment')),
