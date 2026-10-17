@@ -53,7 +53,7 @@ describe('FormStep', () => {
         </FormStep>,
       ),
     ).toBe(
-      '<li class="fstep"><span class="fstep-n" aria-hidden="true">2</span><div class="fstep-b" id="jobs" role="group" aria-labelledby="jobs-h"><div class="fstep-t"><h3 id="jobs-h"><span class="vh">Step 2: </span>Which jobs</h3><p>Inherited from GitHub Actions (acme).</p></div>x</div></li>',
+      '<li class="fstep"><span class="fstep-n" aria-hidden="true">2</span><div class="fstep-b" id="jobs" role="group" aria-labelledby="jobs-h"><div class="fstep-t"><h2 id="jobs-h"><span class="vh">Step 2: </span>Which jobs</h2><p>Inherited from GitHub Actions (acme).</p></div>x</div></li>',
     );
     expect(
       render(

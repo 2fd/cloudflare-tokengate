@@ -1,5 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { SrSuffix } from '../../lib/sr';
 import { Icon, type IconName } from './Icon';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'danger-solid';
@@ -49,9 +50,9 @@ export interface ButtonProps {
   icon?: IconName;
   /**
    * Screen-reader-only suffix (`.vh`) that names the object of a row action: "Disable" +
-   * " acme/api → Slack" is read "Disable acme/api → Slack". Start it with a space.
+   * "acme/api → Slack" is read "Disable acme/api → Slack". The space before it is added.
    */
-  context?: string;
+  srSuffix?: string;
   id?: string;
   /** Ids of elements that describe the button (a hint next to a submit). */
   describedBy?: string;
@@ -82,7 +83,7 @@ export function Button(props: ButtonProps) {
       ) : null}
       {props.icon ? <Icon name={props.icon} /> : null}
       {props.children}
-      {props.context ? <span class="vh">{props.context}</span> : null}
+      <SrSuffix text={props.srSuffix} />
     </>
   );
   if (props.href !== undefined) {

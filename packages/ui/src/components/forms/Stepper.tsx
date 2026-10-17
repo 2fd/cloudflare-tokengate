@@ -1,5 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { H, useHeadingLevel, type HeadingLevel } from '../../lib/heading';
 import { ChoiceContext, type LiveSlot } from './context';
 
 export interface StepperProps {
@@ -25,8 +26,8 @@ export interface FormStepProps {
    * directly inside. `group`: the step holds several fields; the title is a heading.
    */
   kind?: 'fieldset' | 'group';
-  /** Heading level of a `group` step's title. */
-  headingLevel?: 2 | 3 | 4;
+  /** Level of a `group` step's title. Default 2: the steps sit under the page H1. */
+  headingLevel?: HeadingLevel;
   /** `current` (solid accent number, `aria-current="step"`) or `done` (ok number). */
   state?: 'current' | 'done';
   /** Live-form field slot of a `fieldset` step (`.sfN`). */
@@ -60,7 +61,7 @@ export function FormStep(props: FormStepProps) {
   );
   let body: Child;
   if (props.kind === 'group') {
-    const Heading = `h${props.headingLevel ?? 3}` as 'h3';
+    const hLevel = useHeadingLevel(props.headingLevel ?? 2);
     const headingId = props.id ? `${props.id}-h` : undefined;
     body = (
       <div
@@ -70,10 +71,10 @@ export function FormStep(props: FormStepProps) {
         aria-labelledby={headingId}
       >
         <div class="fstep-t">
-          <Heading id={headingId}>
+          <H level={hLevel} id={headingId}>
             {prefix}
             {props.title}
-          </Heading>
+          </H>
           {props.description ? <p>{props.description}</p> : null}
         </div>
         {props.children}

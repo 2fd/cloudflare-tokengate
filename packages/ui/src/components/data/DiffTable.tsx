@@ -12,8 +12,8 @@ export interface DiffRow {
 
 export interface DiffTableProps {
   rows: readonly DiffRow[];
-  /** Screen reader caption ("Changes to acme/infra → GitHub at 11:47"). */
-  caption?: Child;
+  /** Screen reader caption, required: the table's name ("Changes to acme/infra → GitHub at 11:47"). */
+  caption: Child;
   /** Column headers. */
   labels?: { field?: string; before?: string; after?: string };
   /** Text for a missing before or after value. */
@@ -37,7 +37,7 @@ export function DiffTable(props: DiffTableProps) {
   const emptyText = props.emptyText ?? 'Not set';
   return (
     <table class={cx('diff', props.class)}>
-      {props.caption !== undefined ? <caption class="vh">{props.caption}</caption> : null}
+      <caption class="vh">{props.caption}</caption>
       <thead>
         <tr>
           <th scope="col">{props.labels?.field ?? 'Field'}</th>

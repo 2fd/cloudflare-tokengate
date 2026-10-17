@@ -73,17 +73,13 @@ describe('AddFilter', () => {
   const html = render(
     <AddFilter
       label="Token"
-      unit=" requests"
+      srSuffix="requests"
       open
       options={[
         {
           href: '?token=slack',
           label: 'Slack',
-          logo: (
-            <span class="logo xs lg-slack" aria-hidden="true">
-              S
-            </span>
-          ),
+          logo: 'slack',
           slug: 'slack',
           count: '2,140',
         },

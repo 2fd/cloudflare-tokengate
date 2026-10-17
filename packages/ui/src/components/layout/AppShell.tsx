@@ -1,5 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { Icon } from '../base/Icon';
 
 export interface AppShellBrand {
   /** Product or instance name ("tokengate"). */
@@ -32,14 +33,11 @@ export interface AppShellProps {
   children?: Child;
 }
 
-/** The shield mark of the instance block. */
+/** The shield mark of the instance block: the `gate` icon of the set on the accent tile. */
 function Mark() {
   return (
     <span class="mark" aria-hidden="true">
-      <svg viewBox="0 0 24 24">
-        <path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z" />
-        <circle cx="12" cy="11" r="2" />
-      </svg>
+      <Icon name="gate" />
     </span>
   );
 }
@@ -72,7 +70,14 @@ export function AppShell(props: AppShellProps) {
           </div>
           {props.health}
           <details class="navd">
-            <summary>Menu</summary>
+            <summary>
+              {/* one label is shown at a time (display:none hides the other from assistive tech too) */}
+              <span class="navd-l">Menu</span>
+              <span class="navd-x">Close</span>
+              <span class="chev" aria-hidden="true">
+                ▾
+              </span>
+            </summary>
             <div class="navd-in">
               {props.nav}
               {props.account}

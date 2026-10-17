@@ -81,7 +81,7 @@ describe('Chart', () => {
         class="extra"
       />,
     );
-    expect(week).toContain('<div class="panel pad extra">');
+    expect(week).toContain('<div class="panel pad chart-panel extra">');
     expect(week).toContain('width="48"');
     expect(week.match(/text-anchor="middle"/g)).toHaveLength(7);
     expect(week).not.toContain('>now<');
@@ -133,7 +133,7 @@ describe('ReasonBar', () => {
       '<svg class="rbar" viewBox="0 0 1000 12" preserveAspectRatio="none" role="img" aria-label="Denied by reason: 182 unknown issuer, 59 no access" focusable="false"><rect class="r-bad" x="0" width="753" height="12"></rect><rect class="r-hatch" x="755" width="245" height="12"></rect></svg>',
     );
     expect(html).toContain(
-      '<li><span class="sw bad" aria-hidden="true"></span><span class="n">182</span><span>Unknown issuer: no service consumer trusts it<span class="meta"> · 1 caller</span></span><span class="pct">75.5 %</span></li>',
+      '<li><span class="sw bad" aria-hidden="true"></span><span class="n">182</span><span>Unknown issuer: no service consumer trusts it<span class="meta"> · 1 caller</span></span><span class="pct">75.5\u00a0%</span></li>',
     );
     expect(html).toContain('<span class="sw denied" aria-hidden="true"></span>');
   });
@@ -150,7 +150,7 @@ describe('ReasonBar', () => {
     expect(html).not.toContain('<h3');
     expect(html).toContain('<svg class="rbar x"');
     expect(html).toContain('<rect class="r-err" x="0" width="1000" height="12">');
-    expect(html).toContain('<span class="pct">100 %</span>');
+    expect(html).toContain('<span class="pct">100\u00a0%</span>');
   });
 
   it('draws nothing in the bar when every count is zero', () => {
@@ -158,7 +158,7 @@ describe('ReasonBar', () => {
       <ReasonBar title="Denied" reasons={[{ count: 0, label: 'None', short: 'none' }]} />,
     );
     expect(html).not.toContain('<rect');
-    expect(html).toContain('<span class="pct">0 %</span>');
+    expect(html).toContain('<span class="pct">0\u00a0%</span>');
   });
 });
 

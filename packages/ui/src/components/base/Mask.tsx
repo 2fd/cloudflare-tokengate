@@ -1,4 +1,5 @@
 import { cx } from '../../lib/cx';
+import { SrPrefix } from '../../lib/sr';
 
 export interface MaskProps {
   /**
@@ -9,24 +10,24 @@ export interface MaskProps {
   /** `lg` (36px, 16px type): the secret block of a token page. Default 24px. */
   size?: 'md' | 'lg';
   /** Screen-reader text before the visible characters. Default "Secret ending in". */
-  srLabel?: string;
+  srPrefix?: string;
   class?: string;
 }
 
 /**
  * A masked secret (`.mask`): "•••• 9fQa". Secrets are never revealed or copied in the UI; the
- * last 4 characters are only there to tell two secrets apart.
+ * last 4 characters are only there to tell two secrets apart. `Secret` draws its mask with it.
  */
 export function Mask({
   last4,
   size = 'md',
-  srLabel = 'Secret ending in',
+  srPrefix = 'Secret ending in',
   class: className,
 }: MaskProps) {
   return (
     <span class={cx('mask', size === 'lg' && 'lg', className)}>
-      <span aria-hidden="true">{'••••\u00a0'}</span>
-      <span class="vh">{`${srLabel} `}</span>
+      <span aria-hidden="true">{'•••• '}</span>
+      <SrPrefix text={srPrefix} />
       {last4.slice(-4)}
     </span>
   );

@@ -69,3 +69,40 @@ export function Logo({
     </span>
   );
 }
+
+/**
+ * A logo as data, the one `logo` type of every component: a brand (`'slack'`), or a brand with
+ * other letters or a disabled state (`{ brand: 'custom', text: 'AC' }`). Each component draws it
+ * at its own size, decorative.
+ */
+export type LogoSpec =
+  | LogoBrand
+  | {
+      brand: LogoBrand;
+      /** Letters on the tile instead of the brand's (`AC` for Acme CRM). Ignored for `oidc`. */
+      text?: string;
+      /** Disabled or idle object: gray, 40% opacity (`.dis`). */
+      disabled?: boolean;
+    };
+
+/**
+ * The tile of a `LogoSpec` (internal: every component with a `logo` prop draws it through this),
+ * decorative. `disabled` dims it on top of the spec's own state.
+ */
+export function LogoTile(props: { logo: LogoSpec; size?: LogoSize; disabled?: boolean }) {
+  const spec = typeof props.logo === 'string' ? { brand: props.logo } : props.logo;
+  const disabled = Boolean(spec.disabled || props.disabled) || undefined;
+  return spec.text === undefined || spec.brand === 'oidc' ? (
+    <Logo brand={spec.brand} size={props.size} disabled={disabled} />
+  ) : (
+    <Logo brand={spec.brand} size={props.size} disabled={disabled}>
+      {spec.text}
+    </Logo>
+  );
+}
+
+/** The same logo, disabled when `disabled` is true (internal: an idle node's logo in a list). */
+export function dimLogo(logo: LogoSpec, disabled: boolean | undefined): LogoSpec {
+  if (!disabled) return logo;
+  return typeof logo === 'string' ? { brand: logo, disabled: true } : { ...logo, disabled: true };
+}

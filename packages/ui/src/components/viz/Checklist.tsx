@@ -1,11 +1,13 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
-import { LogoTile, type VizLogo } from './parts';
+import { H, useHeadingLevel, type HeadingLevel } from '../../lib/heading';
+import { Badge } from '../base/Badge';
+import { LogoTile, type LogoSpec } from '../base/Logo';
 
 export interface ChecklistQuickLink {
   href: string;
   label: string;
-  logo?: VizLogo;
+  logo?: LogoSpec;
 }
 
 export interface ChecklistStep {
@@ -25,6 +27,8 @@ export interface ChecklistStep {
 
 export interface ChecklistProps {
   steps: readonly ChecklistStep[];
+  /** Level of the step titles. Default 3, one under the tray title (a Tray sets it). */
+  headingLevel?: HeadingLevel;
   class?: string;
 }
 
@@ -58,7 +62,8 @@ export function ChecklistProgress({ done, total, class: className }: ChecklistPr
  * steps with a Done / To do badge; only the next step has the primary button. Goes inside a
  * `.panel` in a tray whose header end shows `ChecklistProgress`.
  */
-export function Checklist({ steps, class: className }: ChecklistProps) {
+export function Checklist({ steps, headingLevel, class: className }: ChecklistProps) {
+  const hLevel = useHeadingLevel(headingLevel ?? 3);
   return (
     <ol class={cx('checklist', className)}>
       {steps.map((step, index) => (
@@ -66,16 +71,16 @@ export function Checklist({ steps, class: className }: ChecklistProps) {
           <span class="no" aria-hidden="true">
             {step.state === 'done' ? '✓' : index + 1}
           </span>
-          <h3>
+          <H level={hLevel}>
             {step.title}{' '}
             {step.state === 'done' ? (
-              <span class="badge ok">
-                <span aria-hidden="true">✓ </span>Done
-              </span>
+              <Badge tone="ok" glyph="✓">
+                Done
+              </Badge>
             ) : (
-              <span class="badge">To do</span>
+              <Badge>To do</Badge>
             )}
-          </h3>
+          </H>
           <p class="why">{step.why}</p>
           {step.action && step.state !== 'done' ? (
             <div class="acts">

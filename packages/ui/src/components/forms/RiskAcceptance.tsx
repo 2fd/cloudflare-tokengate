@@ -1,5 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { H, useHeadingLevel, type HeadingLevel } from '../../lib/heading';
 import { FieldError } from './Field';
 
 export interface AcceptedRisk {
@@ -26,7 +27,8 @@ export interface RiskAcceptanceProps {
   hint?: Child;
   /** The server's error when the risk was not accepted. */
   error?: Child;
-  headingLevel?: 2 | 3 | 4;
+  /** Level of the heading. Default 2: it sits in the form, under the page H1. */
+  headingLevel?: HeadingLevel;
   class?: string;
 }
 
@@ -38,12 +40,12 @@ export interface RiskAcceptanceProps {
 export function RiskAcceptance(props: RiskAcceptanceProps) {
   const headingId = `${props.id}-h`;
   const errorId = props.error ? `${props.id}-error` : undefined;
-  const Heading = `h${props.headingLevel ?? 3}` as 'h3';
+  const hLevel = useHeadingLevel(props.headingLevel ?? 2);
   return (
     <div class={cx('riskacc', props.class)} id={props.id} role="group" aria-labelledby={headingId}>
-      <Heading id={headingId}>
+      <H level={hLevel} id={headingId}>
         <span aria-hidden="true">⚠</span> {props.title}
-      </Heading>
+      </H>
       <ul>
         {props.risks.map((risk) => (
           <li>

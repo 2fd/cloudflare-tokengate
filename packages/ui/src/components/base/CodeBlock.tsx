@@ -14,7 +14,7 @@ export interface CodeBlockProps {
 
 /**
  * A code snippet (`pre.code`): scrolls on its own, focusable so keyboard users can scroll it, and
- * selects as a whole on click (`user-select: all`). Minimal version from the docs scaffold.
+ * selects as a whole on click (`user-select: all`).
  */
 export function CodeBlock({ label, caption, class: className, children }: CodeBlockProps) {
   return (

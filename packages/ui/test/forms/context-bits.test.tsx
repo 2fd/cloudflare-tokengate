@@ -8,15 +8,11 @@ describe('FixedBar', () => {
       render(
         <FixedBar
           label="Token"
-          logo={
-            <span class="logo sm lg-slack" aria-hidden="true">
-              S
-            </span>
-          }
+          logo="slack"
           name="Slack"
           meta="/proxy/slack"
           status={<span class="badge ok">Secret set</span>}
-          change={{ href: '/admin/access/new', context: 'token' }}
+          change={{ href: '/admin/access/new', srSuffix: 'token' }}
         />,
       ),
     ).toBe(
@@ -31,7 +27,7 @@ describe('FixedBar', () => {
           label="Consumer"
           name="GitHub Actions (acme)"
           class="x"
-          change={{ href: '?', context: 'consumer', label: 'Pick another' }}
+          change={{ href: '?', srSuffix: 'consumer', label: 'Pick another' }}
         />,
       ),
     ).toBe(

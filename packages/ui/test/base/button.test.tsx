@@ -52,9 +52,9 @@ describe('Button', () => {
     );
   });
 
-  it('adds a hidden plus, an icon and a screen-reader context', () => {
+  it('adds a hidden plus, an icon and a screen-reader suffix (the space is added)', () => {
     const html = render(
-      <Button variant="primary" plus icon="token" context=" to Slack">
+      <Button variant="primary" plus icon="token" srSuffix="to Slack">
         Give access
       </Button>,
     );
@@ -91,12 +91,12 @@ describe('Button', () => {
   it('escapes the label and attributes', () => {
     expect(
       render(
-        <Button href={'/x?a="b"'} context="<i>">
+        <Button href={'/x?a="b"'} srSuffix="<i>">
           {'<b>'}
         </Button>,
       ),
     ).toBe(
-      '<a class="btn secondary" href="/x?a=&quot;b&quot;">&lt;b&gt;<span class="vh">&lt;i&gt;</span></a>',
+      '<a class="btn secondary" href="/x?a=&quot;b&quot;">&lt;b&gt;<span class="vh"> &lt;i&gt;</span></a>',
     );
   });
 });
@@ -119,7 +119,7 @@ describe('LinkAction', () => {
   it('renders .linkish with a hidden arrow and context', () => {
     expect(
       render(
-        <LinkAction href="/admin/requests?outcome=denied" arrow context=" requests">
+        <LinkAction href="/admin/requests?outcome=denied" arrow srSuffix="requests">
           See denied
         </LinkAction>,
       ),

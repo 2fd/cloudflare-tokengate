@@ -1,5 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { SrSuffix } from '../../lib/sr';
 
 export interface SideNavItem {
   label: string;
@@ -15,8 +16,8 @@ export interface SideNavSection {
   icon?: Child;
   /** Count on the section row (tokens 6), shown open or closed. */
   count?: number;
-  /** Warn pill on the section row ("1 pending"); `srLabel` completes it for screen readers. */
-  pill?: { label: string; srLabel?: string };
+  /** Warn pill on the section row ("1 pending"); `srSuffix` completes it for screen readers. */
+  pill?: { label: string; srSuffix?: string };
   /** The section holds the current page: its row is highlighted and its items are shown. */
   open?: boolean;
   /** The section row itself is the current page (a section without sub-items). */
@@ -53,7 +54,7 @@ export function SideNav({ label, sections, class: className }: SideNavProps) {
             {section.pill ? (
               <span class="nav-pill">
                 {section.pill.label}
-                {section.pill.srLabel ? <span class="vh">{section.pill.srLabel}</span> : null}
+                <SrSuffix text={section.pill.srSuffix} />
               </span>
             ) : null}
           </a>

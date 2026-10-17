@@ -29,6 +29,11 @@ export interface KpiItem {
 
 export interface KpisProps {
   items: readonly KpiItem[];
+  /**
+   * `2`: a 2 × 2 block of compact tiles (`.kpis.c2`, 20px numbers) for a rail. Default: the tiles
+   * fill the row (at least 10rem each) and wrap.
+   */
+  columns?: 2;
   class?: string;
 }
 
@@ -36,10 +41,10 @@ export interface KpisProps {
  * KPI tiles (`dl.kpis > div.kpi`): label, big number with unit, change and a link to the list.
  * The tiles fill the row (minimum 10rem each) and wrap.
  */
-export function Kpis({ items, class: className }: KpisProps) {
+export function Kpis({ items, columns, class: className }: KpisProps) {
   const worst = items.findIndex((item) => item.worst);
   return (
-    <dl class={cx('kpis', className)}>
+    <dl class={cx('kpis', columns === 2 && 'c2', className)}>
       {items.map((item, index) => (
         <div class={cx('kpi', index === worst && 'tone-warn')}>
           <dt>

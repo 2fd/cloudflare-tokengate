@@ -112,6 +112,9 @@ describe('token contrast (light and dark)', () => {
     ['control-border', 'input-bg'],
     ['focus', 'page-bg'],
     ['focus', 'panel-bg'],
+    // chart bars and map wires are the main graphic (WCAG 1.4.11)
+    ['chart-allowed', 'panel-bg'],
+    ['chart-allowed', 'tray-bg'],
   ];
 
   for (const [scheme, index] of [

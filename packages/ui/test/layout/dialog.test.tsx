@@ -11,18 +11,18 @@ describe('DialogTrigger', () => {
         </DialogTrigger>,
       ),
     ).toBe(
-      '<button class="btn danger" type="button" commandfor="dlg-del" command="show-modal" popovertarget="dlg-del">Delete Slack…</button>',
+      '<button class="btn danger" type="button" command="show-modal" commandfor="dlg-del" popovertarget="dlg-del">Delete Slack…</button>',
     );
   });
 
-  it('defaults to secondary and takes size and classes', () => {
-    expect(
-      render(
-        <DialogTrigger dialog="d" size="sm" class="x">
-          Edit…
-        </DialogTrigger>,
-      ),
-    ).toContain('class="btn secondary sm x"');
+  it('is a Button: secondary by default, with size, classes and a row suffix', () => {
+    const html = render(
+      <DialogTrigger dialog="d" size="sm" class="x" srSuffix="acme/api → Slack" id="t">
+        Delete…
+      </DialogTrigger>,
+    );
+    expect(html).toContain('class="btn sm secondary x" id="t" type="button"');
+    expect(html).toContain('Delete…<span class="vh"> acme/api → Slack</span></button>');
   });
 });
 
@@ -68,11 +68,9 @@ describe('Dialog', () => {
   });
 
   it('puts hidden fields first in the form', () => {
-    expect(
-      render(
-        <Dialog id="d" title="T" footer="f" fields={<input type="hidden" name="a" value="1" />} />,
-      ),
-    ).toContain('<form method="post"><input type="hidden" name="a" value="1"/><div class="dlg-h">');
+    expect(render(<Dialog id="d" title="T" footer="f" hidden={{ a: '1' }} />)).toContain(
+      '<form method="post"><input type="hidden" name="a" value="1"/><div class="dlg-h">',
+    );
   });
 });
 
@@ -91,7 +89,7 @@ describe('ConfirmDialog', () => {
         hint: 'The slug of this token, in lower case.',
         name: 'confirm_slug',
       }}
-      fields={<input type="hidden" name="confirm" value="1" />}
+      hidden={{ confirm: '1' }}
     >
       <p>extra</p>
     </ConfirmDialog>,
@@ -142,7 +140,7 @@ describe('ConfirmDialog', () => {
         title="Approve?"
         action="/x"
         confirmLabel="Approve"
-        tone="primary"
+        confirmVariant="primary"
         cancelLabel="Not now"
       />,
     );

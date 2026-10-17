@@ -1,5 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { LogoTile, type LogoSpec } from '../base/Logo';
 import { type ChoiceBase, choiceAttrs, isChecked } from './choice';
 import { useChoiceIds } from './context';
 
@@ -12,8 +13,8 @@ export interface RowPick extends ChoiceBase {
   detail?: Child;
   /** Right column: usage count, “most used · 6 accesses”. */
   meta?: Child;
-  /** Logo tile (24px, `logo sm`), decorative. Rows without one get `.nologo`. */
-  logo?: Child;
+  /** Brand tile (24px, `logo sm`), decorative. Rows without one get `.nologo`. */
+  logo?: LogoSpec;
 }
 
 export interface RowPickerProps {
@@ -40,7 +41,7 @@ export function RowPicker(props: RowPickerProps) {
         const attrs = choiceAttrs(option, index, prefix);
         return (
           <label
-            class={cx('row-pick', !option.logo && 'nologo')}
+            class={cx('row-pick', option.logo === undefined && 'nologo')}
             data-o={attrs.o}
             data-risk={attrs.risk}
           >
@@ -53,7 +54,7 @@ export function RowPicker(props: RowPickerProps) {
               disabled={option.disabled}
               required={props.required}
             />
-            {option.logo ?? null}
+            {option.logo !== undefined ? <LogoTile logo={option.logo} size="sm" /> : null}
             <span class={cx('t', option.mono && 'mono')}>
               {option.title}
               {option.detail ? (

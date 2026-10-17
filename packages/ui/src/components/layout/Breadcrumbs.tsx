@@ -9,13 +9,18 @@ export interface Crumb {
 export interface BreadcrumbsProps {
   /** From the list page the object belongs to, to the current page (last). */
   items: readonly Crumb[];
+  /**
+   * Name of the navigation landmark. Default "Breadcrumb". Give a second trail on the same page
+   * its own name, so the landmarks can be told apart.
+   */
+  label?: string;
   class?: string;
 }
 
 /** Breadcrumb trail (`nav.crumbs`); the last item carries `aria-current="page"`. */
-export function Breadcrumbs({ items, class: className }: BreadcrumbsProps) {
+export function Breadcrumbs({ items, label, class: className }: BreadcrumbsProps) {
   return (
-    <nav class={cx('crumbs', className)} aria-label="Breadcrumb">
+    <nav class={cx('crumbs', className)} aria-label={label ?? 'Breadcrumb'}>
       <ol>
         {items.map((item, i) =>
           i === items.length - 1 ? (

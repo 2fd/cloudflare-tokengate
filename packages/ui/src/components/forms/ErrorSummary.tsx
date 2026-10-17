@@ -1,5 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { H, useHeadingLevel, type HeadingLevel } from '../../lib/heading';
 
 export interface ErrorSummaryItem {
   /** Id of the control to fix: an Input's id, or `${fieldSetId}-1` for a group of choices. */
@@ -19,7 +20,8 @@ export interface ErrorSummaryProps {
   id?: string;
   /** Focus the summary on load (default), so keyboard and screen reader users start at it. */
   autofocus?: boolean;
-  headingLevel?: 2 | 3;
+  /** Level of the heading. Default 2: the summary sits under the page H1. */
+  headingLevel?: HeadingLevel;
   class?: string;
 }
 
@@ -32,7 +34,7 @@ export function ErrorSummary(props: ErrorSummaryProps) {
   if (props.errors.length === 0) return null;
   const id = props.id ?? 'error-summary';
   const headingId = `${id}-h`;
-  const Heading = props.headingLevel === 3 ? 'h3' : 'h2';
+  const hLevel = useHeadingLevel(props.headingLevel ?? 2);
   return (
     <div
       class={cx('callout', 'bad', 'errsum', props.class)}
@@ -46,7 +48,9 @@ export function ErrorSummary(props: ErrorSummaryProps) {
         ✕
       </span>
       <div class="body">
-        <Heading id={headingId}>{props.title ?? 'There is a problem'}</Heading>
+        <H level={hLevel} id={headingId}>
+          {props.title ?? 'There is a problem'}
+        </H>
         {props.description ? <p>{props.description}</p> : null}
         <ul>
           {props.errors.map((error) => (

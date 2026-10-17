@@ -46,6 +46,10 @@ Steps:
    pnpm dev
    ```
 
+   The same server has the design system docs at `http://localhost:8787/docs`. `pnpm dev` runs
+   `apps/gateway/src/dev.ts`, which serves `/docs` on `localhost`, `127.0.0.1` and `[::1]` only.
+   Deploys never include the docs ([I-DEPLOY-2](docs/threat-model.md#i-deploy-2)).
+
 `AUTH_ACCESS_DEVELOPMENT` is the local development login: every admin request is signed in as that
 email, without Cloudflare Access. The gateway accepts it only on requests to `localhost`, `127.0.0.1`
 or `[::1]`. On an empty local database, the first sign-in becomes the owner, and its hostname
@@ -74,7 +78,8 @@ page from the repository root; the root `package.json` scripts delegate to the p
 ```text
 apps/
   gateway/                 @tokengate/gateway: the Worker (proxy, admin UI, cron, queue consumer).
-    src/                   Worker code. Module map: docs/architecture.md.
+    src/                   Worker code. Module map: docs/architecture.md. src/index.ts is the
+                           deployed entry; src/dev.ts (`pnpm dev`) adds /docs on localhost.
     test/                  Vitest suites (unit, integration, security), vectors, helpers.
     migrations/            DB (control plane) migrations.
     migrations-telemetry/  TELEMETRY_DB migrations.
@@ -82,11 +87,12 @@ apps/
     scripts/               Worker scripts: keyring, config guardrails, archive setup.
     wrangler.jsonc         Worker configuration.
     .dev.vars.example      Local variables; `pnpm run setup` copies it to .dev.vars.
-  docs/                    @tokengate/docs: Worker "tokengate-docs" serving the design system docs
-                           under /docs (`pnpm docs:dev`, port 8790). Pages come from src/registry.
 packages/
   ui/                      @tokengate/ui: design system D. src/styles/ui.css and Hono JSX
                            components (no client JS). Conventions: packages/ui/README.md.
+  docs/                    @tokengate/docs: the design system docs, a Hono app for /docs. Not a
+                           Worker: the gateway serves it in local development only (I-DEPLOY-2).
+                           Pages come from src/registry.
 actions/get-token/         Composite GitHub Action for callers, and its shell test.
 pipelines/                 Request archive stream schema.
 docs/                      Operator and contributor documentation, ADRs, diagrams.
@@ -108,19 +114,17 @@ scripts/                   Repository checks: links, threat-model IDs.
 | `pnpm check` | Everything CI runs on the code: `lint`, `typecheck`, `test`, `test:scripts`. Run it before you push. |
 | `pnpm lint` | `oxlint` (type-aware), then `oxfmt --check .` (format and import order). |
 | `pnpm format` | `oxfmt .` |
-| `pnpm typecheck` | In `apps/gateway`: `wrangler types --check`, then `tsc --noEmit` for `src/` and `test/`, then for `scripts/`. In `apps/docs`: `wrangler types --check`, then `tsc --noEmit`. In `packages/ui`: `tsc --noEmit`. |
-| `pnpm types` | Regenerates `apps/gateway/worker-configuration.d.ts` and `apps/docs/worker-configuration.d.ts`. Run it after you change bindings or module rules in a `wrangler.jsonc`. |
-| `pnpm test` | In `apps/gateway`: Vitest inside workerd (`@cloudflare/vitest-plugin`) with local D1 databases. In `packages/ui` and `apps/docs`: Vitest in Node (components render to strings; docs routes through `app.request()`). |
+| `pnpm typecheck` | In `apps/gateway`: `wrangler types --check`, then `tsc --noEmit` for `src/` and `test/`, then for `scripts/`. In `packages/ui` and `packages/docs`: `tsc --noEmit`. |
+| `pnpm types` | Regenerates `apps/gateway/worker-configuration.d.ts`. Run it after you change bindings or module rules in `apps/gateway/wrangler.jsonc`. |
+| `pnpm test` | In `apps/gateway`: Vitest inside workerd (`@cloudflare/vitest-plugin`) with local D1 databases. In `packages/ui` and `packages/docs`: Vitest in Node (components render to strings; docs routes through `app.request()`). |
 | `pnpm test:watch` | Vitest in watch mode. |
-| `pnpm test:scripts` | Shell checks: `scripts/check-threat-ids.sh`, `actions/get-token/test.sh`, `scripts/check-links.mjs`, then `apps/gateway/scripts/check-config.sh` and `apps/gateway/test/security/check-config-test.sh`. |
+| `pnpm test:scripts` | Shell checks: `scripts/check-threat-ids.sh`, `actions/get-token/test.sh`, `scripts/check-links.mjs`, then `apps/gateway/scripts/check-config.sh`, `apps/gateway/test/security/check-config-test.sh` and `apps/gateway/scripts/check-bundle.sh` (builds the production and dev bundles with `wrangler deploy --dry-run` and fails if the production one contains the docs). |
 | `pnpm run setup` | Copies `apps/gateway/.dev.vars.example` to `apps/gateway/.dev.vars` (overwriting it), deletes the local D1 databases and recreates them with every migration applied. |
-| `pnpm dev` | `wrangler dev` with `apps/gateway/.dev.vars`. |
+| `pnpm dev` | `wrangler dev src/dev.ts` in `apps/gateway`, with `apps/gateway/.dev.vars`, on http://localhost:8787. It is the production Worker plus the design system docs at http://localhost:8787/docs (loopback hostnames only). |
 | `pnpm db:migrate:local` | Applies `apps/gateway/migrations/` to `DB` and `apps/gateway/migrations-telemetry/` to `TELEMETRY_DB`, locally. |
 | `pnpm keyring generate` / `pnpm keyring check` | Generates a key, or validates a `TOKENGATE_KEK` or `TOKENGATE_KEYRING` value read from stdin. See [docs/operations/key-rotation.md](docs/operations/key-rotation.md). |
-| `pnpm run deploy` | Applies both remote migrations, then `wrangler deploy`. Operators use it; contributors rarely need it. |
+| `pnpm run deploy` | Applies both remote migrations, then `wrangler deploy` with `wrangler.jsonc` `main` (`src/index.ts`), which has no `/docs` (404 in production). Operators use it; contributors rarely need it. |
 | `pnpm wrangler <args>` | Wrangler in `apps/gateway`, for example `pnpm wrangler secret put TOKENGATE_KEK`. |
-| `pnpm docs:dev` | The design system docs Worker (`apps/docs`) on http://localhost:8790/docs. |
-| `pnpm docs:deploy` | Deploys the docs Worker `tokengate-docs`. |
 
 To run one file or one `describe`:
 
@@ -192,7 +196,8 @@ Comments are concise and say what the code guarantees and why. They are part of 
 | `apps/gateway/src/admin/auth/` | Per-request Access identity, CSRF, RBAC, email linking, bootstrap ([I-SESS-1](docs/threat-model.md#i-sess-1), [I-CSRF-1](docs/threat-model.md#i-csrf-1), [I-LINK-1](docs/threat-model.md#i-link-1), [I-BOOT-1](docs/threat-model.md#i-boot-1), [I-RBAC-1](docs/threat-model.md#i-rbac-1)). |
 | `apps/gateway/src/http/` | Security headers and host pinning ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)). |
 | `apps/gateway/migrations/`, `apps/gateway/migrations-telemetry/` | Schema, including SQL-enforced invariants. |
-| `apps/gateway/wrangler.jsonc` | Compatibility flags, `preview_urls`, `keep_vars` ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1), [I-SSRF-1](docs/threat-model.md#i-ssrf-1)). |
+| `apps/gateway/wrangler.jsonc` | `main`, compatibility flags, `preview_urls`, `keep_vars` ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1), [I-DEPLOY-2](docs/threat-model.md#i-deploy-2), [I-SSRF-1](docs/threat-model.md#i-ssrf-1)). |
+| `apps/gateway/src/dev.ts` | The local entry that adds the dev-only docs on loopback hostnames ([I-DEPLOY-2](docs/threat-model.md#i-deploy-2)). |
 | `.github/workflows/` | CI supply chain. |
 
 A change in these paths needs:

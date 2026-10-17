@@ -9,12 +9,11 @@ export interface Suggestion {
   href?: string;
 }
 
-export interface InputProps {
+interface InputBase {
   /** Defaults to the id of the Field around it. One of the two is required. */
   id?: string;
   name?: string;
   type?: 'text' | 'password' | 'url' | 'email' | 'search' | 'date' | 'number' | 'tel';
-  value?: string | number;
   /** The exact format, as an example value: `acme/api (89012345)`, `xoxb-0000…`. Never the label. */
   placeholder?: string;
   /**
@@ -22,11 +21,6 @@ export interface InputProps {
    * autocapitalize, which only get in the way of exact values.
    */
   mono?: boolean;
-  /**
-   * A secret: password type, mono, and ignored by password managers (`data-1p-ignore`,
-   * `data-lpignore`), so they never offer to save an API key as a login.
-   */
-  secret?: boolean;
   /** Read-only, shown gray: a derived value. */
   readonly?: boolean;
   disabled?: boolean;
@@ -53,6 +47,25 @@ export interface InputProps {
   class?: string;
 }
 
+export type InputProps = InputBase &
+  (
+    | {
+        secret?: false;
+        /** The current value (the server re-renders what was submitted). */
+        value?: string | number;
+      }
+    | {
+        /**
+         * A secret: password type, mono, and ignored by password managers (`data-1p-ignore`,
+         * `data-lpignore`), so they never offer to save an API key as a login. A secret input never
+         * renders a value: a rejected secret is not sent back in the page. Keep it server-side and
+         * say so in a `Field` note ("The secret you entered, ending in 9fQa, is kept").
+         */
+        secret: true;
+        value?: never;
+      }
+  );
+
 /**
  * Text input (`.input`, 40px). Inside a Field it takes the Field's id and ARIA. Suggestions render
  * a `datalist` and, for those with a link, a visible line under the input.
@@ -70,7 +83,7 @@ export function Input(props: InputProps) {
         id={control.id}
         name={props.name}
         type={props.secret ? 'password' : (props.type ?? 'text')}
-        value={props.value}
+        value={props.secret ? undefined : props.value}
         placeholder={props.placeholder}
         readonly={props.readonly}
         disabled={props.disabled}

@@ -12,12 +12,19 @@ export { ICON_NAMES, Icon, type IconName, type IconProps } from './Icon';
 export { IdChip, type IdChipProps } from './IdChip';
 export { Kbd, type KbdProps } from './Kbd';
 export { LinkAction, type LinkActionProps } from './LinkAction';
-export { LOGO_BRANDS, Logo, type LogoBrand, type LogoProps, type LogoSize } from './Logo';
+export {
+  LOGO_BRANDS,
+  Logo,
+  type LogoBrand,
+  type LogoProps,
+  type LogoSize,
+  type LogoSpec,
+} from './Logo';
 export { LogoStack, type LogoStackProps } from './LogoStack';
 export { Mask, type MaskProps } from './Mask';
 export { Mono, type MonoProps } from './Mono';
 export { Notice, type NoticeProps } from './Notice';
 export { RiskTag, type RiskTagProps } from './RiskTag';
-export { Dot, Status, type DotProps, type StatusProps } from './Status';
+export { Dot, Status, type DotProps, type StatusProps, type StatusWordProps } from './Status';
 export { Slug, type SlugProps } from './Slug';
 export { STATUS_VOCABULARY, type StatusKind, type StatusWord } from './vocabulary';

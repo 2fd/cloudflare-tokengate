@@ -18,8 +18,8 @@ export const FieldContext = createContext<FieldControl | null>(null);
 export const ChoiceContext = createContext<ChoiceGroup | null>(null);
 export const RevealContext = createContext<boolean>(false);
 
-/** The live-form field slots of `.lform` (`.sf1` … `.sf6`, `.sv1` … `.sv6`, `.rv1` … `.rv6`). */
-export type LiveSlot = 1 | 2 | 3 | 4 | 5 | 6;
+/** The live-form field slots of `.lform` (`.sf1` … `.sf8`, `.sv1` … `.sv8`, `.rv1` … `.rv8`). */
+export type LiveSlot = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 /** Props of the one control inside a Field, resolved against the Field around it. */
 export function useControl(

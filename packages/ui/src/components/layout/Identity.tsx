@@ -1,9 +1,14 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { H, useHeadingLevel } from '../../lib/heading';
+import { IdChip } from '../base/IdChip';
+import { LogoTile, type LogoSpec } from '../base/Logo';
 
 export interface IdentityProps {
-  /** Decorative 40px tile before the name: a `logo lg` tile or an `avatar lg`, `aria-hidden`. */
-  logo?: Child;
+  /** Brand tile (40px, `logo lg`) before the name, decorative. */
+  logo?: LogoSpec;
+  /** A custom decorative node instead of `logo`: an `Avatar size="lg"` for a person. */
+  logoSlot?: Child;
   /** The object name: the page H1 ("Slack"). */
   title: Child;
   /** Status badge after the name, inside the H1 ("✓ Active"). */
@@ -13,10 +18,10 @@ export interface IdentityProps {
   /** Mono slug ("slack"). */
   slug?: string;
   /**
-   * The full object ID in a mono chip (`.idchip`, selects as a whole: the copy source). `label`
-   * names the kind of ID ("Token ID") as the chip's tooltip and for screen readers.
+   * The full object ID in an `IdChip` (selects as a whole: the copy source). `kind` names the
+   * kind of object ("Token"): the chip's tooltip and the hidden label read "Token ID".
    */
-  entityId?: { value: string; label: string };
+  entityId?: { value: string; kind: string };
   /** Facts after the ID, in order ("Created 3 Oct 2026", "Last sign-in 2 h ago"). */
   facts?: readonly Child[];
   class?: string;
@@ -28,6 +33,7 @@ export interface IdentityProps {
  */
 export function Identity(props: IdentityProps) {
   const facts = props.facts ?? [];
+  const level = useHeadingLevel(1);
   const hasMeta =
     props.type !== undefined ||
     props.slug !== undefined ||
@@ -35,12 +41,12 @@ export function Identity(props: IdentityProps) {
     facts.length > 0;
   return (
     <div class={cx('ident', props.class)}>
-      {props.logo}
+      {props.logo !== undefined ? <LogoTile logo={props.logo} size="lg" /> : props.logoSlot}
       <div>
-        <h1>
+        <H level={level} class={level !== 1 ? 'h1' : undefined}>
           {props.title}
           {props.status ? <> {props.status}</> : null}
-        </h1>
+        </H>
         {hasMeta ? (
           <div class="ident-meta">
             {props.type !== undefined ? <span>{props.type}</span> : null}
@@ -48,10 +54,8 @@ export function Identity(props: IdentityProps) {
             {props.entityId ? (
               <>
                 {/* the label stays outside the chip, so selecting the chip copies only the ID */}
-                <span class="vh">{props.entityId.label}</span>
-                <span class="idchip" title={props.entityId.label}>
-                  {props.entityId.value}
-                </span>
+                <span class="vh">{`${props.entityId.kind} ID`}</span>
+                <IdChip kind={props.entityId.kind}>{props.entityId.value}</IdChip>
               </>
             ) : null}
             {facts.map((fact) => (

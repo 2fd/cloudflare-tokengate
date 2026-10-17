@@ -1,17 +1,22 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { H, useHeadingLevel, type HeadingLevel } from '../../lib/heading';
+import { Icon, type IconName } from '../base/Icon';
 
 export interface EmptyStateProps {
   /** What is missing, as a sentence ("No consumer can use a token yet"). */
   title: Child;
   /** Why it matters and what the action does. One or two sentences. */
   description?: Child;
-  /** Decorative 16px icon (`svg.ic`) in the 40px glyph tile. Hidden from assistive tech. */
-  glyph?: Child;
+  /** Icon of the set in the 40px tile (`.glyph`), decorative. */
+  icon?: IconName;
   /** One `.btn.primary` that fixes it, then an optional "How it works" link (`.btn-row`). */
   actions?: Child;
-  /** Heading level of the title: 3 under a tray title (default), 2 when no heading is above it. */
-  level?: 2 | 3 | 4;
+  /**
+   * Level of the title: 3 (default) under a tray title (a Tray sets it), 2 when no heading is
+   * above it.
+   */
+  headingLevel?: HeadingLevel;
   class?: string;
 }
 
@@ -20,15 +25,15 @@ export interface EmptyStateProps {
  * header (`Table scroll={false}` with no rows), so the shape of the list stays visible.
  */
 export function EmptyState(props: EmptyStateProps) {
-  const Heading = props.level === 2 ? 'h2' : props.level === 4 ? 'h4' : 'h3';
+  const hLevel = useHeadingLevel(props.headingLevel ?? 3);
   return (
     <div class={cx('empty', props.class)}>
-      {props.glyph !== undefined ? (
+      {props.icon !== undefined ? (
         <span class="glyph" aria-hidden="true">
-          {props.glyph}
+          <Icon name={props.icon} />
         </span>
       ) : null}
-      <Heading>{props.title}</Heading>
+      <H level={hLevel}>{props.title}</H>
       {props.description !== undefined ? <p>{props.description}</p> : null}
       {props.actions !== undefined ? <div class="btn-row">{props.actions}</div> : null}
     </div>

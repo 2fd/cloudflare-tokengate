@@ -1,10 +1,13 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { H, useHeadingLevel } from '../../lib/heading';
 import { Breadcrumbs, type Crumb } from './Breadcrumbs';
 
 interface PageHeaderBase {
   /** Breadcrumb above the title; omit on top-level pages. The first crumb is the list page. */
   crumbs?: readonly Crumb[];
+  /** Name of the breadcrumb landmark. Default "Breadcrumb"; only for a second trail on the page. */
+  crumbsLabel?: string;
   /** Header actions (`.ph-actions`): at most one primary button, last (top right). */
   actions?: Child;
   class?: string;
@@ -14,7 +17,10 @@ interface PageHeaderBase {
 
 /** List page: H1 with an optional count and a description. */
 export interface ListPageHeaderProps extends PageHeaderBase {
-  /** The page H1 (the only h1 on the page). */
+  /**
+   * The page H1: the only h1 on the page. Inside a `HeadingOffset` (a docs example) it renders
+   * that many levels deeper, styled the same.
+   */
   title: Child;
   /** Count after the title ("Service tokens 6"). */
   count?: number | string;
@@ -39,18 +45,21 @@ export type PageHeaderProps = ListPageHeaderProps | DetailPageHeaderProps;
  * actions), then optional rows (relation line, tab row), 16px apart.
  */
 export function PageHeader(props: PageHeaderProps) {
+  const level = useHeadingLevel(1);
   return (
     <header class={cx('ph', props.class)}>
-      {props.crumbs && props.crumbs.length > 0 ? <Breadcrumbs items={props.crumbs} /> : null}
+      {props.crumbs && props.crumbs.length > 0 ? (
+        <Breadcrumbs items={props.crumbs} label={props.crumbsLabel} />
+      ) : null}
       <div class="ph-row">
         {props.identity !== undefined ? (
           props.identity
         ) : (
           <div class="ph-title">
-            <h1>
+            <H level={level} class={level !== 1 ? 'h1' : undefined}>
               {props.title}
               {props.count !== undefined ? <span class="count">{props.count}</span> : null}
-            </h1>
+            </H>
             {props.description ? <p class="desc">{props.description}</p> : null}
           </div>
         )}

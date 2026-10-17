@@ -1,11 +1,17 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { H, useHeadingLevel, type HeadingLevel } from '../../lib/heading';
+import { Hidden, type HiddenFields } from '../../lib/hidden';
+import { Icon, type IconName } from '../base/Icon';
+import { LogoTile, type LogoSpec } from '../base/Logo';
 import type { LiveSlot } from './context';
 
 export interface LiveFormProps {
   method?: 'post' | 'get';
   action?: string;
   id?: string;
+  /** Hidden fields at the top of the form (`_csrf`, ids), one `input type="hidden"` each. */
+  hidden?: HiddenFields;
   /** The summary rail (a LiveSummary), right of the form at >= 80rem, under it otherwise. */
   rail?: Child;
   class?: string;
@@ -28,6 +34,7 @@ export function LiveForm(props: LiveFormProps) {
       action={props.action}
       id={props.id}
     >
+      <Hidden fields={props.hidden} />
       <div class="stack">{props.children}</div>
       {props.rail ?? null}
     </form>
@@ -41,7 +48,14 @@ export interface LiveSummaryProps {
   title: Child;
   /** One line under the title (“Follows the choices in this form.”). */
   description?: Child;
-  headingLevel?: 2 | 3;
+  /** Level of the rail title. Default 2: the rail sits beside the form, under the page H1. */
+  headingLevel?: HeadingLevel;
+  /**
+   * `rail` (default): the sticky summary rail of a LiveForm (`aside.rail` > tray > panel).
+   * `plan`: the summary alone in a panel (`.lsum.plan`, dashed wires), for a plan of what is
+   * not built yet, such as the empty install, in its own tray (no rail, not sticky).
+   */
+  variant?: 'rail' | 'plan';
   class?: string;
   /** SummaryRow, SummaryWire and SummaryFoot. */
   children: Child;
@@ -53,30 +67,44 @@ export interface LiveSummaryProps {
  */
 export function LiveSummary(props: LiveSummaryProps) {
   const headingId = `${props.id}-h`;
-  const Heading = props.headingLevel === 3 ? 'h3' : 'h2';
+  const level = useHeadingLevel(props.headingLevel ?? 2);
+  const hLevel = level;
+  const plan = props.variant === 'plan';
+  const tray = (
+    <section
+      class={cx('tray', plan && props.class)}
+      id={plan ? props.id : undefined}
+      aria-labelledby={plan ? headingId : undefined}
+    >
+      <div class="tray-h">
+        <div class="t">
+          <H level={hLevel} id={headingId}>
+            {props.title}
+          </H>
+          {props.description ? <p>{props.description}</p> : null}
+        </div>
+      </div>
+      <div class="panel">
+        <div class={cx('lsum', plan && 'plan')}>{props.children}</div>
+      </div>
+    </section>
+  );
+  if (plan) return tray;
   return (
     <aside class={cx('rail', props.class)} id={props.id} aria-labelledby={headingId}>
-      <section class="tray">
-        <div class="tray-h">
-          <div class="t">
-            <Heading class={props.headingLevel === 3 ? 'h2' : undefined} id={headingId}>
-              {props.title}
-            </Heading>
-            {props.description ? <p>{props.description}</p> : null}
-          </div>
-        </div>
-        <div class="panel">
-          <div class="lsum">{props.children}</div>
-        </div>
-      </section>
+      {tray}
     </aside>
   );
 }
 
 export interface SummaryRowProps {
-  /** Leading logo tile (`logo`, 32px, aria-hidden), or a `decorative` LivePhrase of logos. */
-  logo?: Child;
-  /** Leading glyph in a gray tile (`.ico`) when there is no logo (“→”). Decorative. */
+  /** Leading brand tile (32px), decorative. */
+  logo?: LogoSpec;
+  /** A custom decorative node instead of `logo`: a `decorative` LivePhrase of logos. */
+  logoSlot?: Child;
+  /** Leading icon in a gray tile (`.ico`) when there is no logo (the tokengate `gate`). */
+  icon?: IconName;
+  /** Leading glyph in the gray tile when there is no logo or icon (“→”). Decorative. */
   glyph?: string;
   /** Bold first line. */
   title: Child;
@@ -91,11 +119,13 @@ export interface SummaryRowProps {
 export function SummaryRow(props: SummaryRowProps) {
   return (
     <div class={cx('lsum-row', props.class)}>
-      {props.logo ? (
-        props.logo
+      {props.logo !== undefined ? (
+        <LogoTile logo={props.logo} />
+      ) : props.logoSlot !== undefined ? (
+        props.logoSlot
       ) : (
         <span class="ico" aria-hidden="true">
-          {props.glyph ?? '→'}
+          {props.icon ? <Icon name={props.icon} /> : (props.glyph ?? '→')}
         </span>
       )}
       <span>

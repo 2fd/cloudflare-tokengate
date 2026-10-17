@@ -6,6 +6,7 @@ export { Breadcrumbs, type BreadcrumbsProps, type Crumb } from './Breadcrumbs';
 export { ConfirmDialog, type ConfirmDialogProps, type ConfirmText } from './ConfirmDialog';
 export { DangerRow, DangerZone, type DangerRowProps, type DangerZoneProps } from './DangerZone';
 export { DetailLayout, type DetailLayoutProps } from './DetailLayout';
+export { Column, Grid, Stack, type ColumnProps, type GridProps, type StackProps } from './Grid';
 export {
   Dialog,
   DialogClose,
@@ -20,14 +21,18 @@ export { HealthStrip, type HealthStripProps } from './HealthStrip';
 export { Identity, type IdentityProps } from './Identity';
 export {
   Menu,
+  MenuHeader,
   MenuItem,
   MenuSeparator,
+  RowMenu,
   type MenuActionItemProps,
+  type MenuDialogItemProps,
+  type MenuHeaderProps,
   type MenuItemProps,
   type MenuLinkItemProps,
   type MenuProps,
+  type RowMenuProps,
 } from './Menu';
-export { NavIcon, type NavIconName, type NavIconProps } from './NavIcon';
 export { Page } from './Page';
 export {
   PageHeader,

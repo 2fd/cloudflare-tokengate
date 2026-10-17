@@ -1,5 +1,7 @@
 import type { Child } from 'hono/jsx';
-import { cx } from '../../lib/cx';
+import type { HeadingLevel } from '../../lib/heading';
+import type { HiddenFields } from '../../lib/hidden';
+import { Button } from '../base/Button';
 import { Dialog, DialogClose } from './Dialog';
 
 export interface ConfirmText {
@@ -24,16 +26,18 @@ export interface ConfirmDialogProps {
   action: string;
   /** The confirm button: the outcome, without "…" ("Delete Slack"). */
   confirmLabel: string;
-  /** `danger` (default): solid danger confirm. `primary` for a non-destructive confirm. */
-  tone?: 'danger' | 'primary';
+  /** Variant of the confirm button: `danger-solid` (default), or `primary` for a non-destructive confirm. */
+  confirmVariant?: 'danger-solid' | 'primary';
   /** What happens, one fact per item, with counts and links (`ul.conseq`). */
   consequences?: readonly Child[];
   /** The affected objects as a bordered list (`ul.dlg-list`): logo + name + meta per item. */
   affected?: readonly Child[];
   /** Type-to-confirm field, only for irreversible cascades. */
   confirmText?: ConfirmText;
-  /** Hidden inputs of the form. */
-  fields?: Child;
+  /** Hidden fields of the form (`_csrf`, ids), one `input type="hidden"` each. */
+  hidden?: HiddenFields;
+  /** Level of the title (see `Dialog`). */
+  headingLevel?: HeadingLevel;
   /** More body content after the lists, before the confirm field (a `Callout` with an alternative). */
   children?: Child;
   /** Cancel label. Default "Cancel". */
@@ -72,7 +76,8 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
       title={props.title}
       description={props.description}
       action={props.action}
-      fields={props.fields}
+      hidden={props.hidden}
+      headingLevel={props.headingLevel}
       wide={props.wide}
       open={props.open}
       class={props.class}
@@ -87,12 +92,9 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
               {cancelLabel}
             </DialogClose>
           )}
-          <button
-            class={cx('btn', props.tone === 'primary' ? 'primary' : 'danger-solid')}
-            type="submit"
-          >
+          <Button variant={props.confirmVariant ?? 'danger-solid'} type="submit">
             {props.confirmLabel}
-          </button>
+          </Button>
         </>
       }
     >

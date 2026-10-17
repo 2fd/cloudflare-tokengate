@@ -1,12 +1,12 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
-import { LogoTile, type VizLogo } from './parts';
+import { LogoTile, type LogoSpec } from '../base/Logo';
 
 export interface MatrixColumn {
   /** Key of the column in each row's `cells`. */
   id: string;
   name: string;
-  logo?: VizLogo;
+  logo?: LogoSpec;
   /** The token page or its access list. */
   href: string;
   /** "3 accesses · 2,140 req". */
@@ -44,7 +44,7 @@ export interface MatrixRow {
 export interface MatrixGroup {
   /** Group header (the consumer). Leave out for a matrix without groups. */
   name?: string;
-  logo?: VizLogo;
+  logo?: LogoSpec;
   href?: string;
   /** "org acme (1234567) · 6 accesses". */
   meta?: Child;

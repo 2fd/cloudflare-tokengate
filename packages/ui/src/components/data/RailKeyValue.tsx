@@ -37,3 +37,14 @@ export function RailKeyValue({ items, class: className }: RailKeyValueProps) {
     </dl>
   );
 }
+
+export interface RailFootProps {
+  class?: string;
+  /** One link to the full list ("Audit history →"). */
+  children: Child;
+}
+
+/** The last line of a rail panel (`p.rail-foot`, top border): a link to the full list. */
+export function RailFoot({ class: className, children }: RailFootProps) {
+  return <p class={cx('rail-foot', className)}>{children}</p>;
+}

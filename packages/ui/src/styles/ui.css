@@ -8,7 +8,7 @@
    Served as one file (apps serve it at /static/ui.<hash>.css, see src/css.ts);
    works with CSP `style-src 'self'`: no imports, no url() to other origins.
    Reference: packages/ui/README.md and the docs app (/docs).
-   Sections (ownership for parallel work: see README "CSS ownership"):
+   Sections (ownership for parallel work: see README "Groups"):
      0 Tokens  1 Base  2 Shell  3 Page header  4 Buttons  5 Badges/status/chips/logos
      6 Tray + panel  7 Tables  8 Callouts/notice/empty  9 Forms  10 Live form (:has)
      11 Key-value/rail/feed/secret  12 Filters  13 Dialogs  14 Monitoring (KPI, chart,
@@ -42,7 +42,7 @@
   /* sizes */
   --h-control: 2.5rem; --h-control-sm: 2rem; --h-chip: 1.75rem; --h-badge: 1.375rem;
   --h-row: 2.75rem; --h-row-dense: 2.25rem; --h-node: 3.5rem;
-  --w-sidebar: 15rem; --w-form: 40rem; --w-rail: 20rem; --w-rail-form: 24rem; --w-content-max: 76rem;
+  --w-sidebar: 15rem; --w-form: 40rem; --w-rail: 20rem; --w-rail-form: 24rem; --w-content-max: 76rem; --w-col-min: 60rem;
   --gutter: 2rem;
   --logo-xs: 1.125rem; --logo-sm: 1.5rem; --logo-md: 2rem; --logo-lg: 2.5rem;
 
@@ -71,7 +71,7 @@
   --bad:  light-dark(#b0211a, #ff9a8f); --bad-bg:  light-dark(#fde7e5, #3a1614); --bad-dot:  light-dark(#d92d20, #ff6b5e);
   --info: light-dark(#1e4bb8, #9cbcff); --info-bg: light-dark(#e7eefc, #14223f);
   --danger: light-dark(#b0211a, #ff8a7e); --on-danger: light-dark(#ffffff, #2a0907);
-  --chart-allowed: light-dark(#8c93a3, #5d6575); --chart-denied: var(--bad-dot); --chart-error: var(--warn-dot);
+  --chart-allowed: light-dark(#858c9c, #69728a); --chart-denied: var(--bad-dot); --chart-error: var(--warn-dot);
 
   /* surface model: page -> tray shell -> panel (tray cards) */
   --page-bg:  light-dark(#ffffff, #0f1115);      /* main column */
@@ -105,7 +105,8 @@
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--text);font:var(--fs-md)/var(--lh-md) var(--font-sans);-webkit-font-smoothing:antialiased}
-h1,h2,h3,h4,p,figure,blockquote,dl,dd{margin:0}
+h1,h2,h3,h4,h5,h6,p,figure,blockquote,dl,dd{margin:0}
+h5,h6{font-size:inherit}   /* a component heading pushed down by HeadingOffset keeps the size its own rules give it */
 ul.plain,ol.plain{margin:0;padding:0;list-style:none}
 a{color:var(--accent-text);text-underline-offset:2px;text-decoration-thickness:1px}
 a:hover{text-decoration-thickness:2px}
@@ -127,7 +128,7 @@ svg.ic{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-wid
 kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:var(--r-1);font-size:var(--fs-xs);line-height:var(--lh-xs);color:var(--text-2);background:var(--surface)}
 
 /* ===== 2. App shell ======================================================= */
-.app{display:grid;grid-template-columns:var(--w-sidebar) minmax(0,1fr);min-height:100vh;min-height:100dvh;background:var(--page-bg);position:relative}
+.app{display:grid;grid-template-columns:var(--w-sidebar) minmax(0,1fr);min-height:100vh;min-height:100dvh;background:var(--page-bg);position:relative;container:app / inline-size}
 .skip-link{position:absolute;left:-9999px;top:var(--sp-2);z-index:30;padding:var(--sp-2) var(--sp-3);border-radius:var(--r-2);background:var(--accent);color:var(--on-accent)}
 .skip-link:focus{left:var(--sp-2)}
 .side{min-width:0;background:var(--nav-bg);border-right:1px solid var(--line)}
@@ -145,6 +146,10 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
 .navd>summary{display:none}
 @media (min-width:40rem){ .navd::details-content{content-visibility:visible;display:contents} }
 .navd-in{display:flex;flex-direction:column;gap:var(--sp-3);flex:1;min-height:0}
+.navd>summary .navd-x,.navd[open]>summary .navd-l{display:none}
+.navd[open]>summary .navd-x{display:inline}
+.navd>summary .chev{font-size:10px;transition:transform .15s}
+.navd[open]>summary .chev{transform:rotate(180deg)}
 .nav{display:flex;flex-direction:column;gap:2px}
 .nav-item{display:flex;align-items:center;gap:var(--sp-2);min-height:2rem;padding:0 var(--sp-2);border-radius:var(--r-2);color:var(--nav-text);text-decoration:none;font-weight:var(--fw-medium)}
 .nav-item svg{flex:none;color:var(--nav-muted)}
@@ -177,6 +182,27 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
 .menu-item{display:flex;align-items:center;width:100%;min-height:2.25rem;padding:0 var(--sp-3);border:0;border-radius:var(--r-2);background:none;color:var(--text);text-decoration:none;text-align:left;cursor:pointer}
 .menu-item:hover{background:var(--surface-2)}
 .menu hr{border:0;border-top:1px solid var(--line);margin:var(--sp-1) 0}
+/* row menu: "Change ▾" in a table row, a <details name> whose panel holds two-line items
+   (what each choice changes). Not a popover: it opens below its row, in the flow below 48rem */
+.rowmenu{position:relative;display:inline-block;text-align:left;vertical-align:middle}
+.rowmenu>summary .chev{font-size:10px;transition:transform .15s}
+.rowmenu[open]>summary{background:var(--surface-2)}
+.rowmenu[open]>summary .chev{transform:rotate(180deg)}
+.rowmenu>.menu{position:absolute;right:0;top:calc(100% + 4px);z-index:10;display:grid;gap:2px;width:22rem;max-width:calc(100vw - 2rem);padding:var(--sp-1);border:1px solid var(--line-strong);border-radius:var(--r-3);background:var(--surface);color:var(--text);box-shadow:var(--shadow-dialog);white-space:normal}
+.rowmenu>.menu form{display:grid;gap:2px}
+.rowmenu>.menu hr{width:100%}
+.menu-h{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(--sp-1) var(--sp-3);padding:var(--sp-2) var(--sp-3) var(--sp-1);font-size:var(--fs-xs);line-height:var(--lh-xs);font-weight:var(--fw-medium);color:var(--text-2)}
+.menu-h b{color:var(--text);font-weight:var(--fw-medium)}
+.menu-item.two{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;gap:2px var(--sp-3);min-height:0;padding:var(--sp-2) var(--sp-3);font-size:var(--fs-md)}
+.menu-item.two b{font-weight:var(--fw-medium)}
+.menu-item.two .k{font-size:var(--fs-xs);color:var(--text-2);white-space:nowrap}
+.menu-item.two .s{grid-column:1/-1;font-size:var(--fs-sm);line-height:var(--lh-sm);color:var(--text-2)}
+.menu-item.bad b,.menu-item.bad:not(.two){color:var(--bad)}
+@media (min-width:48.01rem){ .tbl td.act>form+.rowmenu{margin-left:var(--sp-2)} }
+@media (max-width:48rem){
+  .rowmenu{display:block}
+  .rowmenu>.menu{position:static;width:auto;max-width:none;margin-top:var(--sp-2);box-shadow:0 0 0 1px var(--line-strong)}
+}
 /* placement: anchored to the button that opened it (implicit popovertarget anchor), below it and
    flipped when there is no room; the account menu opens upward. Without anchor positioning the
    menu is centered in the viewport instead of sitting in the top-left corner. */
@@ -185,17 +211,22 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
 @supports not (position-area:block-end){ [popover].menu{inset:0;margin:auto;width:fit-content;height:fit-content} }
 /* health strip (error level only), top of main */
 .hstrip{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-1) var(--sp-3);padding:var(--sp-2) max(var(--gutter),calc((100% - var(--w-content-max)) / 2));background:var(--bad-bg);color:var(--text);box-shadow:inset 0 -1px 0 color-mix(in srgb,var(--bad-dot) 40%,transparent);font-size:var(--fs-sm)}
+.app .hstrip{--col:min(var(--w-content-max) + 2 * var(--gutter),max(100cqi - 2 * var(--w-sidebar),var(--w-col-min)),100cqi - var(--w-sidebar));padding-inline-start:max(var(--gutter),calc((100cqi - var(--col)) / 2 - var(--w-sidebar) + var(--gutter)))}
 .hstrip b{color:var(--bad);font-weight:var(--fw-medium)}
 .hstrip a{color:var(--bad);font-weight:var(--fw-medium)}
 /* main column */
 .main{min-width:0;background:var(--page-bg)}
-/* content column: centered in the main area, --w-content-max wide plus the gutters.
-   Header, trays, tables and forms all share this column; the sidebar stays on the left. */
-.page{max-width:calc(var(--w-content-max) + 2 * var(--gutter));margin-inline:auto;padding:var(--sp-6) var(--gutter) var(--sp-10)}
+/* content column: centered on the WHOLE shell (the window in the app), not on the space left of
+   the sidebar. 100cqi is the .app width. The column is its page width (--page-w: content max or the
+   form measure, plus gutters), but no wider than the window minus a sidebar on EACH side, so it stays
+   centered; it never shrinks below --w-col-min (then it starts at the sidebar edge instead), and
+   never overflows the main area. Header, trays, tables and forms share it. */
+.page{--page-w:calc(var(--w-content-max) + 2 * var(--gutter));max-width:var(--page-w);margin-inline:auto;padding:var(--sp-6) var(--gutter) var(--sp-10)}
+.app .page{--col:min(var(--page-w),max(100cqi - 2 * var(--w-sidebar),var(--w-col-min)),100cqi - var(--w-sidebar));max-width:none;width:var(--col);margin-inline:max(0px,calc((100cqi - var(--col)) / 2 - var(--w-sidebar))) auto}
 /* form page (a .form-layout directly in .page): the whole page — header, callouts, form and
    summary rail — narrows to the form measure and stays centered, so the header keeps the form's edge */
-.page:has(>.form-layout){max-width:calc(var(--w-form) + 2 * var(--gutter))}
-@media (min-width:80rem){ .page:has(>.form-layout){max-width:calc(var(--w-form) + var(--sp-7) + var(--w-rail-form) + 2 * var(--gutter))} }
+.page:has(>.form-layout){--page-w:calc(var(--w-form) + 2 * var(--gutter))}
+@media (min-width:80rem){ .page:has(>.form-layout){--page-w:calc(var(--w-form) + var(--sp-7) + var(--w-rail-form) + 2 * var(--gutter))} }
 .page>*+*{margin-top:var(--sp-7)}               /* 32px between top-level blocks */
 .page>.ph+*{margin-top:var(--sp-7)}
 .stack{display:flex;flex-direction:column;gap:var(--sp-7);min-width:0}
@@ -211,6 +242,7 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
 @media (min-width:80rem){
   .detail{grid-template-columns:minmax(0,1fr) var(--w-rail)}
   .form-layout{grid-template-columns:minmax(0,var(--w-form)) minmax(var(--w-rail),var(--w-rail-form))}
+  .form-layout .form-layout{grid-template-columns:minmax(0,1fr)}   /* a nested form layout (a LiveForm in a form column) never gets a second rail */
 }
 /* top bar below 40rem: the bar keeps its height when the shell is taller than its content */
 @media (max-width:39.99rem){ .app{grid-template-rows:auto minmax(0,1fr)} }
@@ -223,8 +255,8 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
 .crumbs a:hover{color:var(--text);text-decoration:underline}
 .ph-row{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:var(--sp-4) var(--sp-6)}
 .ph-title{display:flex;flex-direction:column;gap:var(--sp-2);min-width:0;flex:1 1 28rem}
-h1{font-size:var(--fs-3xl);line-height:var(--lh-3xl);font-weight:var(--fw-medium);letter-spacing:var(--tracking-tight)}
-h1 .count{margin-left:var(--sp-2);color:var(--text-3);font-weight:var(--fw-regular);font-variant-numeric:tabular-nums}
+h1,.h1{font-size:var(--fs-3xl);line-height:var(--lh-3xl);font-weight:var(--fw-medium);letter-spacing:var(--tracking-tight)}
+:is(h1,.h1) .count{margin-left:var(--sp-2);color:var(--text-3);font-weight:var(--fw-regular);font-variant-numeric:tabular-nums}
 .ph-actions{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center}
 .ph-actions form{display:contents}
 .desc{max-width:70ch;color:var(--text-2)}
@@ -232,7 +264,7 @@ h1 .count{margin-left:var(--sp-2);color:var(--text-3);font-weight:var(--fw-regul
 .relline b,.relline a{color:var(--text);font-weight:var(--fw-medium)}
 /* detail identity row: logo 40 + H1 + status + mono ID chip */
 .ident{display:flex;align-items:center;gap:var(--sp-4);min-width:0}
-.ident h1{font-size:var(--fs-2xl);line-height:var(--lh-2xl);display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2) var(--sp-3)}
+.ident :is(h1,.h1){font-size:var(--fs-2xl);line-height:var(--lh-2xl);display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2) var(--sp-3)}
 .ident-meta{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-1) var(--sp-3);margin-top:2px;font-size:var(--fs-sm);color:var(--text-2)}
 .idchip{display:inline-flex;align-items:center;max-width:100%;height:var(--h-badge);padding:0 6px;border-radius:var(--r-1);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line);font:var(--fs-xs)/1 var(--font-mono);color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;user-select:all;-webkit-user-select:all}
 .slug{font-family:var(--font-mono);font-size:var(--fs-xs);color:var(--text-3)}
@@ -321,8 +353,8 @@ a.chip:hover{border-color:var(--control-border);background:var(--surface-3)}
 .tray{display:block;min-width:0;padding:4px;border:0;border-radius:var(--r-4);background:var(--tray-bg);box-shadow:var(--tray-ring)}
 .tray-h{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--sp-2) var(--sp-4);min-height:3rem;padding:var(--sp-3) var(--sp-4)}
 .tray-h .t{display:flex;flex-direction:column;gap:2px;min-width:0}
-.tray-h h2,.tray-h .h2{display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-lg);line-height:var(--lh-lg);font-weight:var(--fw-medium)}
-.tray-h h2 .count{color:var(--text-3);font-weight:var(--fw-regular)}
+.tray-h :is(h2,h3,h4,h5,h6),.tray-h .h2{display:flex;align-items:center;gap:var(--sp-2);font-size:var(--fs-lg);line-height:var(--lh-lg);font-weight:var(--fw-medium)}
+.tray-h :is(h2,h3,h4,h5,h6) .count{color:var(--text-3);font-weight:var(--fw-regular)}
 .tray-h p{font-size:var(--fs-sm);line-height:var(--lh-sm);color:var(--text-2)}
 .tray-h .end{display:flex;flex-wrap:wrap;gap:var(--sp-2) var(--sp-3);align-items:center;margin-left:auto}
 .panel{min-width:0;border-radius:var(--r-3);background:var(--panel-bg);box-shadow:var(--panel-ring)}
@@ -335,11 +367,11 @@ fieldset.tray>legend{float:left;width:100%;display:flex;align-items:center;gap:v
 fieldset.tray>legend+*{clear:both}
 .tray.tone-warn{box-shadow:var(--tray-ring),inset 0 3px 0 var(--warn-dot)}
 /* danger zone */
-.danger-zone .tray-h h2{color:var(--bad)}
+.danger-zone .tray-h :is(h2,h3,h4,h5,h6){color:var(--bad)}
 .dz-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--sp-4);padding:var(--sp-4) var(--sp-5);border-top:1px solid var(--line)}
 .dz-row:first-child{border-top:0}
 .dz-row>div{flex:1 1 18rem;min-width:0}
-.dz-row h3{font-size:var(--fs-md);font-weight:var(--fw-medium)}
+.dz-row :is(h3,h4,h5,h6){font-size:var(--fs-md);font-weight:var(--fw-medium)}
 .dz-row p{margin-top:2px;font-size:var(--fs-sm);color:var(--text-2)}
 .dz-row form{display:contents}
 .dz-row form.field-inline{display:inline-flex} /* a form that is itself a component keeps its box */
@@ -349,7 +381,8 @@ details.disc>summary{display:inline-flex;align-items:center;gap:var(--sp-2);min-
 details.disc>summary::before{content:"";width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg);transition:transform .12s}
 details.disc[open]>summary::before{transform:rotate(45deg)}
 details.disc>summary .hint{font-weight:var(--fw-regular)}
-details.disc>.disc-b{margin-top:var(--sp-2)}
+details.disc>.disc-b{display:grid;justify-items:start;gap:var(--sp-2);margin-top:var(--sp-2)}
+details.disc>.disc-b>.diff{margin-top:0}
 
 /* ===== 7. Tables ========================================================== */
 .scroll{position:relative;overflow-x:auto;border-radius:inherit}
@@ -388,6 +421,14 @@ a.ent-n:hover{color:var(--accent-text);text-decoration:underline}
 .day:first-child{border-top:0;border-radius:var(--r-3) var(--r-3) 0 0}
 .pager{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-4);padding:var(--sp-3) var(--sp-4);border-top:1px solid var(--line);font-size:var(--fs-sm);color:var(--text-2)}
 .pager .end{display:flex;gap:var(--sp-3);margin-left:auto;align-items:center}
+/* group row inside a table (GroupRow): the consumer or repository of the rows under it */
+.tbl tr.grp>th{height:auto;padding:var(--sp-2) var(--sp-4);background:var(--panel-sub);font-weight:var(--fw-medium)}
+.tbl tbody tr.grp:hover>*{background:var(--panel-sub)}
+.grp-in{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--sp-1) var(--sp-3);min-height:var(--h-control-sm)}
+.grp-in .ent{gap:var(--sp-2)}
+.grp-in .meta{font-weight:var(--fw-regular)}
+@media (max-width:48rem){ .grp-in>.btn.ghost{margin-left:calc(-1 * var(--sp-3))} }
+@media (max-width:48rem){ .tbl.stackable tr.grp{display:block;padding:0} .tbl.stackable tr.grp>th{padding:var(--sp-2) var(--sp-4)!important;background:var(--panel-sub)!important} }
 
 /* ===== 8. Callouts, notice, empty state, AskSomeone ====================== */
 .callout{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:var(--sp-1) var(--sp-3);align-items:start;padding:var(--sp-3) var(--sp-4);border-radius:var(--r-3);background:var(--info-bg);color:var(--text);box-shadow:inset 4px 0 0 var(--info)}
@@ -406,7 +447,7 @@ a.ent-n:hover{color:var(--accent-text);text-decoration:underline}
 /* empty state: inside the panel where the table would be */
 .empty{display:flex;flex-direction:column;align-items:center;gap:var(--sp-2);padding:var(--sp-9) var(--sp-5);text-align:center}
 .empty .glyph{display:grid;place-items:center;width:var(--logo-lg);height:var(--logo-lg);margin-bottom:var(--sp-2);border-radius:var(--r-3);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--text-2)}
-.empty :is(h2,h3,h4){font-size:var(--fs-lg);line-height:var(--lh-lg);font-weight:var(--fw-medium)}
+.empty :is(h2,h3,h4,h5,h6){font-size:var(--fs-lg);line-height:var(--lh-lg);font-weight:var(--fw-medium)}
 .empty p{max-width:52ch;color:var(--text-2)}
 .empty .btn-row{margin-top:var(--sp-3);justify-content:center}
 /* zero state inside a panel, positive */
@@ -463,14 +504,33 @@ input[type=radio],input[type=checkbox]{flex:none;width:16px;height:16px;margin:0
 .rc.wide{grid-column:1/-1}
 .rc>input{margin-top:2px}
 .rc-b{display:grid;gap:2px;min-width:0}
-.rc-t{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-weight:var(--fw-medium)}
-.rc-d{font-size:var(--fs-sm);line-height:var(--lh-sm);color:var(--text-2)}
+.rc-t{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0;font-weight:var(--fw-medium);overflow-wrap:anywhere}
+.rc-d{min-width:0;font-size:var(--fs-sm);line-height:var(--lh-sm);color:var(--text-2);overflow-wrap:anywhere}   /* a long issuer host breaks inside its card */
 .sel{display:none;margin-left:auto;font-size:var(--fs-xs);font-weight:var(--fw-medium);color:var(--accent-soft-text)}
 .rc:hover{border-color:var(--control-border)}
 .rc:has(input:checked){border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);background:var(--accent-soft)}
 .rc:has(input:checked) .sel{display:inline}
 .rc.risk:has(input:checked){border-color:var(--warn-dot);box-shadow:inset 0 0 0 1px var(--warn-dot);background:var(--warn-bg)}
 .rc.risk:has(input:checked) .sel{color:var(--warn)}
+/* radio cards with a logo on top (type cards: “Add a consumer”) */
+.rc-b>.logo{margin-bottom:var(--sp-2)}
+.rc-b>.logo~.rc-t .sel{position:absolute;top:var(--sp-3);right:var(--sp-3)}
+/* action cards (ActionCards): the radio-card look on a submit button, the click is the choice */
+button.rc,div.rc.is-current{width:100%;margin:0;font:inherit;color:var(--text);text-align:left;grid-template-columns:minmax(0,1fr)}
+button.rc:hover{border-color:var(--accent);background:var(--accent-soft)}
+button.rc:hover .rc-go{color:var(--accent-soft-text)}
+button.rc.risk{box-shadow:inset 3px 0 0 var(--warn-dot)}
+.rc-go{margin-left:auto;font-size:var(--fs-sm);font-weight:var(--fw-medium);color:var(--accent-text);white-space:nowrap}
+.rc-q{margin-top:var(--sp-1);padding-top:var(--sp-2);border-top:1px dashed var(--line-strong);font-size:var(--fs-sm);line-height:var(--lh-sm)}
+.rc.is-current{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);background:var(--accent-soft);cursor:default}
+.rc.is-current .rc-d{color:var(--text)}
+button.rc:focus-visible{outline:var(--focus-ring);outline-offset:2px}
+/* one-button POST form (ActionForm): sits inline next to other buttons */
+.action-form{display:inline-flex}
+/* short fields side by side (FieldGrid): Name · Slug · Expires */
+.fgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--sp-4)}
+.fgrid>.span-all{grid-column:1/-1}
+@media (max-width:48rem){ .fgrid{grid-template-columns:minmax(0,1fr)} }
 .rc:has(input:disabled){cursor:not-allowed;background:var(--surface-2)}
 .rc:has(input:disabled) .rc-d{text-decoration:line-through}
 /* row picker: existing values as a list (most used first) */
@@ -509,7 +569,7 @@ input[type=radio],input[type=checkbox]{flex:none;width:16px;height:16px;margin:0
 /* hidden branch box (reveal) and More disclosure */
 .subbox{display:grid;gap:var(--sp-5);padding:var(--sp-4);border-radius:var(--r-3);background:var(--surface-2)}
 /* a SubBox as a side note (“When you save”): heading + numbered list (promoted from the tokens page) */
-.subbox h3{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2);font-size:var(--fs-md);font-weight:var(--fw-medium)}
+.subbox :is(h3,h4,h5,h6){display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2);font-size:var(--fs-md);font-weight:var(--fw-medium)}
 .subbox ol{display:grid;gap:var(--sp-2);margin:0;padding-left:1.1rem;font-size:var(--fs-sm);color:var(--text-2)}
 .subbox ol b{color:var(--text);font-weight:var(--fw-medium)}
 details.more>summary{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px var(--sp-2);min-height:2rem;color:var(--accent-text);font-weight:var(--fw-medium)}
@@ -519,14 +579,14 @@ details.more>summary .meta{font-weight:var(--fw-regular)}
 details.more>.more-b{margin-top:var(--sp-2);display:grid;gap:var(--sp-4)}
 /* risk acceptance block (directly before submit) */
 .riskacc{display:grid;gap:var(--sp-2);padding:var(--sp-4);border-radius:var(--r-3);background:var(--warn-bg);box-shadow:inset 4px 0 0 var(--warn)}
-.riskacc h3{font-size:var(--fs-md);font-weight:var(--fw-medium);color:var(--warn)}
+.riskacc :is(h2,h3,h4,h5,h6){font-size:var(--fs-md);font-weight:var(--fw-medium);color:var(--warn)}
 .riskacc ul{margin:0;padding-left:1.1rem;display:grid;gap:var(--sp-1)}
 .riskacc .check{margin-top:var(--sp-1);font-weight:var(--fw-medium)}
 .submit-row{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-3)}
 .submit-row .hint{flex-basis:100%}
 /* error summary (GOV.UK pattern): a bad callout, focused on load, one link per field error */
 .errsum:focus{outline:var(--focus-ring);outline-offset:2px}
-.errsum h2,.errsum h3{font-size:var(--fs-md);line-height:var(--lh-md);font-weight:600}
+.errsum :is(h2,h3,h4,h5,h6){font-size:var(--fs-md);line-height:var(--lh-md);font-weight:600}
 .errsum ul{margin:var(--sp-1) 0 0;padding-left:1.1rem;display:grid;gap:2px}
 .errsum a{color:var(--bad);font-weight:var(--fw-medium)}
 /* stepper form sections (one page, numbered steps) */
@@ -565,8 +625,8 @@ details.type-card[open] .sel{display:inline}
 .tcard{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:2px var(--sp-3);align-items:center;padding:var(--sp-3) var(--sp-4);border:1px solid var(--line-strong);border-radius:var(--r-3);background:var(--panel-bg);color:var(--text);text-decoration:none}
 .tcard:hover{border-color:var(--accent)}
 .tcard>.logo{grid-row:1/3}
-.tcard .t{font-weight:var(--fw-medium)}
-.tcard .d{grid-column:2;font-size:var(--fs-sm);color:var(--text-2)}
+.tcard .t{min-width:0;font-weight:var(--fw-medium);overflow-wrap:anywhere}
+.tcard .d{grid-column:2;min-width:0;font-size:var(--fs-sm);color:var(--text-2);overflow-wrap:anywhere}   /* a long issuer host breaks inside its card */
 .tcard .go{grid-row:1/3;grid-column:3;color:var(--text-3)}
 .tcards>li{display:grid}  /* a card in a list item fills its cell */
 .tcard{align-content:center}  /* a taller card (its row neighbour wraps more) keeps title and line together, not spread apart */
@@ -580,45 +640,45 @@ pre.code .k{color:var(--accent-text)}
 .code-cap{margin-bottom:6px;font-size:var(--fs-xs);color:var(--text-2)}
 
 /* ===== 10. Live form (:has) — generic, no per-page CSS ====================
-   Scope: <form class="lform">. A field is a fieldset with class .sf1 … .sf6.
+   Scope: <form class="lform">. A field is a fieldset with class .sf1 … .sf8.
    Each option label in it carries data-o="1" … "12". Dependent elements:
      summary phrase: .sv1 > [data-o="K"]   (inline, shown when option K of field 1 is checked)
      reveal box:     .rv1[data-o="K"]      (block, shown when option K of field 1 is checked)
      empty phrase:   .sv1 > [data-o="0"]   (shown while field 1 has nothing checked)
    An option label with data-risk reveals .riskacc and swaps .if-risk / .if-norisk.
    Never put `required` on inputs inside a .rv box: the server validates them. */
-.lform :is(.sv1,.sv2,.sv3,.sv4,.sv5,.sv6)>[data-o]{display:none}
-.lform :is(.rv1,.rv2,.rv3,.rv4,.rv5,.rv6)[data-o]{display:none}
+.lform :is(.sv1,.sv2,.sv3,.sv4,.sv5,.sv6,.sv7,.sv8)>[data-o]{display:none}
+.lform :is(.rv1,.rv2,.rv3,.rv4,.rv5,.rv6,.rv7,.rv8)[data-o]{display:none}
 .lform .riskacc,.lform .if-risk{display:none}
 .lform:has([data-risk] input:checked) .riskacc{display:grid}
 .lform:has([data-risk] input:checked) .if-risk{display:inline}
 .lform:has([data-risk] input:checked) .if-norisk{display:none}
-.lform:not(:has(.sf1 input:checked)) .sv1>[data-o="0"],.lform:not(:has(.sf2 input:checked)) .sv2>[data-o="0"],.lform:not(:has(.sf3 input:checked)) .sv3>[data-o="0"],.lform:not(:has(.sf4 input:checked)) .sv4>[data-o="0"],.lform:not(:has(.sf5 input:checked)) .sv5>[data-o="0"],.lform:not(:has(.sf6 input:checked)) .sv6>[data-o="0"]{display:inline}
-/* generated: K = 1..12, N = 1..6 */
-.lform:has(.sf1 [data-o="1"] input:checked) .sv1>[data-o="1"],.lform:has(.sf2 [data-o="1"] input:checked) .sv2>[data-o="1"],.lform:has(.sf3 [data-o="1"] input:checked) .sv3>[data-o="1"],.lform:has(.sf4 [data-o="1"] input:checked) .sv4>[data-o="1"],.lform:has(.sf5 [data-o="1"] input:checked) .sv5>[data-o="1"],.lform:has(.sf6 [data-o="1"] input:checked) .sv6>[data-o="1"],
-.lform:has(.sf1 [data-o="2"] input:checked) .sv1>[data-o="2"],.lform:has(.sf2 [data-o="2"] input:checked) .sv2>[data-o="2"],.lform:has(.sf3 [data-o="2"] input:checked) .sv3>[data-o="2"],.lform:has(.sf4 [data-o="2"] input:checked) .sv4>[data-o="2"],.lform:has(.sf5 [data-o="2"] input:checked) .sv5>[data-o="2"],.lform:has(.sf6 [data-o="2"] input:checked) .sv6>[data-o="2"],
-.lform:has(.sf1 [data-o="3"] input:checked) .sv1>[data-o="3"],.lform:has(.sf2 [data-o="3"] input:checked) .sv2>[data-o="3"],.lform:has(.sf3 [data-o="3"] input:checked) .sv3>[data-o="3"],.lform:has(.sf4 [data-o="3"] input:checked) .sv4>[data-o="3"],.lform:has(.sf5 [data-o="3"] input:checked) .sv5>[data-o="3"],.lform:has(.sf6 [data-o="3"] input:checked) .sv6>[data-o="3"],
-.lform:has(.sf1 [data-o="4"] input:checked) .sv1>[data-o="4"],.lform:has(.sf2 [data-o="4"] input:checked) .sv2>[data-o="4"],.lform:has(.sf3 [data-o="4"] input:checked) .sv3>[data-o="4"],.lform:has(.sf4 [data-o="4"] input:checked) .sv4>[data-o="4"],.lform:has(.sf5 [data-o="4"] input:checked) .sv5>[data-o="4"],.lform:has(.sf6 [data-o="4"] input:checked) .sv6>[data-o="4"],
-.lform:has(.sf1 [data-o="5"] input:checked) .sv1>[data-o="5"],.lform:has(.sf2 [data-o="5"] input:checked) .sv2>[data-o="5"],.lform:has(.sf3 [data-o="5"] input:checked) .sv3>[data-o="5"],.lform:has(.sf4 [data-o="5"] input:checked) .sv4>[data-o="5"],.lform:has(.sf5 [data-o="5"] input:checked) .sv5>[data-o="5"],.lform:has(.sf6 [data-o="5"] input:checked) .sv6>[data-o="5"],
-.lform:has(.sf1 [data-o="6"] input:checked) .sv1>[data-o="6"],.lform:has(.sf2 [data-o="6"] input:checked) .sv2>[data-o="6"],.lform:has(.sf3 [data-o="6"] input:checked) .sv3>[data-o="6"],.lform:has(.sf4 [data-o="6"] input:checked) .sv4>[data-o="6"],.lform:has(.sf5 [data-o="6"] input:checked) .sv5>[data-o="6"],.lform:has(.sf6 [data-o="6"] input:checked) .sv6>[data-o="6"],
-.lform:has(.sf1 [data-o="7"] input:checked) .sv1>[data-o="7"],.lform:has(.sf2 [data-o="7"] input:checked) .sv2>[data-o="7"],.lform:has(.sf3 [data-o="7"] input:checked) .sv3>[data-o="7"],.lform:has(.sf4 [data-o="7"] input:checked) .sv4>[data-o="7"],.lform:has(.sf5 [data-o="7"] input:checked) .sv5>[data-o="7"],.lform:has(.sf6 [data-o="7"] input:checked) .sv6>[data-o="7"],
-.lform:has(.sf1 [data-o="8"] input:checked) .sv1>[data-o="8"],.lform:has(.sf2 [data-o="8"] input:checked) .sv2>[data-o="8"],.lform:has(.sf3 [data-o="8"] input:checked) .sv3>[data-o="8"],.lform:has(.sf4 [data-o="8"] input:checked) .sv4>[data-o="8"],.lform:has(.sf5 [data-o="8"] input:checked) .sv5>[data-o="8"],.lform:has(.sf6 [data-o="8"] input:checked) .sv6>[data-o="8"],
-.lform:has(.sf1 [data-o="9"] input:checked) .sv1>[data-o="9"],.lform:has(.sf2 [data-o="9"] input:checked) .sv2>[data-o="9"],.lform:has(.sf3 [data-o="9"] input:checked) .sv3>[data-o="9"],.lform:has(.sf4 [data-o="9"] input:checked) .sv4>[data-o="9"],.lform:has(.sf5 [data-o="9"] input:checked) .sv5>[data-o="9"],.lform:has(.sf6 [data-o="9"] input:checked) .sv6>[data-o="9"],
-.lform:has(.sf1 [data-o="10"] input:checked) .sv1>[data-o="10"],.lform:has(.sf2 [data-o="10"] input:checked) .sv2>[data-o="10"],.lform:has(.sf3 [data-o="10"] input:checked) .sv3>[data-o="10"],.lform:has(.sf4 [data-o="10"] input:checked) .sv4>[data-o="10"],.lform:has(.sf5 [data-o="10"] input:checked) .sv5>[data-o="10"],.lform:has(.sf6 [data-o="10"] input:checked) .sv6>[data-o="10"],
-.lform:has(.sf1 [data-o="11"] input:checked) .sv1>[data-o="11"],.lform:has(.sf2 [data-o="11"] input:checked) .sv2>[data-o="11"],.lform:has(.sf3 [data-o="11"] input:checked) .sv3>[data-o="11"],.lform:has(.sf4 [data-o="11"] input:checked) .sv4>[data-o="11"],.lform:has(.sf5 [data-o="11"] input:checked) .sv5>[data-o="11"],.lform:has(.sf6 [data-o="11"] input:checked) .sv6>[data-o="11"],
-.lform:has(.sf1 [data-o="12"] input:checked) .sv1>[data-o="12"],.lform:has(.sf2 [data-o="12"] input:checked) .sv2>[data-o="12"],.lform:has(.sf3 [data-o="12"] input:checked) .sv3>[data-o="12"],.lform:has(.sf4 [data-o="12"] input:checked) .sv4>[data-o="12"],.lform:has(.sf5 [data-o="12"] input:checked) .sv5>[data-o="12"],.lform:has(.sf6 [data-o="12"] input:checked) .sv6>[data-o="12"]{display:inline}
-.lform:has(.sf1 [data-o="1"] input:checked) .rv1[data-o="1"],.lform:has(.sf2 [data-o="1"] input:checked) .rv2[data-o="1"],.lform:has(.sf3 [data-o="1"] input:checked) .rv3[data-o="1"],.lform:has(.sf4 [data-o="1"] input:checked) .rv4[data-o="1"],.lform:has(.sf5 [data-o="1"] input:checked) .rv5[data-o="1"],.lform:has(.sf6 [data-o="1"] input:checked) .rv6[data-o="1"],
-.lform:has(.sf1 [data-o="2"] input:checked) .rv1[data-o="2"],.lform:has(.sf2 [data-o="2"] input:checked) .rv2[data-o="2"],.lform:has(.sf3 [data-o="2"] input:checked) .rv3[data-o="2"],.lform:has(.sf4 [data-o="2"] input:checked) .rv4[data-o="2"],.lform:has(.sf5 [data-o="2"] input:checked) .rv5[data-o="2"],.lform:has(.sf6 [data-o="2"] input:checked) .rv6[data-o="2"],
-.lform:has(.sf1 [data-o="3"] input:checked) .rv1[data-o="3"],.lform:has(.sf2 [data-o="3"] input:checked) .rv2[data-o="3"],.lform:has(.sf3 [data-o="3"] input:checked) .rv3[data-o="3"],.lform:has(.sf4 [data-o="3"] input:checked) .rv4[data-o="3"],.lform:has(.sf5 [data-o="3"] input:checked) .rv5[data-o="3"],.lform:has(.sf6 [data-o="3"] input:checked) .rv6[data-o="3"],
-.lform:has(.sf1 [data-o="4"] input:checked) .rv1[data-o="4"],.lform:has(.sf2 [data-o="4"] input:checked) .rv2[data-o="4"],.lform:has(.sf3 [data-o="4"] input:checked) .rv3[data-o="4"],.lform:has(.sf4 [data-o="4"] input:checked) .rv4[data-o="4"],.lform:has(.sf5 [data-o="4"] input:checked) .rv5[data-o="4"],.lform:has(.sf6 [data-o="4"] input:checked) .rv6[data-o="4"],
-.lform:has(.sf1 [data-o="5"] input:checked) .rv1[data-o="5"],.lform:has(.sf2 [data-o="5"] input:checked) .rv2[data-o="5"],.lform:has(.sf3 [data-o="5"] input:checked) .rv3[data-o="5"],.lform:has(.sf4 [data-o="5"] input:checked) .rv4[data-o="5"],.lform:has(.sf5 [data-o="5"] input:checked) .rv5[data-o="5"],.lform:has(.sf6 [data-o="5"] input:checked) .rv6[data-o="5"],
-.lform:has(.sf1 [data-o="6"] input:checked) .rv1[data-o="6"],.lform:has(.sf2 [data-o="6"] input:checked) .rv2[data-o="6"],.lform:has(.sf3 [data-o="6"] input:checked) .rv3[data-o="6"],.lform:has(.sf4 [data-o="6"] input:checked) .rv4[data-o="6"],.lform:has(.sf5 [data-o="6"] input:checked) .rv5[data-o="6"],.lform:has(.sf6 [data-o="6"] input:checked) .rv6[data-o="6"],
-.lform:has(.sf1 [data-o="7"] input:checked) .rv1[data-o="7"],.lform:has(.sf2 [data-o="7"] input:checked) .rv2[data-o="7"],.lform:has(.sf3 [data-o="7"] input:checked) .rv3[data-o="7"],.lform:has(.sf4 [data-o="7"] input:checked) .rv4[data-o="7"],.lform:has(.sf5 [data-o="7"] input:checked) .rv5[data-o="7"],.lform:has(.sf6 [data-o="7"] input:checked) .rv6[data-o="7"],
-.lform:has(.sf1 [data-o="8"] input:checked) .rv1[data-o="8"],.lform:has(.sf2 [data-o="8"] input:checked) .rv2[data-o="8"],.lform:has(.sf3 [data-o="8"] input:checked) .rv3[data-o="8"],.lform:has(.sf4 [data-o="8"] input:checked) .rv4[data-o="8"],.lform:has(.sf5 [data-o="8"] input:checked) .rv5[data-o="8"],.lform:has(.sf6 [data-o="8"] input:checked) .rv6[data-o="8"],
-.lform:has(.sf1 [data-o="9"] input:checked) .rv1[data-o="9"],.lform:has(.sf2 [data-o="9"] input:checked) .rv2[data-o="9"],.lform:has(.sf3 [data-o="9"] input:checked) .rv3[data-o="9"],.lform:has(.sf4 [data-o="9"] input:checked) .rv4[data-o="9"],.lform:has(.sf5 [data-o="9"] input:checked) .rv5[data-o="9"],.lform:has(.sf6 [data-o="9"] input:checked) .rv6[data-o="9"],
-.lform:has(.sf1 [data-o="10"] input:checked) .rv1[data-o="10"],.lform:has(.sf2 [data-o="10"] input:checked) .rv2[data-o="10"],.lform:has(.sf3 [data-o="10"] input:checked) .rv3[data-o="10"],.lform:has(.sf4 [data-o="10"] input:checked) .rv4[data-o="10"],.lform:has(.sf5 [data-o="10"] input:checked) .rv5[data-o="10"],.lform:has(.sf6 [data-o="10"] input:checked) .rv6[data-o="10"],
-.lform:has(.sf1 [data-o="11"] input:checked) .rv1[data-o="11"],.lform:has(.sf2 [data-o="11"] input:checked) .rv2[data-o="11"],.lform:has(.sf3 [data-o="11"] input:checked) .rv3[data-o="11"],.lform:has(.sf4 [data-o="11"] input:checked) .rv4[data-o="11"],.lform:has(.sf5 [data-o="11"] input:checked) .rv5[data-o="11"],.lform:has(.sf6 [data-o="11"] input:checked) .rv6[data-o="11"],
-.lform:has(.sf1 [data-o="12"] input:checked) .rv1[data-o="12"],.lform:has(.sf2 [data-o="12"] input:checked) .rv2[data-o="12"],.lform:has(.sf3 [data-o="12"] input:checked) .rv3[data-o="12"],.lform:has(.sf4 [data-o="12"] input:checked) .rv4[data-o="12"],.lform:has(.sf5 [data-o="12"] input:checked) .rv5[data-o="12"],.lform:has(.sf6 [data-o="12"] input:checked) .rv6[data-o="12"]{display:grid}
+.lform:not(:has(.sf1 input:checked)) .sv1>[data-o="0"],.lform:not(:has(.sf2 input:checked)) .sv2>[data-o="0"],.lform:not(:has(.sf3 input:checked)) .sv3>[data-o="0"],.lform:not(:has(.sf4 input:checked)) .sv4>[data-o="0"],.lform:not(:has(.sf5 input:checked)) .sv5>[data-o="0"],.lform:not(:has(.sf6 input:checked)) .sv6>[data-o="0"],.lform:not(:has(.sf7 input:checked)) .sv7>[data-o="0"],.lform:not(:has(.sf8 input:checked)) .sv8>[data-o="0"]{display:inline}
+/* generated: K = 1..12, N = 1..8 */
+.lform:has(.sf1 [data-o="1"] input:checked) .sv1>[data-o="1"],.lform:has(.sf2 [data-o="1"] input:checked) .sv2>[data-o="1"],.lform:has(.sf3 [data-o="1"] input:checked) .sv3>[data-o="1"],.lform:has(.sf4 [data-o="1"] input:checked) .sv4>[data-o="1"],.lform:has(.sf5 [data-o="1"] input:checked) .sv5>[data-o="1"],.lform:has(.sf6 [data-o="1"] input:checked) .sv6>[data-o="1"],.lform:has(.sf7 [data-o="1"] input:checked) .sv7>[data-o="1"],.lform:has(.sf8 [data-o="1"] input:checked) .sv8>[data-o="1"],
+.lform:has(.sf1 [data-o="2"] input:checked) .sv1>[data-o="2"],.lform:has(.sf2 [data-o="2"] input:checked) .sv2>[data-o="2"],.lform:has(.sf3 [data-o="2"] input:checked) .sv3>[data-o="2"],.lform:has(.sf4 [data-o="2"] input:checked) .sv4>[data-o="2"],.lform:has(.sf5 [data-o="2"] input:checked) .sv5>[data-o="2"],.lform:has(.sf6 [data-o="2"] input:checked) .sv6>[data-o="2"],.lform:has(.sf7 [data-o="2"] input:checked) .sv7>[data-o="2"],.lform:has(.sf8 [data-o="2"] input:checked) .sv8>[data-o="2"],
+.lform:has(.sf1 [data-o="3"] input:checked) .sv1>[data-o="3"],.lform:has(.sf2 [data-o="3"] input:checked) .sv2>[data-o="3"],.lform:has(.sf3 [data-o="3"] input:checked) .sv3>[data-o="3"],.lform:has(.sf4 [data-o="3"] input:checked) .sv4>[data-o="3"],.lform:has(.sf5 [data-o="3"] input:checked) .sv5>[data-o="3"],.lform:has(.sf6 [data-o="3"] input:checked) .sv6>[data-o="3"],.lform:has(.sf7 [data-o="3"] input:checked) .sv7>[data-o="3"],.lform:has(.sf8 [data-o="3"] input:checked) .sv8>[data-o="3"],
+.lform:has(.sf1 [data-o="4"] input:checked) .sv1>[data-o="4"],.lform:has(.sf2 [data-o="4"] input:checked) .sv2>[data-o="4"],.lform:has(.sf3 [data-o="4"] input:checked) .sv3>[data-o="4"],.lform:has(.sf4 [data-o="4"] input:checked) .sv4>[data-o="4"],.lform:has(.sf5 [data-o="4"] input:checked) .sv5>[data-o="4"],.lform:has(.sf6 [data-o="4"] input:checked) .sv6>[data-o="4"],.lform:has(.sf7 [data-o="4"] input:checked) .sv7>[data-o="4"],.lform:has(.sf8 [data-o="4"] input:checked) .sv8>[data-o="4"],
+.lform:has(.sf1 [data-o="5"] input:checked) .sv1>[data-o="5"],.lform:has(.sf2 [data-o="5"] input:checked) .sv2>[data-o="5"],.lform:has(.sf3 [data-o="5"] input:checked) .sv3>[data-o="5"],.lform:has(.sf4 [data-o="5"] input:checked) .sv4>[data-o="5"],.lform:has(.sf5 [data-o="5"] input:checked) .sv5>[data-o="5"],.lform:has(.sf6 [data-o="5"] input:checked) .sv6>[data-o="5"],.lform:has(.sf7 [data-o="5"] input:checked) .sv7>[data-o="5"],.lform:has(.sf8 [data-o="5"] input:checked) .sv8>[data-o="5"],
+.lform:has(.sf1 [data-o="6"] input:checked) .sv1>[data-o="6"],.lform:has(.sf2 [data-o="6"] input:checked) .sv2>[data-o="6"],.lform:has(.sf3 [data-o="6"] input:checked) .sv3>[data-o="6"],.lform:has(.sf4 [data-o="6"] input:checked) .sv4>[data-o="6"],.lform:has(.sf5 [data-o="6"] input:checked) .sv5>[data-o="6"],.lform:has(.sf6 [data-o="6"] input:checked) .sv6>[data-o="6"],.lform:has(.sf7 [data-o="6"] input:checked) .sv7>[data-o="6"],.lform:has(.sf8 [data-o="6"] input:checked) .sv8>[data-o="6"],
+.lform:has(.sf1 [data-o="7"] input:checked) .sv1>[data-o="7"],.lform:has(.sf2 [data-o="7"] input:checked) .sv2>[data-o="7"],.lform:has(.sf3 [data-o="7"] input:checked) .sv3>[data-o="7"],.lform:has(.sf4 [data-o="7"] input:checked) .sv4>[data-o="7"],.lform:has(.sf5 [data-o="7"] input:checked) .sv5>[data-o="7"],.lform:has(.sf6 [data-o="7"] input:checked) .sv6>[data-o="7"],.lform:has(.sf7 [data-o="7"] input:checked) .sv7>[data-o="7"],.lform:has(.sf8 [data-o="7"] input:checked) .sv8>[data-o="7"],
+.lform:has(.sf1 [data-o="8"] input:checked) .sv1>[data-o="8"],.lform:has(.sf2 [data-o="8"] input:checked) .sv2>[data-o="8"],.lform:has(.sf3 [data-o="8"] input:checked) .sv3>[data-o="8"],.lform:has(.sf4 [data-o="8"] input:checked) .sv4>[data-o="8"],.lform:has(.sf5 [data-o="8"] input:checked) .sv5>[data-o="8"],.lform:has(.sf6 [data-o="8"] input:checked) .sv6>[data-o="8"],.lform:has(.sf7 [data-o="8"] input:checked) .sv7>[data-o="8"],.lform:has(.sf8 [data-o="8"] input:checked) .sv8>[data-o="8"],
+.lform:has(.sf1 [data-o="9"] input:checked) .sv1>[data-o="9"],.lform:has(.sf2 [data-o="9"] input:checked) .sv2>[data-o="9"],.lform:has(.sf3 [data-o="9"] input:checked) .sv3>[data-o="9"],.lform:has(.sf4 [data-o="9"] input:checked) .sv4>[data-o="9"],.lform:has(.sf5 [data-o="9"] input:checked) .sv5>[data-o="9"],.lform:has(.sf6 [data-o="9"] input:checked) .sv6>[data-o="9"],.lform:has(.sf7 [data-o="9"] input:checked) .sv7>[data-o="9"],.lform:has(.sf8 [data-o="9"] input:checked) .sv8>[data-o="9"],
+.lform:has(.sf1 [data-o="10"] input:checked) .sv1>[data-o="10"],.lform:has(.sf2 [data-o="10"] input:checked) .sv2>[data-o="10"],.lform:has(.sf3 [data-o="10"] input:checked) .sv3>[data-o="10"],.lform:has(.sf4 [data-o="10"] input:checked) .sv4>[data-o="10"],.lform:has(.sf5 [data-o="10"] input:checked) .sv5>[data-o="10"],.lform:has(.sf6 [data-o="10"] input:checked) .sv6>[data-o="10"],.lform:has(.sf7 [data-o="10"] input:checked) .sv7>[data-o="10"],.lform:has(.sf8 [data-o="10"] input:checked) .sv8>[data-o="10"],
+.lform:has(.sf1 [data-o="11"] input:checked) .sv1>[data-o="11"],.lform:has(.sf2 [data-o="11"] input:checked) .sv2>[data-o="11"],.lform:has(.sf3 [data-o="11"] input:checked) .sv3>[data-o="11"],.lform:has(.sf4 [data-o="11"] input:checked) .sv4>[data-o="11"],.lform:has(.sf5 [data-o="11"] input:checked) .sv5>[data-o="11"],.lform:has(.sf6 [data-o="11"] input:checked) .sv6>[data-o="11"],.lform:has(.sf7 [data-o="11"] input:checked) .sv7>[data-o="11"],.lform:has(.sf8 [data-o="11"] input:checked) .sv8>[data-o="11"],
+.lform:has(.sf1 [data-o="12"] input:checked) .sv1>[data-o="12"],.lform:has(.sf2 [data-o="12"] input:checked) .sv2>[data-o="12"],.lform:has(.sf3 [data-o="12"] input:checked) .sv3>[data-o="12"],.lform:has(.sf4 [data-o="12"] input:checked) .sv4>[data-o="12"],.lform:has(.sf5 [data-o="12"] input:checked) .sv5>[data-o="12"],.lform:has(.sf6 [data-o="12"] input:checked) .sv6>[data-o="12"],.lform:has(.sf7 [data-o="12"] input:checked) .sv7>[data-o="12"],.lform:has(.sf8 [data-o="12"] input:checked) .sv8>[data-o="12"]{display:inline}
+.lform:has(.sf1 [data-o="1"] input:checked) .rv1[data-o="1"],.lform:has(.sf2 [data-o="1"] input:checked) .rv2[data-o="1"],.lform:has(.sf3 [data-o="1"] input:checked) .rv3[data-o="1"],.lform:has(.sf4 [data-o="1"] input:checked) .rv4[data-o="1"],.lform:has(.sf5 [data-o="1"] input:checked) .rv5[data-o="1"],.lform:has(.sf6 [data-o="1"] input:checked) .rv6[data-o="1"],.lform:has(.sf7 [data-o="1"] input:checked) .rv7[data-o="1"],.lform:has(.sf8 [data-o="1"] input:checked) .rv8[data-o="1"],
+.lform:has(.sf1 [data-o="2"] input:checked) .rv1[data-o="2"],.lform:has(.sf2 [data-o="2"] input:checked) .rv2[data-o="2"],.lform:has(.sf3 [data-o="2"] input:checked) .rv3[data-o="2"],.lform:has(.sf4 [data-o="2"] input:checked) .rv4[data-o="2"],.lform:has(.sf5 [data-o="2"] input:checked) .rv5[data-o="2"],.lform:has(.sf6 [data-o="2"] input:checked) .rv6[data-o="2"],.lform:has(.sf7 [data-o="2"] input:checked) .rv7[data-o="2"],.lform:has(.sf8 [data-o="2"] input:checked) .rv8[data-o="2"],
+.lform:has(.sf1 [data-o="3"] input:checked) .rv1[data-o="3"],.lform:has(.sf2 [data-o="3"] input:checked) .rv2[data-o="3"],.lform:has(.sf3 [data-o="3"] input:checked) .rv3[data-o="3"],.lform:has(.sf4 [data-o="3"] input:checked) .rv4[data-o="3"],.lform:has(.sf5 [data-o="3"] input:checked) .rv5[data-o="3"],.lform:has(.sf6 [data-o="3"] input:checked) .rv6[data-o="3"],.lform:has(.sf7 [data-o="3"] input:checked) .rv7[data-o="3"],.lform:has(.sf8 [data-o="3"] input:checked) .rv8[data-o="3"],
+.lform:has(.sf1 [data-o="4"] input:checked) .rv1[data-o="4"],.lform:has(.sf2 [data-o="4"] input:checked) .rv2[data-o="4"],.lform:has(.sf3 [data-o="4"] input:checked) .rv3[data-o="4"],.lform:has(.sf4 [data-o="4"] input:checked) .rv4[data-o="4"],.lform:has(.sf5 [data-o="4"] input:checked) .rv5[data-o="4"],.lform:has(.sf6 [data-o="4"] input:checked) .rv6[data-o="4"],.lform:has(.sf7 [data-o="4"] input:checked) .rv7[data-o="4"],.lform:has(.sf8 [data-o="4"] input:checked) .rv8[data-o="4"],
+.lform:has(.sf1 [data-o="5"] input:checked) .rv1[data-o="5"],.lform:has(.sf2 [data-o="5"] input:checked) .rv2[data-o="5"],.lform:has(.sf3 [data-o="5"] input:checked) .rv3[data-o="5"],.lform:has(.sf4 [data-o="5"] input:checked) .rv4[data-o="5"],.lform:has(.sf5 [data-o="5"] input:checked) .rv5[data-o="5"],.lform:has(.sf6 [data-o="5"] input:checked) .rv6[data-o="5"],.lform:has(.sf7 [data-o="5"] input:checked) .rv7[data-o="5"],.lform:has(.sf8 [data-o="5"] input:checked) .rv8[data-o="5"],
+.lform:has(.sf1 [data-o="6"] input:checked) .rv1[data-o="6"],.lform:has(.sf2 [data-o="6"] input:checked) .rv2[data-o="6"],.lform:has(.sf3 [data-o="6"] input:checked) .rv3[data-o="6"],.lform:has(.sf4 [data-o="6"] input:checked) .rv4[data-o="6"],.lform:has(.sf5 [data-o="6"] input:checked) .rv5[data-o="6"],.lform:has(.sf6 [data-o="6"] input:checked) .rv6[data-o="6"],.lform:has(.sf7 [data-o="6"] input:checked) .rv7[data-o="6"],.lform:has(.sf8 [data-o="6"] input:checked) .rv8[data-o="6"],
+.lform:has(.sf1 [data-o="7"] input:checked) .rv1[data-o="7"],.lform:has(.sf2 [data-o="7"] input:checked) .rv2[data-o="7"],.lform:has(.sf3 [data-o="7"] input:checked) .rv3[data-o="7"],.lform:has(.sf4 [data-o="7"] input:checked) .rv4[data-o="7"],.lform:has(.sf5 [data-o="7"] input:checked) .rv5[data-o="7"],.lform:has(.sf6 [data-o="7"] input:checked) .rv6[data-o="7"],.lform:has(.sf7 [data-o="7"] input:checked) .rv7[data-o="7"],.lform:has(.sf8 [data-o="7"] input:checked) .rv8[data-o="7"],
+.lform:has(.sf1 [data-o="8"] input:checked) .rv1[data-o="8"],.lform:has(.sf2 [data-o="8"] input:checked) .rv2[data-o="8"],.lform:has(.sf3 [data-o="8"] input:checked) .rv3[data-o="8"],.lform:has(.sf4 [data-o="8"] input:checked) .rv4[data-o="8"],.lform:has(.sf5 [data-o="8"] input:checked) .rv5[data-o="8"],.lform:has(.sf6 [data-o="8"] input:checked) .rv6[data-o="8"],.lform:has(.sf7 [data-o="8"] input:checked) .rv7[data-o="8"],.lform:has(.sf8 [data-o="8"] input:checked) .rv8[data-o="8"],
+.lform:has(.sf1 [data-o="9"] input:checked) .rv1[data-o="9"],.lform:has(.sf2 [data-o="9"] input:checked) .rv2[data-o="9"],.lform:has(.sf3 [data-o="9"] input:checked) .rv3[data-o="9"],.lform:has(.sf4 [data-o="9"] input:checked) .rv4[data-o="9"],.lform:has(.sf5 [data-o="9"] input:checked) .rv5[data-o="9"],.lform:has(.sf6 [data-o="9"] input:checked) .rv6[data-o="9"],.lform:has(.sf7 [data-o="9"] input:checked) .rv7[data-o="9"],.lform:has(.sf8 [data-o="9"] input:checked) .rv8[data-o="9"],
+.lform:has(.sf1 [data-o="10"] input:checked) .rv1[data-o="10"],.lform:has(.sf2 [data-o="10"] input:checked) .rv2[data-o="10"],.lform:has(.sf3 [data-o="10"] input:checked) .rv3[data-o="10"],.lform:has(.sf4 [data-o="10"] input:checked) .rv4[data-o="10"],.lform:has(.sf5 [data-o="10"] input:checked) .rv5[data-o="10"],.lform:has(.sf6 [data-o="10"] input:checked) .rv6[data-o="10"],.lform:has(.sf7 [data-o="10"] input:checked) .rv7[data-o="10"],.lform:has(.sf8 [data-o="10"] input:checked) .rv8[data-o="10"],
+.lform:has(.sf1 [data-o="11"] input:checked) .rv1[data-o="11"],.lform:has(.sf2 [data-o="11"] input:checked) .rv2[data-o="11"],.lform:has(.sf3 [data-o="11"] input:checked) .rv3[data-o="11"],.lform:has(.sf4 [data-o="11"] input:checked) .rv4[data-o="11"],.lform:has(.sf5 [data-o="11"] input:checked) .rv5[data-o="11"],.lform:has(.sf6 [data-o="11"] input:checked) .rv6[data-o="11"],.lform:has(.sf7 [data-o="11"] input:checked) .rv7[data-o="11"],.lform:has(.sf8 [data-o="11"] input:checked) .rv8[data-o="11"],
+.lform:has(.sf1 [data-o="12"] input:checked) .rv1[data-o="12"],.lform:has(.sf2 [data-o="12"] input:checked) .rv2[data-o="12"],.lform:has(.sf3 [data-o="12"] input:checked) .rv3[data-o="12"],.lform:has(.sf4 [data-o="12"] input:checked) .rv4[data-o="12"],.lform:has(.sf5 [data-o="12"] input:checked) .rv5[data-o="12"],.lform:has(.sf6 [data-o="12"] input:checked) .rv6[data-o="12"],.lform:has(.sf7 [data-o="12"] input:checked) .rv7[data-o="12"],.lform:has(.sf8 [data-o="12"] input:checked) .rv8[data-o="12"]{display:grid}
 /* checkbox count in a summary or label (decoration only) */
 .lform .count-scope{counter-reset:opsn}
 .lform .count-scope input[type=checkbox]:checked{counter-increment:opsn}
@@ -636,6 +696,10 @@ pre.code .k{color:var(--accent-text)}
 .lsum .ico{display:grid;place-items:center;width:var(--logo-md);height:var(--logo-md);border-radius:var(--r-2);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--text-2)}
 .lsum-foot{margin-top:var(--sp-4);padding-top:var(--sp-3);border-top:1px solid var(--line);font-size:var(--fs-sm);color:var(--text-2)}
 .lsum-foot b{color:var(--text);font-weight:var(--fw-medium)}
+/* plan diagram (LiveSummary variant="plan"): dashed wires, the parts are not built yet */
+.lsum.plan .lsum-wire{border-left-style:dashed}
+.lsum.plan .lsum-row .meta{margin-top:2px}
+.lsum .ico svg.ic{width:16px;height:16px}
 
 /* ===== 11. Key-value, rail, feed, masked secret ========================== */
 .kv{display:grid;grid-template-columns:12rem minmax(0,1fr);margin:0}
@@ -725,7 +789,7 @@ dialog.dlg:popover-open{display:flex;flex-direction:column;inset:0;margin:auto}
 /* server-rendered open (re-shown after a failed submit, or a GET confirm page): in the page flow, not an overlay */
 dialog.dlg[open]:not(:modal){position:relative;inset:auto;margin:0;max-width:100%;max-height:none}
 .dlg-h{display:flex;flex-direction:column;gap:var(--sp-1);padding:var(--sp-5) var(--sp-6) 0}
-.dlg-h h2{font-size:var(--fs-xl);line-height:var(--lh-xl);font-weight:var(--fw-medium)}
+.dlg-h :is(h2,h3,h4,h5,h6){font-size:var(--fs-xl);line-height:var(--lh-xl);font-weight:var(--fw-medium)}
 .dlg-h p{color:var(--text-2)}
 .dlg-b{display:flex;flex-direction:column;gap:var(--sp-5);flex:1 1 auto;min-height:0;overflow:auto;padding:var(--sp-5) var(--sp-6)}
 .dlg-f{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:var(--sp-2);padding:var(--sp-4) var(--sp-6);border-top:1px solid var(--line);background:var(--surface-2)}
@@ -746,6 +810,14 @@ dialog.dlg[open]:not(:modal){position:relative;inset:auto;margin:0;max-width:100
 .kpi .kpi-l{margin-top:var(--sp-2);font-size:var(--fs-sm)}
 .kpi.tone-warn{background:var(--warn-bg);box-shadow:inset 0 0 0 1px var(--warn-dot)}
 .kpi.tone-warn :is(dt,.kpi-m,.kpi-n small,.kpi-l a){color:var(--warn)}
+/* KPIs in a rail (Kpis columns={2}): 2 × 2 compact tiles, straight in the tray */
+.kpis.c2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.kpis.c2 .kpi{padding:var(--sp-3) var(--sp-4)}
+.kpis.c2 .kpi-n{font-size:var(--fs-2xl);line-height:var(--lh-2xl)}
+.tray>.kpis+.panel{margin-top:4px}
+/* sparkline (Sparkline): a 44px bar chart under rail KPIs, its time labels under it */
+.spark{display:block;width:100%;height:44px}
+.spark-axis{display:flex;justify-content:space-between;margin-top:var(--sp-1);font-size:var(--fs-xs);color:var(--text-3);font-variant-numeric:tabular-nums}
 .delta{display:inline-flex;align-items:center;gap:2px;height:1.25rem;padding:0 6px;border-radius:var(--r-1);background:var(--surface-2);color:var(--text-2);font-size:var(--fs-xs);font-weight:var(--fw-medium);white-space:nowrap}
 .delta.bad{background:var(--bad-bg);color:var(--bad)}
 .delta.warn{background:var(--panel-bg);color:var(--warn);box-shadow:inset 0 0 0 1px var(--warn-dot)}
@@ -759,7 +831,20 @@ dialog.dlg[open]:not(:modal){position:relative;inset:auto;margin:0;max-width:100
 .sw.error{background:radial-gradient(circle,var(--panel-bg) 1px,transparent 1.4px) 0 0/3px 3px,var(--chart-error)}
 .chart{display:block;width:100%;height:auto;overflow:visible}  /* y labels may reach into the panel padding on phones */
 .chart .gridl{stroke:var(--line);stroke-width:1}
-.chart .axis{fill:var(--text-3);font:14px var(--font-sans)}  /* viewBox units: about 12px at 1440 */
+/* axis labels are SVG text in viewBox units (the viewBox is 960 wide), so their rendered size
+   follows the chart width: each band of the chart panel's width picks the size that lands at
+   about 12px (11–13px) from a narrow rail to a full-width tray, and 10–11px on a phone */
+.chart-panel{container-type:inline-size}
+.chart .axis{fill:var(--text-3);font:30px var(--font-sans)}
+/* a phone column has room for every other time label and no "0": they would run into each other */
+@container (max-width:23.99rem){ .chart .axis.xo{display:none} }
+@container (max-width:39.99rem){ .chart .axis.y0{display:none} }
+@container (min-width:24rem){ .chart .axis{font-size:26px} }
+@container (min-width:32rem){ .chart .axis{font-size:20px} }
+@container (min-width:40rem){ .chart .axis{font-size:16.5px} }
+@container (min-width:48rem){ .chart .axis{font-size:14px} }
+@container (min-width:56rem){ .chart .axis{font-size:12.5px} }
+@container (min-width:64rem){ .chart .axis{font-size:11px} }
 .chart .b-allowed{fill:var(--chart-allowed)}
 .chart .b-denied{fill:url(#hatch)} .chart .b-error{fill:url(#dots)}
 .chart .hatch-bg{fill:var(--chart-denied)} .chart .hatch-ln{stroke:var(--panel-bg);stroke-width:1.4}
@@ -784,7 +869,7 @@ a.stage:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 a.stage:hover .stage-go{text-decoration:underline}
 .stage .lbl{font-size:var(--fs-sm);font-weight:var(--fw-medium);color:var(--text-2)}
 .stage .big{margin-top:var(--sp-1);font-size:var(--fs-4xl);line-height:var(--lh-4xl);font-weight:var(--fw-medium);letter-spacing:var(--tracking-tight);font-variant-numeric:tabular-nums}
-.stage .meta{display:flex;flex-wrap:wrap;gap:var(--sp-1) var(--sp-2);align-items:center}
+.stage .meta{display:flex;flex-wrap:wrap;gap:2px var(--sp-1);align-items:center}   /* facts between " · " wrap whole (Pipeline) */
 .stage-go{margin-top:auto;padding-top:var(--sp-2);font-size:var(--fs-sm);font-weight:var(--fw-medium);color:var(--accent-text)}
 .stage.in{box-shadow:inset 0 2px 0 var(--accent),var(--panel-ring)}
 .stage.out{box-shadow:inset 0 2px 0 var(--ok-dot),var(--panel-ring)}
@@ -826,6 +911,14 @@ a.drop:hover .drop-go{text-decoration-thickness:2px}
 .att-a.roles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
 .att-a.roles .btn{width:100%}
 .att-a.roles .linkish{grid-column:1/-1;justify-self:start;font-size:var(--fs-sm)}
+/* decision item (NeedsAttention who): the person, then Approve as … and a separate Reject */
+.att-who{display:flex;align-items:center;gap:var(--sp-3);min-width:0}
+.att-who :is(h2,h3,h4,h5,h6){display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2);font-size:var(--fs-md);line-height:var(--lh-md);font-weight:var(--fw-medium)}
+.att-a fieldset{display:flex;flex-direction:column;gap:6px;min-width:0}
+.att-a fieldset>legend{float:left;font-size:var(--fs-sm);font-weight:var(--fw-medium);color:var(--text-2)}
+.att-a fieldset>legend+*{clear:both}
+.att-a .reject{margin-left:auto;align-self:flex-end}
+@media (max-width:48rem){ .att-a .reject{margin-left:0;align-self:flex-start} }
 
 /* --- Request trace (4 checks) */
 .trace{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--sp-5);margin:0;padding:0;list-style:none}
@@ -851,40 +944,6 @@ mark.ok{background:var(--ok-bg);color:var(--ok)}
 .todo{display:grid;gap:var(--sp-3);padding:var(--sp-4);border-radius:var(--r-3);background:var(--accent-soft);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 35%,transparent)}
 .prefill{display:flex;flex-wrap:wrap;gap:var(--sp-1) var(--sp-2);align-items:center;font-size:var(--fs-sm);color:var(--text-2)}
 
-
-/* --- Split view: request list + detail pane. Each item links to its own URL (?req=), so the
-   server renders the pane and marks the item aria-current="page"; no JS. */
-.split{display:grid;grid-template-columns:minmax(16rem,22rem) minmax(0,1fr);gap:4px;align-items:start}
-.split-list{position:sticky;top:var(--sp-4);display:flex;flex-direction:column;min-width:0;max-height:calc(100dvh - 2 * var(--sp-4));overflow:auto;border-radius:var(--r-3);background:var(--panel-bg);box-shadow:var(--panel-ring)}
-.split-items{margin:0;padding:0;list-style:none}
-.split-items>li+li{border-top:1px solid var(--line)}
-.split-item{display:grid;gap:2px;padding:var(--sp-3) var(--sp-4);color:var(--text);text-decoration:none}
-.split-item:hover{background:var(--row-hover)}
-.split-item[aria-current]{background:var(--accent-soft);box-shadow:inset 3px 0 0 var(--accent)}
-.split-item:focus-visible{outline-offset:-3px}
-.split-top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--sp-1) var(--sp-3);font-size:var(--fs-sm);line-height:var(--lh-sm)}
-.split-t{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-sm);font-weight:var(--fw-medium)}
-.split-item:hover .split-t{color:var(--accent-text);text-decoration:underline}
-.split-item .meta{overflow-wrap:anywhere}
-.split-f{margin-top:auto;padding:var(--sp-2) var(--sp-4);border-top:1px solid var(--line);font-size:var(--fs-sm);color:var(--text-2)}
-.split-pane{display:flex;flex-direction:column;gap:var(--sp-5);min-width:0;padding:var(--sp-5);border-radius:var(--r-3);background:var(--panel-bg);box-shadow:var(--panel-ring)}
-.split-h{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:var(--sp-3) var(--sp-4);padding-bottom:var(--sp-4);border-bottom:1px solid var(--line)}
-.split-h .t{display:flex;flex-direction:column;gap:2px;min-width:0}
-.split-h :is(h2,h3){font-size:var(--fs-lg);line-height:var(--lh-lg);font-weight:var(--fw-medium);overflow-wrap:anywhere}
-.split-h .end{display:flex;flex-wrap:wrap;gap:var(--sp-2);margin-left:auto}
-.split-b{display:flex;flex-direction:column;gap:var(--sp-5);min-width:0}
-/* the pane is narrower than a page: its trace shows 2 per row */
-.split-b .trace{grid-template-columns:repeat(2,minmax(0,1fr))}
-.split-b .tstep:nth-child(odd)::before{display:none}
-@media (max-width:64rem){
-  .split{grid-template-columns:minmax(0,1fr)}
-  .split-list{position:static;max-height:20rem}
-}
-@media (max-width:39.99rem){
-  .chart .axis{font-size:24px}  /* viewBox units: stays readable when the chart is a third of its width */
-  .split-pane{padding:var(--sp-4)}
-  .split-b .trace{grid-template-columns:minmax(0,1fr)}
-}
 
 /* ===== 15. Connections ===================================================== */
 /* --- Arrow (delegation) row: consumer · repo  ->  token · operation */
@@ -922,6 +981,8 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 .node a.id:hover .nm{color:var(--accent-text);text-decoration:underline}
 .node .nm{font-weight:var(--fw-medium);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .node .nl{font-size:var(--fs-sm);line-height:var(--lh-sm);color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* a status line is read as words: it wraps to a second line (name 20 + 2 × 18 = the 56px node) before it is cut */
+.node .nl{display:-webkit-box;white-space:normal;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2}
 .node.rs2{grid-row:span 2;align-self:center} .node.rs3{grid-row:span 3;align-self:center} .node.rs4{grid-row:span 4;align-self:center} /* span rows, stay one node tall, centered */
 .node.idle{background:var(--panel-sub);border:1px dashed var(--control-border);box-shadow:none} /* border, not outline: an outline paints over the access-count pill that straddles the edge */
 .node.group{background:transparent;box-shadow:none;border:1px dashed var(--control-border);color:var(--text-2)}
@@ -935,7 +996,7 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 /* access count pill sits on the wire side */
 .cnt{display:inline-grid;place-items:center;flex:none;min-width:1.5rem;height:1.375rem;padding:0 6px;border-radius:var(--r-1);background:var(--accent-soft);color:var(--accent-soft-text);font-size:var(--fs-xs);font-weight:600;font-variant-numeric:tabular-nums}
 .cnode .cnt{position:absolute;right:-.75rem;top:50%;transform:translateY(-50%);box-shadow:0 0 0 3px var(--tray-bg)}
-.tnode{display:grid;grid-template-columns:auto minmax(0,1fr) repeat(3,4.5rem) 6.5rem;gap:var(--sp-3);padding-left:0}
+.tnode{display:grid;grid-template-columns:auto minmax(0,1fr) repeat(3,4rem) 5.75rem;gap:var(--sp-3);padding-left:0}
 .tnode .cnt{margin-left:-.75rem;box-shadow:0 0 0 3px var(--tray-bg)}
 .tnode .idw{display:flex;align-items:center;gap:var(--sp-3);min-width:0}
 .tnode .m{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -943,7 +1004,7 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 .tnode .m.warn{color:var(--warn);font-weight:var(--fw-medium)}
 .tnode .m.z{color:var(--text-3)}
 .tnode .m .u{display:none;color:var(--text-2);font-size:var(--fs-sm)}
-.tok-h{display:grid;grid-template-columns:auto minmax(0,1fr) repeat(3,4.5rem) 6.5rem;gap:var(--sp-3);padding-right:var(--sp-4)}
+.tok-h{display:grid;grid-template-columns:auto minmax(0,1fr) repeat(3,4rem) 5.75rem;gap:var(--sp-3);padding-right:var(--sp-4)}
 .tok-h>span{text-align:right} .tok-h>span:first-child{text-align:left;padding-left:var(--sp-4)}
 /* focus bar above the map: links to ?focus=consumer (server dims the rest) */
 .cmap-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--sp-2) var(--sp-4);padding:0 var(--sp-4) var(--sp-3)}
@@ -984,7 +1045,59 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 .lg-sw.warn{background:var(--warn-bg);border-color:var(--warn-dot)}
 .lg-sw.bad{background:var(--bad-bg);border-color:var(--bad-dot)}
 .lg-sw.off{background:transparent;border-style:dashed;border-color:var(--control-border)}
-/* repository groups on the consumer page */
+/* --- Who can use (WhoCanUse): consumer node -> access rows -> token hub, CSS lines only.
+   Every group grows down, so it scales by capping rows per group and groups per token (server). */
+.wmap{display:grid;grid-template-columns:minmax(0,1fr) 11rem;column-gap:var(--sp-8);padding:var(--sp-5)}
+.wgroups{display:grid;gap:var(--sp-4);margin:0;padding:0;list-style:none}
+.wg{display:grid;grid-template-columns:17rem minmax(0,1fr);column-gap:var(--sp-8);align-items:start}
+.wg>.node::after{content:"";position:absolute;left:100%;top:50%;width:var(--sp-8);border-top:1.5px solid var(--wire);z-index:-1}
+.wg>.node{z-index:0}
+.wg .cnt{box-shadow:0 0 0 3px var(--panel-bg)}
+.wg.rest{grid-template-columns:minmax(0,1fr)}
+.wrows{position:relative;display:grid;gap:var(--sp-2);margin:0;padding:0 0 0 var(--sp-5);list-style:none}
+.wrows::before{content:"";position:absolute;left:0;top:calc(var(--h-node) / 2);bottom:calc(var(--h-node) / 2);border-left:1.5px solid var(--wire)}
+.wrows:has(>.more:last-child)::before{bottom:1.125rem}
+.wrow{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:var(--sp-1) var(--sp-3);min-height:var(--h-node);padding:var(--sp-2) var(--sp-4);border-radius:var(--r-3);background:var(--panel-bg);box-shadow:var(--panel-ring)}
+.wrow::before{content:"";position:absolute;right:100%;top:calc(var(--h-node) / 2);width:var(--sp-5);border-top:1.5px solid var(--wire)}
+.wrow::after{content:"";position:absolute;left:100%;top:calc(var(--h-node) / 2);width:var(--sp-8);border-top:1.5px solid var(--wire)}
+.wrow .ctx{color:var(--text-2)}
+.wrow .meta code{font-size:var(--fs-xs);padding:1px 5px;border-radius:var(--r-1);background:var(--surface-2)}
+.wrow.warn{box-shadow:inset 0 0 0 1px var(--warn-dot)}
+.wrow.warn::before,.wrow.warn::after{border-top:1.5px dashed var(--wire-warn)}
+.wrow.more{min-height:2.25rem;background:transparent;box-shadow:none;outline:1px dashed var(--control-border);outline-offset:-1px}
+.wrow.more::after{border-top-style:dashed}
+.wrow.more::before,.wrow.more::after{top:50%}
+.wrow.more a{font-weight:var(--fw-medium)}
+.wst{display:flex;flex-direction:column;align-items:flex-end;gap:2px}
+.whub{position:relative;display:flex;align-items:center}
+.whub::before{content:"";position:absolute;left:0;top:calc(var(--h-node) / 2);bottom:calc(var(--h-node) / 2);border-left:1.5px solid var(--wire)}
+.whub>.node{flex-direction:column;justify-content:center;gap:var(--sp-1);width:100%;height:auto;margin-left:var(--sp-5);padding:var(--sp-4);text-align:center}
+.whub>.node::before{content:"";position:absolute;right:100%;top:50%;width:var(--sp-5);border-top:1.5px solid var(--wire)}
+.whub>.node::after{content:"";position:absolute;left:-8px;top:50%;transform:translateY(-50%);border:4.5px solid transparent;border-left:6px solid var(--wire)}
+.whub .nm{font-size:var(--fs-lg);line-height:var(--lh-lg);font-weight:var(--fw-medium)}
+.whub .meta{font-family:var(--font-mono);font-size:var(--fs-xs)}
+/* empty: a dashed ghost where the first consumer will appear */
+.wghost{position:relative;display:grid;gap:var(--sp-3);align-content:center;padding:var(--sp-5);border-radius:var(--r-3);background:var(--panel-sub);outline:1px dashed var(--control-border);outline-offset:-1px}
+.wghost::after{content:"";position:absolute;left:100%;top:50%;width:calc(var(--sp-8) + var(--sp-5));border-top:1.5px dashed var(--wire)}
+.wghost :is(h2,h3,h4,h5,h6){font-size:var(--fs-md);font-weight:var(--fw-medium)}
+.wghost .ask{background:var(--panel-bg)}
+.wmap.is-empty .whub::before{display:none}
+.wmap.is-empty .whub>.node::before{border-top-style:dashed}
+.wfoot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--sp-2) var(--sp-4);padding:var(--sp-3) var(--sp-4) var(--sp-2);font-size:var(--fs-sm);color:var(--text-2)}
+@media (max-width:64rem){
+  .wmap{grid-template-columns:minmax(0,1fr);row-gap:var(--sp-4)}
+  .whub{order:-1}
+  .whub::before,.whub>.node::before,.whub>.node::after,.wrow::after,.wghost::after{display:none}
+  .whub>.node{flex-direction:row;justify-content:flex-start;margin-left:0;text-align:left;gap:var(--sp-3)}
+}
+@media (max-width:48rem){
+  .wmap{padding:var(--sp-4)}
+  .wg{grid-template-columns:minmax(0,1fr);row-gap:var(--sp-2)}
+  .wg>.node::after,.wrows::before,.wrow::before{display:none}
+  .wrows{padding-left:var(--sp-4)}
+  .wrow{grid-template-columns:minmax(0,1fr);justify-items:start}
+  .wst{flex-direction:row;align-items:center;gap:var(--sp-3)}
+}
 
 /* ===== 16. Get started (empty install: the checklist is the content) ===== */
 .checklist{display:flex;flex-direction:column;margin:0;padding:0;list-style:none}
@@ -993,8 +1106,8 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 .checklist .no{display:grid;place-items:center;width:2rem;height:2rem;border-radius:50%;background:var(--panel-bg);box-shadow:inset 0 0 0 1px var(--line-strong);font-weight:var(--fw-medium);color:var(--text-2);font-variant-numeric:tabular-nums}
 .checklist .is-next .no{background:var(--accent);box-shadow:none;color:var(--on-accent)}
 .checklist .is-done .no{background:var(--ok-bg);box-shadow:none;color:var(--ok)}
-.checklist .is-done h3{color:var(--text-2)}
-.checklist h3{display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2);font-size:var(--fs-lg);line-height:var(--lh-lg);font-weight:var(--fw-medium)}
+.checklist .is-done :is(h3,h4,h5,h6){color:var(--text-2)}
+.checklist :is(h3,h4,h5,h6){display:flex;flex-wrap:wrap;align-items:center;gap:var(--sp-2);font-size:var(--fs-lg);line-height:var(--lh-lg);font-weight:var(--fw-medium)}
 .checklist .why{grid-column:2;max-width:62ch;color:var(--text-2)}
 .checklist .acts{grid-column:3;grid-row:1/span 2;align-self:center;display:flex;flex-wrap:wrap;gap:var(--sp-2);justify-content:flex-end}
 .checklist .wide{grid-column:2/-1;min-width:0}
@@ -1010,7 +1123,7 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
   .att.cols{grid-template-columns:repeat(2,minmax(0,1fr))}
   .span-8,.span-7,.span-6,.span-5,.span-4{grid-column:span 12}
   .cmap{grid-template-columns:minmax(13rem,15rem) minmax(3rem,.7fr) minmax(0,2.6fr)}
-  .tnode,.tok-h{grid-template-columns:auto minmax(0,1fr) repeat(2,4.5rem)}
+  .tnode,.tok-h{grid-template-columns:auto minmax(0,1fr) repeat(2,4rem)}
   .tnode .m.x,.tok-h .x{display:none}
 }
 @media (max-width:64rem){
@@ -1037,6 +1150,7 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
   .nodes{grid-auto-rows:minmax(var(--h-node),auto)}
   .node{height:auto;min-height:var(--h-node);padding-block:var(--sp-2)}
   .node .nm,.node .nl{white-space:normal}
+  .node .nl{display:block;-webkit-line-clamp:none;line-clamp:none}   /* nodes grow here: no clamp */
   .tnode .slug{display:none}
   .tok-h>span:first-child{padding-left:0}
   .tray-f>.legend:has(.wire){display:none}
@@ -1061,6 +1175,8 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 @media (max-width:39.99rem){
   :root{--gutter:1rem}
   .app{grid-template-columns:minmax(0,1fr);min-height:0}
+  .app .page{width:auto;max-width:var(--page-w);margin-inline:auto}
+  .app .hstrip{padding-inline-start:var(--gutter)}
   .side{border-right:0;border-bottom:1px solid var(--line)}
   .side-in{flex-direction:row;flex-wrap:wrap;align-items:center;gap:var(--sp-2);min-height:0;padding:var(--sp-2) var(--gutter)}
   .side-in>.health{display:none}
@@ -1068,8 +1184,11 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
   .mark{width:1.75rem;height:1.75rem}
   .navd{flex:0 0 auto;margin-left:auto}
   .navd>summary{display:inline-flex;align-items:center;gap:var(--sp-2);height:var(--h-control);padding:0 var(--sp-4);border:1px solid var(--control-border);border-radius:var(--r-2);background:var(--btn-bg);font-weight:var(--fw-medium)}
-  .navd[open]{flex-basis:100%;order:3;margin-left:0}
-  .navd[open]>summary{align-self:flex-end;margin-top:calc(-1 * var(--h-control) - var(--sp-2))}
+  /* open: the details box dissolves into the bar, so the button stays where it was and the
+     links take a row of their own under it */
+  .navd[open],.navd[open]::details-content{display:contents}
+  .navd[open]>summary{margin-left:auto}
+  .navd[open] .navd-in{flex-basis:100%;order:3}
   .navd-in{padding:var(--sp-3) 0}
   .page{padding-top:var(--sp-5)}
   .ph-actions{width:100%}

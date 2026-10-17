@@ -1,11 +1,11 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
-import { LogoTile, type VizLogo } from './parts';
+import { LogoTile, type LogoSpec } from '../base/Logo';
 
 export interface ArrowEnd {
   /** "GitHub Actions (acme) › acme/api", "Slack". */
   name: Child;
-  logo?: VizLogo;
+  logo?: LogoSpec;
   /** Muted fact after the name, after a "·": "environment production", "Post messages". */
   context?: Child;
 }

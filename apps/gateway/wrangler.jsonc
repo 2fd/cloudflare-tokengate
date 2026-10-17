@@ -3,6 +3,8 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "tokengate",
+  // The deployed entry. `pnpm dev` runs src/dev.ts instead, which adds the design system docs
+  // under /docs on localhost; nothing reachable from src/index.ts imports them (I-DEPLOY-2).
   "main": "src/index.ts",
   "compatibility_date": "2026-10-01",
   "compatibility_flags": [

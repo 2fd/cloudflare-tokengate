@@ -14,11 +14,7 @@ describe('LinkCards', () => {
               title: 'Slack Web API',
               meta: '2 tokens',
               description: 'slack.com/api · bot token',
-              logo: (
-                <span class="logo lg-slack" aria-hidden="true">
-                  S
-                </span>
-              ),
+              logo: 'slack',
             },
           ]}
         />,

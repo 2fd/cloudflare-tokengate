@@ -36,7 +36,10 @@ export interface PipelineStage {
   label: string;
   /** Calls that reached the stage. */
   value: number | string;
-  /** Line under the number: share of received, latency, a `Delta`. */
+  /**
+   * Line under the number: share of received, latency, a `Delta`. In a text line the facts
+   * between " · " never break inside ("p95 212 ms" stays together); the line wraps between them.
+   */
   meta?: Child;
   /** The request list filtered to this stage. Without it the stage is not a link. */
   href?: string;
@@ -65,13 +68,33 @@ function Go(props: { children: Child }) {
   );
 }
 
+/** A meta text split into its " · " facts, each kept on one line; other content as it is. */
+function Facts(props: { meta: Child }) {
+  if (typeof props.meta !== 'string' || !props.meta.includes(' · ')) return <>{props.meta}</>;
+  const facts = props.meta.split(' · ');
+  return (
+    <>
+      {facts.map((fact, index) => (
+        <span class="nowrap">
+          {fact}
+          {index < facts.length - 1 ? ' ·' : null}
+        </span>
+      ))}
+    </>
+  );
+}
+
 function Stage(props: { stage: PipelineStage; position: 'in' | 'out' | undefined }) {
   const { stage } = props;
   const body = (
     <>
       <span class="lbl">{stage.label}</span>
       <span class="big">{fmt(stage.value)}</span>
-      {stage.meta !== undefined ? <span class="meta">{stage.meta}</span> : null}
+      {stage.meta !== undefined ? (
+        <span class="meta">
+          <Facts meta={stage.meta} />
+        </span>
+      ) : null}
       {stage.href ? <Go>{stage.go ?? 'See requests'}</Go> : null}
     </>
   );

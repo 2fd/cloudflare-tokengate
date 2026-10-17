@@ -9,4 +9,5 @@
 /apps/gateway/migrations/            @2fd
 /apps/gateway/migrations-telemetry/  @2fd
 /apps/gateway/wrangler.jsonc         @2fd
+/apps/gateway/src/dev.ts             @2fd
 /.github/workflows/                  @2fd

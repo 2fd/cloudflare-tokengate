@@ -16,7 +16,7 @@ describe('RiskAcceptance', () => {
         />,
       ),
     ).toBe(
-      '<div class="riskacc" id="risk" role="group" aria-labelledby="risk-h"><h3 id="risk-h"><span aria-hidden="true">⚠</span> Accept 1 risk to save this access</h3><ul><li><b>Pull request into:</b> pull_request jobs run the proposed code.</li></ul><label class="check"><input type="checkbox" id="risk-ack" name="acknowledge_warnings" value="1"/><span>I accept this risk for acme/api → Slack</span></label><p class="hint">Or pick a safer option above; this box then goes away.</p></div>',
+      '<div class="riskacc" id="risk" role="group" aria-labelledby="risk-h"><h2 id="risk-h"><span aria-hidden="true">⚠</span> Accept 1 risk to save this access</h2><ul><li><b>Pull request into:</b> pull_request jobs run the proposed code.</li></ul><label class="check"><input type="checkbox" id="risk-ack" name="acknowledge_warnings" value="1"/><span>I accept this risk for acme/api → Slack</span></label><p class="hint">Or pick a safer option above; this box then goes away.</p></div>',
     );
   });
 

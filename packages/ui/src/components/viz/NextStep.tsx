@@ -1,11 +1,12 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
-import { LogoTile, type VizLogo } from './parts';
+import { Chip } from '../base/Chip';
+import type { LogoSpec } from '../base/Logo';
 
 export interface PrefillValue {
   /** The value as it will appear in the form. */
   label: Child;
-  logo?: VizLogo;
+  logo?: LogoSpec;
   /** Mono type, for repositories, branches and IDs. */
   mono?: boolean;
 }
@@ -37,10 +38,9 @@ export function NextStep(props: NextStepProps) {
         <p class="prefill">
           <span class="vh">Filled in: </span>
           {props.prefill.map((value) => (
-            <span class={cx('chip', !value.logo && 'text', value.mono && 'mono')}>
-              {value.logo ? <LogoTile logo={value.logo} size="xs" /> : null}
+            <Chip logo={value.logo} class={value.mono ? 'mono' : undefined}>
               {value.label}
-            </span>
+            </Chip>
           ))}
         </p>
       ) : null}

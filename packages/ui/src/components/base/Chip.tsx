@@ -1,12 +1,13 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
-import { Logo, type LogoBrand } from './Logo';
+import { SrSuffix } from '../../lib/sr';
+import { LogoTile, type LogoSpec } from './Logo';
 
 export interface ChipProps {
   /** Link to the relation (the access, the consumer). Without it the chip is a plain span. */
   href?: string;
   /** Brand tile (18px) before the name. Without a logo the chip is a text chip (`.text`). */
-  logo?: LogoBrand;
+  logo?: LogoSpec;
   /**
    * `warn` / `bad` tint the glyph (an expired access); `off` is dashed with a dimmed logo (inactive,
    * the token is disabled). Default: an active relation.
@@ -20,9 +21,10 @@ export interface ChipProps {
   glyphTone?: 'ok' | 'warn' | 'bad';
   /**
    * Screen-reader-only rest of the sentence (`.vh`): the status in words and the action
-   * (": 2 accesses, one expiring. Open."). Required whenever a glyph or tone carries status.
+   * (": 2 accesses, one expiring. Open."). Required whenever a glyph or tone carries status. The
+   * space before it is added (none before punctuation).
    */
-  context?: string;
+  srSuffix?: string;
   class?: string;
   /** The name of the related object ("Slack", "acme/api · env production"). */
   children: Child;
@@ -36,7 +38,7 @@ export function Chip(props: ChipProps) {
   const className = cx('chip', props.tone, props.logo === undefined && 'text', props.class);
   const content = (
     <>
-      {props.logo ? <Logo brand={props.logo} size="xs" disabled={props.tone === 'off'} /> : null}
+      {props.logo ? <LogoTile logo={props.logo} size="xs" disabled={props.tone === 'off'} /> : null}
       {props.children}
       {props.count !== undefined ? (
         <>
@@ -49,7 +51,7 @@ export function Chip(props: ChipProps) {
           {props.glyph}
         </span>
       ) : null}
-      {props.context ? <span class="vh">{props.context}</span> : null}
+      <SrSuffix text={props.srSuffix} />
     </>
   );
   return props.href !== undefined ? (

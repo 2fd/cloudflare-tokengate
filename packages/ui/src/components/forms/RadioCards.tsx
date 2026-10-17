@@ -1,5 +1,7 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { LogoTile, type LogoSpec } from '../base/Logo';
+import { RiskTag } from '../base/RiskTag';
 import { type ChoiceBase, choiceAttrs, isChecked } from './choice';
 import { useChoiceIds } from './context';
 
@@ -10,6 +12,11 @@ export interface RadioCard extends ChoiceBase {
   description?: Child;
   /** A label after the title, e.g. `<Badge tone="accent">Most used</Badge>`. */
   badge?: Child;
+  /**
+   * Brand tile (32px) above the title, decorative: type cards such as “Add a consumer” (GitHub
+   * Actions, GitLab CI). “✓ Selected” then sits in the top right corner.
+   */
+  logo?: LogoSpec;
   /** Spans the whole row (`.rc.wide`): a last, different option. */
   wide?: boolean;
 }
@@ -30,14 +37,20 @@ export interface RadioCardsProps {
   class?: string;
 }
 
+/** `.rcs` with its column count (shared with ActionCards). */
+export function cardsClass(columns: 1 | 2 | 3 | undefined, className: string | undefined) {
+  return cx('rcs', columns === 1 && 'c1', columns === 3 && 'c3', className);
+}
+
 /**
  * Radio cards (`.rcs` + `.rc`) for 2–6 options with a line of explanation each. Checked: accent
  * border and “✓ Selected”; a risky option turns warn and shows a “⚠ Risk” tag; disabled is struck.
+ * For cards that act on click (submit the form, or open a confirm), use `ActionCards`.
  */
 export function RadioCards(props: RadioCardsProps) {
   const prefix = useChoiceIds('RadioCards', props);
   return (
-    <div class={cx('rcs', props.columns === 1 && 'c1', props.columns === 3 && 'c3', props.class)}>
+    <div class={cardsClass(props.columns, props.class)}>
       {props.options.map((option, index) => {
         const attrs = choiceAttrs(option, index, prefix);
         return (
@@ -56,15 +69,14 @@ export function RadioCards(props: RadioCardsProps) {
               required={props.required}
             />
             <span class="rc-b">
+              {option.logo !== undefined ? <LogoTile logo={option.logo} /> : null}
               <span class="rc-t">
                 {option.title}
                 {option.badge ? <> {option.badge}</> : null}
                 {option.risk ? (
                   <>
                     {' '}
-                    <span class="risktag">
-                      <span aria-hidden="true">⚠</span> Risk
-                    </span>
+                    <RiskTag />
                   </>
                 ) : null}
                 <span class="sel" aria-hidden="true">

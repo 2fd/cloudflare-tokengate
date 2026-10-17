@@ -12,17 +12,22 @@ export interface TableColumn {
   class?: string;
 }
 
-/** How the scroll region is named: by the id of a visible heading, or by a label. */
+/**
+ * How the table is named. In its scroll region (default): by the id of a visible heading, or by a
+ * label. Without the region (`scroll={false}`) the table names itself: `caption` is required.
+ */
 type TableName =
-  | { labelledBy: string; label?: undefined; scroll?: true }
-  | { label: string; labelledBy?: undefined; scroll?: true }
-  | { scroll: false; label?: undefined; labelledBy?: undefined };
+  | { labelledBy: string; label?: undefined; scroll?: true; caption?: Child }
+  | { label: string; labelledBy?: undefined; scroll?: true; caption?: Child }
+  | { scroll: false; label?: undefined; labelledBy?: undefined; caption: Child };
 
 export type TableProps = TableName & {
   /** Header cells, left to right. Kept for an empty table, so the empty state shows the shape. */
   columns: readonly TableColumn[];
-  /** Table caption. Visually hidden unless `captionVisible`: the tray title is the visible name. */
-  caption?: Child;
+  /**
+   * Show the caption instead of hiding it (`.vh`). Usually the tray title is the visible name and
+   * the caption (`caption`, required with `scroll={false}`) stays for screen readers.
+   */
   captionVisible?: boolean;
   /** 36px rows, for logs and number tables. */
   dense?: boolean;
@@ -135,5 +140,32 @@ export function Cell(props: CellProps) {
     >
       {props.children}
     </td>
+  );
+}
+
+export interface GroupRowProps {
+  /** How many columns the group header spans: the table's column count. */
+  colspan: number;
+  /** One action at the right (`.btn.ghost.sm`): "+ Give acme/api access to another token". */
+  actions?: Child;
+  class?: string;
+  /** What the rows under it share: an `Entity`, a mono repository and its ID. */
+  children: Child;
+}
+
+/**
+ * A group header inside a table (`tr.grp` > `th[scope=rowgroup]` > `.grp-in`): the consumer or
+ * repository the following rows belong to, on the panel-sub band, with one optional action.
+ */
+export function GroupRow(props: GroupRowProps) {
+  return (
+    <tr class={cx('grp', props.class)}>
+      <th colspan={props.colspan} scope="rowgroup">
+        <span class="grp-in">
+          <span>{props.children}</span>
+          {props.actions ?? null}
+        </span>
+      </th>
+    </tr>
   );
 }

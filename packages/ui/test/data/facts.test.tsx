@@ -22,6 +22,7 @@ describe('DiffTable', () => {
     const html = render(
       <DiffTable
         class="x"
+        caption="Changes"
         labels={{ field: 'Setting', before: 'Was', after: 'Now' }}
         emptyText="None"
         rows={[
@@ -31,17 +32,16 @@ describe('DiffTable', () => {
       />,
     );
     expect(html).toContain(
-      '<table class="diff x"><thead><tr><th scope="col">Setting</th><th scope="col">Was</th><th scope="col">Now</th>',
+      '<table class="diff x"><caption class="vh">Changes</caption><thead><tr><th scope="col">Setting</th><th scope="col">Was</th><th scope="col">Now</th>',
     );
     expect(html).toContain(
       '<th scope="row">Note</th><td><span class="faint">None</span></td><td><ins>Rotated</ins></td>',
     );
     expect(html).toContain('<td><del>main</del></td><td><span class="faint">None</span></td>');
-    expect(html).not.toContain('caption');
   });
 
   it('escapes values', () => {
-    expect(render(<DiffTable rows={[{ field: 'x', before: '<i>' }]} />)).toContain(
+    expect(render(<DiffTable caption="c" rows={[{ field: 'x', before: '<i>' }]} />)).toContain(
       '<del>&lt;i&gt;</del>',
     );
   });
@@ -122,15 +122,22 @@ describe('Secret', () => {
         />,
       ),
     ).toBe(
-      '<div class="secret"><span class="mask lg"><span class="vh">Secret ending in </span><span aria-hidden="true">••••\u00a0</span>9fQa</span>' +
+      '<div class="secret"><span class="mask lg"><span aria-hidden="true">••••\u00a0</span><span class="vh">Secret ending in </span>9fQa</span>' +
         '<span class="facts"><span>Bot token · 51 characters</span><span class="meta">Set 3 Oct 2026 by Priya Natarajan</span></span>' +
         '<span class="acts"><button class="btn secondary" type="button">Replace secret</button></span></div>',
     );
   });
 
   it('renders the mask alone, with a custom label and a class', () => {
-    expect(render(<Secret last4="<x>" srLabel="Key ending in" class="x" />)).toBe(
-      '<div class="secret x"><span class="mask lg"><span class="vh">Key ending in </span><span aria-hidden="true">••••\u00a0</span>&lt;x&gt;</span></div>',
+    expect(render(<Secret last4="<x>" srPrefix="Key ending in" class="x" />)).toBe(
+      '<div class="secret x"><span class="mask lg"><span aria-hidden="true">••••\u00a0</span><span class="vh">Key ending in </span>&lt;x&gt;</span></div>',
     );
+  });
+
+  it('never renders more than the last 4 characters, whatever is passed', () => {
+    const html = render(<Secret last4="xoxb-1234567890-secret-9fQa" />);
+    expect(html).toMatch(/<\/span>9fQa<\/span><\/div>$/);
+    expect(html).not.toContain('xoxb');
+    expect(html).not.toContain('secret-');
   });
 });

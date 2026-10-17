@@ -175,7 +175,9 @@ Each line gives the module's purpose and the invariants it enforces.
 
 ```text
 apps/gateway/src/
-  index.ts              Worker entry: fetch, scheduled, queue.
+  index.ts              Worker entry: fetch, scheduled, queue. wrangler.jsonc "main", the only deployed entry.
+  dev.ts                Local entry for `pnpm dev`: index.ts plus the design system docs (@tokengate/docs) on
+                        /docs for loopback hostnames only. Nothing imports it (I-DEPLOY-2).
   app.ts                Composes routes in a fixed order. No behavior.
   deps.ts               Deps interface (env, fetch, now, random, waitUntil) and production values.
   env.ts                Typed view of vars, secrets and optional bindings.

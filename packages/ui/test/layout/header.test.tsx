@@ -43,16 +43,12 @@ describe('PageHeader (detail)', () => {
 describe('Identity', () => {
   const html = render(
     <Identity
-      logo={
-        <span class="logo lg lg-slack" aria-hidden="true">
-          S
-        </span>
-      }
+      logo="slack"
       title="Slack"
       status={<span class="badge ok">✓ Active</span>}
       type="Slack Web API"
       slug="slack"
-      entityId={{ value: 'svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C', label: 'Token ID' }}
+      entityId={{ value: 'svc_01JB8Y2K4M6P8R0T2V4X6Z8A1C', kind: 'Token' }}
       facts={['Created 3 Oct 2026']}
       class="x"
     />,

@@ -1,7 +1,7 @@
 {
   "name": "cloudflare-tokengate",
   "private": true,
-  "description": "Self-hosted credential broker for Cloudflare Workers (pnpm workspace root). The Worker lives in apps/gateway, the design system in packages/ui and its docs Worker in apps/docs.",
+  "description": "Self-hosted credential broker for Cloudflare Workers (pnpm workspace root). The Worker lives in apps/gateway, the design system in packages/ui and its docs in packages/docs (served by the gateway in local development only).",
   "license": "Apache-2.0",
   "type": "module",
   "packageManager": "pnpm@11.22.0",
@@ -12,8 +12,6 @@
     "setup": "pnpm --filter @tokengate/gateway run setup",
     "dev": "pnpm --filter @tokengate/gateway run dev",
     "deploy": "pnpm --filter @tokengate/gateway run deploy",
-    "docs:dev": "pnpm --filter @tokengate/docs run dev",
-    "docs:deploy": "pnpm --filter @tokengate/docs run deploy",
     "db:migrate:local": "pnpm --filter @tokengate/gateway run db:migrate:local",
     "types": "pnpm -r run types",
     "typecheck": "pnpm -r run typecheck",

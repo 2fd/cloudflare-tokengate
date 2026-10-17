@@ -40,7 +40,7 @@ describe('Mask', () => {
   });
 
   it('takes another screen-reader label and escapes', () => {
-    expect(render(<Mask last4="<&>" srLabel="Old secret ending in" />)).toContain(
+    expect(render(<Mask last4="<&>" srPrefix="Old secret ending in" />)).toContain(
       '<span class="vh">Old secret ending in </span>&lt;&amp;&gt;',
     );
   });

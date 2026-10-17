@@ -1,13 +1,18 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { LogoTile, type LogoSpec } from '../base/Logo';
 
 export interface EntityProps {
   /** The object's name. A link (`a.ent-n`) when `href` is set. */
   name: Child;
   /** Detail page of the object. */
   href?: string;
-  /** Decorative logo or avatar before the name (`.logo` / `.avatar`, with `aria-hidden`). */
-  logo?: Child;
+  /** Brand tile before the name, decorative. */
+  logo?: LogoSpec;
+  /** Tile size: `md` (32px, default) on list pages, `sm` (24px) in denser rows. */
+  logoSize?: 'sm' | 'md';
+  /** A custom decorative node instead of `logo`: an `Avatar` for a person. */
+  logoSlot?: Child;
   /** Inline after the name on the same line: a slug, a "You" badge. */
   after?: Child;
   /** Muted second line (`.meta`): the second fact, instead of another column. */
@@ -45,7 +50,11 @@ export function Entity(props: EntityProps) {
   );
   return (
     <span class={cx('ent', props.class)}>
-      {props.logo}
+      {props.logo !== undefined ? (
+        <LogoTile logo={props.logo} size={props.logoSize === 'sm' ? 'sm' : 'md'} />
+      ) : (
+        props.logoSlot
+      )}
       {text}
     </span>
   );

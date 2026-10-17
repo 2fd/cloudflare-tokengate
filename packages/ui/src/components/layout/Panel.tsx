@@ -6,7 +6,7 @@ export interface PanelProps extends BaseProps {
   variant?: 'pad' | 'flush';
 }
 
-/** White panel inside a tray (`.panel`). Minimal version from the docs scaffold. */
+/** White panel inside a tray (`.panel`): the content level of page > tray > panel. */
 export function Panel({ variant, class: className, children }: PanelProps) {
   return <div class={cx('panel', variant, className)}>{children}</div>;
 }

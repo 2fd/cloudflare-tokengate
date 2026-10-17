@@ -14,11 +14,7 @@ describe('RowPicker', () => {
               value: 'gh',
               title: 'GitHub Actions (acme)',
               meta: 'most used · 6 accesses',
-              logo: (
-                <span class="logo sm lg-github" aria-hidden="true">
-                  GH
-                </span>
-              ),
+              logo: 'github',
             },
             { value: 'new', title: 'Another consumer' },
           ]}

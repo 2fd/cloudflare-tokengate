@@ -19,15 +19,23 @@ export { Filters, type FiltersProps } from './Filters';
 export { KeyValue, type KeyValueItem, type KeyValueProps } from './KeyValue';
 export { Pager, type PagerProps } from './Pager';
 export { QuickLinks, type QuickLink, type QuickLinksProps } from './QuickLinks';
-export { RailKeyValue, type RailKeyValueItem, type RailKeyValueProps } from './RailKeyValue';
+export {
+  RailFoot,
+  RailKeyValue,
+  type RailFootProps,
+  type RailKeyValueItem,
+  type RailKeyValueProps,
+} from './RailKeyValue';
 export { Result, type ResultProps } from './Result';
 export { Secret, type SecretProps } from './Secret';
 export {
   Cell,
+  GroupRow,
   Row,
   RowHeader,
   Table,
   type CellProps,
+  type GroupRowProps,
   type RowHeaderProps,
   type RowProps,
   type TableColumn,

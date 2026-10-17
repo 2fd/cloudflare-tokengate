@@ -1,8 +1,9 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { HeadingScope, H, useHeadingLevel, type HeadingLevel } from '../../lib/heading';
 
 export interface TrayProps {
-  /** Id of the tray heading; the section is labelled by it. Unique on the page. */
+  /** Id of the section (unique on the page); the title gets `${id}-h` and labels the section. */
   id: string;
   /** Tray title (h2 by default). */
   title: Child;
@@ -24,8 +25,11 @@ export interface TrayProps {
   actions?: Child;
   /** Footer facts (`.tray-f`). */
   footer?: Child;
-  /** Heading level of the title: 2 on pages, 3 when the tray sits under another h2. */
-  level?: 2 | 3;
+  /**
+   * Level of the title: 2 (default) on pages, 3 when the tray sits under another h2. Headings
+   * inside the tray (an EmptyState, a DangerRow, a FeedDay) follow it one level deeper.
+   */
+  headingLevel?: HeadingLevel;
   /** `warn` adds the 3px warn bar at the top. */
   tone?: 'warn';
   class?: string;
@@ -35,16 +39,17 @@ export interface TrayProps {
 
 /**
  * Tray card (`section.tray`): a gray shell with a title row, then one or more white panels.
- * Hierarchy: page header > tray > panel content. Minimal version from the docs scaffold.
+ * Hierarchy: page header > tray > panel content.
  */
 export function Tray(props: TrayProps) {
   const headingId = `${props.id}-h`;
-  const Heading = props.level === 3 ? 'h3' : 'h2';
+  const nominal = props.headingLevel ?? 2;
+  const level = useHeadingLevel(nominal);
   const heading = (
-    <Heading class={cx(props.level === 3 && 'h2', props.hideTitle && 'vh')} id={headingId}>
+    <H level={level} class={props.hideTitle ? 'vh' : undefined} id={headingId}>
       {props.title}
       {props.count !== undefined ? <span class="count">{props.count}</span> : null}
-    </Heading>
+    </H>
   );
   return (
     <section
@@ -64,7 +69,8 @@ export function Tray(props: TrayProps) {
         {props.bar ?? null}
         {props.actions ? <div class="end">{props.actions}</div> : null}
       </div>
-      {props.children}
+      {/* headings inside sit one level under the title, whatever level it took */}
+      <HeadingScope by={nominal - 2}>{props.children}</HeadingScope>
       {props.footer ? <div class="tray-f">{props.footer}</div> : null}
     </section>
   );

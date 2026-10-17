@@ -1,10 +1,13 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { HeadingScope, H, useHeadingLevel, type HeadingLevel } from '../../lib/heading';
+import { Hidden, type HiddenFields } from '../../lib/hidden';
+import { Button, type ButtonProps } from '../base/Button';
 
 export interface DialogProps {
   /** Id of the `dialog`; triggers point at it. The heading gets `${id}-h`, the description `${id}-d`. */
   id: string;
-  /** The question or task, as an h2 ("Delete Slack and its 3 consumer accesses?"). */
+  /** The question or task ("Delete Slack and its 3 consumer accesses?"). */
   title: Child;
   /** One or two sentences under the title; the dialog's description for screen readers. */
   description?: Child;
@@ -12,8 +15,13 @@ export interface DialogProps {
   action?: string;
   /** Form method. Default `post`. */
   method?: 'post' | 'get';
-  /** Hidden inputs at the top of the form (CSRF token, ids). */
-  fields?: Child;
+  /** Hidden fields at the top of the form (`_csrf`, ids), one `input type="hidden"` each. */
+  hidden?: HiddenFields;
+  /**
+   * Level of the title. Default 2: a modal dialog is its own context. An `open` dialog drawn in
+   * the page flow under an h2 takes 3.
+   */
+  headingLevel?: HeadingLevel;
   /** Body (`.dlg-b`): consequence list, fields. It scrolls; header and footer stay. */
   children?: Child;
   /** Footer buttons (`.dlg-f`), right-aligned: `DialogClose` first, then the confirm button. */
@@ -28,21 +36,23 @@ export interface DialogProps {
   class?: string;
 }
 
-/**
- * Dialog (`dialog.dlg`): header, scrolling body and footer around one form. Opened with no
- * JavaScript by a `DialogTrigger` (`command="show-modal"`): modal, Esc closes it and focus
- * returns to the trigger. Where invoker commands are missing, the same trigger opens it as a
- * popover (it carries `popover="auto"`), with the same backdrop and Esc to close.
- */
 /** True when a children value renders something (Hono passes `[undefined]` for `{undefined}`). */
 function rendersSomething(node: Child): boolean {
   if (Array.isArray(node)) return node.some(rendersSomething);
   return node !== undefined && node !== null && node !== false && node !== '';
 }
 
+/**
+ * Dialog (`dialog.dlg`): header, scrolling body and footer around one form. Opened with no
+ * JavaScript by a `DialogTrigger` (`command="show-modal"`): modal, Esc closes it and focus
+ * returns to the trigger. Where invoker commands are missing, the same trigger opens it as a
+ * popover (it carries `popover="auto"`), with the same backdrop and Esc to close.
+ */
 export function Dialog(props: DialogProps) {
   const headingId = `${props.id}-h`;
   const descriptionId = `${props.id}-d`;
+  const nominal = props.headingLevel ?? 2;
+  const hLevel = useHeadingLevel(nominal);
   return (
     <dialog
       class={cx('dlg', props.wide && 'wide', props.class)}
@@ -53,51 +63,60 @@ export function Dialog(props: DialogProps) {
       open={props.open ? true : undefined}
     >
       <form method={props.method ?? 'post'} action={props.action}>
-        {props.fields}
+        <Hidden fields={props.hidden} />
         <div class="dlg-h">
-          <h2 id={headingId}>{props.title}</h2>
+          <H level={hLevel} id={headingId}>
+            {props.title}
+          </H>
           {props.description !== undefined ? <p id={descriptionId}>{props.description}</p> : null}
         </div>
-        {rendersSomething(props.children) ? <div class="dlg-b">{props.children}</div> : null}
+        {rendersSomething(props.children) ? (
+          <div class="dlg-b">
+            <HeadingScope by={nominal - 2}>{props.children}</HeadingScope>
+          </div>
+        ) : null}
         <div class="dlg-f">{props.footer}</div>
       </form>
     </dialog>
   );
 }
 
-export interface DialogTriggerProps {
+/**
+ * Every `Button` prop except the ones the trigger sets itself (`type`, `href`, `command`,
+ * `commandfor`, `popovertarget`) and the submit-only ones.
+ */
+export type DialogTriggerProps = Omit<
+  ButtonProps,
+  | 'type'
+  | 'href'
+  | 'command'
+  | 'commandfor'
+  | 'popovertarget'
+  | 'form'
+  | 'formaction'
+  | 'formmethod'
+  | 'name'
+  | 'value'
+> & {
   /** Id of the `Dialog` it opens. */
   dialog: string;
-  /** Button style. `danger` on a page always opens a confirm dialog. Default `secondary`. */
-  variant?: 'primary' | 'secondary' | 'danger' | 'ghost';
-  size?: 'sm';
-  class?: string;
-  /** The label; a label that opens a confirm dialog ends with "…" ("Delete Slack…"). */
-  children: Child;
-}
+};
 
 /**
- * Button that opens a `Dialog`: `commandfor` + `command="show-modal"` (modal), plus
+ * A `Button` that opens a `Dialog`: `commandfor` + `command="show-modal"` (modal), plus
  * `popovertarget` as the fallback where invoker commands are missing. `type="button"`, so it
- * never submits a surrounding form.
+ * never submits a surrounding form. A label that opens a confirm dialog ends with "…"
+ * ("Delete Slack…"); a row trigger names its object with `srSuffix`.
  */
-export function DialogTrigger({
-  dialog,
-  variant = 'secondary',
-  size,
-  class: className,
-  children,
-}: DialogTriggerProps) {
+export function DialogTrigger({ dialog, ...button }: DialogTriggerProps) {
   return (
-    <button
-      class={cx('btn', variant, size, className)}
+    <Button
+      {...button}
       type="button"
-      commandfor={dialog}
       command="show-modal"
+      commandfor={dialog}
       popovertarget={dialog}
-    >
-      {children}
-    </button>
+    />
   );
 }
 

@@ -1,5 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { H, useHeadingLevel, type HeadingLevel } from '../../lib/heading';
 
 export interface FeedProps {
   /** Rail history: 24px avatars, 13px text, tighter rows (`.feed.compact`). */
@@ -51,15 +52,19 @@ export function FeedItem(props: FeedItemProps) {
 }
 
 export interface FeedDayProps {
-  /** Heading level: 3 under a tray title (default). */
-  level?: 3 | 4;
+  /** Heading level: 3 (default) under a tray title (a Tray sets it). */
+  headingLevel?: HeadingLevel;
   class?: string;
   /** The day ("Today, 15 Oct"). */
   children: Child;
 }
 
 /** Day heading between feeds in one panel (`.day`): "Today, 15 Oct", "Yesterday, 14 Oct". */
-export function FeedDay({ level, class: className, children }: FeedDayProps) {
-  const Heading = level === 4 ? 'h4' : 'h3';
-  return <Heading class={cx('day', className)}>{children}</Heading>;
+export function FeedDay({ headingLevel, class: className, children }: FeedDayProps) {
+  const hLevel = useHeadingLevel(headingLevel ?? 3);
+  return (
+    <H level={hLevel} class={cx('day', className)}>
+      {children}
+    </H>
+  );
 }

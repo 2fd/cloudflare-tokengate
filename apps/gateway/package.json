@@ -7,7 +7,7 @@
   "type": "module",
   "scripts": {
     "setup": "cp .dev.vars.example .dev.vars && rm -rf .wrangler/state/v3/d1 && pnpm db:migrate:local",
-    "dev": "wrangler dev",
+    "dev": "wrangler dev src/dev.ts",
     "deploy": "wrangler d1 migrations apply DB --remote && wrangler d1 migrations apply TELEMETRY_DB --remote && wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply DB --local && wrangler d1 migrations apply TELEMETRY_DB --local",
     "types": "wrangler types --env-file .dev.vars.example",
@@ -15,7 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "keyring": "node scripts/keyring.ts",
-    "test:scripts": "bash scripts/check-config.sh && bash test/security/check-config-test.sh"
+    "test:scripts": "bash scripts/check-config.sh && bash test/security/check-config-test.sh && bash scripts/check-bundle.sh"
   },
   "dependencies": {
     "hono": "^4.13.13",
@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.0",
+    "@tokengate/docs": "workspace:*",
     "@types/node": "^26.6.5",
     "typescript": "^7.0.2",
     "vitest": "^5.0.3",

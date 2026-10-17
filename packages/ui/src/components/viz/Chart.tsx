@@ -70,17 +70,19 @@ export function Chart(props: ChartProps) {
   const endLabel = props.endLabel ?? 'now';
   const totals = bars.map((bar) => bar.allowed + bar.denied + bar.errors);
   const max = Math.max(1, ...totals);
-  const scale = (BASE - TOP) / max;
   const step = niceStep(max / 3);
+  // the axis ends on a gridline: the top of the scale is the first tick at or above the tallest bar
+  const top = Math.ceil(max / step) * step;
+  const scale = (BASE - TOP) / top;
   const ticks: number[] = [];
-  for (let value = 0; value <= max; value += step) ticks.push(value);
+  for (let value = 0; value <= top; value += step) ticks.push(value);
   const slot = bars.length > 0 ? (RIGHT - LEFT) / bars.length : 0;
   const width = r1(Math.min(BAR_MAX, slot * BAR_SHARE));
   const segment = (value: number) => (value > 0 ? Math.max(MIN_SEGMENT, value * scale) : 0);
 
   return (
     <>
-      <div class={cx('panel pad', props.class)}>
+      <div class={cx('panel pad chart-panel', props.class)}>
         <svg
           class="chart"
           viewBox={`0 0 ${W} ${H}`}
@@ -95,7 +97,12 @@ export function Chart(props: ChartProps) {
             return (
               <>
                 <line class="gridl" x1={LEFT} x2={RIGHT} y1={y} y2={y} />
-                <text class="axis" x={LEFT - 8} y={r1(y + 5)} text-anchor="end">
+                <text
+                  class={cx('axis', value === 0 && 'y0')}
+                  x={LEFT - 8}
+                  y={r1(y + 5)}
+                  text-anchor="end"
+                >
                   {fmt(value)}
                 </text>
               </>
@@ -136,7 +143,12 @@ export function Chart(props: ChartProps) {
                   ) : null}
                 </g>
                 {tickEvery > 0 && index % tickEvery === 0 ? (
-                  <text class="axis" x={r1(x + width / 2)} y="292" text-anchor="middle">
+                  <text
+                    class={cx('axis', (index / tickEvery) % 2 === 1 && 'xo')}
+                    x={r1(x + width / 2)}
+                    y="292"
+                    text-anchor="middle"
+                  >
                     {bar.label}
                   </text>
                 ) : null}

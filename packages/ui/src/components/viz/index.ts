@@ -35,10 +35,10 @@ export {
   type AttentionItem,
   type AttentionLevel,
   type AttentionRole,
+  type AttentionWho,
   type NeedsAttentionProps,
 } from './NeedsAttention';
 export { NextStep, type NextStepProps, type PrefillValue } from './NextStep';
-export type { VizBrand, VizLogo } from './parts';
 export {
   Pipeline,
   type PipelineDrop,
@@ -47,5 +47,6 @@ export {
   type PipelineTotal,
 } from './Pipeline';
 export { ReasonBar, type Reason, type ReasonBarProps, type ReasonKind } from './ReasonBar';
-export { SplitView, type SplitItem, type SplitViewProps } from './SplitView';
+export { Sparkline, type SparkBar, type SparklineProps } from './Sparkline';
+export { WhoCanUse, type WhoAccess, type WhoCanUseProps, type WhoGroup } from './WhoCanUse';
 export { Trace, type TraceProps, type TraceState, type TraceStep } from './Trace';

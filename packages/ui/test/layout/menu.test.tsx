@@ -38,7 +38,7 @@ describe('MenuItem', () => {
         name="role"
         value="viewer"
         class="y"
-        fields={<input type="hidden" name="csrf" value="t" />}
+        hidden={{ csrf: 't' }}
       >
         Viewer
       </MenuItem>,

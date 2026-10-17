@@ -2,6 +2,8 @@
 // `export { Name, type NameProps } from './Name';`. Only the forms group agent edits this file.
 export type { ChoiceBase } from './choice';
 export type { LiveSlot } from './context';
+export { ActionForm, type ActionFormProps } from './ActionForm';
+export { ActionCards, type ActionCard, type ActionCardsProps } from './ActionCards';
 export { Checkbox, type CheckboxProps } from './Checkbox';
 export {
   CheckPresets,
@@ -12,6 +14,7 @@ export {
 } from './CheckPresets';
 export { ErrorSummary, type ErrorSummaryItem, type ErrorSummaryProps } from './ErrorSummary';
 export { Field, FieldError, type FieldProps } from './Field';
+export { FieldGrid, type FieldGridProps } from './FieldGrid';
 export { FieldInline, type FieldInlineProps } from './FieldInline';
 export { FieldSet, type FieldSetProps } from './FieldSet';
 export { FixedBar, type FixedBarProps } from './FixedBar';
@@ -47,6 +50,7 @@ export {
   CatalogGroup,
   TypeCard,
   TypeCatalog,
+  type CatalogGroupProps,
   type TypeCardProps,
   type TypeCatalogProps,
 } from './TypeCatalog';

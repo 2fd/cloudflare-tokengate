@@ -1,5 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { H, useHeadingLevel, type HeadingLevel } from '../../lib/heading';
 import { Panel } from './Panel';
 import { Tray } from './Tray';
 
@@ -8,6 +9,8 @@ export interface DangerZoneProps {
   id: string;
   /** Tray title, in the bad color. Default "Danger zone". */
   title?: Child;
+  /** Level of the tray title: 2 (default), 3 under another h2. The rows follow one level deeper. */
+  headingLevel?: HeadingLevel;
   class?: string;
   /** `DangerRow`s, least destructive first (Disable, then Delete). */
   children: Child;
@@ -20,11 +23,12 @@ export interface DangerZoneProps {
 export function DangerZone({
   id,
   title = 'Danger zone',
+  headingLevel,
   class: className,
   children,
 }: DangerZoneProps) {
   return (
-    <Tray id={id} title={title} class={cx('danger-zone', className)}>
+    <Tray id={id} title={title} headingLevel={headingLevel} class={cx('danger-zone', className)}>
       <Panel variant="flush">{children}</Panel>
     </Tray>
   );
@@ -36,19 +40,28 @@ export interface DangerRowProps {
   /** The consequence in one sentence ("This cannot be undone."). */
   description?: Child;
   /**
-   * The button: a secondary submit in its own form for reversible actions, a `DialogTrigger`
-   * with `variant="danger"` (label ends with "…") for irreversible ones.
+   * The button: an `ActionForm` (secondary submit in its own form) for reversible actions, a
+   * `DialogTrigger` with `variant="danger"` (label ends with "…") for irreversible ones.
    */
   action: Child;
+  /** Level of the row title. Default 3, one under its DangerZone (which sets it). */
+  headingLevel?: HeadingLevel;
   class?: string;
 }
 
-/** One row of a `DangerZone` (`.dz-row`): h3 + consequence on the left, the button on the right. */
-export function DangerRow({ title, description, action, class: className }: DangerRowProps) {
+/** One row of a `DangerZone` (`.dz-row`): heading + consequence on the left, the button on the right. */
+export function DangerRow({
+  title,
+  description,
+  action,
+  headingLevel,
+  class: className,
+}: DangerRowProps) {
+  const hLevel = useHeadingLevel(headingLevel ?? 3);
   return (
     <div class={cx('dz-row', className)}>
       <div>
-        <h3>{title}</h3>
+        <H level={hLevel}>{title}</H>
         {description !== undefined ? <p>{description}</p> : null}
       </div>
       {action}

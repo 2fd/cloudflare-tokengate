@@ -48,7 +48,7 @@ describe('Tray', () => {
   });
 
   it('uses an h3 styled as a tray title at level 3', () => {
-    expect(render(<Tray id="a" title="T" level={3} />)).toContain('<h3 class="h2" id="a-h">T</h3>');
+    expect(render(<Tray id="a" title="T" headingLevel={3} />)).toContain('<h3 id="a-h">T</h3>');
   });
 });
 

@@ -1,5 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { H, useHeadingLevel, type HeadingLevel } from '../../lib/heading';
 import { fmt, pct, plural } from './parts';
 
 export type ReasonKind = 'bad' | 'denied' | 'error';
@@ -26,6 +27,8 @@ export interface ReasonBarProps {
   reasons: readonly Reason[];
   /** Render the `h3.sm` heading with the total. Default true. */
   heading?: boolean;
+  /** Level of the heading. Default 3, one under the tray title (a Tray sets it). */
+  headingLevel?: HeadingLevel;
   /** Extra classes on the `svg.rbar`. */
   class?: string;
 }
@@ -54,16 +57,17 @@ export function ReasonBar(props: ReasonBarProps) {
     x += width + GAP;
     return segment;
   });
+  const hLevel = useHeadingLevel(props.headingLevel ?? 3);
   const name = `${props.title}: ${reasons.map((reason) => `${fmt(reason.count)} ${reason.short}`).join(', ')}`;
   return (
     <>
       {props.heading === false ? null : (
-        <h3 class="sm">
+        <H level={hLevel} class="sm">
           <b>{props.title}</b>{' '}
           <span class="muted">
             {fmt(total)} in {plural(reasons.length, 'reason', 'reasons')}
           </span>
-        </h3>
+        </H>
       )}
       <svg
         class={cx('rbar', props.class)}

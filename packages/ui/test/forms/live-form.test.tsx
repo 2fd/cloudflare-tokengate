@@ -55,7 +55,7 @@ describe('LiveSummary', () => {
         </LiveSummary>,
       ),
     ).toContain(
-      '<aside class="rail x" id="s" aria-labelledby="s-h"><section class="tray"><div class="tray-h"><div class="t"><h3 class="h2" id="s-h">T</h3>',
+      '<aside class="rail x" id="s" aria-labelledby="s-h"><section class="tray"><div class="tray-h"><div class="t"><h3 id="s-h">T</h3>',
     );
   });
 });
@@ -63,18 +63,7 @@ describe('LiveSummary', () => {
 describe('summary parts', () => {
   it('SummaryRow renders a logo or a glyph tile, a title and a meta line', () => {
     expect(
-      render(
-        <SummaryRow
-          logo={
-            <span class="logo lg-slack" aria-hidden="true">
-              S
-            </span>
-          }
-          title="Slack"
-          meta="gate.acme.dev/proxy/slack"
-          mono
-        />,
-      ),
+      render(<SummaryRow logo="slack" title="Slack" meta="gate.acme.dev/proxy/slack" mono />),
     ).toBe(
       '<div class="lsum-row"><span class="logo lg-slack" aria-hidden="true">S</span><span><b>Slack</b><span class="meta mono">gate.acme.dev/proxy/slack</span></span></div>',
     );

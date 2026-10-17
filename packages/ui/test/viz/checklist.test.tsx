@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Checklist, ChecklistProgress, SplitView } from '../../src';
+import { Checklist, ChecklistProgress } from '../../src';
 import { render } from '../render';
 
 describe('Checklist', () => {
@@ -37,7 +37,7 @@ describe('Checklist', () => {
   it('marks done and next steps and numbers the rest', () => {
     expect(
       html.startsWith(
-        '<ol class="checklist x"><li class="is-done"><span class="no" aria-hidden="true">✓</span><h3>Sign in with Cloudflare Access <span class="badge ok"><span aria-hidden="true">✓ </span>Done</span></h3>',
+        '<ol class="checklist x"><li class="is-done"><span class="no" aria-hidden="true">✓</span><h3>Sign in with Cloudflare Access <span class="badge ok"><span aria-hidden="true">✓</span>Done</span></h3>',
       ),
     ).toBe(true);
     expect(html).toContain(
@@ -67,75 +67,5 @@ describe('ChecklistProgress', () => {
     expect(render(<ChecklistProgress done={1} total={3} class="x" />)).toBe(
       '<span class="progress x" aria-hidden="true"><i class="on"></i><i></i><i></i></span><span class="meta">1 of 3 done</span>',
     );
-  });
-});
-
-describe('SplitView', () => {
-  const html = render(
-    <SplitView
-      id="rq"
-      label="Requests, newest first"
-      title="POST /chat.postMessage"
-      meta="req_01JB8Z5K2Q7W3N4M6P8R9T0V1X · 14:03:22 UTC"
-      actions={
-        <a class="btn sm secondary" href="/admin/requests/req_1">
-          Open
-        </a>
-      }
-      listFooter="Showing 1–25 of 8,214"
-      class="x"
-      items={[
-        {
-          href: '?req=req_1',
-          title: 'POST /chat.postMessage',
-          outcome: { tone: 'bad', word: 'Denied', code: '403' },
-          time: '14:03:22',
-          datetime: '2026-10-15T14:03:22Z',
-          meta: 'acme/web → slack',
-          current: true,
-        },
-        {
-          href: '?req=req_2',
-          title: 'POST /v1/chat/completions',
-          outcome: { tone: 'ok', word: 'Allowed' },
-        },
-        { href: '?req=req_3', title: '<script>' },
-      ]}
-    >
-      <p>Detail</p>
-    </SplitView>,
-  );
-
-  it('renders the list as a named nav of links with the current one marked', () => {
-    expect(
-      html.startsWith(
-        '<div class="split x" id="rq"><nav class="split-list" aria-label="Requests, newest first"><ol class="split-items"><li><a class="split-item" href="?req=req_1" aria-current="page">',
-      ),
-    ).toBe(true);
-    expect(html.match(/aria-current/g)).toHaveLength(1);
-  });
-
-  it('shows outcome, code and time on the first line', () => {
-    expect(html).toContain(
-      '<span class="split-top"><span class="res bad"><span class="dot bad" aria-hidden="true"></span>Denied <span class="code">403</span></span><time class="time" datetime="2026-10-15T14:03:22Z">14:03:22</time></span><span class="split-t mono">POST /chat.postMessage</span><span class="meta">acme/web → slack</span>',
-    );
-    expect(html).toContain(
-      '<span class="res ok"><span class="dot" aria-hidden="true"></span>Allowed</span>',
-    );
-    expect(html).toContain(
-      '<a class="split-item" href="?req=req_3"><span class="split-t mono">&lt;script&gt;</span></a>',
-    );
-  });
-
-  it('labels the pane with its heading and renders the detail', () => {
-    expect(html).toContain('<div class="split-f">Showing 1–25 of 8,214</div></nav>');
-    expect(html).toContain(
-      '<section class="split-pane" aria-labelledby="rq-h"><div class="split-h"><div class="t"><h2 id="rq-h">POST /chat.postMessage</h2><p class="meta">req_01JB8Z5K2Q7W3N4M6P8R9T0V1X · 14:03:22 UTC</p></div><div class="end"><a class="btn sm secondary" href="/admin/requests/req_1">Open</a></div></div><div class="split-b"><p>Detail</p></div></section></div>',
-    );
-  });
-
-  it('takes heading level 3', () => {
-    const h3 = render(<SplitView id="s" label="l" title="t" level={3} items={[]} />);
-    expect(h3).toContain('<h3 id="s-h">t</h3>');
   });
 });

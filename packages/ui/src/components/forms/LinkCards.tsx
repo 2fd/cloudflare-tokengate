@@ -1,5 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { LogoTile, type LogoSpec } from '../base/Logo';
 
 export interface LinkCard {
   href: string;
@@ -9,8 +10,8 @@ export interface LinkCard {
   description?: Child;
   /** Faint fact after the title (“6 tokens”). */
   meta?: Child;
-  /** Logo tile (`logo`, 32px), decorative. Cards without one use two columns. */
-  logo?: Child;
+  /** Brand tile (32px), decorative. Cards without one use two columns. */
+  logo?: LogoSpec;
 }
 
 export interface LinkCardsProps {
@@ -30,7 +31,7 @@ export function LinkCards(props: LinkCardsProps) {
       {props.cards.map((card) => (
         <li>
           <a class="tcard" href={card.href}>
-            {card.logo ?? null}
+            {card.logo !== undefined ? <LogoTile logo={card.logo} /> : null}
             <span class="t">
               {card.title}
               {card.meta ? <span class="faint"> · {card.meta}</span> : null}

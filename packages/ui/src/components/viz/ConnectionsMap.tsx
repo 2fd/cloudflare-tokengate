@@ -1,9 +1,11 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
 import type { Tone } from '../../lib/props';
+import { Icon } from '../base/Icon';
+import { LogoTile, dimLogo, type LogoSpec } from '../base/Logo';
 import { ArrowRow } from './ArrowRow';
 import { Legend } from './Legend';
-import { LogoTile, ShieldMark, fmt, plural, type VizLogo } from './parts';
+import { fmt, plural } from './parts';
 
 export interface MapConsumer {
   /** Stable id, used in the links (`?consumer=`, `?focus=`). */
@@ -11,7 +13,7 @@ export interface MapConsumer {
   name: string;
   /** Second line: "org acme (1234567)", "Generic OIDC · idle 41 days". */
   line?: Child;
-  logo: VizLogo;
+  logo: LogoSpec;
   /** Idle consumer: dashed node, gray logo. */
   idle?: boolean;
   /** Busyness for the scale rule; defaults to its number of accesses. */
@@ -27,7 +29,7 @@ export interface MapToken {
   line?: Child;
   /** Colors the status line. */
   lineTone?: 'warn' | 'bad';
-  logo: VizLogo;
+  logo: LogoSpec;
   /** Requests in the last 24 hours; also the token's busyness for the scale rule. */
   requests: number;
   denied: number;
@@ -73,6 +75,11 @@ export interface ConnectionsMapProps {
   maxRows?: number;
   /** Consumers offered in the focus bar, busiest first. Default 3; 0 hides the bar. */
   focusLinks?: number;
+  /**
+   * Name of the focus bar landmark. Default "Focus on a consumer"; give a second map on the same
+   * page its own name.
+   */
+  focusLabel?: string;
   /** Facts at the start of the footer ("Refused before a token was chosen: 182"). */
   footer?: Child;
   class?: string;
@@ -256,7 +263,7 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
     <>
       {focusLinks > 0 ? (
         <div class="cmap-bar">
-          <nav class="qlinks" aria-label="Focus on a consumer">
+          <nav class="qlinks" aria-label={props.focusLabel ?? 'Focus on a consumer'}>
             <a class="ql" href={base} aria-current={focused ? undefined : 'true'}>
               All consumers
             </a>
@@ -362,7 +369,9 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
         <div class="cmap-mid" aria-hidden="true">
           <div class="cmap-h">
             <span class="hub">
-              <ShieldMark />
+              <span class="mark" aria-hidden="true">
+                <Icon name="gate" />
+              </span>
               {plural(accesses.length, 'access', 'accesses')}
             </span>
           </div>
@@ -539,7 +548,7 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
                     }}
                     token={{
                       name: token?.name ?? access.token,
-                      logo: token ? { ...token.logo, disabled: token.idle } : undefined,
+                      logo: token ? dimLogo(token.logo, token.idle) : undefined,
                       context: access.operation,
                     }}
                   />

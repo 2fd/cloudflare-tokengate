@@ -1,13 +1,26 @@
+import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
-import type { BaseProps, Tone } from '../../lib/props';
+import type { Tone } from '../../lib/props';
 import { STATUS_VOCABULARY, type StatusKind } from './vocabulary';
 
-export interface StatusProps extends BaseProps {
-  /** A meaning from the status vocabulary: sets the tone and the default word. */
-  status?: StatusKind;
+/**
+ * The word of a status: a meaning from the vocabulary (its word is the default), or the word
+ * itself as children. One of the two is required, so a status never renders without a word.
+ */
+export type StatusWordProps =
+  | {
+      /** A meaning from the status vocabulary: sets the tone and the default word. */
+      status: StatusKind;
+      /** Replaces the vocabulary word ("Expires in 6 days"). */
+      children?: Child;
+    }
+  | { status?: undefined; children: Child };
+
+export type StatusProps = StatusWordProps & {
   /** Dot color; `ok` (default) is green. `off` is a hollow ring. */
   tone?: Tone;
-}
+  class?: string;
+};
 
 /**
  * Dot + text (`.st`), the status form for dense table rows. The dot is drawn by CSS and never

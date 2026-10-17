@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Deployment guardrails that tests cannot see because they live in wrangler.jsonc (I-DEPLOY-1, I-SSRF-1).
+# Deployment guardrails that tests cannot see because they live in wrangler.jsonc (I-DEPLOY-1,
+# I-DEPLOY-2, I-SSRF-1).
 # Usage: apps/gateway/scripts/check-config.sh [path/to/wrangler.jsonc]   (default: its wrangler.jsonc)
 set -euo pipefail
 config_file="$(realpath "${1:-$(dirname "$0")/../wrangler.jsonc}")"
@@ -11,6 +12,10 @@ config="$(sed -E 's#^[[:space:]]*//.*$##; s#[[:space:]]//[^"]*$##' "$config_file
 
 fail() { echo "check-config: $1" >&2; exit 1; }
 
+# Wrangler honours "main" inside an environment block too (`wrangler deploy --env <name>`), so every
+# entry point must be src/index.ts. An environment without "main" inherits the top-level one.
+jq -e '[.main] + [(.env // {} | .[] | .main // empty)] | all(. == "src/index.ts")' <<<"$config" >/dev/null ||
+  fail 'wrangler.jsonc "main" (top-level and in every env block) must be src/index.ts (src/dev.ts adds the dev-only docs, I-DEPLOY-2)'
 [[ "$(jq -r '.preview_urls' <<<"$config")" == "false" ]] ||
   fail 'wrangler.jsonc must set "preview_urls": false (version URLs would run old code against production data)'
 jq -e '.compatibility_flags | index("global_fetch_strictly_public")' <<<"$config" >/dev/null ||

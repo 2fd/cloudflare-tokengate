@@ -69,7 +69,7 @@ describe('FeedDay', () => {
     expect(render(<FeedDay>Today, 15 Oct</FeedDay>)).toBe('<h3 class="day">Today, 15 Oct</h3>');
     expect(
       render(
-        <FeedDay level={4} class="x">
+        <FeedDay headingLevel={4} class="x">
           2 Oct
         </FeedDay>,
       ),
@@ -82,7 +82,7 @@ describe('EmptyState', () => {
     expect(
       render(
         <EmptyState
-          glyph={<svg class="ic" />}
+          icon="consumer"
           title="No consumer can use a token yet"
           description="Give a consumer access."
           actions={
@@ -93,17 +93,19 @@ describe('EmptyState', () => {
         />,
       ),
     ).toBe(
-      '<div class="empty"><span class="glyph" aria-hidden="true"><svg class="ic"></svg></span>' +
+      '<div class="empty"><span class="glyph" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect><path d="M10 6.5h4a3 3 0 0 1 3 3V14"></path></svg></span>' +
         '<h3>No consumer can use a token yet</h3><p>Give a consumer access.</p>' +
         '<div class="btn-row"><a class="btn primary" href="/admin/access/new">Give access</a></div></div>',
     );
   });
 
   it('renders just the title at another level, with a class', () => {
-    expect(render(<EmptyState title="No requests" level={2} class="x" />)).toBe(
+    expect(render(<EmptyState title="No requests" headingLevel={2} class="x" />)).toBe(
       '<div class="empty x"><h2>No requests</h2></div>',
     );
-    expect(render(<EmptyState title="t" level={4} />)).toBe('<div class="empty"><h4>t</h4></div>');
+    expect(render(<EmptyState title="t" headingLevel={4} />)).toBe(
+      '<div class="empty"><h4>t</h4></div>',
+    );
   });
 });
 

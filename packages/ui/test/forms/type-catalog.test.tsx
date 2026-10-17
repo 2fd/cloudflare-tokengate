@@ -2,11 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CatalogGroup, TypeCard, TypeCatalog } from '../../src';
 import { render } from '../render';
 
-const slack = (
-  <span class="logo lg-slack" aria-hidden="true">
-    S
-  </span>
-);
+const slack = 'slack' as const;
 
 describe('TypeCatalog', () => {
   it('renders a labelled section with the catalog tray', () => {
@@ -30,7 +26,7 @@ describe('TypeCatalog', () => {
         </TypeCatalog>,
       ),
     ).toContain(
-      '<section class="x" id="t" aria-labelledby="t-h"><div class="cat-list"><div class="tray-h"><div class="t"><h3 class="h2" id="t-h">T</h3>',
+      '<section class="x" id="t" aria-labelledby="t-h"><div class="cat-list"><div class="tray-h"><div class="t"><h3 id="t-h">T</h3>',
     );
   });
 });
@@ -82,7 +78,7 @@ describe('CatalogGroup', () => {
     expect(render(<CatalogGroup>Chat</CatalogGroup>)).toBe('<h3 class="cat-group">Chat</h3>');
     expect(
       render(
-        <CatalogGroup level={4} class="x">
+        <CatalogGroup headingLevel={4} class="x">
           AI
         </CatalogGroup>,
       ),

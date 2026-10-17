@@ -1,0 +1,28 @@
+{
+  "name": "@tokengate/docs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Documentation of the tokengate design system (@tokengate/ui): a Hono app for /docs that the gateway serves in local development only (apps/gateway/src/dev.ts). Never deployed.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@tokengate/ui": "workspace:*"
+  },
+  "peerDependencies": {
+    "hono": "^4.13.13"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "hono": "^4.13.13",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  }
+}

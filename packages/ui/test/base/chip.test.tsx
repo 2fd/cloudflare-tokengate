@@ -3,10 +3,15 @@ import { Chip, Chips } from '../../src';
 import { render } from '../render';
 
 describe('Chip', () => {
-  it('links a logo chip with a count and a hidden context', () => {
+  it('links a logo chip with a count and a hidden srSuffix', () => {
     expect(
       render(
-        <Chip href="/admin/access?token=slack" logo="slack" count={2} context=": 2 accesses. Open.">
+        <Chip
+          href="/admin/access?token=slack"
+          logo="slack"
+          count={2}
+          srSuffix=": 2 accesses. Open."
+        >
           Slack
         </Chip>,
       ),

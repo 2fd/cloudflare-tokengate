@@ -18,15 +18,21 @@ importers:
         specifier: ^7.0.2004
         version: 7.0.2004
 
-  apps/docs:
+  apps/gateway:
     dependencies:
-      '@tokengate/ui':
-        specifier: workspace:*
-        version: link:../../packages/ui
       hono:
         specifier: ^4.13.13
         version: 4.13.13
+      jose:
+        specifier: ^6.2.12
+        version: 6.2.12
     devDependencies:
+      '@cloudflare/vitest-plugin':
+        specifier: ^1.4.0
+        version: 1.4.0(@types/node@26.6.5)(vitest@5.0.3(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)))
+      '@tokengate/docs':
+        specifier: workspace:*
+        version: link:../../packages/docs
       '@types/node':
         specifier: ^26.6.5
         version: 26.6.5
@@ -40,30 +46,24 @@ importers:
         specifier: ^4.149.0
         version: 4.149.0(@types/node@26.6.5)
 
-  apps/gateway:
+  packages/docs:
     dependencies:
-      hono:
-        specifier: ^4.13.13
-        version: 4.13.13
-      jose:
-        specifier: ^6.2.12
-        version: 6.2.12
+      '@tokengate/ui':
+        specifier: workspace:*
+        version: link:../ui
     devDependencies:
-      '@cloudflare/vitest-plugin':
-        specifier: ^1.4.0
-        version: 1.4.0(@types/node@26.6.5)(vitest@5.0.3(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)))
       '@types/node':
         specifier: ^26.6.5
         version: 26.6.5
+      hono:
+        specifier: ^4.13.13
+        version: 4.13.13
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
       vitest:
         specifier: ^5.0.3
         version: 5.0.3(@types/node@26.6.5)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2))
-      wrangler:
-        specifier: ^4.149.0
-        version: 4.149.0(@types/node@26.6.5)
 
   packages/ui:
     devDependencies:

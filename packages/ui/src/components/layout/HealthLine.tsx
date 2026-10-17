@@ -1,5 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { SrSuffix } from '../../lib/sr';
 
 export interface HealthLineProps {
   /** Where the line leads: Overview, Needs attention (`/admin#ov-attention`) or Health (`#ov-health`). */
@@ -9,7 +10,7 @@ export interface HealthLineProps {
   /** Visible summary: "3 warnings to review", "Healthy · 1 note". */
   children: Child;
   /** Rest of the link name for screen readers: ". Open Overview, Needs attention". */
-  srLabel?: string;
+  srSuffix?: string;
   class?: string;
 }
 
@@ -21,14 +22,14 @@ export function HealthLine({
   href,
   tone = 'ok',
   children,
-  srLabel,
+  srSuffix,
   class: className,
 }: HealthLineProps) {
   return (
     <a class={cx('health', className)} href={href}>
       <span class={cx('dot', tone !== 'ok' && tone)} aria-hidden="true"></span>
       {children}
-      {srLabel ? <span class="vh">{srLabel}</span> : null}
+      <SrSuffix text={srSuffix} />
     </a>
   );
 }

@@ -1,13 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  AccountMenu,
-  AppShell,
-  HealthLine,
-  HealthStrip,
-  MenuItem,
-  NavIcon,
-  SideNav,
-} from '../../src';
+import { AccountMenu, AppShell, HealthLine, HealthStrip, MenuItem, SideNav } from '../../src';
 import { render } from '../render';
 
 const sections = [
@@ -22,7 +14,7 @@ const sections = [
       { label: 'Allowed hosts', href: '/admin/tokens/hosts' },
     ],
   },
-  { label: 'Users', href: '/admin/users', pill: { label: '1 pending', srLabel: ': decide' } },
+  { label: 'Users', href: '/admin/users', pill: { label: '1 pending', srSuffix: ': decide' } },
 ];
 
 describe('SideNav', () => {
@@ -52,7 +44,13 @@ describe('AppShell', () => {
     );
     expect(html).toContain('<a class="skip-link" href="#m">Skip to content</a>');
     expect(html).toContain('<main class="main" id="m">body</main>');
-    expect(html).toContain('<details class="navd"><summary>Menu</summary>');
+    expect(html).toContain(
+      '<details class="navd"><summary><span class="navd-l">Menu</span><span class="navd-x">Close</span><span class="chev" aria-hidden="true">▾</span></summary>',
+    );
+    // the instance mark is the gate icon of the set, not a second drawing of it
+    expect(html).toContain(
+      '<span class="mark" aria-hidden="true"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"></path>',
+    );
   });
 
   it('drops the landmarks when drawn inside another page', () => {
@@ -76,7 +74,7 @@ describe('AppShell slots', () => {
         <HealthLine
           href="/admin#ov-attention"
           tone="warn"
-          srLabel=". Open Overview, Needs attention"
+          srSuffix=". Open Overview, Needs attention"
         >
           3 warnings to review
         </HealthLine>
@@ -116,7 +114,7 @@ describe('HealthLine', () => {
   it('renders a hidden dot, the summary and the screen reader rest of the name', () => {
     expect(
       render(
-        <HealthLine href="/admin#ov-attention" tone="warn" srLabel=". Open Overview">
+        <HealthLine href="/admin#ov-attention" tone="warn" srSuffix=". Open Overview">
           3 warnings to review
         </HealthLine>,
       ),
@@ -195,18 +193,13 @@ describe('AccountMenu', () => {
   });
 });
 
-describe('NavIcon', () => {
-  it.each(['monitoring', 'tokens', 'consumers', 'users'] as const)(
-    '%s is a hidden svg.ic',
-    (name) => {
-      const html = render(<NavIcon name={name} />);
-      expect(html).toMatch(
-        /^<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><(path|circle|rect) /,
-      );
-    },
-  );
-
-  it('passes classes through', () => {
-    expect(render(<NavIcon name="users" class="big" />)).toContain('class="ic big"');
+describe('AccountMenu initials', () => {
+  it('takes the initials from the name, like Avatar', () => {
+    const html = render(
+      <AccountMenu id="a" name="Diego Ruiz" role="Admin">
+        x
+      </AccountMenu>,
+    );
+    expect(html).toContain('<span class="avatar md" aria-hidden="true">DR</span>');
   });
 });

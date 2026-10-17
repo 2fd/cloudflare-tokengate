@@ -7,5 +7,5 @@ export interface BaseProps {
   children?: Child;
 }
 
-/** The status tones of the system (README "Status vocabulary"). */
+/** The status tones of the system (README "Status words"). */
 export type Tone = 'ok' | 'warn' | 'bad' | 'info' | 'off';

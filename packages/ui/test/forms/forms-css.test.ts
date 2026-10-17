@@ -1,5 +1,5 @@
 // The forms sections of ui.css: every class the forms components render exists, the live-form
-// :has() contract covers fields 1-6 x options 1-12, and the color pairs the forms use pass AA.
+// :has() contract covers fields 1-8 x options 1-12, and the color pairs the forms use pass AA.
 import { describe, expect, it } from 'vitest';
 import { uiCss } from '../../src/css';
 
@@ -71,7 +71,7 @@ describe('forms classes', () => {
 });
 
 describe('live form contract', () => {
-  const slots = [1, 2, 3, 4, 5, 6];
+  const slots = [1, 2, 3, 4, 5, 6, 7, 8];
   const options = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
   it.each(slots)('field %i: phrases, reveals and the empty phrase', (n) => {
     for (const k of options) {

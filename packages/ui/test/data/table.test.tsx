@@ -31,11 +31,12 @@ describe('Table', () => {
 
   it('renders without the region, and without a tbody when there are no rows', () => {
     const html = render(
-      <Table scroll={false} columns={columns}>
+      <Table scroll={false} caption="Tokens" columns={columns}>
         {[]}
       </Table>,
     );
-    expect(html.startsWith('<table class="tbl">')).toBe(true);
+    // without the region the table names itself: the caption is required
+    expect(html.startsWith('<table class="tbl"><caption class="vh">Tokens</caption>')).toBe(true);
     expect(html).not.toContain('scroll');
     expect(html).not.toContain('<tbody>');
   });
@@ -97,17 +98,7 @@ describe('Row, RowHeader, Cell', () => {
 describe('Entity', () => {
   it('renders logo, name link and a mono meta line', () => {
     const html = render(
-      <Entity
-        logo={
-          <span class="logo lg-slack" aria-hidden="true">
-            S
-          </span>
-        }
-        name="Slack"
-        href="/admin/tokens/slack"
-        meta="/proxy/slack"
-        metaMono
-      />,
+      <Entity logo="slack" name="Slack" href="/admin/tokens/slack" meta="/proxy/slack" metaMono />,
     );
     expect(html).toBe(
       '<span class="ent"><span class="logo lg-slack" aria-hidden="true">S</span>' +
@@ -143,7 +134,7 @@ describe('CountLink', () => {
   it('links the count with a tone and a screen reader suffix', () => {
     expect(
       render(
-        <CountLink href="/admin/requests?outcome=denied&token=slack" tone="bad" srLabel=" denied">
+        <CountLink href="/admin/requests?outcome=denied&token=slack" tone="bad" srSuffix="denied">
           38
         </CountLink>,
       ),

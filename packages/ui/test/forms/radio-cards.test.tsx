@@ -36,7 +36,7 @@ describe('RadioCards', () => {
   it('marks risky options with data-risk, the warn class and a Risk tag', () => {
     const html = render(<RadioCards name="ctx" options={contexts} />);
     expect(html).toContain('<label class="rc risk" data-o="3" data-risk="true">');
-    expect(html).toContain('<span class="risktag"><span aria-hidden="true">⚠</span> Risk</span>');
+    expect(html).toContain('<span class="risktag"><span aria-hidden="true">⚠</span>Risk</span>');
     expect(html.match(/data-risk/g)).toHaveLength(1);
   });
 

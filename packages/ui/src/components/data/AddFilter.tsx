@@ -1,13 +1,17 @@
 import type { Child } from 'hono/jsx';
 import { cx } from '../../lib/cx';
+import { SrSuffix } from '../../lib/sr';
+import { LogoTile, type LogoSpec } from '../base/Logo';
 
 export interface FilterOption {
   /** The list with this filter added ("?token=slack"). */
   href: string;
   /** What it filters by ("Slack"). */
   label: Child;
-  /** Decorative logo or avatar before the label (`aria-hidden`). */
-  logo?: Child;
+  /** Brand tile (18px) before the label, decorative. */
+  logo?: LogoSpec;
+  /** A custom decorative node instead of `logo`: an `Avatar` for a person. */
+  logoSlot?: Child;
   /** Mono slug or kind after the label ("slack", "token"). */
   slug?: string;
   /** How many rows match, right-aligned ("2,140"). */
@@ -21,18 +25,18 @@ export interface AddFilterProps {
   options: readonly FilterOption[];
   /** Special values after a divider ("No token chosen", "Unverified callers"). */
   extra?: readonly FilterOption[];
-  /** Screen reader unit after each count (" requests"). */
-  unit?: string;
+  /** Screen reader suffix after each count ("requests"). The space is added. */
+  srSuffix?: string;
   /** Render the menu open (server state, or docs). */
   open?: boolean;
   class?: string;
 }
 
-function Option(props: { option: FilterOption; unit: string | undefined }) {
+function Option(props: { option: FilterOption; srSuffix: string | undefined }) {
   const { option } = props;
   return (
     <a href={option.href}>
-      {option.logo}
+      {option.logo !== undefined ? <LogoTile logo={option.logo} size="xs" /> : option.logoSlot}
       {option.label}
       {option.slug !== undefined ? (
         <>
@@ -43,7 +47,7 @@ function Option(props: { option: FilterOption; unit: string | undefined }) {
       {option.count !== undefined ? (
         <span class="n">
           {option.count}
-          {props.unit ? <span class="vh">{props.unit}</span> : null}
+          <SrSuffix text={props.srSuffix} />
         </span>
       ) : null}
     </a>
@@ -64,13 +68,13 @@ export function AddFilter(props: AddFilterProps) {
       </summary>
       <div class="fpop">
         {props.options.map((option) => (
-          <Option option={option} unit={props.unit} />
+          <Option option={option} srSuffix={props.srSuffix} />
         ))}
         {props.extra && props.extra.length > 0 ? (
           <>
             <hr />
             {props.extra.map((option) => (
-              <Option option={option} unit={props.unit} />
+              <Option option={option} srSuffix={props.srSuffix} />
             ))}
           </>
         ) : null}
