@@ -7,7 +7,7 @@
   "type": "module",
   "scripts": {
     "setup": "cp .dev.vars.example .dev.vars && rm -rf .wrangler/state/v3/d1 && pnpm db:migrate:local",
-    "dev": "wrangler dev src/dev.ts",
+    "dev": "CLOUDFLARE_CF_FETCH_ENABLED=false wrangler dev src/dev.ts",
     "deploy": "wrangler d1 migrations apply DB --remote && wrangler d1 migrations apply TELEMETRY_DB --remote && wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply DB --local && wrangler d1 migrations apply TELEMETRY_DB --local",
     "types": "wrangler types --env-file .dev.vars.example",
