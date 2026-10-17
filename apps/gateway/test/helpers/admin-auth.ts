@@ -26,28 +26,38 @@ export { TEST_ACCESS_ENV, TEST_ORIGIN };
 
 /**
  * Empties the control-plane tables, grants before the services and caller providers they
- * reference. The last-owner delete trigger (I-OWNER-1) is dropped and re-created from its stored
- * SQL inside the same batch, since it forbids deleting the last owner.
+ * reference. The built-in team rows are never touched; custom teams and every membership are
+ * deleted. The last-owner delete triggers (I-OWNER-1) are dropped and re-created from their stored
+ * SQL inside the same batch, since they forbid deleting the last owner. Settings go first, so the
+ * default-team triggers (I-LINK-1) do not block the team deletes.
  */
 export async function resetControlPlane(): Promise<void> {
   const db = env.DB;
-  const trigger = await db
+  const names = ['users_last_owner_delete', 'team_members_last_owner_delete'];
+  const { results: triggers } = await db
     .prepare(
-      "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'users_last_owner_delete'",
+      `SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name IN (${names.map(() => '?').join(', ')})`,
     )
-    .first<{ sql: string }>();
-  if (!trigger) throw new Error('users_last_owner_delete trigger missing');
+    .bind(...names)
+    .all<{ name: string; sql: string }>();
+  for (const name of names) {
+    if (!triggers.some((trigger) => trigger.name === name)) {
+      throw new Error(`${name} trigger missing`);
+    }
+  }
   await db.batch([
-    db.prepare('DROP TRIGGER users_last_owner_delete'),
+    ...triggers.map((trigger) => db.prepare(`DROP TRIGGER ${trigger.name}`)),
+    db.prepare('DELETE FROM settings'),
+    db.prepare('DELETE FROM team_members'),
+    db.prepare('DELETE FROM teams WHERE builtin IS NULL'),
     db.prepare('DELETE FROM user_identities'),
     db.prepare('DELETE FROM audit_log'),
-    db.prepare('DELETE FROM settings'),
     db.prepare('DELETE FROM grants'),
     db.prepare('DELETE FROM claim_labels'),
     db.prepare('DELETE FROM services'),
     db.prepare('DELETE FROM caller_providers'),
     db.prepare('DELETE FROM users'),
-    db.prepare(trigger.sql),
+    ...triggers.map((trigger) => db.prepare(trigger.sql)),
   ]);
 }
 
