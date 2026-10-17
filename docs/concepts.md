@@ -148,6 +148,54 @@ There are five roles. Token duties and access duties are separate roles ([ADR 00
 
 Some form fields need a further permission, on top of the route's: allowing a new upstream host while saving a service needs `settings:write`, and deleting a service together with its grants needs `access:write`. Every admin route has an entry in the permission table, and unknown routes are denied ([I-RBAC-1](threat-model.md#i-rbac-1)). The database refuses to remove the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). IDs start with `usr_`. Admin UI: Users › People (`/admin/users`). Code: `apps/gateway/src/admin/auth/rbac.ts`.
 
+### Team
+
+A team (an admin team) is a named set of users that holds global permissions and a scope of service tokens and consumers. Its members get these powers. Teams replace the roles ([ADR 0023](adr/0023-teams-replace-roles.md)). A team is **not** the Cloudflare Access *team domain*: the docs always write "Access team domain" for that one, and the variable stays `AUTH_ACCESS_TEAM_DOMAIN`. "Team" alone always means an admin team. A user can be in several teams; the effective permissions are the union of the teams. A holder of `users:write` creates custom teams, sets their powers and adds people, but never more power than they hold themselves (I-RBAC-2). Teams are not tenants: slugs, names, issuers, settings and the keyring stay deployment-wide. IDs start with `tea_`. Admin UI: Users › Teams (`/admin/users/teams`).
+
+### Built-in team
+
+A built-in team is one of five seeded teams with fixed IDs, in privilege order: Owners (`tea_owner`), Admins (`tea_admin`), Token managers (`tea_token_manager`), Access managers (`tea_access_manager`) and Viewers (`tea_viewer`). They are the former roles, with access to all tokens and all consumers. Their permissions and scope cannot change (I-RBAC-3); their membership can, which is how a person becomes an owner. The admin UI shows a "Built-in" badge next to them, and a custom team cannot have a name close to theirs.
+
+### Membership
+
+A membership is a row (team, user). Only the memberships of an active user count. A pending user holds no membership: approval puts them in one team. Nobody adds themselves to a team or removes themselves from one. The Owners team always keeps at least one active member ([I-OWNER-1](threat-model.md#i-owner-1)).
+
+### Global permission
+
+A global permission is a power that is not tied to one token or consumer: `tokens:create`, `consumers:create`, `config:export`, `users:write`, `settings:write` and `keyring:rewrap`. `read` is not stored: it means "member of at least one team". An active user in no team sees only the "No team yet" page.
+
+### Level
+
+A level is what a team may do with one token or consumer: `1` view, `2` edit, `3` delete. Each level includes the lower ones. Creating is a global permission of the kind, not a level. A consumer access (grant) has no level of its own: changing it needs edit on its consumer and view on its token.
+
+### Scope
+
+A scope is the set of tokens, or of consumers, that a team can reach, with a level. For each kind a team has exactly one mode: *none*, *all* (one level that covers current and future items) or *list* (one row per item, each with its own level). A team never mixes *all* and *list* for one kind. To see every token but change only some, a person joins two teams, for example Viewers and Payments.
+
+### Visible
+
+A token or consumer is visible to a person when one of their teams can at least view it. Anything else is hidden everywhere in the admin UI: lists, details, the access map, requests, the audit log, the Overview, the export and the sidebar counts. Its URL answers 404, the same page as for an ID that does not exist (I-SCOPE-1). A consumer access is visible when its consumer and its token are both visible. A request record is visible when its consumer is visible and its token is unset or visible.
+
+### Global viewer
+
+A global viewer is a person who can view all tokens and all consumers through an all-scope. Only global viewers see records from before a caller was trusted, deployment-wide totals and the traffic of deleted tokens. Every built-in team is a global viewer.
+
+### Reveal
+
+Reveal (admin UI: "Copy secret") is a flag on a team's access to a token. It includes view. It allows `POST /admin/tokens/:id/reveal`, which sends the credential to the browser encrypted to a key of the browser, after an audit row, at most 20 times per hour per person. The browser copies it to the clipboard and never shows it. Among the built-in teams only Owners hold reveal. A person with reveal can always extract the credential: "copy only" is a UI choice, not a control ([ADR 0024](adr/0024-secret-reveal-over-ecdh.md)). Not the same as the `Reveal` component of `@tokengate/ui`, which shows a branch of a form without JavaScript.
+
+### Default team
+
+The default team is the team that new people join on their first sign-in when the join status is `active` (settings key `join_team`). By default it is Viewers. It must be join-safe: not Owners, and no `users:write`, `settings:write`, `keyring:rewrap` or reveal ([I-LINK-1](threat-model.md#i-link-1)). The default team cannot be deleted. Admin UI: Users › Sign-in.
+
+### Receiving team
+
+The receiving team is the team that gets access to a token or consumer when someone creates it. The create form offers the creator's teams that hold the matching create permission. The team gets the level delete, without reveal, in the same database batch as the new item, so the creator can always see what they created (I-SCOPE-2).
+
+### Secret ends
+
+The secret ends are the first 4 and the last 4 characters of a credential. The token page shows them only to a person with reveal on that token, and only when the secret part (without a username or prefix) has at least 20 characters. They are derived when the page renders and never stored: the database holds only the length of the credential. Everyone else sees a mask and the length.
+
 ### Login provider
 
 Users sign in through Cloudflare Access (login provider `access`), configured with Worker variables, not in the database ([configuration.md](configuration.md), [ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). The gateway keeps no session: it verifies the Access token on every admin request. The token proves a stable subject (`<team domain>|<sub>`) and an email address. On a new login, the gateway links an existing user only when that user is invited, the invitation is not expired, and the email in the token matches ([I-LINK-1](threat-model.md#i-link-1)). Otherwise the first person to sign in becomes the owner, at most once ([I-BOOT-1](threat-model.md#i-boot-1)). Everyone after that joins with the role and status that owners set for new users in Users: by default an active `viewer`; the role can be any role except `owner`, and the status `pending` (wait for approval) or `suspended`. So the Access policy decides who can reach the admin UI, and the join status decides whether they get in at once. An email that already belongs to another user is refused. Admin UI: Users › Sign-in (`/admin/users/sign-in`) shows the login provider and the admin hosts. For local development only, `AUTH_ACCESS_DEVELOPMENT` (login provider `dev`) signs every request to `localhost` in as one email. It never works together with Access: with both set, no login works ([I-CFG-1](threat-model.md#i-cfg-1)). Code: `apps/gateway/src/admin/auth/`.

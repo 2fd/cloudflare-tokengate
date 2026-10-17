@@ -37,3 +37,13 @@ Every deployment already runs on Cloudflare. Cloudflare Access authenticates use
 - The Access policy is the list of people who can reach the admin UI: each of them becomes a user with the join defaults. With the default (active viewer) they can read it at once; with the join status `pending` they wait for an owner. Until the first owner signs in, the first person through Access becomes the owner, so the policy must name only the operator until then.
 - The trust in email linking moves to Access and the identity provider behind it. The provider-specific email rules of 0008 (GitHub verified emails, Google `hd`, `AUTH_OIDC_ALLOWED_DOMAINS`) no longer exist; restrict the Access policy instead.
 - A D1 restore can no longer bring back ended sessions, but it still brings back users, roles and identity links as they were at the restore point.
+
+## Note (2026-10-17)
+
+[ADR 0023](0023-teams-replace-roles.md) replaces roles with teams. In this ADR:
+
+- The join role is now the default team: the settings key `join_team` replaces `join_role` (Users › Sign-in). By default new people join Viewers. The default team must be join-safe: not Owners, and no `users:write`, `settings:write`, `keyring:rewrap` or reveal. Pending people join no team; the person who approves them chooses the team. An invitation names a team, not a role.
+- The write re-check verifies the claims of the request (memberships, permissions, levels, reveal and dominance), not the role.
+- A team change applies to the user's next request, like a suspension or a login reset. A D1 restore brings back memberships as they were at the restore point.
+
+[ADR 0024](0024-secret-reveal-over-ecdh.md) uses the `iat` of the Access JWT: a secret reveal needs a sign-in of at most 15 minutes ago.

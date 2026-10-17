@@ -66,3 +66,7 @@ gateway already has an envelope format with a key hierarchy and AAD binding
 - `apps/gateway/src/admin/ops/credential-draft.ts` and `credentialDraftAad` in
   `apps/gateway/src/crypto/envelope.ts` hold the format;
   `apps/gateway/test/security/credential-draft.test.ts` pins every rule above.
+
+## Note (2026-10-17)
+
+[ADR 0024](0024-secret-reveal-over-ecdh.md) removes the stored last 4 characters of a secret. The hint next to the field shows the length only, for example "Secret kept for 15 minutes (34 characters)." The draft format and its rules are unchanged.

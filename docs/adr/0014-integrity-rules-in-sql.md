@@ -38,3 +38,14 @@ A JavaScript check followed by a write would leave a race between the two.
 - The last-owner rule also holds for manual SQL run with `wrangler d1 execute`, unless the trigger itself is dropped.
 - The SQL is more complex than plain inserts and updates. Tests cover the guards, for example `apps/gateway/test/security/bootstrap.test.ts` and `apps/gateway/test/security/audit-coverage-ops.test.ts`.
 - Anyone with D1 write access can still change data directly. Such changes bypass the admin UI and its audit log. Credentials stay protected by their AAD binding ([ADR 0004](0004-envelope-encryption-bound-to-destination.md)).
+
+## Note (2026-10-17)
+
+[ADR 0023](0023-teams-replace-roles.md) adds triggers to `apps/gateway/migrations/0001_initial.sql`:
+
+- A built-in team, its permissions and its scope cannot change (`builtin_team`). Membership rows, permission rows and the keys of scope rows are never updated, and a user id never changes (`immutable_row`).
+- A team never has an all-scope and list rows for the same kind (`scope_mixed`).
+- An active owner is an active member of the Owners team. `team_members_last_owner_delete`, `users_last_owner_status` and `users_last_owner_delete` replace `users_last_owner_update` and `users_last_owner_delete` (I-OWNER-1).
+- The default team for new people is join-safe in both directions and cannot be deleted (`join_team_unsafe`, `default_team`).
+
+The actor check in each audited batch now re-evaluates the claims of the request in SQL (memberships, permissions, levels, reveal and dominance), not a role.

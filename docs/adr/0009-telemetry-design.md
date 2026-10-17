@@ -42,3 +42,7 @@ Details are in [observability.md](../observability.md).
 - The archive needs manual setup, because the Deploy button does not provision Pipelines. The stream drops records that do not match the schema, so the schema file is versioned.
 - Audit events reach a SIEM only through Workers Logs or its exports. tokengate does not push them anywhere itself.
 - An Analytics Engine sink for metrics stays a possible later addition ([roadmap.md](../roadmap.md)).
+
+## Note (2026-10-17)
+
+[ADR 0023](0023-teams-replace-roles.md) adds `caller_provider_id` to the key of `request_rollup_hourly` (`''` when the issuer was unknown). A viewer who sees only some consumers then gets counts without the traffic of the other consumers. Only rows without a grant multiply, because a grant already fixes its consumer. Each audit event also gains `resources`: the token and consumer ids that the event shows, which decide who can read it.

@@ -39,3 +39,7 @@ Request volume and control-plane data behave differently:
 - Every proxied request makes one D1 batch read on `DB` ([ADR 0006](0006-no-policy-caching.md)).
 - The project depends on Cloudflare features: D1, Workers Assets, Cron Triggers, and optionally Queues, Pipelines and Rate Limiting. It cannot run elsewhere without changes.
 - Workers behavior applies to outbound requests. The `global_fetch_strictly_public` flag sends same-zone upstream requests through Cloudflare's front door, and Workers adds a `CF-Worker` header to outbound requests ([threat-model.md](../threat-model.md)).
+
+## Note (2026-10-17)
+
+[ADR 0023](0023-teams-replace-roles.md) hides the service tokens and consumers that a person cannot view, also in the data of `TELEMETRY_DB`. The two databases still cannot be joined. A query on request records or rollups binds the ids that the viewer can see as one JSON list (`json_each`). It never joins with `DB`. For a global viewer the query has no such clause.

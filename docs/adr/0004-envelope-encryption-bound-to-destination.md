@@ -41,3 +41,7 @@ Credentials are sealed with envelope encryption and stored in `services.credenti
 - Anyone who can deploy code to the Worker can read every credential. Worker deployers are fully trusted ([threat-model.md](../threat-model.md)).
 - Key check values are recorded per kid, not per credential. Replacing the key behind a kid is detected, but a restored old key does not reveal which newer credentials it cannot open.
 - Holding the KEK in Secrets Store instead of a Worker secret stays possible as a later option ([roadmap.md](../roadmap.md)).
+
+## Note (2026-10-17)
+
+[ADR 0024](0024-secret-reveal-over-ecdh.md) replaces `services.credential_hint` (the last 4 characters of the secret) with `credential_length`. D1, backups, audit diffs and logs hold only the length. A person with reveal on a token sees its first 4 and last 4 characters, which the page derives at render from the opened credential. That person can also copy the secret through the one reveal endpoint, which encrypts it to a key of the browser. The envelope format is unchanged.

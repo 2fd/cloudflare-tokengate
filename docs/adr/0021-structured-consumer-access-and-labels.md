@@ -35,3 +35,12 @@ The single "I have read the warnings" box accepted every warning at once. A tick
 - Accesses with conditions the structured form cannot rebuild (several repositories, extra claims, other events) are edited in the rows editor. Nothing is lost.
 - The labels add one table to the export (schema 2) and to backups.
 - Contributors add a new structured context by extending the builder, its inverse and the round-trip test (`apps/gateway/test/unit/policy/presets-roundtrip.test.ts`). A new risky choice must carry its code in `coveredRiskCodes` and the "Risk:" text in its label.
+
+## Note (2026-10-17)
+
+With [ADR 0023](0023-teams-replace-roles.md):
+
+- The inline consumer of the access form gets a receiving team, as "Add consumer" does: one of the creator's teams with `consumers:create`, written in the same batch.
+- A merge into the consumer of the same issuer needs edit on that consumer. When the person cannot see or edit it, the merge is refused, the message names nothing of it, and no access is written on it. A merge writes no scope row.
+- Every access change needs edit on the consumer and view on the token. The form and "Copy" offer only tokens that the person can view.
+- Suggestions come only from consumers and tokens that the person can see.

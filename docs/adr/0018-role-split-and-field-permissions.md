@@ -6,7 +6,7 @@ Date: 2026-10-14
 
 ## Status
 
-Accepted
+Superseded by [0023](0023-teams-replace-roles.md)
 
 ## Context
 
@@ -47,3 +47,9 @@ The export holds every user's email and both halves of the policy. It contains n
 - Old code runs on the new schema during a deploy: it never writes the new roles, and `can()` refuses roles it does not know. Rolling back after someone has the new roles leaves them with no permission until the new code is back.
 - The migration rebuilds two tables. Operators take a backup first, and the CHANGELOG upgrade notes say so.
 - Adding a field permission is a change to the RBAC table, pinned by `apps/gateway/test/unit/admin/auth/rbac.test.ts`, and the role split is tested on the real app by `apps/gateway/test/security/role-split.test.ts`.
+
+## Note (2026-10-17)
+
+[ADR 0023](0023-teams-replace-roles.md) supersedes this ADR. The five roles become five built-in teams with the same powers. `tokens:write` becomes `tokens:create` plus delete on all tokens, and `access:write` becomes `consumers:create` plus delete on all consumers. `with_accesses` no longer has a field permission: the op needs edit on every affected consumer, so token managers are still refused. `apps/gateway/test/security/role-split.test.ts` becomes `team-split.test.ts`.
+
+Correction: the Consequences item "The migration rebuilds two tables" is wrong. The Schema item is correct: the project had no release, so the initial migration held the change and no table was rebuilt.

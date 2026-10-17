@@ -46,3 +46,5 @@ The URL names were the internal names (`services`, `caller-providers`, `grants`)
 ## Note (2026-10-17)
 
 [ADR 0022](0022-admin-ui-on-design-system-d.md) changes two parts of this decision. The sidebar lists the sections as Monitoring, Service tokens, Service consumers, Users (Users is last). The configuration export is an item of the account menu at the bottom of the sidebar, not a form in the page footer. The sections, their pages and every URL are unchanged.
+
+[ADR 0023](0023-teams-replace-roles.md) adds Teams to the Users section, which has the pages People, Teams (`/admin/users/teams`) and Sign-in. A team has its page at `/admin/users/teams/:id` and its permission editor at `/admin/users/teams/:id/permissions`. These routes are registered before `/admin/users/:id`, and the route-order test covers the pairs. A token, consumer, access or request that the viewer cannot see answers 404 at its URL, like an id that does not exist.

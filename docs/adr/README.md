@@ -23,11 +23,13 @@ Each ADR uses the format from [0001](0001-record-architecture-decisions.md): Sta
 | [0015](0015-cloudflare-access-only-admin-login.md) | Cloudflare Access as the only admin login, without gateway sessions | Accepted |
 | [0016](0016-admin-hosts-in-settings.md) | Admin hosts in Settings instead of `PUBLIC_URL` | Accepted |
 | [0017](0017-kek-bound-to-login-variables.md) | Key-encryption keys bound to the login variables | Accepted |
-| [0018](0018-role-split-and-field-permissions.md) | Role split (token and access duties) and field permissions | Accepted |
+| [0018](0018-role-split-and-field-permissions.md) | Role split (token and access duties) and field permissions | Superseded by [0023](0023-teams-replace-roles.md) |
 | [0019](0019-admin-information-architecture.md) | Admin information architecture and URL scheme | Accepted |
 | [0020](0020-sealed-credential-drafts.md) | Sealed credential drafts | Accepted |
 | [0021](0021-structured-consumer-access-and-labels.md) | Structured consumer access, claim labels and risk acceptance | Accepted |
 | [0022](0022-admin-ui-on-design-system-d.md) | Admin UI on design system D: sidebar shell, section order, export in the account menu, stylesheets served by the Worker | Accepted |
+| [0023](0023-teams-replace-roles.md) | Teams replace roles; scoped visibility of service tokens and consumers; no escalation enforced in SQL | Accepted |
+| [0024](0024-secret-reveal-over-ecdh.md) | Secret reveal over ECDH and one client script | Accepted |
 
 ## Adding an ADR
 

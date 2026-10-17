@@ -36,3 +36,7 @@ Design D (sidebar navigation, centered content, one primary button per page) was
 - Operators who used the footer export find it in the account menu. The 404 hint for `/admin/settings` says so.
 - A stylesheet change is a deploy: the hashed URL changes with the content, so browsers load the new file at once and cache it for a year.
 - The CSP is unchanged: `style-src 'self'` covers the Worker's `/static` route.
+
+## Note (2026-10-17)
+
+[ADR 0024](0024-secret-reveal-over-ecdh.md) amends two parts of this decision. `/static` also serves one script, `reveal.client.js`, at an exact hashed URL with an immutable cache; every other `/static/*.js` path is a 404. The CSP is no longer the same on every page: the token detail page of a person with reveal on that token adds an exact `script-src` and `connect-src`. `packages/ui` stays free of JavaScript. [ADR 0023](0023-teams-replace-roles.md) adds the Teams page to the Users section, and the account menu shows the person's teams instead of a role.

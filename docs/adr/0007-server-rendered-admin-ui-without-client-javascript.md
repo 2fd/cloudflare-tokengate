@@ -33,3 +33,5 @@ The UI is a set of lists and forms used by a few people. It does not need client
 ## Note (2026-10-17)
 
 The admin stylesheets are now `ui.css` of the design system package (`@tokengate/ui`) and the admin's `apps/gateway/src/admin/pages.css`. The Worker serves both at hashed `/static/` URLs; Workers Assets and `app.css` are gone ([ADR 0022](0022-admin-ui-on-design-system-d.md)). The rest of this decision is unchanged.
+
+[ADR 0024](0024-secret-reveal-over-ecdh.md) amends this decision. The token detail page of a person with reveal on that token loads one script, `reveal.client.js`, from an exact hashed `/static` URL with SHA-384 integrity. Only that response has a `script-src` (the exact script URL) and a `connect-src` (the exact reveal path). Every other response keeps the policy above, with no `script-src`. Without JavaScript the page still works, and the "Copy secret" button stays hidden.
