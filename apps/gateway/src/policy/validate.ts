@@ -43,7 +43,7 @@ const PATH_SECRET_SEGMENT = /^[A-Za-z0-9\-._~!$&'()*+,=:@]+$/;
  * claim rules (I-TEN-1) nor the event guard (I-AUTHZ-3) would apply. Duplicated from the
  * profiles on purpose so that this check does not depend on profile data.
  */
-const CI_ISSUER_HOSTS: ReadonlyMap<string, ProfileId> = new Map([
+export const CI_ISSUER_HOSTS: ReadonlyMap<string, ProfileId> = new Map([
   ['token.actions.githubusercontent.com', 'github-actions'],
   ['gitlab.com', 'gitlab-ci'],
 ]);
@@ -528,7 +528,7 @@ export function validateCredentialAccessRule(
  * The audience must be unique to this gateway so tokens minted for other relying parties
  * (cloud providers, GitHub's default owner-URL audience) cannot be replayed here.
  */
-function audienceErrors(audience: unknown): string[] {
+export function audienceErrors(audience: unknown): string[] {
   if (typeof audience !== 'string' || audience.trim() === '') return ['audience is required'];
   if (audience !== audience.trim() || !isVisibleAscii(audience)) {
     return ['audience must be printable ASCII without spaces'];
@@ -664,14 +664,14 @@ export function validateIssuerAccessRule(
 }
 
 /** Values every pin condition on `claim` accepts (pin conditions are ANDed). */
-function tenantPinValues(pin: Condition[], claim: string): Set<string> {
+export function tenantPinValues(pin: Condition[], claim: string): Set<string> {
   const onClaim = pin.filter((condition) => condition.claim === claim);
   const [first, ...rest] = onClaim;
   if (first === undefined) return new Set();
   return new Set(first.values.filter((value) => rest.every((c) => c.values.includes(value))));
 }
 
-function grantWarnings(conditions: Condition[], profile: IssuerProfile): WarningDetail[] {
+export function grantWarnings(conditions: Condition[], profile: IssuerProfile): WarningDetail[] {
   const warnings: WarningDetail[] = [];
   const warn = (code: WarningCode, message: string) => warnings.push({ code, message });
 
@@ -755,7 +755,7 @@ function grantWarnings(conditions: Condition[], profile: IssuerProfile): Warning
  * https://discord.com/developers/docs/resources/webhook#get-webhook-with-token). Upstream
  * response bodies are not redacted, so every other method is flagged.
  */
-function pathInjectionRuleWarnings(rules: unknown[]): WarningDetail[] {
+export function pathInjectionRuleWarnings(rules: unknown[]): WarningDetail[] {
   const methods = new Set<string>();
   for (const rule of rules) {
     if (!isRecord(rule) || !Array.isArray(rule.methods)) continue;
@@ -772,7 +772,7 @@ function pathInjectionRuleWarnings(rules: unknown[]): WarningDetail[] {
   ];
 }
 
-function ruleShapeError(rule: unknown): string | null {
+export function ruleShapeError(rule: unknown): string | null {
   if (!isRecord(rule)) return 'rule must be an object';
   const { methods, path } = rule;
   if (!Array.isArray(methods) || methods.length === 0) return 'at least one method is required';
@@ -795,7 +795,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Characters 0x21-0x7e only: no whitespace, control or non-ASCII characters. */
-function isVisibleAscii(text: string): boolean {
+export function isVisibleAscii(text: string): boolean {
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
     if (code < 0x21 || code > 0x7e) return false;
@@ -804,7 +804,7 @@ function isVisibleAscii(text: string): boolean {
 }
 
 /** https URL with no user info, query or fragment; checked on the raw text too. */
-function httpsUrlError(raw: unknown): string | null {
+export function httpsUrlError(raw: unknown): string | null {
   if (typeof raw !== 'string' || raw === '') return 'is required';
   if (!isVisibleAscii(raw)) return 'must be printable ASCII without spaces';
   if (!raw.startsWith('https://')) return 'must start with https://';
@@ -820,7 +820,7 @@ function httpsUrlError(raw: unknown): string | null {
   return null;
 }
 
-function requiredTextError(value: unknown, max: number): string | null {
+export function requiredTextError(value: unknown, max: number): string | null {
   if (typeof value !== 'string' || value.trim() === '') return 'is required';
   if (value.length > max) return `must be at most ${max} characters`;
   if (hasControlChars(value)) return 'must not contain control characters';
