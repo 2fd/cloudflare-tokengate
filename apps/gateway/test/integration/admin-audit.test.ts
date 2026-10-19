@@ -20,7 +20,8 @@ import { createClock, TEST_EPOCH_MS } from '../helpers/jwt';
 const random = (n: number) => crypto.getRandomValues(new Uint8Array(n));
 const SVC_A = 'svc_01JAAAAAAAAAAAAAAAAAAAAAAA';
 const SVC_B = 'svc_01JBBBBBBBBBBBBBBBBBBBBBBB';
-const GRT_C = 'grt_01JCCCCCCCCCCCCCCCCCCCCCCC';
+const ACR_C = 'acr_01JCCCCCCCCCCCCCCCCCCCCCCC';
+const GAR_D = 'gar_01JDDDDDDDDDDDDDDDDDDDDDDD';
 
 let clock: ReturnType<typeof createClock>;
 let app: TestApp;
@@ -64,10 +65,10 @@ describe('GET /admin/audit', () => {
       diff: { after: { slug: 'slack', credential_sealed: 'sealed-bytes' } },
     });
     const updated = await audit(actorFor(owner), {
-      action: 'grant.update',
-      targetType: 'grant',
-      targetId: GRT_C,
-      summary: 'Updated grant deploy',
+      action: 'credential_access_rule.update',
+      targetType: 'credential_access_rule',
+      targetId: ACR_C,
+      summary: 'Changed credential access rule `deploy`: operations',
       diff: {
         before: { name: 'old', rules: [1] },
         after: { name: 'new', rules: [1] },
@@ -151,9 +152,9 @@ describe('GET /admin/audit', () => {
       summary: 'b',
     });
     const c = await audit(actorFor(other), {
-      action: 'grant.create',
-      targetType: 'grant',
-      targetId: GRT_C,
+      action: 'credential_access_rule.create',
+      targetType: 'credential_access_rule',
+      targetId: ACR_C,
       summary: 'c',
     });
     const s = await audit(SYSTEM_ACTOR, {
@@ -185,15 +186,30 @@ describe('GET /admin/audit', () => {
       summary: 'h',
     });
     const g = await audit(actorFor(owner), {
-      action: 'grant.create',
-      targetType: 'grant',
-      targetId: GRT_C,
+      action: 'credential_access_rule.create',
+      targetType: 'credential_access_rule',
+      targetId: ACR_C,
       summary: 'g',
+    });
+    const gl = await audit(actorFor(owner), {
+      action: 'global_access_rule.disable',
+      targetType: 'global_access_rule',
+      targetId: GAR_D,
+      summary: 'gl',
     });
     const get = async (query: string) =>
       eventIds(await (await adminGet(app, session, `/admin/audit?${query}`)).text());
     expect(await get('category=tokens')).toEqual([h, t]);
-    expect(await get('category=access')).toEqual([g]);
+    expect(await get('category=access_rules')).toEqual([g]);
+    expect(await get('category=global_rules')).toEqual([gl]);
+    expect(await get(`target=${GAR_D}`)).toEqual([gl]);
+    // The category menu names both kinds of rule.
+    const html = await (await adminGet(app, session, '/admin/audit')).text();
+    expect(html).toContain('<a href="/admin/audit?category=access_rules">Access rules</a>');
+    const tab = await (await adminGet(app, session, '/admin/audit?category=global_rules')).text();
+    expect(tab).toContain(
+      '<a href="/admin/audit?category=global_rules" aria-current="page">Global access rules</a>',
+    );
     expect(await get('category=users')).toEqual([]);
     const { results } = await env.DB.prepare(
       "EXPLAIN QUERY PLAN SELECT * FROM audit_log WHERE ((action >= 'service.' AND action < 'service/')) ORDER BY id DESC LIMIT 51",
@@ -206,18 +222,18 @@ describe('GET /admin/audit', () => {
     for (let i = 0; i < 53; i++) {
       ids.push(
         await audit(actorFor(owner), {
-          action: 'grant.update',
-          targetType: 'grant',
-          targetId: GRT_C,
+          action: 'credential_access_rule.update',
+          targetType: 'credential_access_rule',
+          targetId: ACR_C,
           summary: `change ${i}`,
         }),
       );
     }
     const newest = [...ids].reverse();
-    const first = await (await adminGet(app, session, `/admin/audit?target=${GRT_C}`)).text();
+    const first = await (await adminGet(app, session, `/admin/audit?target=${ACR_C}`)).text();
     expect(eventIds(first)).toEqual(newest.slice(0, 50));
     const older = first.match(/href="(\/admin\/audit\?[^"]*before=[^"]*)"/)?.[1];
-    expect(older).toContain(`target=${GRT_C}`);
+    expect(older).toContain(`target=${ACR_C}`);
     const second = await (
       await adminGet(app, session, (older ?? '').replaceAll('&amp;', '&'))
     ).text();
@@ -272,9 +288,9 @@ describe('GET /admin/audit', () => {
       status: 'suspended',
     });
     await audit(actorFor(gone), {
-      action: 'grant.create',
-      targetType: 'grant',
-      targetId: GRT_C,
+      action: 'credential_access_rule.create',
+      targetType: 'credential_access_rule',
+      targetId: ACR_C,
       summary: 'x',
     });
     const html = await (await adminGet(app, session, '/admin/audit?range=24h')).text();
@@ -290,7 +306,7 @@ describe('GET /admin/audit', () => {
       { type: 'user', id: 'usr_x', email: hostile, ip: hostile, userAgent: hostile },
       {
         action: hostile,
-        targetType: 'grant',
+        targetType: 'credential_access_rule',
         targetId: hostile,
         summary: hostile,
         diff: { after: { name: hostile } },
@@ -346,18 +362,25 @@ describe('AUDIT_CATEGORIES', () => {
   const emitted = new Set<string>();
   for (const [file, text] of Object.entries(sources)) {
     if (file.includes('/admin/views/') || file.endsWith('/routes/audit.tsx')) continue;
-    for (const match of text.matchAll(
-      /\baction: (?:[a-z]+ \? )?'((?:service|grant|credential_access_rule|user|settings|keyring|credential|config)\.[a-z_.]+)'(?: : '([a-z_.]+)')?/g,
-    )) {
-      emitted.add(match[1] as string);
-      if (match[2]) emitted.add(match[2]);
+    // The whole value of each `action:` (a literal or a ternary, which holds no comma).
+    for (const value of text.matchAll(/\baction:([^,]*),/g)) {
+      for (const match of (value[1] ?? '').matchAll(
+        /'((?:service|credential_access_rule|global_access_rule|user|settings|keyring|credential|config)\.[a-z_.]+)'/g,
+      )) {
+        emitted.add(match[1] as string);
+      }
     }
   }
 
   it('finds the emitted actions', () => {
     expect(emitted.size).toBeGreaterThan(25);
-    expect(emitted).toContain('grant.enable');
-    expect(emitted).toContain('grant.disable');
+    for (const kind of ['credential_access_rule', 'global_access_rule']) {
+      for (const verb of ['create', 'update', 'enable', 'disable', 'delete']) {
+        expect(emitted).toContain(`${kind}.${verb}`);
+      }
+    }
+    expect(emitted).toContain('credential_access_rule.duplicate');
+    expect([...emitted].filter((action) => action.startsWith('grant.'))).toEqual([]);
   });
 
   it('maps every emitted action to exactly one category, and every action has a text', () => {
@@ -373,8 +396,8 @@ describe('AUDIT_CATEGORIES', () => {
     }
     expect(Object.keys(AUDIT_CATEGORIES)).toEqual([
       'tokens',
-      'consumers',
-      'access',
+      'access_rules',
+      'global_rules',
       'users',
       'signins',
       'system',

@@ -56,7 +56,7 @@ beforeEach(async () => {
   await env.DB.batch([
     env.DB.prepare('DELETE FROM audit_log'),
     env.DB.prepare('DELETE FROM settings'),
-    env.DB.prepare('DELETE FROM issuer_access_rules'),
+    env.DB.prepare('DELETE FROM access_rules'),
     env.DB.prepare('DELETE FROM credentials'),
   ]);
   await env.TELEMETRY_DB.batch([

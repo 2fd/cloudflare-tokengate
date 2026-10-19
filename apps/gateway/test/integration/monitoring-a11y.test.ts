@@ -17,7 +17,7 @@ beforeEach(async () => {
   await resetControlPlane();
   owner = await createUser({ email: 'owner@example.com', role: 'owner' });
   viewer = await createUser({ email: 'viewer@example.com', role: 'viewer' });
-  fixture = await setupProxy({ grant: { rules: [{ methods: ['GET'], path: '/ok/**' }] } });
+  fixture = await setupProxy({ rule: { rules: [{ methods: ['GET'], path: '/ok/**' }] } });
   expect((await fixture.call('/ok/1')).status).toBe(200);
   expect((await fixture.call('/nope', { method: 'DELETE' })).status).toBe(403);
   await fixture.app.settle();
@@ -73,6 +73,11 @@ describe('Monitoring pages: WCAG 2.2 AA markup', () => {
     const ownerSession = await loginAs(a, owner);
     const viewerSession = await loginAs(a, viewer);
     const [first] = await fixture.records();
+    // A call that the global access rules refuse: its detail draws the global trace.
+    await fixture.addGlobalRule({ name: 'reads only', rules: [{ methods: ['GET'], path: '/**' }] });
+    await fixture.addRule({ rules: [{ methods: ['POST'], path: '/ok/**' }] });
+    const blocked = await fixture.call('/ok/2', { method: 'POST' });
+    expect(blocked.status).toBe(403);
     const pages = [
       '/admin',
       '/admin?range=7d',
@@ -80,6 +85,8 @@ describe('Monitoring pages: WCAG 2.2 AA markup', () => {
       '/admin/requests',
       '/admin/requests?outcome=denied&range=24h',
       `/admin/requests/${first?.id}`,
+      `/admin/requests/${blocked.headers.get('x-tokengate-request-id')}`,
+      `/admin/requests?rule=${fixture.ruleId}`,
       '/admin/audit',
       '/admin/retention',
     ];
@@ -118,7 +125,7 @@ describe('Monitoring pages: WCAG 2.2 AA markup', () => {
     const res = await adminGet(
       a,
       await loginAs(a, viewer),
-      '/admin/requests?token=bogus&reason=bogus',
+      '/admin/requests?token=bogus&rule=bogus&reason=bogus',
     );
     expect(res.status).toBe(400);
     const html = await res.text();
@@ -129,7 +136,7 @@ describe('Monitoring pages: WCAG 2.2 AA markup', () => {
     );
     // A filter menu with an invalid value: the summary links the menu, which renders open on its
     // list of valid choices, and the error text follows the menus.
-    for (const field of ['token', 'reason']) {
+    for (const field of ['token', 'rule', 'reason']) {
       expect(html).toContain(`<a href="#f-${field}">`);
       expect(html).toContain(`<details class="fadd" id="f-${field}" open="">`);
       expect(html).toContain(`<p class="field-error" id="f-${field}-error">`);

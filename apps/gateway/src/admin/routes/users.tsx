@@ -940,8 +940,8 @@ const CATEGORY_CHIPS: ReadonlyArray<{
   many: string;
 }> = [
   { category: 'tokens', one: 'token', many: 'tokens' },
-  { category: 'consumers', one: 'consumer', many: 'consumers' },
-  { category: 'access', one: 'access', many: 'accesses' },
+  { category: 'access_rules', one: 'access rule', many: 'access rules' },
+  { category: 'global_rules', one: 'global access rule', many: 'global access rules' },
   { category: 'users', one: 'person', many: 'people' },
   { category: 'system', one: 'setting', many: 'settings' },
 ];
@@ -953,7 +953,7 @@ const PROVIDER_LABELS: Readonly<Record<string, string>> = {
 
 type Categories = Awaited<ReturnType<typeof auditCountByActorAndCategory>>;
 
-/** "7 accesses · 1 consumer": the category counts in words. */
+/** "7 tokens · 1 access rule": the category counts in words. */
 function categoryWords(categories: Categories): string {
   return CATEGORY_CHIPS.filter((chip) => categories[chip.category] > 0)
     .map((chip) => {
@@ -976,9 +976,9 @@ function relationSentence(user: UserListEntry, now: number): string {
   }
   const can: Record<Role, string> = {
     viewer: `${first} sees every page and changes nothing.`,
-    token_manager: `${first} can add, rotate, test, disable and delete every credential, and cannot give any issuer access rules to them.`,
-    access_manager: `${first} can give any credential access rule access to every credential, and never sees a secret. They cannot add or replace tokens.`,
-    admin: `${first} can change credentials and issuer access rules, and download the configuration export.`,
+    token_manager: `${first} can add, rotate, test, disable and delete every credential, and cannot decide who may use them.`,
+    access_manager: `${first} can add and change the credential access rules of every credential, and never sees a secret. They cannot add or replace credentials.`,
+    admin: `${first} can change credentials, credential and global access rules, and download the configuration export.`,
     owner: `${first} can change everything, including people, sign-in and settings.`,
   };
   return user.status === 'suspended'
@@ -989,7 +989,7 @@ function relationSentence(user: UserListEntry, now: number): string {
 /** The icon of an audit action's category, for a feed avatar. */
 function actionIcon(action: string): 'token' | 'consumer' | 'users' | 'system' {
   if (/^(service|credential|keyring)\./.test(action)) return 'token';
-  if (/^(credential_access_rule|grant)\./.test(action)) return 'consumer';
+  if (/^(credential_access_rule|global_access_rule)\./.test(action)) return 'consumer';
   if (action.startsWith('user.')) return 'users';
   return 'system';
 }

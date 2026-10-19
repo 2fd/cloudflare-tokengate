@@ -54,7 +54,7 @@ const PAGE_SIZE = 50;
 const ULID = '[0-9A-HJKMNP-TV-Z]{26}';
 const AUDIT_ID = new RegExp(`^aud_${ULID}$`);
 const USER_ID = new RegExp(`^usr_${ULID}$`);
-const TARGET_ID = new RegExp(`^(svc|cpr|grt|usr)_${ULID}$`);
+const TARGET_ID = new RegExp(`^(svc|acr|gar|usr)_${ULID}$`);
 /** Upper bound of the people the actor menu lists. */
 const PEOPLE_LIMIT = 1000;
 
@@ -78,12 +78,16 @@ export const AUDIT_CATEGORIES: Readonly<Record<AuditCategory, { label: string } 
       prefixes: ['service.', 'credential.', 'keyring.'],
       exact: ['settings.upstream_hosts'],
     },
-    consumers: {
-      label: 'Credential access rules',
+    access_rules: {
+      label: 'Access rules',
       prefixes: ['credential_access_rule.'],
       exact: [],
     },
-    access: { label: 'Access', prefixes: ['grant.'], exact: [] },
+    global_rules: {
+      label: 'Global access rules',
+      prefixes: ['global_access_rule.'],
+      exact: [],
+    },
     users: {
       label: 'Users',
       prefixes: [],
@@ -135,13 +139,13 @@ export async function loadAuditPeople(db: D1Database): Promise<AuditPerson[]> {
 
 /** Current names of the objects audit events point at, by id. */
 export function auditTargetNames(
-  connections: Pick<Connections, 'tokens' | 'consumers' | 'accesses'>,
+  connections: Pick<Connections, 'credentials' | 'rules' | 'globals'>,
   people: readonly AuditPerson[],
 ): Map<string, string> {
   return new Map<string, string>([
-    ...connections.tokens.map((t) => [t.id, t.name] as [string, string]),
-    ...connections.consumers.map((c) => [c.id, c.name] as [string, string]),
-    ...connections.accesses.map((a) => [a.grant.id, a.grant.name] as [string, string]),
+    ...connections.credentials.map((t) => [t.id, t.name] as [string, string]),
+    ...connections.rules.map((edge) => [edge.rule.id, edge.rule.name] as [string, string]),
+    ...connections.globals.map((g) => [g.id, g.name] as [string, string]),
     ...people.map((p) => [p.id, p.email] as [string, string]),
   ]);
 }
@@ -160,20 +164,23 @@ export function registerAuditRoutes(app: App): void {
     const deps = c.get('deps');
     const db = deps.env.DB;
     const q = (name: string) => c.req.query(name);
-    const [people, tokens, consumers, issuer_access_rules] = await Promise.all([
+    const [people, tokens, rules, globals] = await Promise.all([
       loadAuditPeople(db),
       db
         .prepare('SELECT id, name FROM credentials ORDER BY name, id')
         .all<{ id: string; name: string }>(),
       db
-        .prepare('SELECT id, name FROM credential_access_rules ORDER BY name, id')
-        .all<{ id: string; name: string }>(),
-      db
         .prepare(
-          `SELECT issuer_access_rules.id, issuer_access_rules.name, credentials.name AS token FROM issuer_access_rules
-           LEFT JOIN credentials ON credentials.id = issuer_access_rules.service_id ORDER BY issuer_access_rules.name, issuer_access_rules.id`,
+          `SELECT r.id, r.name, credentials.name AS token FROM access_rules r
+           LEFT JOIN credentials ON credentials.id = r.credential_id
+           WHERE r.credential_id IS NOT NULL ORDER BY r.name, r.id`,
         )
         .all<{ id: string; name: string; token: string | null }>(),
+      db
+        .prepare(
+          'SELECT id, name, issuer_key FROM access_rules WHERE credential_id IS NULL ORDER BY name, id',
+        )
+        .all<{ id: string; name: string; issuer_key: string }>(),
     ]);
     const errors: FieldErrorData[] = [];
     const params: AuditParams = {};
@@ -250,12 +257,12 @@ export function registerAuditRoutes(app: App): void {
     }
     const names = new Map<string, string>([
       ...tokens.results.map((t) => [t.id, t.name] as [string, string]),
-      ...consumers.results.map((r) => [r.id, r.name] as [string, string]),
-      ...issuer_access_rules.results.map((g) => [g.id, g.name] as [string, string]),
+      ...rules.results.map((r) => [r.id, r.name] as [string, string]),
+      ...globals.results.map((g) => [g.id, g.name] as [string, string]),
       ...people.map((p) => [p.id, p.email] as [string, string]),
     ]);
     const suspended = new Set(people.filter((p) => p.status === 'suspended').map((p) => p.id));
-    // "+ Target": today's object groups, in the same order (tokens, consumers, accesses, people),
+    // "+ Target": today's object groups, in the same order (credentials, access rules, people),
     // then the settings pages and the keyring.
     const targetGroups: FilterOptionGroup[] = [
       {
@@ -268,18 +275,18 @@ export function registerAuditRoutes(app: App): void {
       },
       {
         group: 'Credential access rules',
-        options: consumers.results.map((r) => ({
+        options: rules.results.map((r) => ({
           href: link({ ...params, target: r.id }, {}),
-          label: r.name,
-          slug: 'consumer',
+          label: r.token ? `${r.name} — ${r.token}` : r.name,
+          slug: 'access rule',
         })),
       },
       {
-        group: 'Access',
-        options: issuer_access_rules.results.map((g) => ({
+        group: 'Global access rules',
+        options: globals.results.map((g) => ({
           href: link({ ...params, target: g.id }, {}),
-          label: g.token ? `${g.name} — ${g.token}` : g.name,
-          slug: 'access',
+          label: `${g.name} — ${g.issuer_key}`,
+          slug: 'global rule',
         })),
       },
       {
@@ -332,7 +339,7 @@ export function registerAuditRoutes(app: App): void {
             title="Audit log"
             description={
               <>
-                Every change to tokens, consumers, access, people and settings, every sign-in, and
+                Every change to credentials, access rules, people and settings, every sign-in, and
                 the hourly job, newest first. Secrets are never recorded.
                 <LearnMore path="concepts.md#audit-event" about="audit events" />
               </>

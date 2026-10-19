@@ -19,8 +19,8 @@ import { TEST_EPOCH_MS } from '../helpers/jwt';
 
 const random = (n: number) => crypto.getRandomValues(new Uint8Array(n));
 const SVC = 'svc_01JAAAAAAAAAAAAAAAAAAAAAAA';
-const CPR = 'cpr_01JAAAAAAAAAAAAAAAAAAAAAAA';
-const GRT = 'grt_01JAAAAAAAAAAAAAAAAAAAAAAA';
+const ACR = 'acr_01JAAAAAAAAAAAAAAAAAAAAAAA';
+const GITHUB = 'https://token.actions.githubusercontent.com';
 
 function record(ts: number, overrides: Partial<RequestRecord> = {}): RequestRecord {
   return {
@@ -35,7 +35,7 @@ function record(ts: number, overrides: Partial<RequestRecord> = {}): RequestReco
     service_slug: 'echo',
     service_id: null,
     credential_access_rule_id: null,
-    grant_id: null,
+    global_access_rule_id: null,
     claims_verified: 0,
     caller_subject: null,
     caller_repository: null,
@@ -59,6 +59,25 @@ function requestLinks(html: string): string[] {
 
 const decode = (href: string) => href.replaceAll('&amp;', '&');
 
+/** A credential with slug `labels` and one credential access rule `id` named `name` (direct SQL). */
+async function insertRule(id: string, name: string): Promise<void> {
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
+     VALUES (?, 'labels', 'Labels fixture', 'https://api.example.com', '{"kind":"bearer"}', 0, 0)`,
+  )
+    .bind(SVC)
+    .run();
+  await env.DB.prepare(
+    `INSERT INTO access_rules (id, credential_id, name, profile, issuer, issuer_key, jwks_uri, audience,
+       allowed_algs, max_token_age_seconds, tenant_pin, anchor_claims, conditions, rules, enabled,
+       created_at, updated_at)
+     VALUES (?, ?, ?, 'github-actions', ?, ?, ?, 'tokengate-test-audience', '["RS256"]', 300, '[]', '[]',
+       '[{"claim":"repository_owner","match":"exact","values":["acme"]}]', '[{"methods":["*"],"path":"/**"}]', 1, 0, 0)`,
+  )
+    .bind(id, SVC, name, GITHUB, GITHUB, `${GITHUB}/.well-known/jwks`)
+    .run();
+}
+
 let app: TestApp;
 let session: AdminSession;
 let viewer: User;
@@ -73,7 +92,7 @@ beforeEach(async () => {
 
 describe('Requests filters', () => {
   it('turns each active filter into a chip whose link drops exactly that one', async () => {
-    const query = `range=24h&outcome=denied&token=${SVC}&consumer=none&access=${GRT}&repo=acme%2Fapi&reason=no_matching_grant&slug=echo`;
+    const query = `range=24h&outcome=denied&token=${SVC}&rule=${ACR}&repo=acme%2Fapi&reason=no_matching_rule&slug=echo`;
     const html = await (await adminGet(app, session, `/admin/requests?${query}`)).text();
     const chips =
       /<div class="achips" role="group" aria-label="Active filters">[\s\S]*?<\/div>/.exec(
@@ -82,8 +101,8 @@ describe('Requests filters', () => {
     const hrefs = [...chips.matchAll(/class="achip" href="([^"]+)"/g)].map((m) =>
       decode(m[1] ?? ''),
     );
-    // Six filters plus the outcome: each chip drops exactly one key.
-    expect(hrefs).toHaveLength(7);
+    // Five filters plus the outcome: each chip drops exactly one key.
+    expect(hrefs).toHaveLength(6);
     expect(html.indexOf('aria-label="Active filters"')).toBeGreaterThan(
       html.indexOf('aria-label="Filter requests"'),
     );
@@ -102,7 +121,7 @@ describe('Requests filters', () => {
 
   it('keeps link-only filters in hidden fields of the filter form', async () => {
     const html = await (
-      await adminGet(app, session, `/admin/requests?range=1h&outcome=error&access=${GRT}&slug=echo`)
+      await adminGet(app, session, `/admin/requests?range=1h&outcome=error&rule=${ACR}&slug=echo`)
     ).text();
     const form =
       /<form class="filters" role="search" method="get" action="\/admin\/requests" aria-label="Filter requests">[\s\S]*?<\/form>/.exec(
@@ -111,18 +130,18 @@ describe('Requests filters', () => {
     for (const [name, value] of [
       ['range', '1h'],
       ['outcome', 'error'],
-      ['access', GRT],
+      ['rule', ACR],
       ['slug', 'echo'],
     ]) {
       expect(form).toContain(`<input type="hidden" name="${name}" value="${value}"/>`);
     }
   });
 
-  it('filters requests refused before a token or consumer was resolved with `none`', async () => {
+  it('filters requests refused before a credential or a credential access rule was resolved with `none`', async () => {
     const bare = record(TEST_EPOCH_MS);
     const resolved = record(TEST_EPOCH_MS + 1000, {
       service_id: SVC,
-      credential_access_rule_id: CPR,
+      credential_access_rule_id: ACR,
     });
     await env.TELEMETRY_DB.batch(
       insertRequestRecordsStatements(env.TELEMETRY_DB, [bare, resolved]),
@@ -130,28 +149,18 @@ describe('Requests filters', () => {
     const get = async (query: string) =>
       requestLinks(await (await adminGet(app, session, `/admin/requests?${query}`)).text());
     expect(await get('token=none')).toEqual([bare.id]);
-    expect(await get('consumer=none')).toEqual([bare.id]);
+    expect(await get('rule=none')).toEqual([bare.id]);
     expect(await get(`token=${SVC}`)).toEqual([resolved.id]);
-    expect(await get(`consumer=${CPR}`)).toEqual([resolved.id]);
+    expect(await get(`rule=${ACR}`)).toEqual([resolved.id]);
   });
 
   it('suggests repositories from claim labels only, never from the request log', async () => {
-    await env.DB.prepare(`INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
-      VALUES ('svc_labels', 'labels', 'Labels fixture', 'https://api.example.com', '{"kind":"bearer"}', 0, 0)`).run();
+    await insertRule(ACR, 'GitHub');
     await env.DB.prepare(
-      `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
-         max_token_age_seconds, tenant_pin, anchor_claims, enabled, created_at, updated_at)
-       VALUES (?, (SELECT id FROM credentials ORDER BY id LIMIT 1), 'GitHub', 'github-actions', 'https://token.actions.githubusercontent.com',
-         'https://token.actions.githubusercontent.com/.well-known/jwks', 'tokengate-test-audience',
-         '["RS256"]', 300, '[]', '[]', 1, 0, 0)`,
-    )
-      .bind(CPR)
-      .run();
-    await env.DB.prepare(
-      `INSERT INTO claim_labels (credential_access_rule_id, claim, value, label, updated_at)
+      `INSERT INTO claim_labels (access_rule_id, claim, value, label, updated_at)
        VALUES (?, 'repository_id', '987654321', 'acme/labelled', 0)`,
     )
-      .bind(CPR)
+      .bind(ACR)
       .run();
     await env.TELEMETRY_DB.batch(
       insertRequestRecordsStatements(env.TELEMETRY_DB, [
@@ -186,11 +195,11 @@ describe('Requests filters', () => {
 
   it('names the reason filter in plain text in the chip and the title', async () => {
     const html = await (
-      await adminGet(app, session, '/admin/requests?reason=no_matching_grant')
+      await adminGet(app, session, '/admin/requests?reason=no_matching_rule')
     ).text();
-    expect(html).toMatch(/<title>Requests: [^<]*\(no_matching_grant\)/);
-    expect(html).toMatch(/Reason: [^<]+ \(no_matching_grant\)/);
-    expect(html).not.toContain('Reason: no_matching_grant');
+    expect(html).toMatch(/<title>Requests: [^<]*\(no_matching_rule\)/);
+    expect(html).toMatch(/Reason: [^<]+ \(no_matching_rule\)/);
+    expect(html).not.toContain('Reason: no_matching_rule');
   });
 
   it('re-renders an invalid repository with the field error and a 400', async () => {
@@ -203,6 +212,92 @@ describe('Requests filters', () => {
     );
     expect(html).toMatch(/id="f-repo"[^>]*name="repo"[^>]*aria-invalid="true"/);
     expect(html).toContain('<p class="field-error" id="f-repo-error">');
+  });
+});
+
+describe('Credential access rule filter (?rule=)', () => {
+  const ACR_2 = 'acr_01JBBBBBBBBBBBBBBBBBBBBBBB';
+  const bar = (html: string) =>
+    /<form class="filters" role="search" method="get" action="\/admin\/requests" aria-label="Filter requests">[\s\S]*?<\/form>/.exec(
+      html,
+    )?.[0] ?? '';
+  /** The filter controls in order, by their id: the stable part of the filter bar. */
+  const controls = (html: string) =>
+    [...bar(html).matchAll(/id="(f-[a-z]+)"/g)]
+      .map((m) => m[1])
+      .filter((id) => id !== 'f-repo-s' && !id?.endsWith('-error'));
+
+  beforeEach(async () => {
+    await insertRule(ACR, 'deploy api');
+    await insertRule(ACR_2, 'nightly');
+  });
+
+  it('lists only the rule records, keeps the menu and the controls in place, and puts the chip after them', async () => {
+    const own = record(TEST_EPOCH_MS, { service_id: SVC, credential_access_rule_id: ACR });
+    const other = record(TEST_EPOCH_MS + 1000, {
+      service_id: SVC,
+      credential_access_rule_id: ACR_2,
+    });
+    const fillers = Array.from({ length: 10 }, (_, i) => record(TEST_EPOCH_MS + 2000 + i));
+    await env.TELEMETRY_DB.batch(
+      insertRequestRecordsStatements(env.TELEMETRY_DB, [own, other, ...fillers]),
+    );
+    const unfiltered = await (await adminGet(app, session, '/admin/requests')).text();
+    const selected = await (await adminGet(app, session, `/admin/requests?rule=${ACR}`)).text();
+    expect(requestLinks(selected)).toEqual([own.id]);
+    // Same controls in the same order with and without the selection; the menu still offers
+    // every rule (from the configuration, not the results), so the value can be replaced in place.
+    expect(controls(selected)).toEqual(controls(unfiltered));
+    expect(controls(selected)).toEqual(['f-repo', 'f-token', 'f-rule', 'f-reason']);
+    expect(bar(selected)).toContain(`href="/admin/requests?rule=${ACR_2}"`);
+    expect(bar(selected)).toContain('nightly');
+    // The title stays; the chip follows the controls and drops the rule.
+    expect(selected).toContain('<h2 id="requests-h">Requests, newest first</h2>');
+    expect(selected).toContain('Access rule: deploy api');
+    expect(selected.indexOf('aria-label="Active filters"')).toBeGreaterThan(
+      selected.indexOf('aria-label="Filter requests"'),
+    );
+    expect(selected).toContain('<a class="achip" href="/admin/requests">');
+    // The row links its rule as a filter.
+    expect(unfiltered).toContain(`href="/admin/requests?rule=${ACR}"`);
+  });
+
+  it('keeps the explanation and the controls on zero results', async () => {
+    await env.TELEMETRY_DB.batch(
+      insertRequestRecordsStatements(env.TELEMETRY_DB, [
+        record(TEST_EPOCH_MS, { service_id: SVC, credential_access_rule_id: ACR }),
+      ]),
+    );
+    const res = await adminGet(app, session, `/admin/requests?rule=${ACR_2}`);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(requestLinks(html)).toEqual([]);
+    expect(controls(html)).toEqual(['f-repo', 'f-token', 'f-rule', 'f-reason']);
+    expect(html).toContain('Access rule: nightly');
+    expect(html).toContain('<h2 id="requests-h">Requests, newest first</h2>');
+  });
+
+  it('names a deleted rule by its id and answers 400 for an invalid id, still listing the results', async () => {
+    const gone = 'acr_01JCCCCCCCCCCCCCCCCCCCCCCC';
+    const deleted = await (await adminGet(app, session, `/admin/requests?rule=${gone}`)).text();
+    expect(deleted).toContain(`Access rule: Deleted credential access rule ${gone}`);
+
+    const kept = record(TEST_EPOCH_MS);
+    await env.TELEMETRY_DB.batch(insertRequestRecordsStatements(env.TELEMETRY_DB, [kept]));
+    for (const value of ['acr_bogus', 'gar_01JAAAAAAAAAAAAAAAAAAAAAAA', '%3Cscript%3E']) {
+      const res = await adminGet(app, session, `/admin/requests?rule=${value}`);
+      expect(res.status, value).toBe(400);
+      const html = await res.text();
+      expect(html).toContain('class="callout bad errsum"');
+      expect(html).toContain('<details class="fadd" id="f-rule" open="">');
+      expect(html).toContain('<p class="field-error" id="f-rule-error">');
+      expect(html).toContain(
+        '<a href="#f-rule">Choose a credential access rule from the list.</a>',
+      );
+      expect(requestLinks(html)).toEqual([kept.id]);
+      expect(controls(html)).toEqual(['f-repo', 'f-token', 'f-rule', 'f-reason']);
+      expect(html).not.toContain('<script>');
+    }
   });
 });
 

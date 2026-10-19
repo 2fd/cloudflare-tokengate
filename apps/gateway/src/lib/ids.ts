@@ -2,7 +2,7 @@
 // (https://github.com/ulid/spec). Time-ordered, so request ids double as a time index.
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
-export type IdPrefix = 'usr' | 'cpr' | 'svc' | 'grt' | 'req' | 'aud' | 'tea';
+export type IdPrefix = 'usr' | 'acr' | 'gar' | 'svc' | 'req' | 'aud' | 'tea';
 
 function encodeTime(ms: number): string {
   let out = '';

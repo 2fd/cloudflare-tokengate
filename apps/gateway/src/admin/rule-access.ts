@@ -1,6 +1,6 @@
-// The structured issuer access rules form (A14.4, A14.7.3): raw form values in, conditions, rules,
-// labels, expiry and field errors out, and the reverse (an access back into form values). Pure: no
-// I/O. Every security decision is still made by validateIssuerAccessRule at save time; this module only
+// The structured credential access rule form (A14.4, A14.7.3): raw form values in, conditions, rules,
+// labels, expiry and field errors out, and the reverse (a rule back into form values). Pure: no
+// I/O. Every security decision is still made by validateCredentialAccessRule at save time; this module only
 // builds candidate values and says which input a problem belongs to. Risks are accepted by the
 // selection that causes them (coveredRiskCodes), never by a client-supplied list (A7.7).
 import { labelFor, parseIdWithLabel, parseIdWithLabelList } from '../db/claim-labels';
@@ -13,9 +13,9 @@ import { globError } from '../policy/glob';
 import {
   type GithubPresetContext,
   type GitlabPresetContext,
-  githubIssuerAccessRulePreset,
+  githubAccessRulePreset,
   githubPresetFromConditions,
-  gitlabIssuerAccessRulePreset,
+  gitlabAccessRulePreset,
   gitlabPresetFromConditions,
   type PresetResult,
   PROTECTABLE_CONTEXTS,
@@ -26,10 +26,9 @@ import { type Condition, PROXY_METHODS, type Rule } from '../policy/types';
 import type { WarningCode, WarningDetail } from '../policy/validate';
 import { accessSummary } from './access-summary';
 import type { Connections } from './connections';
-import { formatValueList, parseValueList } from './grant-text';
-import { pinValues } from './ops/credential-access-rules';
-import type { IssuerAccessRuleLabel } from './ops/issuer_access_rules';
+import { pinValues, type RuleLabel } from './ops/credential-access-rules';
 import type { FieldError } from './ops/shared';
+import { formatValueList, parseValueList } from './rule-text';
 import {
   type OperationPreset,
   presetNeedsRepository,
@@ -303,7 +302,7 @@ export interface CondRow {
   values: string;
 }
 
-/** Raw values of the "Which jobs" fieldset of one consumer branch, kept as text. */
+/** Raw values of the "Which jobs" fieldset of one issuer type branch, kept as text. */
 export interface JobsForm {
   editor: 'structured' | 'rows';
   repository: string;
@@ -377,11 +376,11 @@ export function readJobsForm(
 
 export interface JobsContext {
   profile: IssuerProfile;
-  /** The credential access rule the access is for, possibly built in memory (new, or with `new_owner`). */
-  provider: CredentialAccessRule;
-  /** Labels of this credential access rule. */
+  /** The rule's issuer and tenant pin, possibly built in memory from the form. */
+  provider: Pick<CredentialAccessRule, 'profile' | 'issuer' | 'tenant_pin' | 'anchor_claims'>;
+  /** Labels of this rule (stored and typed). */
   labels: readonly ClaimLabel[];
-  /** Field name prefix of this credential access rule branch. */
+  /** Field name prefix of this issuer type's jobs fields. */
   prefix: string;
 }
 
@@ -390,16 +389,16 @@ export interface ParsedJobs {
   risks: RiskCode[];
   presetWarnings: string[];
   /** Labels typed with the access (the repository), for claim_labels. */
-  labels: IssuerAccessRuleLabel[];
+  labels: RuleLabel[];
   repository: IdRef | null;
-  /** An organization or group to add to the credential access rule before the access (A14.4 step 4). */
+  /** An organization or group the rule's tenant pin does not hold yet; the save adds it (A14.4 step 4). */
   newOwner: IdRef | null;
   /** The repository's org or group prefix when it is not pinned: render `new_owner`. */
   unknownOwner: string | null;
   errors: FieldError[];
 }
 
-/** Builds the conditions of one consumer branch (structured or rows). */
+/** Builds the conditions of one issuer type branch (structured or rows). */
 export function parseJobs(form: JobsForm, ctx: JobsContext): ParsedJobs {
   if (form.editor === 'rows') return parseRowsJobs(form, ctx);
   const { profile, provider, labels, prefix } = ctx;
@@ -459,7 +458,7 @@ export function parseJobs(form: JobsForm, ctx: JobsContext): ParsedJobs {
       out.unknownOwner = prefixText;
       out.errors.push({
         field: field('repository'),
-        message: `${prefixText} is not ${profile.id === 'gitlab-ci' ? 'a group' : 'an organization'} of this credential access rule yet. Ask a credential administrator to update the boundary.`,
+        message: `${prefixText} is not ${profile.id === 'gitlab-ci' ? 'a group' : 'an organization'} of this rule. Add it under Issuer and tenant.`,
       });
     }
   } else if (repository.ok) {
@@ -484,7 +483,7 @@ export function parseJobs(form: JobsForm, ctx: JobsContext): ParsedJobs {
   const requireProtectedRef = form.ref_protection !== 'unprotected';
   let built: PresetResult;
   if (profile.id === 'github-actions') {
-    built = githubIssuerAccessRulePreset({
+    built = githubAccessRulePreset({
       ownerId: ownerId ?? '',
       repositoryId: out.repository?.id ?? null,
       context,
@@ -494,7 +493,7 @@ export function parseJobs(form: JobsForm, ctx: JobsContext): ParsedJobs {
       workflowRef: form.workflow_ref.trim() || null,
     });
   } else {
-    built = gitlabIssuerAccessRulePreset({
+    built = gitlabAccessRulePreset({
       namespaceId: ownerId ?? '',
       projectId: out.repository?.id ?? null,
       context: context as GitlabPresetContext,
@@ -660,16 +659,16 @@ export function condRows(conditions: readonly Condition[]): CondRow[] {
 }
 
 /** The jobs form of an access: structured when it round-trips, else the rows editor. */
-export function accessFormFromIssuerAccessRule(
-  grant: { conditions: Condition[] },
+export function jobsFormFromRule(
+  rule: { conditions: Condition[] },
   profile: Pick<IssuerProfile, 'id'>,
   labels: readonly ClaimLabel[],
 ): JobsForm {
   return (
-    jobsFormFromConditions(grant.conditions, profile, labels) ?? {
+    jobsFormFromConditions(rule.conditions, profile, labels) ?? {
       ...blankJobsForm(profile),
       editor: 'rows',
-      cond: condRows(grant.conditions),
+      cond: condRows(rule.conditions),
     }
   );
 }
@@ -1001,14 +1000,14 @@ export function deriveAccessName(
   return `${tokenName} for ${summary.subject} (${summary.context})`.slice(0, 100);
 }
 
-/** Labels of one consumer with the typed ones on top (for derivation before they are stored). */
+/** Labels of one rule with the typed ones on top (for derivation before they are stored). */
 export function withTypedLabels(
   labels: readonly ClaimLabel[],
   providerId: string,
-  typed: readonly IssuerAccessRuleLabel[],
+  typed: readonly RuleLabel[],
 ): ClaimLabel[] {
   const extra: ClaimLabel[] = typed.map((label) => ({
-    credential_access_rule_id: providerId,
+    access_rule_id: providerId,
     claim: label.claim,
     value: label.value,
     label: label.label,
@@ -1063,9 +1062,9 @@ function constrainsRef(c: Condition): boolean {
 
 /**
  * True when GitHub or GitLab conditions constrain no ref, environment, protection, commit or event,
- * so every job of the repository matches: the `any_ref` risk (A7.7). validateIssuerAccessRule does not emit
- * it (the ops accept such issuer_access_rules without acknowledgement), so the pages add it from the
- * conditions, the same way for the structured form, the rows editor and stored accesses.
+ * so every job of the repository matches: the `any_ref` risk (A7.7). validateCredentialAccessRule does
+ * not emit it (the ops accept such rules without acknowledgement), so the pages add it from the
+ * conditions, the same way for the structured form, the rows editor and stored rules.
  */
 export function isAnyRef(
   conditions: readonly Condition[],
@@ -1093,16 +1092,16 @@ export function accessWarningDetails(
   return [...details, { code: 'any_ref', message: RISK_WARNINGS.any_ref }];
 }
 
-/** Connections whose any-ref accesses also carry the risk_accepted flag (the access page agrees). */
+/** Connections whose any-ref rules also carry the risk_accepted flag (the rule page agrees). */
 export function withAnyRefFlags(connections: Connections): Connections {
   return {
     ...connections,
-    accesses: connections.accesses.map((edge) => {
-      const profile = edge.consumer ? getProfile(edge.consumer.profile) : null;
+    rules: connections.rules.map((edge) => {
+      const profile = getProfile(edge.rule.profile);
       if (
         !profile ||
         edge.flags.some((f) => f.status === 'risk_accepted') ||
-        !isAnyRef(edge.grant.conditions, profile)
+        !isAnyRef(edge.rule.conditions, profile)
       ) {
         return edge;
       }

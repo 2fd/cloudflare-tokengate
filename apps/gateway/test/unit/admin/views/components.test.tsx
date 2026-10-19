@@ -512,7 +512,7 @@ describe('ConfirmDialog and ActionButton', () => {
     triggerContext: 'Slack',
     title: 'Delete Slack?',
     body: 'This cannot be undone.',
-    affected: ['2 issuer access rules stop working'],
+    affected: ['2 credential access rules stop working'],
     confirmLabel: 'Delete Slack',
     danger: true,
   };
@@ -545,7 +545,7 @@ describe('ConfirmDialog and ActionButton', () => {
     ]) {
       expect(form).toContain(field);
     }
-    expect(form).toContain('<li>2 issuer access rules stop working</li>');
+    expect(form).toContain('<li>2 credential access rules stop working</li>');
     expect(form).toContain('<button class="btn danger-solid" type="submit">Delete Slack</button>');
   });
 
@@ -861,7 +861,7 @@ describe('NotFound', () => {
     ]);
     expect(out).toContain('<h2 id="nf-sections-h">Go to a section</h2>');
     expect(out).toContain(
-      '<a class="tcard" href="/admin/credentials"><span class="t">Credentials</span><span class="d">Tokens, allowed hosts and encryption keys</span>',
+      '<a class="tcard" href="/admin/credentials"><span class="t">Credentials</span><span class="d">Credentials, allowed hosts and encryption keys</span>',
     );
     // No bare user-agent list: the cards are a plain list.
     expect(out).not.toMatch(/<ul>/);

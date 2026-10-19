@@ -31,7 +31,7 @@ function stepLinks(html: string): string[] {
 describe('GET /admin on a fresh deployment', () => {
   const app = () => createTestApp({ now: () => TEST_EPOCH_MS });
 
-  it('shows the four getting-started steps with links, tokens first', async () => {
+  it('shows the three getting-started steps with links, credentials first', async () => {
     const a = app();
     const res = await adminGet(a, await loginAs(a, owner), '/admin');
     expect(res.status).toBe(200);
@@ -39,15 +39,14 @@ describe('GET /admin on a fresh deployment', () => {
     expect(html).toContain('<title>Overview (last 24 hours) – Monitoring – tokengate</title>');
     expect(stepLinks(html)).toEqual([
       '/admin/credentials/new',
-      '/admin/credential-access-rules/new?type=github-actions',
-      '/admin/issuer-access-rules/new',
+      '/admin/credential-access-rules/new',
       'https://github.com/2fd/cloudflare-tokengate/blob/main/docs/callers/github-actions.md',
     ]);
-    expect(html).toContain('Steps 1 and 2 can be done in any order, and by different people.');
+    expect(html).toContain('Each step can be done by a different person.');
     // Get started is the content: one primary, on step 1, and no empty charts or tables.
     expect(html.match(/class="btn primary"/g) ?? []).toHaveLength(1);
     expect(html).toContain('<a class="btn primary" href="/admin/credentials/new">');
-    expect(html).toContain('0 of 4 done');
+    expect(html).toContain('0 of 3 done');
     expect(html).toContain('<section class="tray" id="plan" aria-labelledby="plan-h">');
     expect(html).toContain('No requests yet.');
     expect(html).toContain('aria-label="Where calls went, all zero"');
@@ -57,14 +56,15 @@ describe('GET /admin on a fresh deployment', () => {
     expect(html).not.toContain('<svg class="chart"');
   });
 
-  it('adds the credential access rule inside the access form once a token exists', async () => {
+  it('links step 2 to the credential access rule form once a credential exists', async () => {
     const a = app();
     await env.DB.prepare(
       `INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
        VALUES ('svc_01JAAAAAAAAAAAAAAAAAAAAAAA', 'slack', 'Slack', 'https://slack.com/api', '{"kind":"bearer"}', 0, 0)`,
     ).run();
     const html = await (await adminGet(a, await loginAs(a, owner), '/admin')).text();
-    expect(stepLinks(html)[1]).toBe('/admin/issuer-access-rules/new?consumer=new');
+    expect(stepLinks(html)[1]).toBe('/admin/credential-access-rules/new');
+    expect(html).toContain('Add a credential access rule');
   });
 
   it('tells viewers whom to ask instead of linking to forms they cannot use', async () => {
@@ -74,7 +74,7 @@ describe('GET /admin on a fresh deployment', () => {
     expect(html).toContain('Only access managers can add a credential access rule. Ask ');
     expect(html).toContain('href="mailto:owner@example.com');
     expect(html).not.toContain('href="/admin/credentials/new"');
-    expect(html).not.toContain('href="/admin/issuer-access-rules/new');
+    expect(html).not.toContain('href="/admin/credential-access-rules/new');
   });
 
   it('renders the alerts after Get started, never as role=alert', async () => {
@@ -117,7 +117,7 @@ describe('GET /admin on a fresh deployment', () => {
 describe('GET /admin with traffic', () => {
   it('shows the KPIs as a list of links, the chart and the token row, and hides the steps', async () => {
     const fixture = await setupProxy({
-      grant: { rules: [{ methods: ['GET'], path: '/ok/**' }] },
+      rule: { rules: [{ methods: ['GET'], path: '/ok/**' }] },
     });
     for (const path of ['/ok/1', '/ok/2', '/ok/3']) {
       expect((await fixture.call(path)).status).toBe(200);
@@ -141,21 +141,45 @@ describe('GET /admin with traffic', () => {
       '<a href="/admin/requests?range=24h&amp;outcome=denied"><span class="tl">Denied</span><b>1</b>',
     );
     expect(html).toContain('role="img"');
-    // The map: the token node opens its issuer access rules, the counts the request list.
-    expect(html).toContain(`href="/admin/issuer-access-rules?token=${fixture.serviceId}"`);
+    // The map: the credential node opens its credential access rules, the counts the request list.
+    expect(html).toContain(`href="/admin/credential-access-rules?credential=${fixture.serviceId}"`);
     expect(html).toContain(`href="/admin/requests?token=${fixture.serviceId}&amp;range=24h"`);
-    expect(html).toContain(`href="/admin/issuer-access-rules/${fixture.grantId}"`);
-    expect(html).toContain('href="/admin/issuer-access-rules"');
+    expect(html).toContain(`href="/admin/credential-access-rules/${fixture.ruleId}"`);
+    expect(html).toContain('href="/admin/credential-access-rules"');
+  });
+
+  it('links the issuer node to its rules and focuses the map by rule id or issuer key', async () => {
+    const fixture = await setupProxy();
+    expect((await fixture.call('/x')).status).toBe(200);
+    await fixture.app.settle();
+    const session = await loginAs(fixture.app, viewer);
+    const page = async (query: string) =>
+      (await adminGet(fixture.app, session, `/admin${query}`)).text();
+    const map = (html: string) => /<div class="cmap"[\s\S]*?<\/svg>/.exec(html)?.[0] ?? '';
+    const plain = await page('');
+    expect(plain).toContain(
+      'href="/admin/credential-access-rules?issuer=https%3A%2F%2Ftoken.actions.githubusercontent.com"',
+    );
+    const byRule = await page(`?focus=${fixture.ruleId}`);
+    const byIssuer = await page(
+      `?focus=${encodeURIComponent('https://token.actions.githubusercontent.com')}`,
+    );
+    expect(map(byRule)).not.toBe(map(plain));
+    expect(map(byIssuer)).toBe(map(byRule));
+    // Anything else is ignored and never echoed.
+    const bogus = await page('?focus=%3Cscript%3E');
+    expect(map(bogus)).toBe(map(plain));
+    expect(bogus).not.toContain('<script>');
   });
 
   it('lists top denials with a link to the latest record, and Create access only for access:write', async () => {
-    const fixture = await setupProxy({ grant: { rules: [{ methods: ['GET'], path: '/ok/**' }] } });
+    const fixture = await setupProxy({ rule: { rules: [{ methods: ['GET'], path: '/ok/**' }] } });
     expect((await fixture.call('/nope', { method: 'DELETE' })).status).toBe(403);
     await fixture.app.settle();
-    const denial = (await fixture.records()).find((r) => r.reason === 'no_matching_grant');
+    const denial = (await fixture.records()).find((r) => r.reason === 'no_matching_rule');
     expect(denial).toBeDefined();
     const a = fixture.app;
-    const create = `href="/admin/issuer-access-rules/new?from_request=${denial?.id}"`;
+    const create = `href="/admin/credential-access-rules/new?from_request=${denial?.id}"`;
     for (const role of ['owner', 'admin', 'access_manager'] as const) {
       const user =
         role === 'owner' ? owner : await createUser({ email: `${role}@example.com`, role });
@@ -163,7 +187,7 @@ describe('GET /admin with traffic', () => {
       expect(html, role).toContain('Top denied callers since');
       expect(html, role).toContain(`href="/admin/requests/${denial?.id}"`);
       expect(html, role).toContain(create);
-      expect(html, role).toContain('No issuer access rules allows this call');
+      expect(html, role).toContain('No credential access rule allows this call');
     }
     for (const role of ['viewer', 'token_manager'] as const) {
       const user =
@@ -184,7 +208,7 @@ describe('GET /admin with traffic', () => {
     const a = fixture.app;
     const before = await (await adminGet(a, await loginAs(a, viewer), '/admin')).text();
     expect(before).toContain('id="get-started"');
-    expect(before).toContain(`href="/admin/issuer-access-rules/${fixture.grantId}#use"`);
+    expect(before).toContain(`href="/admin/credential-access-rules/${fixture.ruleId}#snippet"`);
 
     expect((await fixture.call('/x')).status).toBe(200);
     await fixture.app.settle();
@@ -311,7 +335,7 @@ describe('GET /admin health checks', () => {
 
   it('opens "All checks" for cron_never although its check passes, so #check-maintenance lands', async () => {
     // Keys loaded, so every check passes; the job has never run, which is not a problem.
-    const fixture = await setupProxy({ grant: false });
+    const fixture = await setupProxy({ rule: false });
     const html = await (
       await adminGet(fixture.app, await loginAs(fixture.app, viewer), '/admin')
     ).text();

@@ -1,7 +1,9 @@
-// I-RBAC-1 for the role split (ADR 0018) on the real app: a credential manager manages credentials but
-// cannot give anyone access to them, an access manager manages credential access rules and issuer_access_rules but
-// cannot touch a service or its credential, field permissions refuse the fields a role lacks, and
-// neither role can export. Every refusal leaves the control plane unchanged.
+// I-RBAC-1 for the role split (ADR 0018, AR-15) on the real app: a credential manager manages
+// credentials but cannot give anyone access to them (no credential access rule, no global access
+// rule, no delete of a credential together with its rules); an access manager manages credential
+// access rules but cannot touch a credential or a global access rule; an admin does both, global
+// access rules included. Field permissions refuse the fields a role lacks, and neither split role
+// can export. Every refusal leaves the control plane unchanged.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ROUTE_PERMISSIONS } from '../../src/admin/auth/rbac';
@@ -13,20 +15,14 @@ import {
   readPath,
   resetAdminWorld,
   seedAdminWorld,
+  TOKEN_FIXTURE_VARIANTS,
 } from '../fixtures/admin-forms';
 import { type AdminSession, adminGet, adminPost, createUser, loginAs } from '../helpers/admin-auth';
+import { seedService } from '../unit/admin/ops/helpers';
 
 /** Every control-plane row except identities (sign-ins touch them). */
 async function controlPlaneDump(): Promise<string> {
-  const tables = [
-    'users',
-    'credential_access_rules',
-    'credentials',
-    'issuer_access_rules',
-    'claim_labels',
-    'settings',
-    'audit_log',
-  ];
+  const tables = ['users', 'access_rules', 'credentials', 'claim_labels', 'settings', 'audit_log'];
   const dumps = await Promise.all(tables.map((t) => env.DB.prepare(`SELECT * FROM ${t}`).all()));
   return JSON.stringify(dumps.map((d) => d.results));
 }
@@ -38,6 +34,7 @@ const routesWith = (permission: string) =>
 
 const TOKEN_ROUTES = routesWith('tokens:write');
 const ACCESS_ROUTES = routesWith('access:write');
+const GLOBAL_ROUTES = routesWith('access_rules:global');
 
 let world: AdminWorld;
 let sessions: Record<Role, AdminSession>;
@@ -88,43 +85,119 @@ async function expectRefused(key: string, role: Role, extra: Record<string, stri
   expect(await controlPlaneDump(), `${key} as ${role}`).toBe(before);
 }
 
+async function expectAllowed(key: string, role: Role) {
+  const { res, mutation } = await send(key, role);
+  const body = await res.text();
+  expect(mutation?.successStatus ?? (mutation ? [303] : [200]), body.slice(0, 500)).toContain(
+    res.status,
+  );
+}
+
 describe('I-RBAC-1: token and access duties are separate', () => {
-  it('lists token and access routes', () => {
+  it('lists credential, credential access rule and global access rule routes', () => {
     expect(TOKEN_ROUTES).toContain('POST /admin/credentials/:id/test');
     expect(TOKEN_ROUTES).toContain('POST /admin/credentials/:id/secret');
     expect(TOKEN_ROUTES).toContain('POST /admin/credentials/:id/destination');
-    expect(ACCESS_ROUTES).toContain('POST /admin/issuer-access-rules');
-    expect(TOKEN_ROUTES).toContain('POST /admin/credential-access-rules');
+    for (const action of ['', '/:id', '/:id/tenants', '/:id/copy', '/:id/toggle', '/:id/delete']) {
+      const key = `POST /admin/credential-access-rules${action}`;
+      expect(ACCESS_ROUTES).toContain(key);
+      expect(TOKEN_ROUTES).not.toContain(key);
+    }
+    expect(ACCESS_ROUTES).toContain('GET /admin/credential-access-rules/new');
+    for (const action of ['', '/:id', '/:id/toggle', '/:id/delete']) {
+      expect(GLOBAL_ROUTES).toContain(`POST /admin/global-access-rules${action}`);
+    }
+    expect(GLOBAL_ROUTES).toContain('GET /admin/global-access-rules/new');
   });
 
   it.each(ACCESS_ROUTES)('token_manager is refused %s', async (key) => {
     await expectRefused(key, 'token_manager');
   });
 
+  it.each(GLOBAL_ROUTES)('token_manager is refused %s', async (key) => {
+    await expectRefused(key, 'token_manager');
+  });
+
   it.each(TOKEN_ROUTES)('token_manager may use %s', async (key) => {
-    const { res, mutation } = await send(key, 'token_manager');
-    const body = await res.text();
-    expect(mutation?.successStatus ?? (mutation ? [303] : [200]), body.slice(0, 500)).toContain(
-      res.status,
-    );
+    await expectAllowed(key, 'token_manager');
   });
 
   it.each(TOKEN_ROUTES)('access_manager is refused %s', async (key) => {
     await expectRefused(key, 'access_manager');
   });
 
-  it.each(ACCESS_ROUTES)('access_manager may use %s', async (key) => {
-    const { res, mutation } = await send(key, 'access_manager');
-    const body = await res.text();
-    expect(mutation?.successStatus ?? (mutation ? [303] : [200]), body.slice(0, 500)).toContain(
-      res.status,
-    );
+  it.each(GLOBAL_ROUTES)('access_manager is refused %s', async (key) => {
+    await expectRefused(key, 'access_manager');
   });
 
-  it('a credential manager cannot delete a service together with its issuer_access_rules (with_accesses)', async () => {
-    await expectRefused('POST /admin/credentials/:id/delete', 'token_manager', {
-      with_accesses: '1',
+  it.each(ACCESS_ROUTES)('access_manager may use %s', async (key) => {
+    await expectAllowed(key, 'access_manager');
+  });
+
+  it.each([...ACCESS_ROUTES, ...GLOBAL_ROUTES])('admin may use %s', async (key) => {
+    await expectAllowed(key, 'admin');
+  });
+
+  it('a credential manager cannot delete a credential together with its rules (with_rules)', async () => {
+    const before = await controlPlaneDump();
+    const request = await TOKEN_FIXTURE_VARIANTS.deleteWithRules(world);
+    const res = await adminPost(world.app, sessions.token_manager, request.path, request.fields);
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain('Your role does not allow this action.');
+    expect(await controlPlaneDump()).toBe(before);
+  });
+
+  it('a credential manager cannot delete a credential that has rules without with_rules', async () => {
+    // The route admits the role, so the request records the sign-in (`last_login_at`); a first
+    // request records it before the dump, so the dump compares only what the delete could change.
+    await adminGet(world.app, sessions.token_manager, '/admin');
+    const before = await controlPlaneDump();
+    const res = await adminPost(
+      world.app,
+      sessions.token_manager,
+      `/admin/credentials/${world.serviceId}/delete`,
+      { confirm: '1' },
+    );
+    expect(res.status).toBe(409);
+    expect(await res.text()).toContain('1 credential access rule');
+    expect(await controlPlaneDump()).toBe(before);
+  });
+
+  it('a credential manager can delete a credential that has no rules', async () => {
+    const id = await seedService(world.app.deps, { slug: 'no-rules' });
+    const res = await adminPost(
+      world.app,
+      sessions.token_manager,
+      `/admin/credentials/${id}/delete`,
+      {
+        confirm: '1',
+      },
+    );
+    expect(res.status).toBe(303);
+    const row = await env.DB.prepare('SELECT id FROM credentials WHERE id = ?').bind(id).first();
+    expect(row).toBeNull();
+  });
+
+  it('an access manager cannot delete a credential, with its rules or not', async () => {
+    // Deleting the credential itself is a credential duty: the route needs tokens:write.
+    await expectRefused('POST /admin/credentials/:id/delete', 'access_manager', {
+      with_rules: '1',
     });
+  });
+
+  it('an admin can delete a credential together with its rules', async () => {
+    const request = await TOKEN_FIXTURE_VARIANTS.deleteWithRules(world);
+    const res = await adminPost(world.app, sessions.admin, request.path, request.fields);
+    expect(res.status).toBe(303);
+    const { results } = await env.DB.prepare('SELECT id FROM access_rules WHERE credential_id = ?')
+      .bind(world.serviceId)
+      .all();
+    expect(results).toEqual([]);
+    // The global access rule of another issuer stays.
+    const global = await env.DB.prepare('SELECT id FROM access_rules WHERE id = ?')
+      .bind(world.global.id)
+      .first();
+    expect(global).not.toBeNull();
   });
 
   it.each(['token_manager', 'admin'] as const)(

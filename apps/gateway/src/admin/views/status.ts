@@ -14,6 +14,9 @@ export type StatusKey =
   | 'upstream_rejecting'
   | 'outside_hosts'
   | 'inactive'
+  | 'global_blocked'
+  | 'global_limited'
+  | 'global_within'
   | 'credential_expired_warning'
   | 'unused'
   | 'risk_accepted'
@@ -28,11 +31,10 @@ export type StatusKey =
   | 'done'
   | 'todo';
 
-/** Reasons an access cannot work although it is enabled (`inactive`), exact texts. */
+/** Reasons a credential access rule cannot work although it is enabled (`inactive`), exact texts. */
 export type InactiveReason =
   | 'credential disabled'
-  | 'credential access rule disabled'
-  | 'token has no credential'
+  | 'credential has no secret'
   | 'credential unreadable';
 
 interface StatusInfo {
@@ -66,6 +68,9 @@ export const STATUS: Readonly<Record<StatusKey, StatusInfo>> = {
     glyph: '⚠',
     label: (detail) => (detail ? `Inactive: ${detail}` : 'Inactive'),
   },
+  global_blocked: { tone: 'bad', glyph: '✕', label: fixed('Blocked by global access rules') },
+  global_limited: { tone: 'warn', glyph: '◐', label: fixed('Limited by global access rules') },
+  global_within: { tone: 'ok', glyph: '✓', label: fixed('Within global access rules') },
   credential_expired_warning: { tone: 'warn', glyph: '⚠', label: fixed('Credential expired') },
   unused: {
     tone: 'muted',

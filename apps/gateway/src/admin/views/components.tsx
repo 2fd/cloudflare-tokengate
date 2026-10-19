@@ -919,13 +919,13 @@ export function AskSomeone(props: {
 // ---------------------------------------------------------------------------------------------
 // Not found
 
-export type NotFoundWhat = 'page' | 'token' | 'consumer' | 'access' | 'user' | 'request';
+export type NotFoundWhat = 'page' | 'token' | 'rule' | 'global' | 'user' | 'request';
 
 const NOT_FOUND_TEXT: Readonly<Record<NotFoundWhat, string>> = {
   page: 'There is no page at this address.',
   token: 'There is no credential with this ID. It may have been deleted.',
-  consumer: 'There is no credential access rule with this ID. It may have been deleted.',
-  access: 'There is no issuer access rules with this ID. It may have been deleted.',
+  rule: 'There is no credential access rule with this ID. It may have been deleted.',
+  global: 'There is no global access rule with this ID. It may have been deleted.',
   user: 'There is no user with this ID. They may have been deleted.',
   request: 'There is no request record with this ID. It may have been purged by data retention.',
 };
@@ -945,12 +945,12 @@ const SECTION_LINKS: readonly LinkCard[] = [
   {
     href: paths.tokens(),
     title: 'Credentials',
-    description: 'Tokens, allowed hosts and encryption keys',
+    description: 'Credentials, allowed hosts and encryption keys',
   },
   {
-    href: paths.consumers(),
-    title: 'Credential access rules',
-    description: 'Consumers and issuer access rules',
+    href: paths.accessRules(),
+    title: 'Access rules',
+    description: 'Credential and global access rules',
   },
   { href: paths.users(), title: 'Users', description: 'People and sign-in' },
 ];

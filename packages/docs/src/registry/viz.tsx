@@ -151,7 +151,7 @@ const stages: PipelineStage[] = [
       count: 59,
       unit: 'no access',
       why: 'Verified callers that no issuer access rules allows.',
-      href: '/admin/requests?reason=no_matching_grant',
+      href: '/admin/requests?reason=no_matching_rule',
     },
   },
   {
@@ -1602,6 +1602,13 @@ export const viz: readonly ComponentDoc[] = [
             default: "'/admin/issuer-access-rules'",
             description:
               'Every link is built from it: ?consumer=, ?token=, ?focus=, ?view=matrix (&consumers=rest, &tokens=rest).',
+          },
+          {
+            name: 'filterParams',
+            type: '{ consumer: string; token: string }',
+            default: "{ consumer: 'consumer', token: 'token' }",
+            description:
+              'Query names of the node filter links, for a page that filters by other names (the Overview: ?issuer=, ?credential=).',
           },
           {
             name: 'focusHref',

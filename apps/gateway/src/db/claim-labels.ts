@@ -1,6 +1,6 @@
-// Display labels for numeric claim IDs (`claim_labels`), per credential access rule: repository_id
+// Display labels for numeric claim IDs (`claim_labels`), per access rule (ADR 0021, ADR 0026): repository_id
 // 987654321 reads as "acme/api". Display and form derivation only; src/policy/* never reads them,
-// so a label can never change what a grant allows. Written only by consumer and access saves.
+// so a label can never change what an access rule allows. Written only by access rule saves.
 import type { ClaimLabel, LabelledClaim } from './types';
 
 export const LABELLED_CLAIMS: readonly LabelledClaim[] = [
@@ -16,25 +16,23 @@ export const CLAIM_LABELS_LIMIT = 1000;
 /** Repository options for a datalist: GitHub repositories and GitLab projects. */
 export const REPOSITORY_OPTIONS_LIMIT = 200;
 
-/** Labels of one credential access rule (a primary-key prefix read), or of all of them. */
-export async function listClaimLabels(db: D1Database, providerId?: string): Promise<ClaimLabel[]> {
+/** Labels of one access rule (a primary-key prefix read), or of all of them. */
+export async function listClaimLabels(db: D1Database, ruleId?: string): Promise<ClaimLabel[]> {
   const statement =
-    providerId === undefined
+    ruleId === undefined
       ? db
-          .prepare(
-            'SELECT * FROM claim_labels ORDER BY credential_access_rule_id, claim, value LIMIT ?',
-          )
+          .prepare('SELECT * FROM claim_labels ORDER BY access_rule_id, claim, value LIMIT ?')
           .bind(CLAIM_LABELS_LIMIT)
       : db
           .prepare(
-            'SELECT * FROM claim_labels WHERE credential_access_rule_id = ? ORDER BY claim, value LIMIT ?',
+            'SELECT * FROM claim_labels WHERE access_rule_id = ? ORDER BY claim, value LIMIT ?',
           )
-          .bind(providerId, CLAIM_LABELS_LIMIT);
+          .bind(ruleId, CLAIM_LABELS_LIMIT);
   const { results } = await statement.all<Record<string, unknown>>();
   return results.map(claimLabelFromRow);
 }
 
-/** The label of `value` for `claim`, or null. `labels` should come from one credential access rule. */
+/** The label of `value` for `claim`, or null. `labels` should come from one access rule. */
 export function labelFor(
   labels: readonly ClaimLabel[],
   claim: string,
@@ -44,7 +42,7 @@ export function labelFor(
 }
 
 export interface RepositoryLabelOption {
-  credential_access_rule_id: string;
+  access_rule_id: string;
   claim: 'repository_id' | 'project_id';
   value: string;
   label: string;
@@ -52,23 +50,23 @@ export interface RepositoryLabelOption {
   text: string;
 }
 
-/** Labelled repositories and projects, by label, of one credential access rule or of all of them. */
+/** Labelled repositories and projects, by label, of one access rule or of all of them. */
 export async function repositoryLabelOptions(
   db: D1Database,
-  providerId?: string,
+  ruleId?: string,
 ): Promise<RepositoryLabelOption[]> {
-  const scope = providerId === undefined ? '' : ' AND credential_access_rule_id = ?';
+  const scope = ruleId === undefined ? '' : ' AND access_rule_id = ?';
   const { results } = await db
     .prepare(
       `SELECT * FROM claim_labels WHERE claim IN ('repository_id', 'project_id')${scope}
        ORDER BY label, value LIMIT ?`,
     )
-    .bind(...(providerId === undefined ? [] : [providerId]), REPOSITORY_OPTIONS_LIMIT)
+    .bind(...(ruleId === undefined ? [] : [ruleId]), REPOSITORY_OPTIONS_LIMIT)
     .all<Record<string, unknown>>();
   return results.map((row) => {
     const label = claimLabelFromRow(row);
     return {
-      credential_access_rule_id: label.credential_access_rule_id,
+      access_rule_id: label.access_rule_id,
       claim: label.claim as 'repository_id' | 'project_id',
       value: label.value,
       label: label.label,
@@ -116,7 +114,7 @@ export function parseIdWithLabelList(raw: string): IdWithLabel[] | null {
 }
 
 /**
- * A parsed ID with its label filled from the stored labels of the credential access rule: a bare ID needs an
+ * A parsed ID with its label filled from the stored labels of the access rule: a bare ID needs an
  * existing label for (claim, id), otherwise null. A typed label wins over the stored one.
  */
 export function resolveIdWithLabel(
@@ -136,11 +134,8 @@ export function idWithLabelText(id: string, label: string | null): string {
 /** Boolean SQL expression plus its binds; evaluated as `... AND (sql)`. */
 type SqlGuard = { sql: string; binds: unknown[] };
 
-/** A label to store: what consumer and access saves write (WP4). */
-export type ClaimLabelInput = Pick<
-  ClaimLabel,
-  'credential_access_rule_id' | 'claim' | 'value' | 'label'
->;
+/** A label to store: what access rule saves write. */
+export type ClaimLabelInput = Pick<ClaimLabel, 'access_rule_id' | 'claim' | 'value' | 'label'>;
 
 /**
  * Inserts or replaces one label while `guard` holds, in the batch of the save that typed it, so
@@ -155,32 +150,24 @@ export function upsertClaimLabelStatement(
 ): D1PreparedStatement {
   return db
     .prepare(
-      `INSERT INTO claim_labels (credential_access_rule_id, claim, value, label, updated_at, updated_by)
+      `INSERT INTO claim_labels (access_rule_id, claim, value, label, updated_at, updated_by)
        SELECT ?, ?, ?, ?, ?, ? WHERE (${guard.sql})
-       ON CONFLICT (credential_access_rule_id, claim, value)
+       ON CONFLICT (access_rule_id, claim, value)
        DO UPDATE SET label = excluded.label, updated_at = excluded.updated_at,
          updated_by = excluded.updated_by`,
     )
-    .bind(
-      label.credential_access_rule_id,
-      label.claim,
-      label.value,
-      label.label,
-      now,
-      actor,
-      ...guard.binds,
-    );
+    .bind(label.access_rule_id, label.claim, label.value, label.label, now, actor, ...guard.binds);
 }
 
-/** Deletes every label of one credential access rule while `guard` holds (consumer delete). */
+/** Deletes every label of one access rule while `guard` holds. */
 export function deleteClaimLabelsStatement(
   db: D1Database,
-  providerId: string,
+  ruleId: string,
   guard: SqlGuard,
 ): D1PreparedStatement {
   return db
-    .prepare(`DELETE FROM claim_labels WHERE credential_access_rule_id = ? AND (${guard.sql})`)
-    .bind(providerId, ...guard.binds);
+    .prepare(`DELETE FROM claim_labels WHERE access_rule_id = ? AND (${guard.sql})`)
+    .bind(ruleId, ...guard.binds);
 }
 
 /** The labels of `next` that are new or differ from `current` (what a save must write). */
@@ -191,13 +178,13 @@ export function changedLabels(
   const out: Array<{ input: ClaimLabelInput; before: string | null }> = [];
   const seen = new Set<string>();
   for (const input of next) {
-    const key = `${input.credential_access_rule_id}\u0000${input.claim}\u0000${input.value}`;
+    const key = `${input.access_rule_id}\u0000${input.claim}\u0000${input.value}`;
     if (seen.has(key)) continue;
     seen.add(key);
     const before =
       current.find(
         (label) =>
-          label.credential_access_rule_id === input.credential_access_rule_id &&
+          label.access_rule_id === input.access_rule_id &&
           label.claim === input.claim &&
           label.value === input.value,
       )?.label ?? null;
@@ -208,7 +195,7 @@ export function changedLabels(
 
 function claimLabelFromRow(row: Record<string, unknown>): ClaimLabel {
   return {
-    credential_access_rule_id: String(row.credential_access_rule_id),
+    access_rule_id: String(row.access_rule_id),
     claim: String(row.claim) as LabelledClaim,
     value: String(row.value),
     label: String(row.label),

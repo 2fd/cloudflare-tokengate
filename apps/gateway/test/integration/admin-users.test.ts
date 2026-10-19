@@ -136,7 +136,7 @@ describe('GET /admin/users', () => {
     expect(map).toContain('<a class="node cnode" href="/admin/users?role=admin">');
     expect(map).toContain('<span class="nl">Diego Ruiz</span>');
     expect(map).toContain('<svg class="wires"');
-    expect(map).toContain('<b>Admin:</b> credentials, issuer access rules, export.');
+    expect(map).toContain('<b>Admin:</b> credentials, access rules, global access rules, export.');
     expect(html).toContain('<details class="disc u-role-guide"><summary>');
     expect(html.indexOf('id="roles-map"')).toBeGreaterThan(html.indexOf('id="people"'));
     // The guide stays available even without decisions or the single-owner note.

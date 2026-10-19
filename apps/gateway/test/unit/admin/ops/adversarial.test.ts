@@ -3,7 +3,6 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  createCredentialAccessRule,
   setCredentialAccessRuleEnabled,
   updateCredentialAccessRule,
 } from '../../../../src/admin/ops/credential-access-rules';
@@ -12,20 +11,15 @@ import {
   deleteService,
   updateServiceFields,
 } from '../../../../src/admin/ops/credentials';
-import {
-  createIssuerAccessRule,
-  setIssuerAccessRuleEnabled,
-  updateIssuerAccessRule,
-} from '../../../../src/admin/ops/issuer_access_rules';
+import { updateGlobalAccessRule } from '../../../../src/admin/ops/global-access-rules';
 import { maskSecret, runVerifyCheck } from '../../../../src/admin/ops/verify';
-import { getCredentialAccessRule } from '../../../../src/db/credential-access-rules';
-import { getService } from '../../../../src/db/credentials';
 import {
-  getIssuerAccessRule,
-  grantVersionGuard,
-  updateIssuerAccessRuleStatement,
-} from '../../../../src/db/issuer_access_rules';
-import { testCredentialId } from './helpers';
+  accessRuleUnchangedGuard,
+  getAccessRuleRow,
+  getCredentialAccessRule,
+  updateAccessRuleStatement,
+} from '../../../../src/db/access-rules';
+import { getService } from '../../../../src/db/credentials';
 import {
   ACTOR,
   auditCount,
@@ -35,32 +29,28 @@ import {
   opsDeps,
   racingDeps,
   resetControlPlane,
-  seedGithubProvider,
-  seedIssuerAccessRule,
+  seedCredentialRule,
+  seedGlobalRule,
   seedService,
   serviceInput,
 } from './helpers';
-
-const ACME_ISSUER = 'https://idp.acme.example';
 
 beforeEach(resetControlPlane);
 
 describe('revocation never depends on validation', () => {
   it('disables a credential access rule whose stored row no longer validates', async () => {
     const deps = opsDeps();
-    const provider = await seedGithubProvider(deps);
+    const rule = await seedCredentialRule(deps);
     // Out of range for github-actions (max 900 s): e.g. written by an older version or by hand.
-    await env.DB.prepare(
-      'UPDATE credential_access_rules SET max_token_age_seconds = 3600 WHERE id = ?',
-    )
-      .bind(provider.id)
+    await env.DB.prepare('UPDATE access_rules SET max_token_age_seconds = 3600 WHERE id = ?')
+      .bind(rule.id)
       .run();
-    const result = await setCredentialAccessRuleEnabled(deps, ACTOR, provider.id, false);
+    const result = await setCredentialAccessRuleEnabled(deps, ACTOR, rule.id, false);
     expect(result.ok).toBe(true);
-    expect((await getCredentialAccessRule(env.DB, provider.id))?.enabled).toBe(false);
-    expect((await auditRows(provider.id)).at(-1)?.action).toBe('credential_access_rule.disable');
+    expect((await getCredentialAccessRule(env.DB, rule.id))?.enabled).toBe(false);
+    expect((await auditRows(rule.id)).at(-1)?.action).toBe('credential_access_rule.disable');
     // Enabling it again validates and is refused.
-    const enabled = await setCredentialAccessRuleEnabled(deps, ACTOR, provider.id, true);
+    const enabled = await setCredentialAccessRuleEnabled(deps, ACTOR, rule.id, true);
     expect(enabled).toMatchObject({ ok: false, reason: 'invalid' });
   });
 
@@ -87,100 +77,67 @@ describe('optimistic concurrency holds within one millisecond', () => {
   it('a stale snapshot cannot overwrite a change made in the same millisecond', async () => {
     const now = 1_800_000_000_000;
     const deps = opsDeps({ now: () => now });
-    const provider = await seedGithubProvider(deps);
-    const serviceId = await seedService(deps);
-    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId);
-    const snapshot = await getIssuerAccessRule(env.DB, grant.id);
-    if (!snapshot) throw new Error('grant missing');
+    const rule = await seedCredentialRule(deps);
+    const snapshot = await getCredentialAccessRule(env.DB, rule.id);
+    if (!snapshot) throw new Error('rule missing');
 
-    expect((await setIssuerAccessRuleEnabled(deps, ACTOR, grant.id, false)).ok).toBe(true);
-    // An edit based on the snapshot (still enabled) must not re-enable the grant.
-    const stale = updateIssuerAccessRuleStatement(
+    expect((await setCredentialAccessRuleEnabled(deps, ACTOR, rule.id, false)).ok).toBe(true);
+    // An edit based on the snapshot (still enabled) must not re-enable the rule.
+    const stale = updateAccessRuleStatement(
       env.DB,
-      grant.id,
+      rule.id,
       { ...snapshot, name: 'stale edit' },
       now,
-      grantVersionGuard(snapshot),
+      accessRuleUnchangedGuard(rule.id, snapshot.updated_at),
     );
     expect((await stale.run()).meta.changes).toBe(0);
-    expect((await getIssuerAccessRule(env.DB, grant.id))?.enabled).toBe(false);
+    expect((await getCredentialAccessRule(env.DB, rule.id))?.enabled).toBe(false);
   });
 
   it('returns the stored version so the next op can use it as a guard', async () => {
     const now = 1_800_000_000_000;
     const deps = opsDeps({ now: () => now });
-    const provider = await seedGithubProvider(deps);
-    const serviceId = await seedService(deps);
-    const grant = await seedIssuerAccessRule(deps, provider.id, serviceId);
-    const first = await updateIssuerAccessRule(deps, ACTOR, grant.id, { name: 'one' });
-    const second = await updateIssuerAccessRule(deps, ACTOR, grant.id, { name: 'two' });
+    const rule = await seedCredentialRule(deps);
+    const first = await updateCredentialAccessRule(deps, ACTOR, rule.id, { name: 'one' });
+    const second = await updateCredentialAccessRule(deps, ACTOR, rule.id, { name: 'two' });
     expect(first.ok && second.ok).toBe(true);
     if (!first.ok || !second.ok) return;
-    expect(second.grant.updated_at).toBeGreaterThan(first.grant.updated_at);
-    expect(await getIssuerAccessRule(env.DB, grant.id)).toEqual(second.grant);
+    expect(second.rule.updated_at).toBeGreaterThan(first.rule.updated_at);
+    expect(await getCredentialAccessRule(env.DB, rule.id)).toEqual(second.rule);
   });
 });
 
 describe('read-then-write races are decided in SQL', () => {
-  it('a grant enabled after the trust-change check still requires confirmation', async () => {
-    const network = fakeNetwork(undefined, {
-      [ACME_ISSUER]: `${ACME_ISSUER}/keys`,
-      'https://idp2.acme.example': 'https://idp2.acme.example/keys',
+  it('a global access rule relaxed after the classification makes the unconfirmed tightening write nothing', async () => {
+    const deps = opsDeps();
+    const rule = await seedGlobalRule(deps, {
+      rules: [{ methods: ['GET', 'POST'], path: '/repos/**' }],
     });
-    const deps = opsDeps({ fetch: network.fetch });
-    const created = await createCredentialAccessRule(deps, ACTOR, {
-      credential_id: await testCredentialId(deps),
-      name: 'Acme',
-      profile: 'generic',
-      issuer: ACME_ISSUER,
-      anchor_claims: ['sub'],
-    });
-    if (!created.ok) throw new Error(created.errors.join());
-    const serviceId = await seedService(deps);
-    const grant = await createIssuerAccessRule(deps, ACTOR, {
-      name: 'ci',
-      credential_access_rule_id: created.credentialAccessRule.id,
-      service_id: serviceId,
-      conditions: [{ claim: 'sub', match: 'exact', values: ['ci-bot'] }],
-      rules: [{ methods: ['GET'], path: '/**' }],
-      enabled: false,
-      acknowledge_warnings: true,
-    });
-    if (!grant.ok) throw new Error(grant.errors.join());
-
     const audits = await auditCount();
+    // A concurrent confirmed update removes the operations limit after this op read the row.
     const racing = racingDeps(deps, () =>
-      env.DB.prepare('UPDATE issuer_access_rules SET enabled = 1 WHERE id = ?')
-        .bind(grant.grant.id)
-        .run(),
+      updateGlobalAccessRule(deps, ACTOR, rule.id, { rules: null, confirm_widening: true }),
     );
-    const result = await updateCredentialAccessRule(
-      racing,
-      ACTOR,
-      created.credentialAccessRule.id,
-      {
-        issuer: 'https://idp2.acme.example',
-      },
-    );
-    expect(result).toMatchObject({ ok: false, reason: 'confirmation_required' });
-    expect((await getCredentialAccessRule(env.DB, created.credentialAccessRule.id))?.issuer).toBe(
-      ACME_ISSUER,
-    );
-    expect(await auditCount()).toBe(audits);
+    const result = await updateGlobalAccessRule(racing, ACTOR, rule.id, {
+      rules: [{ methods: ['GET'], path: '/repos/**' }],
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'conflict' });
+    expect((await getAccessRuleRow(env.DB, rule.id))?.rules).toBeNull();
+    // Only the racing update's own audit row was added.
+    expect(await auditCount()).toBe(audits + 1);
   });
 
-  it('a grant created after the reference check blocks the service delete', async () => {
+  it('a credential access rule created after the reference check blocks the credential delete', async () => {
     const deps = opsDeps();
-    const provider = await seedGithubProvider(deps);
     const serviceId = await seedService(deps);
     const audits = await auditCount();
     const racing = racingDeps(deps, () =>
-      seedIssuerAccessRule(deps, provider.id, serviceId, 'late'),
+      seedCredentialRule(deps, { credential_id: serviceId, name: 'late' }),
     );
     const result = await deleteService(racing, ACTOR, serviceId);
     expect(result).toMatchObject({ ok: false, reason: 'conflict' });
     expect(await getService(env.DB, serviceId)).not.toBeNull();
-    // Only the racing grant's own audit row was added.
+    // Only the racing rule's own audit row was added.
     expect(await auditCount()).toBe(audits + 1);
   });
 });
@@ -223,13 +180,19 @@ describe('input hardening', () => {
     await expect(updateServiceFields(deps, ACTOR, id, { name: 7 as never })).resolves.toMatchObject(
       { ok: false, reason: 'invalid' },
     );
-    const provider = await seedGithubProvider(deps);
+    const rule = await seedCredentialRule(deps, { credential_id: id });
     await expect(
-      updateCredentialAccessRule(deps, ACTOR, provider.id, { audience: null as never }),
+      updateCredentialAccessRule(deps, ACTOR, rule.id, { audience: null as never }),
     ).resolves.toMatchObject({ ok: false, reason: 'invalid' });
-    const grant = await seedIssuerAccessRule(deps, provider.id, id);
     await expect(
-      updateIssuerAccessRule(deps, ACTOR, grant.id, { name: ['x'] as never }),
+      updateCredentialAccessRule(deps, ACTOR, rule.id, { name: ['x'] as never }),
+    ).resolves.toMatchObject({ ok: false, reason: 'invalid' });
+    const global = await seedGlobalRule(deps);
+    await expect(
+      updateGlobalAccessRule(deps, ACTOR, global.id, { name: 7 as never }),
+    ).resolves.toMatchObject({ ok: false, reason: 'invalid' });
+    await expect(
+      updateGlobalAccessRule(deps, ACTOR, global.id, { rules: 'x' as never }),
     ).resolves.toMatchObject({ ok: false, reason: 'invalid' });
   });
 });

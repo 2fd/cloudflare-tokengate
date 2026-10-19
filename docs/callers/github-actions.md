@@ -361,14 +361,14 @@ jobs:
 ```
 
 - The calling job must grant `id-token: write`. A called workflow can only keep or reduce the permissions of the calling job ([GitHub docs](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations)).
-- The ref in `uses:` must produce the pinned `job_workflow_ref`. `@main` gives `...openai.yml@refs/heads/main`. A caller that uses a tag or a commit SHA gets a different value and is denied with `no_matching_grant`.
+- The ref in `uses:` must produce the pinned `job_workflow_ref`. `@main` gives `...openai.yml@refs/heads/main`. A caller that uses a tag or a commit SHA gets a different value and is denied with `no_matching_rule`.
 - A job outside the reusable workflow cannot mint a token with the pinned `job_workflow_ref`, so its own calls are denied.
   This holds only while the called workflow follows the list above. Every calling repository can still make the calls that the workflow makes.
 - To limit which repositories may call the workflow, add `repository_id exact <id>, <id>` to the grant.
 
 ### Give access from a denied request
 
-1. Run the workflow once. It fails with `403 no_matching_grant`.
+1. Run the workflow once. It fails with `403 no_matching_rule`.
 2. In the admin UI, open **Requests** and select the denied request. The error body contains its request ID.
 3. Select **Give this caller access**.
    The form is prefilled with the caller's repository as `name (ID)`, the context (the environment when the job has one, else the branch or tag), the protected-refs choice the token reported, and the exact call as an operation, unless the path contains `*` or `%2F`.
@@ -406,6 +406,6 @@ A response without `x-tokengate-request-id` came from Cloudflare, not from the g
 | `tenant_mismatch` (401) | The repository owner is not in **Allowed organization IDs** | Ask an admin to add the organization ID. |
 | `token_expired` or `token_too_old` (401) | Token minted too early | Call `tokengate-token` right before the request. |
 | `event_not_trusted` (403) | The event is not trusted and the grant does not opt in | Ask an admin to add the event to an exact `event_name` condition, or trigger the job another way. |
-| `no_matching_grant` (403) | No grant matches the claims, method and path | Ask an access manager to use **Give this caller access** on the request. |
+| `no_matching_rule` (403) | No grant matches the claims, method and path | Ask an access manager to use **Give this caller access** on the request. |
 | `service_not_found` (404) | Wrong slug, or the service is disabled | Check the slug after `/proxy/`. |
 | `path_invalid` (400) | `//`, `.` or `..` segments, forbidden escapes, or a method-override query parameter | Fix the URL. |

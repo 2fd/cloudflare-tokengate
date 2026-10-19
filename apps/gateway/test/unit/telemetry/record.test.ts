@@ -33,8 +33,8 @@ function input(overrides: Partial<RequestRecordInput> = {}): RequestRecordInput 
     reason: null,
     status: 200,
     serviceId: 'svc_1',
-    credentialAccessRuleId: 'cpr_1',
-    grantId: 'grt_1',
+    credentialAccessRuleId: 'acr_1',
+    globalAccessRuleId: 'gar_1',
     untrustedIss: 'https://token.actions.githubusercontent.com',
     caller: {
       claims,
@@ -165,7 +165,7 @@ describe('buildRequestRecord', () => {
 
   it('caps the policy trace at 2 KB', () => {
     const trace = Array.from({ length: 50 }, (_, i) => ({
-      grant_id: `grt_${i}`,
+      rule_id: `acr_${i}`,
       result: 'condition_failed' as const,
       detail: 'd'.repeat(300),
     }));

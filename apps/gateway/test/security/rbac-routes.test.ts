@@ -1,9 +1,10 @@
 // I-RBAC-1 against the real app: the routes createApp() registers under /admin are exactly the
 // RBAC table's keys, and for every route × role (anonymous and the five roles) the response is
-// sign-in, 403 with no side effect, or success. Successful mutations reuse the I-AUDIT-1 fixtures.
+// sign-in, 403 with no side effect, or success. The oracle is a constant table in this file (WHO),
+// never the production check. Successful mutations reuse the I-AUDIT-1 fixtures.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { can, ROUTE_PERMISSIONS } from '../../src/admin/auth/rbac';
+import { ROUTE_PERMISSIONS } from '../../src/admin/auth/rbac';
 import { createApp } from '../../src/app';
 import type { Role } from '../../src/db/types';
 import {
@@ -37,18 +38,86 @@ async function auditCount(): Promise<number> {
 
 /** Every control-plane row except identities (sign-ins touch them), for "no side effect" checks. */
 async function controlPlaneDump(): Promise<string> {
-  const tables = [
-    'users',
-    'credential_access_rules',
-    'credentials',
-    'issuer_access_rules',
-    'claim_labels',
-    'settings',
-    'audit_log',
-  ];
+  const tables = ['users', 'access_rules', 'credentials', 'claim_labels', 'settings', 'audit_log'];
   const dumps = await Promise.all(tables.map((t) => env.DB.prepare(`SELECT * FROM ${t}`).all()));
   return JSON.stringify(dumps.map((d) => d.results));
 }
+
+const ALL = ROLES;
+const TOKENS: readonly Role[] = ['token_manager', 'admin', 'owner'];
+const ACCESS: readonly Role[] = ['access_manager', 'admin', 'owner'];
+const GLOBAL: readonly Role[] = ['admin', 'owner'];
+const EXPORT: readonly Role[] = ['admin', 'owner'];
+const OWNER: readonly Role[] = ['owner'];
+
+/**
+ * Who may use each route (ADR 0018, AR-15): credential managers decide which credentials exist,
+ * access managers decide who may use them, and only admins and owners set global access rules.
+ */
+const WHO: Readonly<Record<string, readonly Role[]>> = {
+  // == monitoring ==
+  'GET /admin': ALL,
+  'GET /admin/requests': ALL,
+  'GET /admin/requests/:id': ALL,
+  'GET /admin/audit': ALL,
+  'GET /admin/retention': ALL,
+  'POST /admin/retention': OWNER,
+
+  // == users ==
+  'GET /admin/users/appearance': ALL,
+  'POST /admin/users/appearance': OWNER,
+  'GET /admin/users/sign-in': ALL,
+  'POST /admin/users/sign-in/policy': OWNER,
+  'POST /admin/users/sign-in/hosts': OWNER,
+  'GET /admin/users': ALL,
+  'POST /admin/users': OWNER,
+  'GET /admin/users/:id': ALL,
+  'POST /admin/users/:id': OWNER,
+  'POST /admin/users/:id/approve': OWNER,
+  'POST /admin/users/:id/reject': OWNER,
+  'POST /admin/users/:id/reset-login': OWNER,
+  'POST /admin/users/:id/resend-invite': OWNER,
+  'POST /admin/users/:id/delete': OWNER,
+  'POST /admin/users/:id/dismiss-attempt': OWNER,
+
+  // == tokens ==
+  'GET /admin/credentials/hosts': ALL,
+  'POST /admin/credentials/hosts': OWNER,
+  'GET /admin/credentials/keys': ALL,
+  'POST /admin/credentials/keys/rewrap': OWNER,
+  'GET /admin/credentials': ALL,
+  'GET /admin/credentials/new': TOKENS,
+  'POST /admin/credentials': TOKENS,
+  'GET /admin/credentials/:id': ALL,
+  'POST /admin/credentials/:id': TOKENS,
+  'POST /admin/credentials/:id/secret': TOKENS,
+  'POST /admin/credentials/:id/destination': TOKENS,
+  'POST /admin/credentials/:id/test': TOKENS,
+  'POST /admin/credentials/:id/toggle': TOKENS,
+  'POST /admin/credentials/:id/delete': TOKENS,
+
+  // == access rules ==
+  'GET /admin/credential-access-rules': ALL,
+  'GET /admin/credential-access-rules/new': ACCESS,
+  'POST /admin/credential-access-rules': ACCESS,
+  'GET /admin/credential-access-rules/:id': ALL,
+  'POST /admin/credential-access-rules/:id': ACCESS,
+  'POST /admin/credential-access-rules/:id/tenants': ACCESS,
+  'POST /admin/credential-access-rules/:id/copy': ACCESS,
+  'POST /admin/credential-access-rules/:id/toggle': ACCESS,
+  'POST /admin/credential-access-rules/:id/delete': ACCESS,
+  // Every role reads global access rules (AR-16); only admins and owners change them (AR-15).
+  'GET /admin/global-access-rules': ALL,
+  'GET /admin/global-access-rules/new': GLOBAL,
+  'POST /admin/global-access-rules': GLOBAL,
+  'GET /admin/global-access-rules/:id': ALL,
+  'POST /admin/global-access-rules/:id': GLOBAL,
+  'POST /admin/global-access-rules/:id/toggle': GLOBAL,
+  'POST /admin/global-access-rules/:id/delete': GLOBAL,
+
+  // == global ==
+  'POST /admin/export': EXPORT,
+};
 
 let world: AdminWorld;
 let sessions: Record<Role, AdminSession>;
@@ -89,14 +158,18 @@ describe('I-RBAC-1: the RBAC table and the registered admin routes are a bijecti
 });
 
 describe('I-RBAC-1: route × role matrix on the real app', () => {
-  const cases = Object.entries(ROUTE_PERMISSIONS).flatMap(([key, rule]) =>
-    ACTORS.map((actor) => [key, actor, rule.permission] as const),
+  it('the oracle covers exactly the route table', () => {
+    expect(Object.keys(WHO).sort()).toEqual(Object.keys(ROUTE_PERMISSIONS).sort());
+  });
+
+  const cases = Object.keys(ROUTE_PERMISSIONS).flatMap((key) =>
+    ACTORS.map((actor) => [key, actor] as const),
   );
 
-  it.each(cases)('%s as %s', async (key, actor, permission) => {
+  it.each(cases)('%s as %s', async (key, actor) => {
     const isGet = key.startsWith('GET ');
     const session = actor === 'anonymous' ? null : sessions[actor];
-    const allowed = actor !== 'anonymous' && can(actor, permission);
+    const allowed = actor !== 'anonymous' && (WHO[key] ?? []).includes(actor);
     const mutation = isGet ? null : await MUTATION_FIXTURES[key]?.(world);
     if (!isGet) expect(mutation, `no fixture for ${key}`).toBeDefined();
     const path = isGet ? readPath(key, world) : (mutation?.path ?? '');
@@ -155,6 +228,7 @@ describe('I-RBAC-1: routes outside the table are denied (fail closed)', () => {
     ['GET', '/admin/tokens/new'],
     ['GET', '/admin/consumers'],
     ['GET', '/admin/access'],
+    ['GET', '/admin/issuer-access-rules'],
     ['GET', '/admin/settings'],
   ])('%s %s is a 404 page for an owner, with no side effect', async (method, path) => {
     const before = await controlPlaneDump();

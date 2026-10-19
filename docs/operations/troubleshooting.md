@@ -47,7 +47,7 @@ The Cloudflare edge answered before the Worker ran, or the request did not reach
 | [`tenant_mismatch`](../errors.md#tenant_mismatch) | The token is from another organization or namespace than the tenant pin | Check the credential access rule's tenant pin and the owner ID ([I-TEN-1](../threat-model.md#i-ten-1)) |
 | [`service_not_found`](../errors.md#service_not_found) | Wrong slug, or the service is disabled (reason `service_disabled`) | Check the slug in the URL; enable the service |
 | [`path_invalid`](../errors.md#path_invalid) | Empty or dot segments, bad escapes; reason `query_invalid` for a refused query, such as a method-override parameter | Fix the URL in the caller |
-| [`no_matching_grant`](../errors.md#no_matching_grant) | No grant matches the caller's claims, method and path | Read the policy trace on the request page; an admin can select "Create grant from this request" ([policies](../policies.md)) |
+| [`no_matching_rule`](../errors.md#no_matching_rule) | No grant matches the caller's claims, method and path | Read the policy trace on the request page; an admin can select "Create grant from this request" ([policies](../policies.md)) |
 | [`event_not_trusted`](../errors.md#event_not_trusted) | The event (for example `pull_request_target`) is outside the trusted events | Add an exact opt-in to the grant only if the risk is acceptable ([policies](../policies.md)) |
 | [`rate_limited`](../errors.md#rate_limited) | The grant reached the `PROXY_RATE_LIMITER` limit | Wait `retry-after` seconds, or raise the limit ([configuration](../configuration.md#proxy_rate_limiter)) |
 

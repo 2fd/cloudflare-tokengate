@@ -1,16 +1,21 @@
 // Fixtures for admin ops tests: deps with injectable fetch/env, a test actor, fake upstream and
 // OIDC discovery endpoints, and seeders that go through the real ops.
 import { env } from 'cloudflare:workers';
-import { createCredentialAccessRule } from '../../../../src/admin/ops/credential-access-rules';
+import {
+  createCredentialAccessRule,
+  type CredentialRuleInput,
+} from '../../../../src/admin/ops/credential-access-rules';
 import { createService, type ServiceCreateInput } from '../../../../src/admin/ops/credentials';
-import { createIssuerAccessRule } from '../../../../src/admin/ops/issuer_access_rules';
+import {
+  createGlobalAccessRule,
+  type GlobalRuleInput,
+} from '../../../../src/admin/ops/global-access-rules';
 import { auditFromRow } from '../../../../src/db/audit';
-import { getCredentialAccessRule } from '../../../../src/db/credential-access-rules';
 import type {
   Actor,
   AuditEvent,
   CredentialAccessRule,
-  IssuerAccessRule,
+  GlobalAccessRule,
 } from '../../../../src/db/types';
 import type { Deps } from '../../../../src/deps';
 import type { AppEnv } from '../../../../src/env';
@@ -89,9 +94,8 @@ export function opsDeps(
 /** Empties the control-plane tables touched by ops (storage is per test file). */
 export async function resetControlPlane(): Promise<void> {
   await env.DB.batch([
-    env.DB.prepare('DELETE FROM issuer_access_rules'),
     env.DB.prepare('DELETE FROM claim_labels'),
-    env.DB.prepare('DELETE FROM credential_access_rules'),
+    env.DB.prepare('DELETE FROM access_rules'),
     env.DB.prepare('DELETE FROM credentials'),
     env.DB.prepare('DELETE FROM audit_log'),
   ]);
@@ -114,13 +118,7 @@ export async function auditCount(): Promise<number> {
 
 /** Every text column of every control-plane row, for "secret appears nowhere" assertions. */
 export async function dumpControlPlane(): Promise<string> {
-  const tables = [
-    'credentials',
-    'credential_access_rules',
-    'issuer_access_rules',
-    'audit_log',
-    'settings',
-  ];
+  const tables = ['credentials', 'access_rules', 'claim_labels', 'audit_log', 'settings'];
   const dumps = await Promise.all(
     tables.map((table) => env.DB.prepare(`SELECT * FROM ${table}`).all()),
   );
@@ -154,24 +152,6 @@ export async function seedService(
   return result.service.id;
 }
 
-export async function seedGithubProvider(deps: Deps): Promise<CredentialAccessRule> {
-  const credential = await deps.env.DB.prepare(
-    'SELECT id FROM credentials ORDER BY created_at DESC LIMIT 1',
-  ).first<{ id: string }>();
-  const credentialId = credential?.id ?? (await seedService(deps));
-  const named = await deps.env.DB.prepare(
-    "SELECT id FROM credential_access_rules WHERE name = 'GitHub Actions'",
-  ).first();
-  const result = await createCredentialAccessRule(deps, ACTOR, {
-    credential_id: credentialId,
-    name: named ? `GitHub Actions (${credentialId})` : 'GitHub Actions',
-    profile: 'github-actions',
-    tenant_pin: [{ claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID] }],
-  });
-  if (!result.ok) throw new Error(`seedGithubProvider: ${result.errors.join('; ')}`);
-  return result.credentialAccessRule;
-}
-
 export function anchoredConditions() {
   return [
     { claim: 'repository_owner_id', match: 'exact' as const, values: [OWNER_ID] },
@@ -179,31 +159,43 @@ export function anchoredConditions() {
   ];
 }
 
-export async function seedIssuerAccessRule(
+/**
+ * A GitHub Actions credential access rule through the real op: the newest credential (or a new one),
+ * the test organization's pin, the anchored jobs and `GET /repos/**`.
+ */
+export async function seedCredentialRule(
   deps: Deps,
-  credentialAccessRuleId: string,
-  serviceId: string,
-  name = 'read repo',
-): Promise<IssuerAccessRule> {
-  const boundary = await getCredentialAccessRule(deps.env.DB, credentialAccessRuleId);
-  if (boundary && boundary.credential_id !== serviceId) {
-    const sibling = await createCredentialAccessRule(deps, ACTOR, {
-      ...boundary,
-      name: `${boundary.name} (${serviceId})`,
-      credential_id: serviceId,
-    });
-    if (!sibling.ok) throw new Error(sibling.errors.join('; '));
-    credentialAccessRuleId = sibling.credentialAccessRule.id;
-  }
-  const result = await createIssuerAccessRule(deps, ACTOR, {
-    name,
-    credential_access_rule_id: credentialAccessRuleId,
-    service_id: serviceId,
+  overrides: Partial<CredentialRuleInput> = {},
+): Promise<CredentialAccessRule> {
+  const credentialId = overrides.credential_id ?? (await testCredentialId(deps));
+  const result = await createCredentialAccessRule(deps, ACTOR, {
+    credential_id: credentialId,
+    name: 'read repo',
+    profile: 'github-actions',
+    tenant_pin: [{ claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID] }],
     conditions: anchoredConditions(),
     rules: [{ methods: ['GET'], path: '/repos/**' }],
+    acknowledge_warnings: true,
+    ...overrides,
   });
-  if (!result.ok) throw new Error(`seedIssuerAccessRule: ${result.errors.join('; ')}`);
-  return result.grant;
+  if (!result.ok) throw new Error(`seedCredentialRule: ${result.errors.join('; ')}`);
+  return result.rule;
+}
+
+/** A global access rule of the GitHub issuer through the real op, confirmed. */
+export async function seedGlobalRule(
+  deps: Deps,
+  overrides: Partial<GlobalRuleInput> = {},
+): Promise<GlobalAccessRule> {
+  const result = await createGlobalAccessRule(deps, ACTOR, {
+    name: 'acme only',
+    profile: 'github-actions',
+    ...overrides,
+    confirm_new_ceiling: true,
+    confirm_widening: true,
+  });
+  if (!result.ok) throw new Error(`seedGlobalRule: ${result.errors.join('; ')}`);
+  return result.rule;
 }
 
 /**

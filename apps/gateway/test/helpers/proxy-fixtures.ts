@@ -1,6 +1,7 @@
-// End-to-end proxy fixture: a real app over D1 with one credential access rule (GitHub issuer by default),
-// one service with a sealed credential and one grant, plus a fake upstream that records what it
-// received. No network: issuer JWKS and upstream are served through the injected fetch.
+// End-to-end proxy fixture: a real app over D1 with one service with a sealed credential and one credential
+// access rule (GitHub issuer by default), plus a fake upstream that records what it received. Global
+// access rules are added on request. No network: issuer JWKS and upstream are served through the
+// injected fetch.
 import { env } from 'cloudflare:workers';
 import { credentialAad, sealCredential } from '../../src/crypto/envelope';
 import { type KeyringEnv, loadKeyring } from '../../src/crypto/keyring';
@@ -11,6 +12,7 @@ import type { ProfileId } from '../../src/identity/types';
 import { toBase64 } from '../../src/lib/encoding';
 import { newId } from '../../src/lib/ids';
 import { canonicalJson } from '../../src/lib/json';
+import { issuerKey } from '../../src/policy/limits';
 import type { Condition, Injection, Rule } from '../../src/policy/types';
 import { resetPretrustBudgetForTests } from '../../src/telemetry/sinks';
 import type { RequestRecord } from '../../src/telemetry/types';
@@ -52,22 +54,52 @@ export interface ServiceSeed {
   timeoutMs?: number;
 }
 
-export interface IssuerAccessRuleSeed {
+/** A credential access rule. Omitted fields take the fixture defaults (the test issuer's settings). */
+export interface CredentialRuleSeed {
   conditions?: Condition[];
   rules?: Rule[];
   enabled?: boolean;
   expiresAt?: number | null;
-  credentialAccessRuleId?: string;
   serviceId?: string;
+  name?: string;
+  profile?: ProfileId;
+  issuer?: string;
+  jwksUri?: string;
+  audience?: string;
+  allowedAlgs?: string[];
+  maxTokenAgeSeconds?: number;
+  tenantPin?: Condition[];
+  anchorClaims?: string[];
+  /** Created at this time (ms); default: after every earlier rule of the fixture. */
+  createdAt?: number;
+}
+
+/** A global access rule of the test issuer (any profile). A limit left out is NULL: no limit. */
+export interface GlobalRuleSeed {
+  name?: string;
+  profile?: ProfileId;
+  issuer?: string;
+  enabled?: boolean;
+  expiresAt?: number | null;
+  jwksUri?: string | null;
+  audience?: string | null;
+  allowedAlgs?: string[] | null;
+  maxTokenAgeSeconds?: number | null;
+  tenantPin?: Condition[] | null;
+  anchorClaims?: string[] | null;
+  conditions?: Condition[] | null;
+  rules?: Rule[] | null;
 }
 
 export interface ProxyFixtureOptions {
   service?: ServiceSeed;
-  /** false: no grant is created. */
-  grant?: IssuerAccessRuleSeed | false;
+  /** false: no credential access rule is created. */
+  rule?: CredentialRuleSeed | false;
   tenantPin?: Condition[];
   profile?: ProfileId;
   upstream?: UpstreamHandler;
+  /** More issuers whose JWKS and discovery the fake network serves (for example GitLab or an attacker). */
+  issuers?: TestIssuer[];
   env?: Partial<AppEnv> & Record<string, unknown>;
 }
 
@@ -75,9 +107,9 @@ export interface ProxyFixture {
   app: TestApp;
   clock: ReturnType<typeof createClock>;
   issuer: TestIssuer;
-  providerId: string;
   serviceId: string;
-  grantId: string | null;
+  /** The first credential access rule, or null with `rule: false`. */
+  ruleId: string | null;
   slug: string;
   /** Requests that reached the fake upstream. */
   upstreamCalls: UpstreamCall[];
@@ -93,7 +125,8 @@ export interface ProxyFixture {
   /** Settles background work and returns stored request records, newest first. */
   records(): Promise<RequestRecord[]>;
   addService(seed: ServiceSeed): Promise<{ id: string; slug: string }>;
-  addIssuerAccessRule(seed: IssuerAccessRuleSeed): Promise<string>;
+  addRule(seed: CredentialRuleSeed): Promise<string>;
+  addGlobalRule(seed: GlobalRuleSeed): Promise<string>;
 }
 
 export const DEFAULT_CONDITIONS: Condition[] = [
@@ -108,13 +141,15 @@ export async function resetProxyState(): Promise<void> {
   resetJwksCacheForTests();
   resetPretrustBudgetForTests();
   await db().batch([
-    db().prepare('DELETE FROM issuer_access_rules'),
+    db().prepare('DELETE FROM access_rules'),
     db().prepare('DELETE FROM credentials'),
-    db().prepare('DELETE FROM credential_access_rules'),
     db().prepare('DELETE FROM settings'),
   ]);
   await env.TELEMETRY_DB.prepare('DELETE FROM request_log').run();
 }
+
+const json = (value: unknown) =>
+  value === null || value === undefined ? null : JSON.stringify(value);
 
 export async function setupProxy(options: ProxyFixtureOptions = {}): Promise<ProxyFixture> {
   await resetProxyState();
@@ -127,6 +162,8 @@ export async function setupProxy(options: ProxyFixtureOptions = {}): Promise<Pro
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (url.startsWith(issuer.issuer)) return issuer.fetch(input, init);
+    const other = options.issuers?.find((candidate) => url.startsWith(candidate.issuer));
+    if (other) return other.fetch(input, init);
     const request = new Request(url, init);
     const call: UpstreamCall = {
       url,
@@ -145,11 +182,11 @@ export async function setupProxy(options: ProxyFixtureOptions = {}): Promise<Pro
     now: clock.now,
     env: { TOKENGATE_KEK: TEST_KEK, ...options.env },
   });
-  const now = clock.now();
   const random = (n: number) => crypto.getRandomValues(new Uint8Array(n));
-
-  const providerId = newId('cpr', now, random);
   const profile = options.profile ?? 'github-actions';
+  const tenantPin = options.tenantPin ?? [
+    { claim: 'repository_owner_id', match: 'exact', values: [TEST_GITHUB_OWNER_ID] },
+  ];
 
   const addService = async (seed: ServiceSeed) => {
     const id = newId('svc', clock.now(), random);
@@ -182,80 +219,87 @@ export async function setupProxy(options: ProxyFixtureOptions = {}): Promise<Pro
     return { id, slug };
   };
 
-  let grantSeq = 0;
-  const addIssuerAccessRule = async (seed: IssuerAccessRuleSeed) => {
-    const id = newId('grt', clock.now(), random);
-    grantSeq++;
-    let boundaryId = seed.credentialAccessRuleId ?? providerId;
-    if (!seed.credentialAccessRuleId && seed.serviceId && seed.serviceId !== service.id) {
-      boundaryId = newId('cpr', clock.now(), random);
-      await db()
-        .prepare(`INSERT INTO credential_access_rules
-        (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
-         max_token_age_seconds, tenant_pin, anchor_claims, conditions, enabled, created_at, updated_at)
-        SELECT ?, ?, ?, profile, issuer, jwks_uri, audience, allowed_algs,
-         max_token_age_seconds, tenant_pin, anchor_claims, conditions, enabled, created_at, updated_at
-        FROM credential_access_rules WHERE id = ?`)
-        .bind(boundaryId, seed.serviceId, `Boundary ${boundaryId}`, providerId)
-        .run();
-    }
+  let seq = 0;
+  const addRule = async (seed: CredentialRuleSeed) => {
+    seq++;
+    const createdAt = seed.createdAt ?? clock.now() + seq;
+    const id = newId('acr', createdAt, random);
+    const ruleIssuer = seed.issuer ?? issuer.issuer;
     await db()
       .prepare(
-        `INSERT INTO issuer_access_rules (id, name, credential_access_rule_id, service_id, conditions, rules, enabled,
+        `INSERT INTO access_rules (id, credential_id, name, profile, issuer, issuer_key, jwks_uri, audience,
+           allowed_algs, max_token_age_seconds, tenant_pin, anchor_claims, conditions, rules, enabled,
            expires_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         id,
-        `grant ${grantSeq}`,
-        boundaryId,
         seed.serviceId ?? service.id,
+        seed.name ?? `rule ${seq}`,
+        seed.profile ?? profile,
+        ruleIssuer,
+        issuerKey(ruleIssuer),
+        seed.jwksUri ?? issuer.jwksUri,
+        seed.audience ?? TEST_AUDIENCE,
+        JSON.stringify(seed.allowedAlgs ?? [issuer.alg]),
+        seed.maxTokenAgeSeconds ?? 600,
+        JSON.stringify(seed.tenantPin ?? tenantPin),
+        JSON.stringify(seed.anchorClaims ?? []),
         JSON.stringify(seed.conditions ?? DEFAULT_CONDITIONS),
         JSON.stringify(seed.rules ?? DEFAULT_RULES),
         seed.enabled === false ? 0 : 1,
         seed.expiresAt ?? null,
-        clock.now() + grantSeq,
-        clock.now() + grantSeq,
+        createdAt,
+        createdAt,
+      )
+      .run();
+    return id;
+  };
+
+  const addGlobalRule = async (seed: GlobalRuleSeed) => {
+    seq++;
+    const createdAt = clock.now() + seq;
+    const id = newId('gar', createdAt, random);
+    const ruleIssuer = seed.issuer ?? issuer.issuer;
+    await db()
+      .prepare(
+        `INSERT INTO access_rules (id, credential_id, name, profile, issuer, issuer_key, jwks_uri, audience,
+           allowed_algs, max_token_age_seconds, tenant_pin, anchor_claims, conditions, rules, enabled,
+           expires_at, created_at, updated_at)
+         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        id,
+        seed.name ?? `global ${seq}`,
+        seed.profile ?? profile,
+        ruleIssuer,
+        issuerKey(ruleIssuer),
+        seed.jwksUri ?? null,
+        seed.audience ?? null,
+        json(seed.allowedAlgs),
+        seed.maxTokenAgeSeconds ?? null,
+        json(seed.tenantPin),
+        json(seed.anchorClaims),
+        json(seed.conditions),
+        json(seed.rules),
+        seed.enabled === false ? 0 : 1,
+        seed.expiresAt ?? null,
+        createdAt,
+        createdAt,
       )
       .run();
     return id;
   };
 
   const service = await addService(options.service ?? {});
-  await db()
-    .prepare(
-      `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
-         max_token_age_seconds, tenant_pin, anchor_claims, enabled, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 600, ?, '[]', 1, ?, ?)`,
-    )
-    .bind(
-      providerId,
-      service.id,
-      'GitHub Actions',
-      profile,
-      issuer.issuer,
-      issuer.jwksUri,
-      TEST_AUDIENCE,
-      JSON.stringify([issuer.alg]),
-      JSON.stringify(
-        options.tenantPin ?? [
-          { claim: 'repository_owner_id', match: 'exact', values: [TEST_GITHUB_OWNER_ID] },
-        ],
-      ),
-      now,
-      now,
-    )
-    .run();
-
-  const grantId = options.grant === false ? null : await addIssuerAccessRule(options.grant ?? {});
+  const ruleId = options.rule === false ? null : await addRule(options.rule ?? {});
 
   return {
     app,
     clock,
     issuer,
-    providerId,
     serviceId: service.id,
-    grantId,
+    ruleId,
     slug: service.slug,
     upstreamCalls,
     setUpstream(handler) {
@@ -276,7 +320,8 @@ export async function setupProxy(options: ProxyFixtureOptions = {}): Promise<Pro
       return listRequests(env.TELEMETRY_DB, { limit: 200 });
     },
     addService,
-    addIssuerAccessRule,
+    addRule,
+    addGlobalRule,
   };
 }
 

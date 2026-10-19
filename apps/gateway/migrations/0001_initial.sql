@@ -49,27 +49,6 @@ CREATE TABLE user_identities (
 );
 CREATE INDEX user_identities_user ON user_identities (user_id);
 
--- Trusted workload-identity issuers. `profile` is immutable after creation.
-CREATE TABLE credential_access_rules (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
-  profile TEXT NOT NULL CHECK (profile IN ('github-actions', 'gitlab-ci', 'generic')),
-  issuer TEXT NOT NULL,
-  credential_id TEXT NOT NULL REFERENCES credentials (id) ON DELETE CASCADE,
-  conditions TEXT NOT NULL DEFAULT '[]', -- mandatory identity filters
-  jwks_uri TEXT NOT NULL,
-  audience TEXT NOT NULL CHECK (length(audience) >= 16),
-  allowed_algs TEXT NOT NULL,          -- JSON string[]
-  max_token_age_seconds INTEGER NOT NULL,
-  tenant_pin TEXT NOT NULL DEFAULT '[]',  -- JSON Condition[] (exact, non-negated)
-  anchor_claims TEXT NOT NULL DEFAULT '[]', -- JSON string[]; used by the generic profile only
-  enabled INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL,
-  UNIQUE (id, credential_id)
-);
-CREATE INDEX credential_access_rules_credential ON credential_access_rules (credential_id);
-
 -- Upstream APIs. The credential is sealed with AAD bound to (id, base_url, injection) (I-CRED-2).
 CREATE TABLE credentials (
   id TEXT PRIMARY KEY,
@@ -91,35 +70,112 @@ CREATE TABLE credentials (
   template_id TEXT                     -- service template: display and presets only, never in the AAD (ADR 0004)
 );
 
-CREATE TABLE issuer_access_rules (
+-- Access rules (ADR 0026). One table, two kinds, fixed at insert:
+-- * Credential access rule (credential_id set, id acr_<ULID>): lets workloads whose tokens `issuer`
+--   signs, and that match `conditions`, use that one credential for `rules`. It carries its own
+--   token verification settings, so every limit column is required.
+-- * Global access rule (credential_id NULL, id gar_<ULID>): a ceiling on every credential access
+--   rule with the same issuer_key. It never lets a request in by itself. A NULL limit column means
+--   "no limit"; a non-NULL value is a limit. An empty JSON array is refused, so a malformed or empty
+--   value never reads as "no limit" (I-AUTHZ-5). Disabled or expired rows still count as existing.
+CREATE TABLE access_rules (
   id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  credential_access_rule_id TEXT NOT NULL REFERENCES credential_access_rules (id),
-  service_id TEXT NOT NULL REFERENCES credentials (id),
-  conditions TEXT NOT NULL,            -- JSON Condition[]
-  rules TEXT NOT NULL,                 -- JSON Rule[]
-  enabled INTEGER NOT NULL DEFAULT 1,
+  credential_id TEXT REFERENCES credentials (id) ON DELETE CASCADE,
+  name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 100),
+  description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 2000),  -- ops/shared.ts DESCRIPTION_MAX_LENGTH
+  profile TEXT NOT NULL CHECK (profile IN ('github-actions', 'gitlab-ci', 'generic')),
+  issuer TEXT NOT NULL CHECK (length(issuer) BETWEEN 1 AND 2048),  -- exact; jose compares it with iss
+  -- Matching key of global rules: ASCII case and trailing slashes folded, so a ceiling can only reach
+  -- more spellings of an issuer, never fewer. Written by the ops with issuerKey() (src/policy/limits.ts);
+  -- the CHECK refuses any row where JS and SQL disagree. Decisions compare stored keys only (AR-3).
+  issuer_key TEXT NOT NULL CHECK (issuer_key = lower(rtrim(issuer, '/'))),
+  jwks_uri TEXT,
+  audience TEXT CHECK (audience IS NULL OR length(audience) >= 16),
+  allowed_algs TEXT,                    -- JSON string[]
+  max_token_age_seconds INTEGER CHECK (max_token_age_seconds IS NULL OR max_token_age_seconds >= 60),
+  tenant_pin TEXT,                      -- JSON Condition[] (exact, non-negated)
+  anchor_claims TEXT,                   -- JSON string[]
+  conditions TEXT,                      -- JSON Condition[]
+  rules TEXT,                           -- JSON Rule[] (operations: methods + path)
+  enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
   expires_at INTEGER,
   created_by TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  FOREIGN KEY (credential_access_rule_id, service_id) REFERENCES credential_access_rules (id, credential_id)
+  CHECK ((credential_id IS NULL AND id GLOB 'gar_*') OR (credential_id IS NOT NULL AND id GLOB 'acr_*')),
+  -- Credential access rule: every limit set, JSON well-formed (rows.ts still fails closed on bad rows).
+  CHECK (credential_id IS NULL OR (
+    jwks_uri IS NOT NULL AND audience IS NOT NULL AND max_token_age_seconds IS NOT NULL
+    AND (CASE WHEN json_valid(allowed_algs)  THEN json_type(allowed_algs)  = 'array' AND json_array_length(allowed_algs) > 0 ELSE 0 END)
+    AND (CASE WHEN json_valid(tenant_pin)    THEN json_type(tenant_pin)    = 'array' ELSE 0 END)
+    AND (CASE WHEN json_valid(anchor_claims) THEN json_type(anchor_claims) = 'array' ELSE 0 END)
+    AND (CASE WHEN json_valid(conditions)    THEN json_type(conditions)    = 'array' AND json_array_length(conditions) BETWEEN 1 AND 32 ELSE 0 END)
+    AND (CASE WHEN json_valid(rules)         THEN json_type(rules)         = 'array' AND json_array_length(rules) BETWEEN 1 AND 50 ELSE 0 END))),
+  -- Global access rule: NULL = no limit; a value must be a non-empty array.
+  CHECK (credential_id IS NOT NULL OR (
+    (allowed_algs  IS NULL OR (CASE WHEN json_valid(allowed_algs)  THEN json_type(allowed_algs)  = 'array' AND json_array_length(allowed_algs) > 0 ELSE 0 END))
+    AND (tenant_pin    IS NULL OR (CASE WHEN json_valid(tenant_pin)    THEN json_type(tenant_pin)    = 'array' AND json_array_length(tenant_pin) > 0 ELSE 0 END))
+    AND (anchor_claims IS NULL OR (CASE WHEN json_valid(anchor_claims) THEN json_type(anchor_claims) = 'array' AND json_array_length(anchor_claims) BETWEEN 1 AND 8 ELSE 0 END))
+    AND (conditions    IS NULL OR (CASE WHEN json_valid(conditions)    THEN json_type(conditions)    = 'array' AND json_array_length(conditions) BETWEEN 1 AND 32 ELSE 0 END))
+    AND (rules         IS NULL OR (CASE WHEN json_valid(rules)         THEN json_type(rules)         = 'array' AND json_array_length(rules) BETWEEN 1 AND 50 ELSE 0 END))))
 );
--- Hot-path lookup. The query must use the literal `enabled = 1` for SQLite to pick this index.
-CREATE INDEX grants_lookup ON issuer_access_rules (credential_access_rule_id, service_id, created_at, id) WHERE enabled = 1;
-CREATE INDEX grants_service ON issuer_access_rules (service_id);
+-- Hot paths (a) and (b), admin lists and the foreign-key cascade from credentials: the rules of one
+-- credential (at most 100), and the global rules of an issuer in every state (credential_id IS NULL,
+-- issuer_key = ?; existence decides "not limited", AR-4). One full index: SQLite picks a partial index for (b) only
+-- after ANALYZE, which local and test databases never run.
+CREATE INDEX access_rules_credential ON access_rules (credential_id, issuer_key, created_at, id);
+-- Hot path (c): unknown or disabled slug (I-TEN-1 order).
+CREATE INDEX access_rules_issuer ON access_rules (issuer, created_at, id) WHERE enabled = 1;
+-- Names are unique per credential, and among global rules. SQLite reports a violation as
+-- "UNIQUE constraint failed: index 'access_rules_name'" (expression index).
+CREATE UNIQUE INDEX access_rules_name ON access_rules (coalesce(credential_id, ''), name COLLATE NOCASE);
 
--- Human labels for numeric IDs, per consumer. Written only by consumer and access saves.
--- Display and form derivation only; src/policy/* never reads it.
+-- ADR 0014 integrity rules.
+CREATE TRIGGER access_rules_id_fixed BEFORE UPDATE OF id ON access_rules
+WHEN OLD.id IS NOT NEW.id BEGIN SELECT RAISE(ABORT, 'immutable_row'); END;
+-- The kind and the credential never change; a rule reaches another credential only by copy.
+CREATE TRIGGER access_rules_credential_fixed BEFORE UPDATE OF credential_id ON access_rules
+WHEN OLD.credential_id IS NOT NEW.credential_id BEGIN SELECT RAISE(ABORT, 'immutable_row'); END;
+CREATE TRIGGER access_rules_profile_fixed BEFORE UPDATE OF profile ON access_rules
+WHEN OLD.profile IS NOT NEW.profile BEGIN SELECT RAISE(ABORT, 'immutable_row'); END;
+-- A ceiling never moves to another issuer (AR-5).
+CREATE TRIGGER access_rules_global_issuer_fixed BEFORE UPDATE OF issuer ON access_rules
+WHEN OLD.credential_id IS NULL AND OLD.issuer IS NOT NEW.issuer
+BEGIN SELECT RAISE(ABORT, 'immutable_row'); END;
+-- Caps (AR-12), one error code each. NEW.issuer_key is safe to read: the CHECK ties it to NEW.issuer.
+CREATE TRIGGER access_rules_credential_cap BEFORE INSERT ON access_rules
+WHEN NEW.credential_id IS NOT NULL
+  AND (SELECT count(*) FROM access_rules WHERE credential_id = NEW.credential_id) >= 100
+BEGIN SELECT RAISE(ABORT, 'too_many_credential_rules'); END;
+CREATE TRIGGER access_rules_global_cap BEFORE INSERT ON access_rules
+WHEN NEW.credential_id IS NULL
+  AND (SELECT count(*) FROM access_rules WHERE credential_id IS NULL
+       AND issuer_key = NEW.issuer_key) >= 20
+BEGIN SELECT RAISE(ABORT, 'too_many_global_rules'); END;
+-- At most 4 distinct verification endpoints (jwks_uri, audience) per credential and issuer key (AR-10).
+CREATE TRIGGER access_rules_verify_cap_insert BEFORE INSERT ON access_rules
+WHEN NEW.credential_id IS NOT NULL
+  AND (SELECT count(*) FROM (SELECT jwks_uri, audience FROM access_rules
+         WHERE credential_id = NEW.credential_id AND issuer_key = NEW.issuer_key
+       UNION SELECT NEW.jwks_uri, NEW.audience)) > 4
+BEGIN SELECT RAISE(ABORT, 'too_many_verification_settings'); END;
+CREATE TRIGGER access_rules_verify_cap_update BEFORE UPDATE OF jwks_uri, audience, issuer, issuer_key ON access_rules
+WHEN NEW.credential_id IS NOT NULL
+  AND (SELECT count(*) FROM (SELECT jwks_uri, audience FROM access_rules
+         WHERE credential_id = NEW.credential_id AND issuer_key = NEW.issuer_key AND id <> NEW.id
+       UNION SELECT NEW.jwks_uri, NEW.audience)) > 4
+BEGIN SELECT RAISE(ABORT, 'too_many_verification_settings'); END;
+
+-- Human labels for numeric IDs, per access rule (ADR 0021, ADR 0026). Written only by access rule
+-- saves. Display and form derivation only; src/policy/* never reads it.
 CREATE TABLE claim_labels (
-  credential_access_rule_id TEXT NOT NULL REFERENCES credential_access_rules (id) ON DELETE CASCADE,
+  access_rule_id TEXT NOT NULL REFERENCES access_rules (id) ON DELETE CASCADE,
   claim TEXT NOT NULL CHECK (claim IN ('repository_owner_id', 'repository_id', 'namespace_id', 'project_id')),
   value TEXT NOT NULL CHECK (length(value) BETWEEN 1 AND 20 AND value NOT GLOB '*[^0-9]*'),
   label TEXT NOT NULL CHECK (length(label) BETWEEN 1 AND 256),
   updated_at INTEGER NOT NULL,
   updated_by TEXT,
-  PRIMARY KEY (credential_access_rule_id, claim, value)
+  PRIMARY KEY (access_rule_id, claim, value)
 );
 
 CREATE TABLE settings (

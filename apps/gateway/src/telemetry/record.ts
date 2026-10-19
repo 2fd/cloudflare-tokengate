@@ -2,8 +2,8 @@
 // claims only, and only for verified, tenant-pinned callers; the only request headers copied are
 // cf-connecting-ip and, for verified callers, user-agent.
 import type { CallerDisplay, Claims } from '../identity/types';
+import { traceJson } from '../policy/access-rules';
 import { claimText } from '../policy/conditions';
-import { traceJson } from '../policy/evaluate';
 import type { TraceEntry } from '../policy/types';
 import type { Outcome, RequestRecord } from './types';
 
@@ -15,7 +15,7 @@ export const RECORD_TEXT_LIMITS = {
   service_slug: 64,
   service_id: 64,
   credential_access_rule_id: 64,
-  grant_id: 64,
+  global_access_rule_id: 64,
   caller_subject: 256,
   caller_repository: 256,
   caller_claims: 8192,
@@ -56,7 +56,7 @@ export interface RequestRecordInput {
   status: number;
   serviceId: string | null;
   credentialAccessRuleId: string | null;
-  grantId: string | null;
+  globalAccessRuleId: string | null;
   /** `iss` read from an unverified token; stored only when `caller` is null. */
   untrustedIss: string | null;
   /** Verified and tenant-pinned caller. Null for every pre-trust failure (I-LOG-2). */
@@ -91,7 +91,7 @@ export function buildRequestRecord(input: RequestRecordInput): RequestRecord {
     service_slug: text(input.slug, 'service_slug'),
     service_id: text(input.serviceId, 'service_id'),
     credential_access_rule_id: text(input.credentialAccessRuleId, 'credential_access_rule_id'),
-    grant_id: text(input.grantId, 'grant_id'),
+    global_access_rule_id: text(input.globalAccessRuleId, 'global_access_rule_id'),
     claims_verified: caller ? 1 : 0,
     caller_subject: caller ? text(caller.display.subject || null, 'caller_subject') : null,
     caller_repository: caller ? text(caller.display.repository ?? null, 'caller_repository') : null,

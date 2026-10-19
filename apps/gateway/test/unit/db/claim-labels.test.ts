@@ -10,32 +10,25 @@ import {
   resolveIdWithLabel,
 } from '../../../src/db/claim-labels';
 import type { CredentialAccessRule } from '../../../src/db/types';
-import { opsDeps, resetControlPlane, seedGithubProvider } from '../admin/ops/helpers';
+import { opsDeps, resetControlPlane, seedCredentialRule } from '../admin/ops/helpers';
 
 let a: CredentialAccessRule;
 let b: CredentialAccessRule;
 
-async function label(providerId: string, claim: string, value: string, text: string) {
+async function label(ruleId: string, claim: string, value: string, text: string) {
   await env.DB.prepare(
-    `INSERT INTO claim_labels (credential_access_rule_id, claim, value, label, updated_at, updated_by)
+    `INSERT INTO claim_labels (access_rule_id, claim, value, label, updated_at, updated_by)
      VALUES (?, ?, ?, ?, 1, 'usr_x')`,
   )
-    .bind(providerId, claim, value, text)
+    .bind(ruleId, claim, value, text)
     .run();
 }
 
 beforeEach(async () => {
   await resetControlPlane();
   const deps = opsDeps();
-  a = await seedGithubProvider(deps);
-  const other = await env.DB.prepare(
-    `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
-       max_token_age_seconds, created_at, updated_at)
-     VALUES ('cpr_other', (SELECT id FROM credentials ORDER BY id LIMIT 1), 'GitLab', 'gitlab-ci', 'https://gitlab.com', 'https://gitlab.com/oauth/discovery/keys',
-       'tokengate:abcdefghijklmnop', '["RS256"]', 900, 1, 1) RETURNING *`,
-  ).first<CredentialAccessRule>();
-  if (!other) throw new Error('insert failed');
-  b = other;
+  a = await seedCredentialRule(deps);
+  b = await seedCredentialRule(deps, { name: 'other rule' });
   await label(a.id, 'repository_owner_id', '4242', 'acme');
   await label(a.id, 'repository_id', '987654321', 'acme/api');
   await label(a.id, 'repository_id', '11', 'acme/web');
@@ -43,7 +36,7 @@ beforeEach(async () => {
 });
 
 describe('claim labels', () => {
-  it('lists the labels of one credential access rule, or of all', async () => {
+  it('lists the labels of one access rule, or of all', async () => {
     const own = await listClaimLabels(env.DB, a.id);
     expect(own.map((row) => [row.claim, row.value, row.label])).toEqual([
       ['repository_id', '11', 'acme/web'],
@@ -51,7 +44,7 @@ describe('claim labels', () => {
       ['repository_owner_id', '4242', 'acme'],
     ]);
     expect(own[0]).toMatchObject({
-      credential_access_rule_id: a.id,
+      access_rule_id: a.id,
       updated_at: 1,
       updated_by: 'usr_x',
     });
@@ -118,7 +111,7 @@ describe('the ID input format: name (ID)', () => {
   it('accepts a bare ID only when the credential access rule already has a label for it', () => {
     const labels = [
       {
-        credential_access_rule_id: 'cpr_x',
+        access_rule_id: 'acr_x',
         claim: 'repository_id' as const,
         value: '42',
         label: 'acme/api',

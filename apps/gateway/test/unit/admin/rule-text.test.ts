@@ -5,7 +5,7 @@ import {
   formatRules,
   formatValueList,
   parseValueList,
-} from '../../../src/admin/grant-text';
+} from '../../../src/admin/rule-text';
 import { PROFILES } from '../../../src/identity/profiles';
 
 describe('parseValueList', () => {

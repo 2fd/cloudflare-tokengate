@@ -14,7 +14,7 @@ import {
   ALLOWED_ALGS,
   audienceErrors,
   CI_ISSUER_HOSTS,
-  grantWarnings as riskWarnings,
+  riskWarnings,
   httpsUrlError,
   pathInjectionRuleWarnings,
   requiredTextError,
@@ -33,7 +33,14 @@ export const VERIFICATION_GROUPS_MAX = 8;
 const EMPTY_LIMIT = 'the list is empty. Leave the box unticked for no limit.';
 
 /** Warning codes of access rule saves. Pages compare codes, never texts. */
-export type AccessRuleWarningCode = WarningCode | 'no_tenant_pin' | 'global_no_limit';
+/** `global_limited`, `global_blocked` and `no_issuer_rule` come from the save ops (AR-8, §A4), never from the validators. */
+export type AccessRuleWarningCode =
+  | WarningCode
+  | 'no_tenant_pin'
+  | 'global_no_limit'
+  | 'global_limited'
+  | 'global_blocked'
+  | 'no_issuer_rule';
 
 export interface AccessRuleWarningDetail {
   code: AccessRuleWarningCode;

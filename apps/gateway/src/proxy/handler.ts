@@ -1,25 +1,31 @@
-// Proxy pipeline (docs/architecture.md, "Proxy pipeline"): verify the caller token, authorize it against issuer_access_rules, swap
-// it for the service credential, stream the upstream response back. I-TOK-1/2, I-TEN-1, I-AUTHZ-1,
+// Proxy pipeline (docs/architecture.md, "Proxy pipeline"): verify the caller token, authorize it against the
+// credential and global access rules, swap it for the service credential, stream the upstream response back.
+// I-TOK-1/2, I-TEN-1, I-AUTHZ-1, I-AUTHZ-5,
 // I-PATH-1, I-INJ-1, I-CRED-2, I-SSRF-1, I-REDIR-1, I-RESP-1, I-LOG-1/2.
 import { credentialAad, openCredential } from '../crypto/envelope';
 import { loadKeyring } from '../crypto/keyring';
 import { loadProxyContext, type ProxyContext } from '../db/proxy-context';
-import type { CredentialAccessRule, Service } from '../db/types';
+import type { CredentialAccessRule, GlobalAccessRule, Service } from '../db/types';
 import type { Deps } from '../deps';
 import {
   buildCallerIdentity,
   decodeUnverified,
   headerAcceptable,
   tenantPinHolds,
+  type VerifyResult,
   verifyCallerToken,
 } from '../identity/jwt';
 import { getProfile } from '../identity/profiles';
 import type { CallerIdentity, IssuerProfile } from '../identity/types';
 import { type GatewayErrorCode, gatewayError } from '../lib/errors';
 import { newId } from '../lib/ids';
-import { boundaryHolds, conditionsWithin } from '../policy/boundaries';
+import {
+  credentialRuleDecision,
+  globalDecision,
+  verificationGroupKey,
+} from '../policy/access-rules';
 import { claimText } from '../policy/conditions';
-import { evaluateIssuerAccessRules } from '../policy/evaluate';
+import type { RequestFacts } from '../policy/limits';
 import type { Injection, TraceEntry } from '../policy/types';
 import { PROXY_METHODS } from '../policy/types';
 import { normalizeInjection, validateBaseUrl } from '../policy/validate';
@@ -39,15 +45,24 @@ export interface ProxyParams {
 
 const HINT_MAX_LENGTH = 256;
 const EVENT_HINT_MAX_LENGTH = 64;
+/** Distinct verification groups (AR-10) and JWKS URIs one request may verify against. */
+export const MAX_VERIFY_GROUPS = 8;
+export const MAX_JWKS_URIS = 4;
+
+/** Stages of a candidate, in the order the refusal precedence ranks them (AR-14). */
+const STAGE = { profile: 0, header: 1, verification: 2, tenant: 3, policy: 4 } as const;
+type Stage = (typeof STAGE)[keyof typeof STAGE];
 
 /** What the pipeline learned; becomes the request record. */
 interface Progress {
   untrustedIss: string | null;
-  provider: CredentialAccessRule | null;
+  /** The credential access rule that matched; on a refusal, the first that passed the tenant gate. */
+  rule: CredentialAccessRule | null;
   service: Service | null;
   /** Set only after signature verification AND the tenant pin passed. */
   caller: { identity: CallerIdentity; logClaims: readonly string[] } | null;
-  grantId: string | null;
+  /** The global access rule that held on an allowed call; null when the issuer has none. */
+  globalRuleId: string | null;
   trace: TraceEntry[] | null;
   upstream: { status: number; ms: number } | null;
   sampleRate: number;
@@ -69,10 +84,10 @@ export async function handleProxy(
   const requestId = newId('req', t0, deps.random);
   const progress: Progress = {
     untrustedIss: null,
-    provider: null,
+    rule: null,
     service: null,
     caller: null,
-    grantId: null,
+    globalRuleId: null,
     trace: null,
     upstream: null,
     sampleRate: 1,
@@ -126,8 +141,14 @@ async function runPipeline(
   let extracted = extractCallerToken(request.headers, null);
   if (!extracted.ok && extracted.code !== 'token_missing') return fail(extracted.code);
 
-  // Step 4: control-plane state, one D1 batch.
-  const context = await loadProxyContext(deps.env.DB, params.slug, deps.now());
+  // Step 4: control-plane state, one D1 batch (docs/architecture.md, "Query budget"). The issuer of a
+  // standard-header token selects the candidate and global rows; that token always wins over the
+  // injection header, which is read only when the standard headers carry no token.
+  const preIss = extracted.ok ? (decodeUnverified(extracted.token)?.iss ?? null) : null;
+  const context = await loadProxyContext(deps.env.DB, params.slug, deps.now(), {
+    preIss,
+    standard: extracted.ok,
+  });
   progress.sampleRate = context.settings.allowed_sample_rate;
   if (!extracted.ok) {
     extracted = extractCallerToken(request.headers, context.service?.injection ?? null);
@@ -137,100 +158,155 @@ async function runPipeline(
   const unverified = decodeUnverified(token);
   if (unverified === null) return fail('token_malformed');
   progress.untrustedIss = unverified.iss;
+  // The batch read rows for preIss; any other issuer would make "no global row" mean nothing.
+  if (preIss !== null && unverified.iss !== preIss) return fail('internal_error');
 
-  // An issuer is a value in each credential boundary. Several boundaries may trust the
-  // same issuer, with different audiences and filters; never choose only the first one.
-  const candidates = context.credentialAccessRules.filter(
-    (rule) =>
-      rule.issuer === unverified.iss &&
-      (context.service === null || rule.credential_id === context.service.id),
-  );
+  // An issuer is a value in each credential access rule. Several rules may trust the same issuer,
+  // with different settings and filters; never choose only the first one.
+  const iss = unverified.iss;
+  const candidates = context.candidateRules
+    .filter(
+      (rule) =>
+        rule.issuer === iss &&
+        (context.service === null || rule.credential_id === context.service.id),
+    )
+    .sort(
+      (a, b) =>
+        Number(b.credential_id === context.disabledServiceId) -
+          Number(a.credential_id === context.disabledServiceId) ||
+        a.created_at - b.created_at ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+    );
   if (candidates.length === 0)
     return fail('issuer_unknown', {
       hint:
-        unverified.iss === null
+        iss === null
           ? undefined
-          : `the token issuer ${JSON.stringify(unverified.iss.slice(0, HINT_MAX_LENGTH))} has no credential access rule for this destination`,
+          : `the token issuer ${JSON.stringify(iss.slice(0, HINT_MAX_LENGTH))} has no credential access rule for this destination`,
     });
   const canonical = canonicalizePath(params.rawPath);
-  let refusal: Result = fail('no_matching_grant');
-  let selected: { provider: CredentialAccessRule; profile: IssuerProfile; grantId: string } | null =
-    null;
-  for (const provider of candidates) {
-    const profile = getProfile(provider.profile);
+  // Refusal precedence (AR-14): the most advanced stage wins; ties go to the first candidate.
+  let best: { stage: number; result: Result } = { stage: -1, result: fail('no_matching_rule') };
+  const note = (stage: Stage, result: Result) => {
+    if (stage > best.stage) best = { stage, result };
+  };
+  const verified = new Map<string, VerifyResult>();
+  const jwksUris = new Set<string>();
+  const trace: TraceEntry[] = [];
+  let eventOnly: { hint: string | undefined } | null = null;
+  let globalBlocked = false;
+  let selected: { rule: CredentialAccessRule; global: GlobalAccessRule | null } | null = null;
+  for (const rule of candidates) {
+    const profile = getProfile(rule.profile);
     if (!profile) {
-      refusal = fail('not_configured', { reason: 'profile_unknown' });
+      note(STAGE.profile, fail('not_configured', { reason: 'profile_unknown' }));
       continue;
     }
-    if (!headerAcceptable(unverified, provider)) {
-      refusal = fail('token_malformed');
+    if (!headerAcceptable(unverified, rule)) {
+      note(STAGE.header, fail('token_malformed'));
       continue;
     }
-    const verified = await verifyCallerToken(token, provider, profile, deps);
-    if (!verified.ok) {
-      refusal = fail(verified.code, {
-        hint:
-          verified.code === 'audience_mismatch'
-            ? `the token audience must be ${JSON.stringify(provider.audience)}`
-            : undefined,
-      });
+    // Rules with the same settings verify the token once (AR-10); the bounds cap the JWKS fetches
+    // and signature checks of rows written around validation.
+    const key = verificationGroupKey(rule, profile);
+    let result = verified.get(key);
+    if (result === undefined) {
+      if (
+        verified.size >= MAX_VERIFY_GROUPS ||
+        (!jwksUris.has(rule.jwks_uri) && jwksUris.size >= MAX_JWKS_URIS)
+      ) {
+        note(STAGE.verification, fail('jwks_unavailable'));
+        continue;
+      }
+      jwksUris.add(rule.jwks_uri);
+      result = await verifyCallerToken(token, rule, profile, deps);
+      verified.set(key, result);
+    }
+    if (!result.ok) {
+      note(
+        STAGE.verification,
+        fail(result.code, {
+          hint:
+            result.code === 'audience_mismatch'
+              ? `the token audience must be ${JSON.stringify(rule.audience)}`
+              : undefined,
+        }),
+      );
       continue;
     }
-    if (!tenantPinHolds(provider, verified.claims)) {
-      refusal = fail('tenant_mismatch');
+    const claims = result.claims;
+    // The tenant gate is the rule's own pin only (AR-9); a global tenant pin is a policy limit.
+    if (!tenantPinHolds(rule, claims)) {
+      note(STAGE.tenant, fail('tenant_mismatch'));
       continue;
     }
-    const logClaims = profile.logClaimAllowlist(provider);
-    progress.provider = provider;
-    progress.caller = {
-      identity: buildCallerIdentity(provider, profile, verified.claims),
-      logClaims,
-    };
+    const logClaims = profile.logClaimAllowlist(rule);
+    // I-TEN-1: the caller learns whether the credential exists only after its own pin held.
+    if (progress.rule === null) {
+      progress.rule = rule;
+      progress.caller = { identity: buildCallerIdentity(rule, profile, claims), logClaims };
+    }
     if (context.service === null)
       return fail('service_not_found', {
         reason: context.serviceDisabled ? 'service_disabled' : 'service_not_found',
       });
     progress.service = context.service;
     if (!canonical.ok) return fail('path_invalid');
-    if (!boundaryHolds(provider.conditions, verified.claims)) {
-      refusal = fail('no_matching_grant');
+    const facts: RequestFacts = {
+      claims,
+      alg: unverified.alg,
+      now: deps.now(),
+      method,
+      path: canonical.path,
+      matchPath: canonical.matchPath,
+      revealClaims: new Set(logClaims),
+    };
+    // Stored keys only (AR-3); rows of every state (AR-4); none = the issuer is not limited.
+    const globals = context.globalRules.filter((global) => global.issuer_key === rule.issuer_key);
+    const own = credentialRuleDecision(rule, profile, facts);
+    if (own.result !== 'matched') {
+      trace.push({ rule_id: rule.id, result: own.result, detail: own.detail });
+      if (
+        eventOnly === null &&
+        own.result === 'event_not_trusted' &&
+        own.rulesMatched &&
+        globalDecision(rule, globals, facts).ok
+      ) {
+        eventOnly = { hint: eventHint(profile, claims) };
+      }
+      note(STAGE.policy, fail('no_matching_rule'));
       continue;
     }
-    const decision = evaluateIssuerAccessRules(
-      context.issuer_access_rules.filter(
-        (rule) =>
-          rule.credential_access_rule_id === provider.id &&
-          rule.service_id === provider.credential_id &&
-          conditionsWithin(rule.conditions, provider.conditions),
-      ),
-      {
-        claims: verified.claims,
-        profile,
-        provider,
-        method,
-        path: canonical.path,
-        matchPath: canonical.matchPath,
-        revealClaims: new Set(logClaims),
-      },
-    );
-    if (decision.decision === 'deny') {
-      progress.trace = decision.trace;
-      refusal = fail(decision.code, {
-        hint:
-          decision.code === 'event_not_trusted' ? eventHint(profile, verified.claims) : undefined,
+    const decision = globalDecision(rule, globals, facts);
+    if (decision.ok) {
+      selected = { rule, global: decision.global };
+      break;
+    }
+    for (const failure of decision.failures) {
+      trace.push({
+        rule_id: rule.id,
+        global_rule_id: failure.global_rule_id,
+        result: 'global_blocked',
+        detail: failure.detail,
       });
-      continue;
     }
-    selected = { provider, profile, grantId: decision.grant.id };
-    progress.trace = null;
-    break;
+    globalBlocked = true;
+    note(STAGE.policy, fail('no_matching_rule'));
   }
-  if (selected === null) return refusal;
+  if (selected === null) {
+    if (best.stage !== STAGE.policy) return best.result;
+    progress.trace = trace;
+    if (eventOnly !== null) return fail('event_not_trusted', { hint: eventOnly.hint });
+    return fail('no_matching_rule', {
+      reason: globalBlocked ? 'outside_global_rules' : 'no_matching_rule',
+    });
+  }
   if (!canonical.ok) return fail('path_invalid');
   const service = context.service;
   if (service === null) return fail('service_not_found');
   progress.service = service;
-  progress.grantId = selected.grantId;
+  progress.rule = selected.rule;
+  progress.globalRuleId = selected.global?.id ?? null;
 
   // Step 12. A failing limiter binding does not block traffic: it caps blast radius, it does not
   // authorize.
@@ -238,7 +314,7 @@ async function runPipeline(
   if (limiter) {
     let allowed = true;
     try {
-      allowed = (await limiter.limit({ key: `grant:${selected.grantId}` })).success;
+      allowed = (await limiter.limit({ key: `rule:${selected.rule.id}` })).success;
     } catch (error) {
       console.error(
         JSON.stringify({
@@ -394,7 +470,7 @@ function storedBaseUrlValid(
 function eventHint(profile: IssuerProfile, claims: Record<string, unknown>): string | undefined {
   const event = profile.eventClaim ? claimText(claims, profile.eventClaim) : null;
   if (event === null) return undefined;
-  return `the event ${JSON.stringify(event.slice(0, EVENT_HINT_MAX_LENGTH))} is not trusted by default and needs an explicit opt-in in the grant`;
+  return `the event ${JSON.stringify(event.slice(0, EVENT_HINT_MAX_LENGTH))} is not trusted by default and needs an explicit opt-in in the credential access rule`;
 }
 
 function nameOf(error: unknown): string {
@@ -441,8 +517,8 @@ function scheduleRecord(deps: Deps, ctx: RecordContext): void {
       reason: result.reason,
       status,
       serviceId: progress.service?.id ?? null,
-      credentialAccessRuleId: progress.provider?.id ?? null,
-      grantId: progress.grantId,
+      credentialAccessRuleId: progress.rule?.id ?? null,
+      globalAccessRuleId: progress.globalRuleId,
       untrustedIss: progress.untrustedIss,
       caller: progress.caller
         ? {

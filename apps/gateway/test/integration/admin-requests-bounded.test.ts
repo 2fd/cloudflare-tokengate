@@ -63,6 +63,27 @@ describe('request list filters are bounded', () => {
     });
   });
 
+  it('a credential access rule filter takes request_log_rule, with no window', async () => {
+    const rule = 'acr_01JAAAAAAAAAAAAAAAAAAAAAAA';
+    await db()
+      .prepare('UPDATE request_log SET credential_access_rule_id = ? WHERE id = ?')
+      .bind(rule, rareId)
+      .run();
+    const page = await searchRequests(db(), { credential_access_rule_id: rule });
+    expect(page).toEqual({
+      records: [expect.objectContaining({ id: rareId })],
+      olderBefore: null,
+      newerAfter: null,
+    });
+    const { results } = await db()
+      .prepare(
+        'EXPLAIN QUERY PLAN SELECT * FROM request_log WHERE credential_access_rule_id = ? ORDER BY id DESC LIMIT 50',
+      )
+      .bind(rule)
+      .all<{ detail: string }>();
+    expect(results.map((row) => row.detail).join('\n')).toContain('request_log_rule');
+  });
+
   it('the denied and error classes take the partial index, with no window', async () => {
     const denied = await searchRequests(db(), { outcomeClass: 'denied', limit: 5 });
     expect(denied.records).toHaveLength(5);

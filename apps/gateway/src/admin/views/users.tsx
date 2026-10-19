@@ -184,7 +184,7 @@ export function StatusCell(props: { user: UserListEntry; now: number }) {
   );
 }
 
-/** "+ credentials · − issuer access rules": what a role change adds and removes. */
+/** "+ credentials · − access rules": what a role change adds and removes. */
 export function RoleDiff(props: { from: Role; to: Role }) {
   const { gain, lose } = roleDiff(props.from, props.to);
   return (
@@ -200,7 +200,7 @@ export function RoleDiff(props: { from: Role; to: Role }) {
 /** The role of a row as two lines: the label, then the duty. */
 const CELL_TAG: Readonly<Record<Role, string>> = {
   ...Object.fromEntries(ROLE_ORDER.map((role) => [role, ROLE_INFO[role].tag])),
-  admin: 'Loads keys and issuer_access_rules access',
+  admin: 'Loads keys and gives access',
 } as Record<Role, string>;
 
 const ROLE_ICON: Partial<Record<Role, 'token' | 'consumer'>> = {
@@ -1224,7 +1224,7 @@ export function CanList(props: { role: Role }) {
 // People: Who can change what (role map)
 
 const MAP_ROLES: readonly Role[] = ['owner', 'admin', 'token_manager', 'access_manager', 'viewer'];
-const MAP_CAPS = ['Credentials', 'Issuer access rules', 'People and settings'] as const;
+const MAP_CAPS = ['Credentials', 'Access rules', 'People and settings'] as const;
 /** Which capability rows each role reaches (indexes into MAP_CAPS). */
 const MAP_WIRES: Readonly<Record<Role, readonly number[]>> = {
   owner: [0, 1, 2],
@@ -1313,7 +1313,7 @@ export function RoleMap(props: { listed: readonly UserListEntry[]; selfId?: stri
               Separate duties: {loaders ? <b>{andList(loaders)}</b> : 'credential managers'}{' '}
               {verbFor(loaders, 'loads', 'load')} keys,{' '}
               {granters ? <b>{andList(granters)}</b> : 'access managers'}{' '}
-              {verbFor(granters, 'issuer_access_rules', 'grant')} access
+              {verbFor(granters, 'gives', 'give')} access
             </span>
           </span>
           <span>

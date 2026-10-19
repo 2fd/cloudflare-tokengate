@@ -246,8 +246,8 @@ describe('Data retention form details', () => {
     const hour = T0 - 2 * 3_600_000;
     await env.TELEMETRY_DB.prepare('DELETE FROM request_rollup_hourly').run();
     await env.TELEMETRY_DB.prepare(
-      `INSERT INTO request_rollup_hourly (hour, service_id, grant_id, outcome, status_class, requests, upstream_auth_fail, duration_sum_ms)
-       VALUES (?, 'svc_A', 'grt_A', 'allowed', 2, 70000, 0, 0), (?, 'svc_A', '', 'denied', 4, 700, 0, 0)`,
+      `INSERT INTO request_rollup_hourly (hour, service_id, credential_access_rule_id, outcome, status_class, requests, upstream_auth_fail, duration_sum_ms)
+       VALUES (?, 'svc_A', 'acr_A', 'allowed', 2, 70000, 0, 0), (?, 'svc_A', '', 'denied', 4, 700, 0, 0)`,
     )
       .bind(hour, hour)
       .run();

@@ -169,7 +169,7 @@ const ASKABLE_ROLES: readonly Role[] = ['token_manager', 'access_manager', 'admi
 interface Shell {
   view: ViewContext;
   needsDecision: number;
-  counts: { tokens: number; consumers: number };
+  counts: { tokens: number; rules: number; globals: number };
   health: HealthSummary;
   problems: HealthProblem[];
 }
@@ -193,8 +193,10 @@ async function loadShell(
   const [people, counts, alertData] = await Promise.all([
     activeUsersByRole(deps.env.DB, ASKABLE_ROLES, ASKERS_SHOWN),
     deps.env.DB.prepare(
-      'SELECT (SELECT COUNT(*) FROM credentials) AS tokens, (SELECT COUNT(*) FROM credential_access_rules) AS consumers',
-    ).first<{ tokens: number; consumers: number }>(),
+      `SELECT (SELECT COUNT(*) FROM credentials) AS tokens,
+         (SELECT COUNT(*) FROM access_rules WHERE credential_id IS NOT NULL) AS rules,
+         (SELECT COUNT(*) FROM access_rules WHERE credential_id IS NULL) AS globals`,
+    ).first<{ tokens: number; rules: number; globals: number }>(),
     loaded ??
       loadAlertData(deps).catch((error: unknown) => {
         console.warn(
@@ -236,7 +238,11 @@ async function loadShell(
   return {
     view,
     needsDecision: alertData && can(role, 'users:write') ? alertData.needsDecision : 0,
-    counts: { tokens: Number(counts?.tokens ?? 0), consumers: Number(counts?.consumers ?? 0) },
+    counts: {
+      tokens: Number(counts?.tokens ?? 0),
+      rules: Number(counts?.rules ?? 0),
+      globals: Number(counts?.globals ?? 0),
+    },
     ...health,
   };
 }

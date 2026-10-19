@@ -1,5 +1,6 @@
 // Request log pages end to end: records produced by the real proxy, filters, keyset pagination,
-// detail with stored claims and trace, re-evaluation against current issuer_access_rules, and RBAC.
+// detail with stored claims and trace, re-evaluation against the current credential and global
+// access rules, and RBAC.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { insertRequestRecordsStatements } from '../../src/db/requests';
@@ -17,7 +18,7 @@ import {
 import { createTestApp } from '../helpers/app';
 import { TEST_EPOCH_MS } from '../helpers/jwt';
 import {
-  type IssuerAccessRuleSeed,
+  type CredentialRuleSeed,
   type ProxyFixture,
   resetProxyState,
   setupProxy,
@@ -38,7 +39,7 @@ function requestRecord(ts: number, overrides: Partial<RequestRecord> = {}): Requ
     service_slug: 'echo',
     service_id: null,
     credential_access_rule_id: null,
-    grant_id: null,
+    global_access_rule_id: null,
     claims_verified: 0,
     caller_subject: null,
     caller_repository: null,
@@ -79,12 +80,12 @@ describe('request log with records from the proxy', () => {
   let ownerSession: AdminSession;
   let viewerSession: AdminSession;
   let allowed: RequestRecord;
-  let noIssuerAccessRule: RequestRecord;
+  let noRule: RequestRecord;
   let noToken: RequestRecord;
 
   beforeEach(async () => {
     fixture = await setupProxy({
-      grant: { rules: [{ methods: ['GET'], path: '/allowed/**' }] },
+      rule: { rules: [{ methods: ['GET'], path: '/allowed/**' }] },
     });
     ownerSession = await loginAs(fixture.app, owner);
     viewerSession = await loginAs(fixture.app, viewer);
@@ -100,7 +101,7 @@ describe('request log with records from the proxy', () => {
       return found;
     };
     allowed = byReason(null);
-    noIssuerAccessRule = byReason('no_matching_grant');
+    noRule = byReason('no_matching_rule');
     noToken = byReason('token_missing');
   });
 
@@ -108,10 +109,10 @@ describe('request log with records from the proxy', () => {
     const res = await adminGet(fixture.app, viewerSession, '/admin/requests');
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(requestLinks(html)).toEqual([noToken.id, noIssuerAccessRule.id, allowed.id]);
+    expect(requestLinks(html)).toEqual([noToken.id, noRule.id, allowed.id]);
     expect(html).toContain('acme/app');
-    expect(html).toContain('no_matching_grant');
-    expect(html).toContain('No issuer access rules allows this call');
+    expect(html).toContain('no_matching_rule');
+    expect(html).toContain('No credential access rule allows this call');
     expect(html).toContain('unverified token');
   });
 
@@ -120,25 +121,19 @@ describe('request log with records from the proxy', () => {
       requestLinks(
         await (await adminGet(fixture.app, viewerSession, `/admin/requests?${query}`)).text(),
       );
-    expect(await get('outcome=denied')).toEqual([noToken.id, noIssuerAccessRule.id]);
+    expect(await get('outcome=denied')).toEqual([noToken.id, noRule.id]);
     expect(await get('outcome=allowed')).toEqual([allowed.id]);
-    expect(await get('repo=acme%2Fapp')).toEqual([noIssuerAccessRule.id, allowed.id]);
-    expect(await get(`token=${fixture.serviceId}`)).toEqual([noIssuerAccessRule.id, allowed.id]);
-    expect(await get('slug=echo')).toEqual([noToken.id, noIssuerAccessRule.id, allowed.id]);
+    expect(await get('repo=acme%2Fapp')).toEqual([noRule.id, allowed.id]);
+    expect(await get(`token=${fixture.serviceId}`)).toEqual([noRule.id, allowed.id]);
+    expect(await get('slug=echo')).toEqual([noToken.id, noRule.id, allowed.id]);
     expect(await get('slug=other')).toEqual([]);
   });
 
   it('shows the detail of a denied request with stored claims, trace and the give-access link for admins', async () => {
-    const res = await adminGet(
-      fixture.app,
-      ownerSession,
-      `/admin/requests/${noIssuerAccessRule.id}`,
-    );
+    const res = await adminGet(fixture.app, ownerSession, `/admin/requests/${noRule.id}`);
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain(
-      `href="/admin/issuer-access-rules/new?from_request=${noIssuerAccessRule.id}"`,
-    );
+    expect(html).toContain(`href="/admin/credential-access-rules/new?from_request=${noRule.id}"`);
     expect(html).toContain('Give access from this request');
     expect(html).toContain('<title>Denied: POST /other – Monitoring – tokengate</title>');
     // Allowlisted claims are shown; the token itself never was stored.
@@ -146,13 +141,13 @@ describe('request log with records from the proxy', () => {
     expect(html).toContain('987654321');
     expect(html).not.toContain('repository_visibility');
     expect(html).toContain('Policy evaluation at request time');
-    expect(html).toContain(`/admin/issuer-access-rules/${fixture.grantId}`);
-    expect(html).toContain('no rule allows this method and path');
+    expect(html).toContain(`/admin/credential-access-rules/${fixture.ruleId}`);
+    expect(html).toContain('no operation allows this method and path');
   });
 
   it('hides "Give access from this request" from viewers', async () => {
     const html = await (
-      await adminGet(fixture.app, viewerSession, `/admin/requests/${noIssuerAccessRule.id}`)
+      await adminGet(fixture.app, viewerSession, `/admin/requests/${noRule.id}`)
     ).text();
     expect(html).not.toContain('from_request=');
   });
@@ -162,93 +157,80 @@ describe('request log with records from the proxy', () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).not.toContain('from_request=');
-    expect(html).not.toContain('Re-evaluate against current issuer_access_rules');
+    expect(html).not.toContain('Check against current access rules');
     expect(html).toContain('the token was not verified');
     expect(html).toContain('x-tokengate-token');
   });
 
-  it('re-evaluates stored claims against the current accesses on every load, changing nothing', async () => {
+  it('re-evaluates stored claims against the current access rules on every load, changing nothing', async () => {
     const denied = await (
-      await adminGet(fixture.app, viewerSession, `/admin/requests/${noIssuerAccessRule.id}`)
+      await adminGet(fixture.app, viewerSession, `/admin/requests/${noRule.id}`)
     ).text();
     expect(denied).toContain('Stored claims subset only');
     expect(denied).toContain('<b>denied</b>');
 
-    const grantId = await fixture.addIssuerAccessRule({
+    const ruleId = await fixture.addRule({
       rules: [{ methods: ['POST'], path: '/other' }],
     });
     const auditBefore = await env.DB.prepare('SELECT COUNT(*) AS n FROM audit_log').first<{
       n: number;
     }>();
     const allowedNow = await (
-      await adminGet(fixture.app, viewerSession, `/admin/requests/${noIssuerAccessRule.id}`)
+      await adminGet(fixture.app, viewerSession, `/admin/requests/${noRule.id}`)
     ).text();
     expect(allowedNow).toContain('<b>allowed</b>');
-    expect(allowedNow).toContain(`/admin/issuer-access-rules/${grantId}`);
+    expect(allowedNow).toContain(`/admin/credential-access-rules/${ruleId}`);
     const auditAfter = await env.DB.prepare('SELECT COUNT(*) AS n FROM audit_log').first<{
       n: number;
     }>();
     expect(auditAfter?.n).toBe(auditBefore?.n);
   });
 
-  it('reports blockers that run before issuer_access_rules when re-evaluating', async () => {
-    await env.DB.prepare('UPDATE credential_access_rules SET enabled = 0 WHERE id = ?')
-      .bind(fixture.providerId)
+  it('reports blockers that run before the access rules when re-evaluating', async () => {
+    await env.DB.prepare('UPDATE credentials SET enabled = 0 WHERE id = ?')
+      .bind(fixture.serviceId)
       .run();
     const html = await (
       await adminGet(fixture.app, viewerSession, `/admin/requests/${allowed.id}`)
     ).text();
-    expect(html).toContain('The credential access rule is disabled');
+    expect(html).toContain('The credential is disabled.');
     // A blocker refuses the request on its own: the verdict never says allowed, and comes first.
     expect(html).not.toContain('Would now be <b>allowed</b>');
     const verdict = html.indexOf('Would still be <b>refused</b>');
     expect(verdict).toBeGreaterThan(-1);
     expect(verdict).toBeLessThan(html.indexOf('<ul class="blockers">'));
     expect(html).toContain(
-      `Once it passes, access <a href="/admin/issuer-access-rules/${fixture.grantId}">`,
+      `Once it passes, <a href="/admin/credential-access-rules/${fixture.ruleId}">`,
     );
   });
 
-  it('re-evaluates with the proxy grant set: disabled, expired and other-provider issuer_access_rules never allow', async () => {
-    const otherProvider = await env.DB.prepare(
-      `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
-         max_token_age_seconds, tenant_pin, anchor_claims, enabled, created_at, updated_at)
-       SELECT 'cpr_01JZZZZZZZZZZZZZZZZZZZZZZZ', credential_id, 'other', profile, issuer || '/other', jwks_uri,
-         audience, allowed_algs, max_token_age_seconds, tenant_pin, anchor_claims, 1, created_at,
-         updated_at FROM credential_access_rules WHERE id = ?`,
-    )
-      .bind(fixture.providerId)
-      .run();
-    expect(otherProvider.meta.changes).toBe(1);
-    const allowingRule: IssuerAccessRuleSeed = { rules: [{ methods: ['POST'], path: '/other' }] };
-    await fixture.addIssuerAccessRule({ ...allowingRule, enabled: false });
-    await fixture.addIssuerAccessRule({ ...allowingRule, expiresAt: fixture.clock.now() - 1 });
-    await fixture.addIssuerAccessRule({
-      ...allowingRule,
-      credentialAccessRuleId: 'cpr_01JZZZZZZZZZZZZZZZZZZZZZZZ',
-    });
+  it('re-evaluates with the proxy candidates: disabled, expired and other-issuer rules never allow', async () => {
+    const allowingRule: CredentialRuleSeed = { rules: [{ methods: ['POST'], path: '/other' }] };
+    await fixture.addRule({ ...allowingRule, enabled: false });
+    await fixture.addRule({ ...allowingRule, expiresAt: fixture.clock.now() - 1 });
+    await fixture.addRule({ ...allowingRule, issuer: `${fixture.issuer.issuer}/other` });
 
     const html = await (
-      await adminGet(fixture.app, viewerSession, `/admin/requests/${noIssuerAccessRule.id}`)
+      await adminGet(fixture.app, viewerSession, `/admin/requests/${noRule.id}`)
     ).text();
     expect(html).toContain('<b>denied</b>');
-    expect(html).toContain('1 enabled access checked.');
+    expect(html).toContain('1 enabled credential access rule checked.');
   });
 
   it('lays the detail out as a runbook: where the call stopped, the check, what to do', async () => {
     const html = await (
-      await adminGet(fixture.app, ownerSession, `/admin/requests/${noIssuerAccessRule.id}`)
+      await adminGet(fixture.app, ownerSession, `/admin/requests/${noRule.id}`)
     ).text();
     expect(html).toContain('<ol class="trace" aria-label="Where the call stopped">');
     expect(html).toMatch(
-      /<li class="tstep fail"><span class="s"><span aria-hidden="true">✕ <\/span>Failed, stopped here<\/span><span class="v">Access matched<\/span>/,
+      /<li class="tstep fail"><span class="s"><span aria-hidden="true">✕ <\/span>Failed, stopped here<\/span><span class="v">Access rule matched<\/span>/,
     );
     expect(html).toMatch(/<h2 id="recheck-h"><span class="fstep-n" aria-hidden="true">2<\/span>/);
     expect(html).toContain('Still denied now');
     // One primary, last in the header; the What to do buttons are secondary.
     expect(html.match(/class="btn primary"/g)).toHaveLength(1);
     expect(html).toContain(
-      `<a class="btn primary" href="/admin/issuer-access-rules/new?from_request=${noIssuerAccessRule.id}">Give access from this request</a></div>`,
+      `<a class="btn primary" href="/admin/credential-access-rules/new?from_request=${noRule.id}">Give access from this request</a></div>`,
     );
     expect(html).toContain('<p class="prefill"><span class="vh">Filled in: </span>');
     // Retention: when the record goes away.
@@ -268,13 +250,13 @@ describe('request log with records from the proxy', () => {
     await fixture.app.settle();
     const records = await fixture.records();
     const newest = records
-      .filter((r) => r.reason === 'no_matching_grant')
+      .filter((r) => r.reason === 'no_matching_rule')
       .sort((a, b) => (a.id < b.id ? 1 : -1))[0];
     const query = `/admin/requests?outcome=denied&token=${fixture.serviceId}`;
     const owner = await (await adminGet(fixture.app, ownerSession, query)).text();
     expect(owner).toContain('All 2 on this page come from one caller: acme/app');
     expect(owner).toContain(
-      `<a class="btn primary" href="/admin/issuer-access-rules/new?from_request=${newest?.id}">Give access from the latest request</a>`,
+      `<a class="btn primary" href="/admin/credential-access-rules/new?from_request=${newest?.id}">Give access from the latest request</a>`,
     );
     const view = await (await adminGet(fixture.app, viewerSession, query)).text();
     expect(view).not.toContain('from_request=');
@@ -282,26 +264,73 @@ describe('request log with records from the proxy', () => {
 
   it('explains the reason and what to do without offering viewers the access form', async () => {
     const html = await (
-      await adminGet(fixture.app, viewerSession, `/admin/requests/${noIssuerAccessRule.id}`)
+      await adminGet(fixture.app, viewerSession, `/admin/requests/${noRule.id}`)
     ).text();
     expect(html).toMatch(
       /<h2 id="next-h"><span class="fstep-n" aria-hidden="true">\d<\/span>What to do<\/h2>/,
     );
     expect(html).toContain('An access manager, admin or owner can give access from this request.');
     expect(html).toContain('Only access managers can give access from this request');
-    expect(html).not.toContain('/admin/issuer-access-rules/new');
+    expect(html).not.toContain('/admin/credential-access-rules/new');
   });
 
   it('rejects mutations from a viewer (no POST routes)', async () => {
     const res = await adminPost(fixture.app, viewerSession, '/admin/requests', {});
     expect(res.status).toBe(403);
-    const detail = await adminPost(
-      fixture.app,
-      viewerSession,
-      `/admin/requests/${noIssuerAccessRule.id}`,
-      {},
-    );
+    const detail = await adminPost(fixture.app, viewerSession, `/admin/requests/${noRule.id}`, {});
     expect(detail.status).toBe(403);
+  });
+});
+
+describe('request detail of a call refused by the global access rules', () => {
+  it('names the global access rule, links the issuer filter and offers no access prefill', async () => {
+    const fixture = await setupProxy({ rule: { rules: [{ methods: ['*'], path: '/**' }] } });
+    const globalId = await fixture.addGlobalRule({
+      name: 'reads only',
+      rules: [{ methods: ['GET'], path: '/**' }],
+    });
+    const session = await loginAs(fixture.app, owner);
+    const res = await fixture.call('/x', { method: 'POST' });
+    expect(res.status).toBe(403);
+    const id = res.headers.get('x-tokengate-request-id');
+    const record = (await fixture.records()).find((r) => r.id === id);
+    expect(record?.reason).toBe('outside_global_rules');
+    expect(record?.credential_access_rule_id).toBe(fixture.ruleId);
+    expect(record?.global_access_rule_id).toBeNull();
+
+    const html = await (await adminGet(fixture.app, session, `/admin/requests/${id}`)).text();
+    const issuerFilter =
+      '/admin/global-access-rules?issuer=https%3A%2F%2Ftoken.actions.githubusercontent.com';
+    // The stored trace and the re-evaluation both name the global rule and its issuer.
+    expect(html).toContain('refused by the global access rules of its issuer');
+    expect(html).toContain(`<a href="/admin/global-access-rules/${globalId}">reads only</a>`);
+    expect(html).toContain(
+      `Refused by the global access rules of <a href="${issuerFilter}">https://token.actions.githubusercontent.com</a>`,
+    );
+    expect(html).toContain('Would still be <b>denied</b> (<code>no_matching_rule</code>)');
+    // What to do: the credential access rule and the global rules of the issuer; no prefill,
+    // because a new credential access rule cannot pass a global ceiling.
+    expect(html).toContain(`href="/admin/credential-access-rules/${fixture.ruleId}"`);
+    expect(html).toContain(`href="${issuerFilter}"`);
+    expect(html).toContain('Open the global access rules');
+    expect(html).not.toContain('from_request=');
+    // The facts name both kinds of rule.
+    expect(html).toContain('Credential access rule');
+    expect(html).toContain('Global access rule');
+  });
+
+  it('names the global access rule that let an allowed call through', async () => {
+    const fixture = await setupProxy();
+    const globalId = await fixture.addGlobalRule({ name: 'acme only' });
+    const session = await loginAs(fixture.app, owner);
+    const res = await fixture.call('/x');
+    expect(res.status).toBe(200);
+    const id = res.headers.get('x-tokengate-request-id');
+    const record = (await fixture.records()).find((r) => r.id === id);
+    expect(record?.global_access_rule_id).toBe(globalId);
+    const html = await (await adminGet(fixture.app, session, `/admin/requests/${id}`)).text();
+    expect(html).toContain(`<a href="/admin/global-access-rules/${globalId}">acme only</a>`);
+    expect(html).toContain('within the global access rule');
   });
 });
 

@@ -33,9 +33,8 @@ export type OutcomeClass = 'allowed' | 'denied' | 'error';
 export interface RequestFilter {
   /** A token id; null for requests refused before a token was resolved. */
   service_id?: string | null;
-  /** A credential access rule id; null for requests with no resolved consumer. */
+  /** A credential access rule id; null for requests with no resolved credential access rule. */
   credential_access_rule_id?: string | null;
-  grant_id?: string;
   /** Exact stored outcome. */
   outcome?: Outcome;
   /**
@@ -64,7 +63,7 @@ export const DEFAULT_REQUEST_PAGE_SIZE = 50;
 const MAX_REQUEST_PAGE_SIZE = 200;
 /**
  * Rows one filtered page may examine when no index serves the filter (requestFilterIndexed: the
- * allowed class, consumer, reason, slug, or any two filters together). Bounds the D1 rows read per page load to about twice this,
+ * allowed class, reason, slug, or any two filters together). Bounds the D1 rows read per page load to about twice this,
  * whatever the table size.
  */
 export const REQUEST_SCAN_ROWS = 10_000;
@@ -93,7 +92,7 @@ export async function listRequests(
 export const PROBLEMS_TERM = "(outcome <> 'allowed' OR status >= 500)";
 
 /**
- * True when one index serves the whole filter: the token, the repository or the issuer access rules
+ * True when one index serves the whole filter: the token, the repository or the credential access rule
  * on its own (each has an `(x, id)` index), or the denied or error class (request_log_problems).
  * Time bounds and keyset cursors are id ranges and keep a filter indexed.
  */
@@ -101,7 +100,6 @@ export function requestFilterIndexed(filter: RequestFilter): boolean {
   const terms = [
     filter.service_id !== undefined,
     filter.credential_access_rule_id !== undefined,
-    filter.grant_id !== undefined,
     filter.outcome !== undefined,
     filter.outcomeClass !== undefined,
     filter.reason !== undefined,
@@ -113,7 +111,7 @@ export function requestFilterIndexed(filter: RequestFilter): boolean {
   return (
     filter.service_id !== undefined ||
     filter.repository !== undefined ||
-    filter.grant_id !== undefined ||
+    filter.credential_access_rule_id !== undefined ||
     filter.outcomeClass === 'denied' ||
     filter.outcomeClass === 'error'
   );
@@ -140,7 +138,6 @@ export async function searchRequests(
   else if (filter.credential_access_rule_id !== undefined) {
     add('credential_access_rule_id = ?', filter.credential_access_rule_id);
   }
-  if (filter.grant_id !== undefined) add('grant_id = ?', filter.grant_id);
   if (filter.outcome) add('outcome = ?', filter.outcome);
   if (filter.outcomeClass === 'allowed') where.push("outcome = 'allowed'");
   if (filter.outcomeClass === 'denied') where.push(PROBLEMS_TERM, "outcome = 'denied'");
@@ -216,7 +213,7 @@ export function requestFromRow(row: Record<string, unknown>): RequestRecord {
     service_slug: strOrNull(row.service_slug),
     service_id: strOrNull(row.service_id),
     credential_access_rule_id: strOrNull(row.credential_access_rule_id),
-    grant_id: strOrNull(row.grant_id),
+    global_access_rule_id: strOrNull(row.global_access_rule_id),
     claims_verified: Number(row.claims_verified) === 1 ? 1 : 0,
     caller_subject: strOrNull(row.caller_subject),
     caller_repository: strOrNull(row.caller_repository),

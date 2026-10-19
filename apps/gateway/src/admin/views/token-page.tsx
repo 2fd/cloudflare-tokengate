@@ -1,9 +1,9 @@
 // The token page (A13.3): the header (identity, relation line, Test and the page's one primary),
 // problems as callouts, who can use the token (a WhoCanUse map with the scale rule, or the
-// hand-off), then the secret (with the inline rotate form), how consumers call it, the
+// hand-off), then the secret (with the inline rotate form), how workloads call it, the
 // destination (changed only with the secret, I-CRED-2) with the details form, the danger zone,
 // and a rail with the record and its history. Viewers and access managers get the same page
-// without token forms, except the access manager's "Add issuer access rule".
+// without credential forms, except the access manager's "Add credential access rule".
 import {
   Avatar,
   Badge,
@@ -45,14 +45,14 @@ import {
 import type { Child } from 'hono/jsx';
 import { sealedKid } from '../../crypto/envelope';
 import type { KeyringError } from '../../crypto/keyring';
-import type { IssuerAccessRuleUsage } from '../../db/rollups';
+import type { RuleUsage } from '../../db/rollups';
 import type { AuditEvent, Service } from '../../db/types';
 import type { Injection, VerifyCheck } from '../../policy/types';
 import { CALLER_TOKEN_HEADER } from '../../proxy/caller-token';
 import { EXPIRY_WARNING_MS, type TrafficStats } from '../../telemetry/dashboard';
 import { CSRF_FIELD } from '../auth/csrf';
 import type { Permission } from '../auth/rbac';
-import type { AccessEdge } from '../connections';
+import type { RuleEdge } from '../connections';
 import type { StoredBinding } from '../ops/credentials';
 import { KEYRING_ERROR_TEXT } from '../ops/keyring';
 import { storedUpstreamHost } from '../ops/upstream-hosts';
@@ -60,7 +60,7 @@ import type { VerifyOutcome } from '../ops/verify';
 import { paths } from '../paths';
 import type { ViewContext } from '../render';
 import { REPO_PLACEHOLDER, SERVICE_TEMPLATES, type ServiceTemplate } from '../service-templates';
-import { consumerLogo } from './access-visuals';
+import { issuerHost, issuerLogo, tenantsText } from './access-visuals';
 import {
   ActionButton,
   AskSomeone,
@@ -105,7 +105,7 @@ import {
 export { typeLabel, upstreamHost } from './token-ui';
 
 const DAY_MS = 86_400_000;
-/** The scale rule of the "Who can use" map: consumers drawn, and accesses per consumer. */
+/** The scale rule of the "Who can use" map: issuers drawn, and rules per issuer. */
 const MAP_GROUPS = 3;
 const MAP_ROWS = 3;
 
@@ -193,14 +193,14 @@ export function LastUsed(props: {
   );
 }
 
-/** Accesses that let a credential access rule call: enabled, unexpired, of an enabled consumer. */
-export function usableAccesses(accesses: readonly AccessEdge[], now: number): AccessEdge[] {
-  return accesses.filter(
+/** Credential access rules that let jobs call: enabled, unexpired, not inactive or blocked. */
+export function usableAccesses(rules: readonly RuleEdge[], now: number): RuleEdge[] {
+  return rules.filter(
     (edge) =>
-      edge.grant.enabled &&
-      (edge.grant.expires_at === null || edge.grant.expires_at > now) &&
-      edge.consumer?.enabled === true &&
-      edge.status !== 'inactive',
+      edge.rule.enabled &&
+      (edge.rule.expires_at === null || edge.rule.expires_at > now) &&
+      edge.status !== 'inactive' &&
+      edge.status !== 'global_blocked',
   );
 }
 
@@ -215,9 +215,9 @@ export interface TokenPageData {
   allowlist: string[] | null;
   /** The base URL's host is not on the allowlist (requests are refused). */
   outside: boolean;
-  accesses: AccessEdge[];
-  /** Allowed requests per access in the last 30 days (map order, relation line). */
-  usage: ReadonlyMap<string, IssuerAccessRuleUsage>;
+  rules: RuleEdge[];
+  /** Allowed requests per credential access rule in the last 30 days (map order, relation line). */
+  usage: ReadonlyMap<string, RuleUsage>;
   usageAvailable: boolean;
   sampleRate: number;
   /** Requests through the token in the last 24 hours (rail); null when telemetry is unreadable. */
@@ -251,12 +251,9 @@ function unreadable(data: TokenPageData): boolean {
   return data.binding.status === 'unattested' || data.keyringError !== null;
 }
 
-/** Allowed requests through the token's accesses in the last 30 days. */
+/** Allowed requests through the credential's rules in the last 30 days. */
 function usage30d(data: TokenPageData): number {
-  return data.accesses.reduce(
-    (sum, edge) => sum + (data.usage.get(edge.grant.id)?.requests ?? 0),
-    0,
-  );
+  return data.rules.reduce((sum, edge) => sum + (data.usage.get(edge.rule.id)?.requests ?? 0), 0);
 }
 
 /** The people to ask for an access, and one mail to all of them with the link in the body. */
@@ -265,7 +262,7 @@ function handoffMail(ctx: ViewContext, service: Service, url: string): string | 
   if (people.length === 0) return null;
   const query = new URLSearchParams({
     subject: `Access to credential ${service.name}`,
-    body: `Please give an issuer access rule to the credential ${service.name}: ${url}`,
+    body: `Please add a credential access rule to the credential ${service.name}: ${url}`,
   })
     .toString()
     .replace(/\+/g, '%20');
@@ -274,7 +271,7 @@ function handoffMail(ctx: ViewContext, service: Service, url: string): string | 
 
 /**
  * The header of a token page: breadcrumb, identity (logo, name, status, type, slug, ID, host),
- * Test, and the one primary: "Add issuer access rule" for access managers, else "Ask an access
+ * Test, and the one primary: "Add credential access rule" for access managers, else "Ask an access
  * manager" (a mail with the link) for credential managers. Then the relation line.
  */
 export function TokenHeader(props: { ctx: ViewContext; data: TokenPageData }) {
@@ -286,14 +283,14 @@ export function TokenHeader(props: { ctx: ViewContext; data: TokenPageData }) {
     now: ctx.now,
   });
   const attested = data.binding.status === 'attested';
-  const giveHref = paths.accessNew({ token: service.id });
+  const giveHref = paths.accessRuleNew({ credential: service.id });
   const mail = ctx.can('tokens:write')
     ? handoffMail(ctx, service, `${data.proxyOrigin}${giveHref}`)
     : null;
   const test = ctx.can('tokens:write') && service.verify !== null && attested;
   const primary = ctx.can('access:write') ? (
     <Button variant="primary" plus href={giveHref}>
-      Add issuer access rule
+      Add credential access rule
     </Button>
   ) : mail ? (
     <Button variant="primary" href={mail}>
@@ -340,12 +337,12 @@ export function TokenHeader(props: { ctx: ViewContext; data: TokenPageData }) {
 function Relation(props: { ctx: ViewContext; data: TokenPageData }) {
   const { ctx, data } = props;
   const { service } = data;
-  const usable = usableAccesses(data.accesses, ctx.now);
-  const consumers = new Set(usable.map((edge) => edge.grant.credential_access_rule_id)).size;
+  const usable = usableAccesses(data.rules, ctx.now);
+  const issuers = new Set(usable.map((edge) => edge.rule.issuer_key)).size;
   const reason = unusableReason(data);
   const reasonText = reason !== null ? ` The credential is not usable now: ${reason}.` : '';
   const requests = data.usageAvailable && data.sampleRate > 0 ? usage30d(data) : 0;
-  const listHref = paths.access({ token: service.id });
+  const listHref = paths.accessRules({ credential: service.id });
   if (usable.length === 0) {
     return (
       <>
@@ -355,8 +352,8 @@ function Relation(props: { ctx: ViewContext; data: TokenPageData }) {
   }
   return (
     <>
-      <a href={listHref}>{plural(consumers, 'credential access rule')}</a> can use {service.name}{' '}
-      through <a href={listHref}>{plural(usable.length, 'access', 'accesses')}</a>.{reasonText}
+      Jobs of <a href={listHref}>{plural(issuers, 'issuer')}</a> can use {service.name} through{' '}
+      <a href={listHref}>{plural(usable.length, 'credential access rule')}</a>.{reasonText}
       {requests > 0
         ? ` ${formatCount(requests)} allowed ${requests === 1 ? 'request' : 'requests'} in the last 30 days.`
         : ''}
@@ -367,19 +364,11 @@ function Relation(props: { ctx: ViewContext; data: TokenPageData }) {
 export function TokenPage(props: { ctx: ViewContext; data: TokenPageData; state: TokenPageState }) {
   const { ctx, data, state } = props;
   const { service } = data;
-  const canDelete =
-    ctx.can('tokens:write') && (data.accesses.length === 0 || ctx.can('access:write'));
+  const canDelete = ctx.can('tokens:write') && (data.rules.length === 0 || ctx.can('access:write'));
   return (
     <>
       <Problems ctx={ctx} data={data} />
-      {ctx.can('tokens:write') ? (
-        <p>
-          <Button href={paths.consumerNew({ credential: service.id })}>
-            Add credential access rule
-          </Button>
-        </p>
-      ) : null}
-      <ConsumersTray ctx={ctx} data={data} />
+      <RulesTray ctx={ctx} data={data} />
       <DetailLayout railLabel={`${service.name} details`} rail={<Rail ctx={ctx} data={data} />}>
         <SecretTray ctx={ctx} data={data} state={state} />
         <UseTray data={data} />
@@ -496,8 +485,8 @@ function Problems(props: { ctx: ViewContext; data: TokenPageData }) {
       const calls = data.usageAvailable && data.sampleRate > 0 ? usage30d(data) : 0;
       const subjects = [
         ...new Set(
-          data.accesses
-            .filter((edge) => (data.usage.get(edge.grant.id)?.requests ?? 0) > 0)
+          data.rules
+            .filter((edge) => (data.usage.get(edge.rule.id)?.requests ?? 0) > 0)
             .map((edge) => edge.subject),
         ),
       ];
@@ -571,7 +560,7 @@ function bindingText(binding: Extract<StoredBinding, { status: 'unattested' }>):
   return `${cause} Treat this as possible tampering: a secret entered now goes to the base URL you submit. Check the base URL and injection against an out-of-band source (the provider's documentation, your configuration as code) before you enter the secret again. The audit log is not a reliable reference: anyone who can edit the database can edit it too.`;
 }
 
-/** Why a token with a secret and accesses still cannot serve them, or null. */
+/** Why a credential with a secret and rules still cannot serve them, or null. */
 function unusableReason(data: TokenPageData): string | null {
   const { service } = data;
   if (!service.enabled) return 'the credential is disabled';
@@ -585,32 +574,44 @@ function unusableReason(data: TokenPageData): string | null {
 // ---------------------------------------------------------------------------------------------
 // Who can use it
 
-function lastUsedText(edge: AccessEdge, data: TokenPageData, now: number): string | null {
+function lastUsedText(edge: RuleEdge, data: TokenPageData, now: number): string | null {
   if (data.sampleRate === 0 || !data.usageAvailable) return null;
   return edge.lastUsedHour === null
     ? 'not used in 30 days'
     : `last used ${relativeTime(edge.lastUsedHour, now)}`;
 }
 
-function accessRow(
-  edge: AccessEdge,
+function ruleRow(
+  edge: RuleEdge,
   data: TokenPageData,
   ctx: ViewContext,
   tokenName: string,
 ): WhoAccess {
   const [first, ...more] = edge.operations;
   const used = lastUsedText(edge, data, ctx.now);
-  const expires = edge.grant.expires_at;
+  const expires = edge.rule.expires_at;
   const risky = edge.flags.some((flag) => flag.status === 'risk_accepted');
+  const global =
+    edge.globalStatus.kind === 'blocked'
+      ? 'blocked by global access rules'
+      : edge.globalStatus.kind === 'limited'
+        ? 'limited by global access rules'
+        : null;
   return {
-    name: edge.subject,
-    href: paths.accessItem(edge.grant.id),
-    context: edge.context,
+    name: edge.rule.name,
+    href: paths.accessRule(edge.rule.id),
+    context: `${edge.subject} · ${edge.context}`,
     meta: (
       <>
         {first ? <code>{first}</code> : 'no operations'}
         {more.length > 0 ? ` +${more.length}` : ''} ·{' '}
         {expires === null ? 'never expires' : `ends ${uiFormatTime(new Date(expires), 'day')}`}
+        {global ? (
+          <>
+            {' · '}
+            <span class={edge.globalStatus.kind === 'blocked' ? 't-bad' : 't-warn'}>{global}</span>
+          </>
+        ) : null}
         {used ? ` · ${used}` : ''}
       </>
     ),
@@ -625,77 +626,92 @@ function accessRow(
     ),
     statusAction:
       edge.status === 'expiring' && ctx.can('access:write') ? (
-        <a class="sm" href={paths.accessItem(edge.grant.id, { open: 'edit', hash: 'edit' })}>
+        <a class="sm" href={paths.accessRule(edge.rule.id, { open: 'edit' })}>
           Extend
           <span class="vh">
             {' '}
-            {edge.subject} → {tokenName}
+            {edge.rule.name} → {tokenName}
           </span>
         </a>
       ) : undefined,
-    warn: edge.status === 'expiring' || edge.status === 'inactive' || edge.status === 'expired',
+    warn:
+      edge.status === 'expiring' ||
+      edge.status === 'inactive' ||
+      edge.status === 'expired' ||
+      edge.status === 'global_blocked',
   };
 }
 
-function ConsumersTray(props: { ctx: ViewContext; data: TokenPageData }) {
+/**
+ * Who can use the credential (A7.9): its credential access rules grouped by issuer and tenant, the
+ * busiest group first, with each rule's jobs, operations, global status and state.
+ */
+function RulesTray(props: { ctx: ViewContext; data: TokenPageData }) {
   const { ctx, data } = props;
   const { service } = data;
-  const byConsumer = new Map<string, AccessEdge[]>();
-  for (const edge of data.accesses) {
-    const list = byConsumer.get(edge.grant.credential_access_rule_id) ?? [];
+  const groupKey = (edge: RuleEdge) => `${edge.rule.issuer_key}\u0000${tenantsText(edge.rule, [])}`;
+  const byIssuer = new Map<string, RuleEdge[]>();
+  for (const edge of data.rules) {
+    const list = byIssuer.get(groupKey(edge)) ?? [];
     list.push(edge);
-    byConsumer.set(edge.grant.credential_access_rule_id, list);
+    byIssuer.set(groupKey(edge), list);
   }
-  const requests = (edge: AccessEdge) => data.usage.get(edge.grant.id)?.requests ?? 0;
-  const ordered = [...byConsumer.entries()]
+  const requests = (edge: RuleEdge) => data.usage.get(edge.rule.id)?.requests ?? 0;
+  const ordered = [...byIssuer.entries()]
     .map(([id, edges]) => ({
       id,
       edges: [...edges].sort((a, b) => requests(b) - requests(a)),
       total: edges.reduce((sum, edge) => sum + requests(edge), 0),
-      name: edges[0]?.consumer?.name ?? 'Deleted credential access rule',
+      name: edges[0] ? issuerHost(edges[0].rule.issuer) : 'Unknown issuer',
     }))
     .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
   const shown = ordered.slice(0, MAP_GROUPS);
   const hidden = ordered.slice(MAP_GROUPS);
   const groups: WhoGroup[] = shown.map((group) => {
-    const consumer = group.edges[0]?.consumer ?? null;
+    const first = group.edges[0]?.rule ?? null;
     const rows = group.edges.slice(0, MAP_ROWS);
     const rest = group.edges.slice(MAP_ROWS);
     const restExpiring = rest.filter((edge) => edge.status === 'expiring').length;
+    const tenants = first ? tenantsText(first, []) : '';
     return {
       consumer: {
         name: group.name,
-        href: consumer ? paths.consumer(consumer.id) : paths.access({ token: service.id }),
-        line: plural(group.edges.length, 'access', 'accesses'),
-        logo: consumerLogo(consumer),
+        href: paths.accessRules({
+          credential: service.id,
+          ...(first ? { issuer: first.issuer_key } : {}),
+        }),
+        line: `${plural(group.edges.length, 'access rule')}${tenants && tenants !== 'No pin' ? ` · ${tenants}` : ''}`,
+        logo: issuerLogo(first),
         count: group.edges.length,
       },
-      accesses: rows.map((edge) => accessRow(edge, data, ctx, service.name)),
+      accesses: rows.map((edge) => ruleRow(edge, data, ctx, service.name)),
       more:
         rest.length > 0
           ? {
-              href: paths.access({ token: service.id, consumer: group.id }),
-              label: `+ ${plural(rest.length, 'more access', 'more accesses')}`,
+              href: paths.accessRules({
+                credential: service.id,
+                ...(first ? { issuer: first.issuer_key } : {}),
+              }),
+              label: `+ ${plural(rest.length, 'more access rule')}`,
               srSuffix: `of ${group.name} to ${service.name}`,
               meta: restExpiring > 0 ? `${restExpiring} expiring` : undefined,
             }
           : undefined,
     };
   });
-  const hiddenAccesses = hidden.reduce((sum, group) => sum + group.edges.length, 0);
+  const hiddenRules = hidden.reduce((sum, group) => sum + group.edges.length, 0);
   const cut = hidden.length > 0 || shown.some((group) => group.edges.length > MAP_ROWS);
-  const expiring = data.accesses.filter((edge) => edge.status === 'expiring').length;
-  const inactive = data.accesses.filter((edge) => edge.status === 'inactive').length;
-  const giveHref = paths.accessNew({ token: service.id });
+  const giveHref = paths.accessRuleNew({ credential: service.id });
   const canGive = ctx.can('access:write');
+  const listHref = paths.accessRules({ credential: service.id });
   return (
     <Tray
-      id="consumers"
+      id="rules"
       title={`Who can use ${service.name}`}
-      count={data.accesses.length}
+      count={data.rules.length}
       description={
         <>
-          Each line is one issuer access rule. Consumers call{' '}
+          Each line is one credential access rule, grouped by issuer. Jobs call{' '}
           <code>{`/proxy/${service.slug}`}</code>; they never see the secret.
         </>
       }
@@ -704,14 +720,14 @@ function ConsumersTray(props: { ctx: ViewContext; data: TokenPageData }) {
           <LinkAction href={paths.requests({ token: service.id })} arrow>
             Requests through {service.name}
           </LinkAction>
-          <LinkAction href={paths.access({ token: service.id })} arrow>
-            Connections map
+          <LinkAction href={listHref} arrow>
+            All its access rules
           </LinkAction>
         </>
       }
     >
       <WhoCanUse
-        label={`Accesses to ${service.name}, grouped by credential access rule`}
+        label={`Credential access rules of ${service.name}, grouped by issuer`}
         token={{
           name: service.name,
           logo: templateLogo(data.template, { disabled: !service.enabled }),
@@ -721,22 +737,23 @@ function ConsumersTray(props: { ctx: ViewContext; data: TokenPageData }) {
         rest={
           hidden.length > 0
             ? {
-                href: paths.access({ token: service.id, view: 'matrix' }),
-                label: `+ ${plural(hidden.length, 'more credential access rule')} · ${plural(hiddenAccesses, 'access', 'accesses')}`,
-                line: `Open them in the matrix, filtered to ${service.name}`,
+                href: listHref,
+                label: `+ ${plural(hidden.length, 'more issuer')} · ${plural(hiddenRules, 'access rule')}`,
+                line: `Open them in the list, filtered to ${service.name}`,
               }
             : undefined
         }
         empty={{
-          title: 'No issuer access rules yet',
+          title: 'No credential access rules yet',
           children: canGive ? (
             <>
               <p>
-                Add issuer access rule so its jobs can call <code>{`/proxy/${service.slug}`}</code>.
+                Add a credential access rule so that jobs can call{' '}
+                <code>{`/proxy/${service.slug}`}</code>.
               </p>
               <div>
                 <Button size="sm" plus href={giveHref}>
-                  Add issuer access rule
+                  Add credential access rule
                 </Button>
               </div>
             </>
@@ -748,37 +765,17 @@ function ConsumersTray(props: { ctx: ViewContext; data: TokenPageData }) {
           cut ? (
             <>
               <b>
-                {plural(byConsumer.size, 'credential access rule')},{' '}
-                {plural(data.accesses.length, 'access', 'accesses')}.
+                {plural(byIssuer.size, 'issuer')}, {plural(data.rules.length, 'access rule')}.
               </b>{' '}
-              The map shows the {plural(shown.length, 'credential access rule')} with the most
-              requests and up to {MAP_ROWS} accesses each. The{' '}
-              <a href={paths.access({ token: service.id, view: 'matrix' })}>matrix</a> shows all of
-              them
-              {expiring > 0 ? (
-                <>
-                  ;{' '}
-                  <a href={paths.access({ token: service.id, status: 'expiring' })}>
-                    {expiring} expiring
-                  </a>
-                </>
-              ) : null}
-              {inactive > 0 ? (
-                <>
-                  {expiring > 0 ? ' and ' : '; '}
-                  <a href={paths.access({ token: service.id, status: 'inactive' })}>
-                    {inactive} inactive
-                  </a>
-                </>
-              ) : null}
-              .
+              The map shows the {plural(shown.length, 'issuer')} with the most requests and up to{' '}
+              {MAP_ROWS} rules each. The <a href={listHref}>list</a> shows all of them.
             </>
           ) : undefined
         }
         footerAction={
           canGive && groups.length > 0 ? (
             <Button variant="ghost" size="sm" plus href={giveHref}>
-              Give another issuer access rules
+              Add another credential access rule
             </Button>
           ) : undefined
         }
@@ -796,13 +793,13 @@ function ConsumersTray(props: { ctx: ViewContext; data: TokenPageData }) {
 function HandOff(props: { ctx: ViewContext; data: TokenPageData }) {
   const { ctx, data } = props;
   const { service } = data;
-  const absolute = `${data.proxyOrigin}${paths.accessNew({ token: service.id })}`;
+  const absolute = `${data.proxyOrigin}${paths.accessRuleNew({ credential: service.id })}`;
   return (
     <div class="stack-sm">
-      <p>Issuer access rules is granted by access managers. Send them this link:</p>
+      <p>Access managers add credential access rules. Send them this link:</p>
       <Field
         id="handoff"
-        label={`Link that opens “Add issuer access rule” for ${service.name}`}
+        label={`Link that opens “Add credential access rule” for ${service.name}`}
         hint="Select to copy."
       >
         <Input name="handoff" mono readonly value={absolute} />
@@ -810,7 +807,7 @@ function HandOff(props: { ctx: ViewContext; data: TokenPageData }) {
       <AskSomeone
         permission="access:write"
         ctx={ctx}
-        verb="give an issuer access rule"
+        verb="add a credential access rule"
         subject={`Access to credential ${service.name}`}
       />
     </div>
@@ -961,7 +958,7 @@ function RotateForm(props: { ctx: ViewContext; data: TokenPageData; state?: Form
           ids={ids}
           label={`New ${inSentence(secret.label)}`}
           placeholder={secret.placeholder}
-          hint={`Sent to ${upstreamHost(service.base_url)}. Replaces ${service.credential_hint ?? 'the stored secret'}. Consumers keep working, with the new secret from the next request.`}
+          hint={`Sent to ${upstreamHost(service.base_url)}. Replaces ${service.credential_hint ?? 'the stored secret'}. Callers keep working, with the new secret from the next request.`}
           pattern={template?.secret.pattern}
           draft={state?.draft ?? null}
         />
@@ -1306,17 +1303,17 @@ function Danger(props: { ctx: ViewContext; data: TokenPageData }) {
   const { ctx, data } = props;
   if (!ctx.can('tokens:write')) return null;
   const { service } = data;
-  const usable = usableAccesses(data.accesses, ctx.now);
-  const consumers = new Set(usable.map((edge) => edge.grant.credential_access_rule_id)).size;
-  const accesses = data.accesses;
+  const usable = usableAccesses(data.rules, ctx.now);
+  const workloads = new Set(usable.map((edge) => edge.rule.issuer_key)).size;
+  const rules = data.rules;
   const toggle = `${paths.token(service.id)}/toggle`;
-  const countText = plural(accesses.length, 'issuer access rules', 'issuer access rules');
+  const countText = plural(rules.length, 'credential access rule');
   return (
     <DangerZone id="danger">
       {service.enabled ? (
         <DangerRow
           title="Disable credential"
-          description={`${plural(consumers, 'workload loses', 'workloads lose')} access until you enable it again. Nothing is deleted.`}
+          description={`The jobs of ${plural(workloads, 'issuer')} lose access until you enable it again. Nothing is deleted.`}
           action={
             <ActionButton
               action={toggle}
@@ -1330,7 +1327,7 @@ function Danger(props: { ctx: ViewContext; data: TokenPageData }) {
       ) : (
         <DangerRow
           title="Enable credential"
-          description="Consumers with access can use it again."
+          description="Its credential access rules allow calls again."
           action={
             <ActionButton
               action={toggle}
@@ -1342,7 +1339,7 @@ function Danger(props: { ctx: ViewContext; data: TokenPageData }) {
           }
         />
       )}
-      {accesses.length === 0 ? (
+      {rules.length === 0 ? (
         <DangerRow
           title={`Delete ${service.name}`}
           description="The credential and its stored secret are deleted. The audit log keeps its configuration, never the secret."
@@ -1355,7 +1352,7 @@ function Danger(props: { ctx: ViewContext; data: TokenPageData }) {
       ) : ctx.can('access:write') ? (
         <DangerRow
           title={`Delete ${service.name} and its ${countText}`}
-          description="The secret and the accesses are removed. This cannot be undone."
+          description="The secret and the credential access rules are removed. This cannot be undone."
           action={
             <DialogTrigger dialog="dlg-delete" variant="danger">
               Delete {service.name}…
@@ -1367,20 +1364,18 @@ function Danger(props: { ctx: ViewContext; data: TokenPageData }) {
           title={`Delete ${service.name}`}
           description={
             <>
-              {service.name} cannot be deleted while issuer access rules uses it. Disable the
-              credential now; an access manager can delete the accesses, or an admin can delete
-              both. Accesses:{' '}
-              {accesses.map((edge, index) => (
+              {service.name} cannot be deleted while credential access rules use it. Disable the
+              credential now; an access manager can delete the rules, or an admin can delete both.
+              Rules:{' '}
+              {rules.map((edge, index) => (
                 <>
                   {index > 0 ? ' · ' : null}
-                  <a href={paths.accessItem(edge.grant.id)}>
-                    {edge.grant.name} ({edge.consumer?.name ?? 'deleted credential access rule'})
-                  </a>
+                  <a href={paths.accessRule(edge.rule.id)}>{edge.rule.name}</a>
                 </>
               ))}
             </>
           }
-          action={<AskSomeone permission="access:write" ctx={ctx} verb="delete these accesses" />}
+          action={<AskSomeone permission="access:write" ctx={ctx} verb="delete these rules" />}
         />
       )}
     </DangerZone>
@@ -1390,9 +1385,9 @@ function Danger(props: { ctx: ViewContext; data: TokenPageData }) {
 function DeleteDialog(props: { ctx: ViewContext; data: TokenPageData }) {
   const { ctx, data } = props;
   const { service } = data;
-  const accesses = data.accesses;
-  const countText = plural(accesses.length, 'issuer access rules', 'issuer access rules');
-  const cascade = accesses.length > 0;
+  const rules = data.rules;
+  const countText = plural(rules.length, 'credential access rule');
+  const cascade = rules.length > 0;
   const disableInstead = cascade && service.enabled;
   return (
     <>
@@ -1414,22 +1409,22 @@ function DeleteDialog(props: { ctx: ViewContext; data: TokenPageData }) {
           confirm: '1',
           ...(cascade
             ? {
-                with_accesses: '1',
-                access_ids: accesses
-                  .map((edge) => edge.grant.id)
+                with_rules: '1',
+                rule_ids: rules
+                  .map((edge) => edge.rule.id)
                   .sort()
                   .join(','),
               }
             : {}),
         })}
         confirmLabel={`Delete ${service.name}`}
-        affected={accesses.map((edge) => (
+        affected={rules.map((edge) => (
           <Entity
-            logo={consumerLogo(edge.consumer)}
+            logo={issuerLogo(edge.rule)}
             logoSize="sm"
-            name={`${edge.subject} · ${edge.context}`}
-            href={paths.accessItem(edge.grant.id)}
-            meta={`${edge.consumer?.name ?? 'deleted credential access rule'}${
+            name={`${edge.rule.name} · ${edge.subject}`}
+            href={paths.accessRule(edge.rule.id)}
+            meta={`${issuerHost(edge.rule.issuer)} · ${edge.context}${
               lastUsedText(edge, data, ctx.now) ? ` · ${lastUsedText(edge, data, ctx.now)}` : ''
             }`}
           />

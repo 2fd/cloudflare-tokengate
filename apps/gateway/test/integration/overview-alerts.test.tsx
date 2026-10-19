@@ -45,7 +45,7 @@ function base(): AlertData {
   return {
     now: NOW,
     credentials: [],
-    issuer_access_rules: [],
+    access_rules: [],
     sealedKids: [],
     keyring: {
       ok: true,
@@ -120,12 +120,11 @@ function catalogue(): AlertData[] {
       service('svc_C', 'Gamma', { has_credential: false }),
       service('svc_D', 'Delta', { base_url: 'https://evil.example.net' }),
     ],
-    issuer_access_rules: [
+    access_rules: [
       {
-        id: 'grt_A',
+        id: 'acr_01JAAAAAAAAAAAAAAAAAAAAAAA',
         name: 'Gamma for acme/api',
-        service_id: 'svc_C',
-        credential_access_rule_id: 'cpr_A',
+        credential_id: 'svc_C',
         enabled: true,
         expires_at: NOW + 2 * DAY,
       },
@@ -203,6 +202,19 @@ describe('the alert catalogue', () => {
     expect(href(keys, 'schema_unknown')).toBe('/admin#check-telemetry-schema');
     expect(href(broken, 'cron_failing')).toBe('/admin#check-maintenance');
     expect(href(keys, 'cron_stale')).toBe('/admin#check-maintenance');
+  });
+
+  it('links an expiring credential access rule to its page and its edit form', () => {
+    const [, keys] = catalogue();
+    const alert = keys ? overviewAlerts(keys).find((a) => a.code === 'access_expiring') : null;
+    expect(alert?.title).toMatch(/^Credential access rule "Gamma for acme\/api" expires on /);
+    expect(alert?.objects[0]?.href).toBe(
+      '/admin/credential-access-rules/acr_01JAAAAAAAAAAAAAAAAAAAAAAA',
+    );
+    expect(alert?.fix?.href).toBe(
+      '/admin/credential-access-rules/acr_01JAAAAAAAAAAAAAAAAAAAAAAA?open=edit#edit',
+    );
+    expect(alert?.fix?.permission).toBe('access:write');
   });
 
   it('orders errors, then warnings, then notes', () => {

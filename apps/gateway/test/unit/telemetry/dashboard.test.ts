@@ -32,7 +32,7 @@ function rollup(overrides: Partial<RollupRow>): RollupRow {
   return {
     hour: H - HOUR_MS,
     service_id: 'svc_A',
-    grant_id: 'grt_A',
+    credential_access_rule_id: 'acr_A',
     outcome: 'allowed',
     status_class: 2,
     requests: 0,
@@ -47,13 +47,13 @@ async function insertRollups(rows: RollupRow[]): Promise<void> {
   await env.TELEMETRY_DB.batch(
     rows.map((r) =>
       env.TELEMETRY_DB.prepare(
-        `INSERT INTO request_rollup_hourly (hour, service_id, grant_id, outcome, status_class, requests, upstream_auth_fail, duration_sum_ms,
+        `INSERT INTO request_rollup_hourly (hour, service_id, credential_access_rule_id, outcome, status_class, requests, upstream_auth_fail, duration_sum_ms,
            le_50, le_100, le_250, le_500, le_1000, le_2500, le_5000, gt_5000)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
         r.hour,
         r.service_id,
-        r.grant_id,
+        r.credential_access_rule_id,
         r.outcome,
         r.status_class,
         r.requests,
@@ -79,8 +79,8 @@ async function insertRequest(
 ): Promise<string> {
   const id = newId('req', ts, random);
   await env.TELEMETRY_DB.prepare(
-    `INSERT INTO request_log (id, ts, outcome, reason, status, upstream_status, method, path, service_slug, service_id, grant_id, claims_verified, duration_ms, weight)
-     VALUES (?, ?, ?, ?, ?, ?, 'GET', '/', ?, ?, 'grt_A', 1, ?, 1)`,
+    `INSERT INTO request_log (id, ts, outcome, reason, status, upstream_status, method, path, service_slug, service_id, credential_access_rule_id, claims_verified, duration_ms, weight)
+     VALUES (?, ?, ?, ?, ?, ?, 'GET', '/', ?, ?, 'acr_A', 1, ?, 1)`,
   )
     .bind(
       id,
@@ -127,9 +127,8 @@ beforeEach(async () => {
   resetSchemaStatusCacheForTests();
   await env.DB.batch([
     env.DB.prepare('DELETE FROM settings'),
-    env.DB.prepare('DELETE FROM issuer_access_rules'),
     env.DB.prepare('DELETE FROM claim_labels'),
-    env.DB.prepare('DELETE FROM credential_access_rules'),
+    env.DB.prepare('DELETE FROM access_rules'),
     env.DB.prepare('DELETE FROM credentials'),
     env.DB.prepare('DELETE FROM user_identities'),
   ]);
@@ -203,7 +202,7 @@ describe('loadOverview', () => {
       rollup({
         hour: H - 2 * HOUR_MS,
         service_id: '',
-        grant_id: '',
+        credential_access_rule_id: '',
         outcome: 'denied',
         status_class: 4,
         requests: 1,
@@ -219,7 +218,7 @@ describe('loadOverview', () => {
       ['svc_A', 8],
       ['', 1],
     ]);
-    expect(data.accessRequests.get('grt_A')).toBe(8);
+    expect(data.accessRequests.get('acr_A')).toBe(8);
   });
 
   it('aggregates the previous hour live until the cron has rolled it up', async () => {
@@ -243,12 +242,12 @@ describe('loadOverview', () => {
     await insertRequest(NOW - 3000, {
       outcome: 'denied',
       status: 403,
-      reason: 'no_matching_grant',
+      reason: 'no_matching_rule',
     });
     const latest = await insertRequest(NOW - 2000, {
       outcome: 'denied',
       status: 403,
-      reason: 'no_matching_grant',
+      reason: 'no_matching_rule',
     });
     await insertRequest(NOW - 1000, {
       outcome: 'denied',
@@ -261,7 +260,7 @@ describe('loadOverview', () => {
     const data = await loadOverview(deps(), '24h');
     expect(data.denials.bounded).toBe(false);
     expect(data.denials.groups.map((g) => [g.reason, g.service_id, g.requests])).toEqual([
-      ['no_matching_grant', 'svc_A', 2],
+      ['no_matching_rule', 'svc_A', 2],
       ['tenant_mismatch', '', 1],
     ]);
     expect(data.denials.groups[0]).toMatchObject({ latest_id: latest, latest_verified_id: latest });
@@ -386,45 +385,36 @@ describe('loadAlertData', () => {
   it('groups same-code alerts into one item that names every object', async () => {
     await insertService('svc_A', 'alpha', null, null);
     await insertService('svc_B', 'beta', null, null);
-    await env.DB.prepare(
-      `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
-         max_token_age_seconds, tenant_pin, anchor_claims, enabled, created_at, updated_at)
-       VALUES ('cpr_A', (SELECT id FROM credentials ORDER BY id LIMIT 1), 'gh', 'github-actions', 'https://iss.example', 'https://iss.example/jwks',
-         'tokengate-test-audience', '["RS256"]', 300, '[]', '[]', 1, 0, 0)`,
-    ).run();
     for (const [id, service, expires] of [
-      ['grt_A', 'svc_A', NOW + 2 * DAY],
-      ['grt_B', 'svc_B', NOW + 5 * DAY],
+      ['acr_A', 'svc_A', NOW + 2 * DAY],
+      ['acr_B', 'svc_B', NOW + 5 * DAY],
     ] as const) {
-      const boundaryId = `cpr_${service}`;
-      await env.DB.prepare(`INSERT INTO credential_access_rules
-        (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs, max_token_age_seconds, created_at, updated_at)
-        SELECT ?, ?, ?, profile, issuer, jwks_uri, audience, allowed_algs, max_token_age_seconds, 0, 0
-        FROM credential_access_rules WHERE id = 'cpr_A'`)
-        .bind(boundaryId, service, boundaryId)
-        .run();
       await env.DB.prepare(
-        `INSERT INTO issuer_access_rules (id, name, credential_access_rule_id, service_id, conditions, rules, enabled,
+        `INSERT INTO access_rules (id, credential_id, name, profile, issuer, issuer_key, jwks_uri, audience,
+           allowed_algs, max_token_age_seconds, tenant_pin, anchor_claims, conditions, rules, enabled,
            expires_at, created_at, updated_at)
-         VALUES (?, ?, ?, ?, '[]', '[]', 1, ?, 0, 0)`,
+         VALUES (?, ?, ?, 'github-actions', 'https://iss.example', 'https://iss.example', 'https://iss.example/jwks',
+           'tokengate-test-audience', '["RS256"]', 300, '[]', '[]',
+           '[{"claim":"repository_id","match":"exact","values":["1"]}]', '[{"methods":["GET"],"path":"/"}]',
+           1, ?, 0, 0)`,
       )
-        .bind(id, `Access ${id}`, boundaryId, service, expires)
+        .bind(id, service, `Access ${id}`, expires)
         .run();
     }
     const alerts = overviewAlerts(await loadAlertData(deps()));
     const missing = alerts.filter((a) => a.code === 'credential_missing_used');
     expect(missing).toHaveLength(1);
     expect(missing[0]?.title).toBe(
-      '2 credentials have no secret, so their accesses cannot work: alpha API (1 access), beta API (1 access).',
+      '2 credentials have no secret, so their access rules cannot work: alpha API (1 access rule), beta API (1 access rule).',
     );
     const expiring = alerts.filter((a) => a.code === 'access_expiring');
     expect(expiring).toHaveLength(1);
     expect(expiring[0]?.objects.map((o) => o.href)).toEqual([
-      '/admin/issuer-access-rules/grt_A',
-      '/admin/issuer-access-rules/grt_B',
+      '/admin/credential-access-rules/acr_A',
+      '/admin/credential-access-rules/acr_B',
     ]);
     expect(expiring[0]?.fix).toMatchObject({
-      href: '/admin/issuer-access-rules/grt_A?open=edit#edit',
+      href: '/admin/credential-access-rules/acr_A?open=edit#edit',
       permission: 'access:write',
     });
   });
@@ -442,7 +432,7 @@ describe('loadAlertData', () => {
       'key_missing',
       'key_not_active',
     ]);
-    expect(alertsFor(data, { consumerId: 'cpr_none' })).toEqual([]);
+    expect(alertsFor(data, { ruleId: 'acr_none' })).toEqual([]);
   });
 });
 
@@ -498,7 +488,7 @@ describe('I-CRED-1: Overview data never carries stored credential material', () 
     await insertRequest(NOW - 1000, {
       outcome: 'denied',
       status: 403,
-      reason: 'no_matching_grant',
+      reason: 'no_matching_rule',
     });
     const data = await loadOverview(deps(), '30d');
     const rendered = JSON.stringify({

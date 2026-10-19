@@ -16,7 +16,7 @@ export interface RequestRecord {
   service_slug: string | null;
   service_id: string | null;
   credential_access_rule_id: string | null;
-  grant_id: string | null;
+  global_access_rule_id: string | null;
   claims_verified: 0 | 1;
   caller_subject: string | null;
   caller_repository: string | null;
@@ -47,7 +47,7 @@ export const REQUEST_RECORD_COLUMNS = [
   'service_slug',
   'service_id',
   'credential_access_rule_id',
-  'grant_id',
+  'global_access_rule_id',
   'claims_verified',
   'caller_subject',
   'caller_repository',
@@ -65,6 +65,6 @@ export const REQUEST_RECORD_COLUMNS = [
 
 /**
  * Record sent to the optional Pipelines stream: every column but eval_trace, plus schema_version
- * (pipelines/request-log.v1.schema.json).
+ * (pipelines/request-log.v2.schema.json).
  */
 export type ArchiveRecord = Omit<RequestRecord, 'eval_trace'> & { schema_version: 1 };

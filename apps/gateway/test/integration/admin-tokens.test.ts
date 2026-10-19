@@ -114,36 +114,35 @@ async function createCustom(session: AdminSession, fields: Record<string, string
   return idFrom(res);
 }
 
-async function insertIssuerAccessRule(
-  serviceId: string,
-  name: string,
-  id = 'grt_TEST',
-): Promise<void> {
+const RULE_ID = 'acr_01JAAAAAAAAAAAAAAAAAAAAAAA';
+const OLD_RULE_ID = 'acr_01JBBBBBBBBBBBBBBBBBBBBBBB';
+
+/** A GitHub Actions credential access rule of `serviceId` for acme/api in production. */
+async function insertRule(serviceId: string, name: string, id = RULE_ID): Promise<void> {
   const now = Date.now();
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
-         max_token_age_seconds, tenant_pin, anchor_claims, enabled, created_at, updated_at)
-       VALUES ('cpr_TEST', ?, 'GitHub Actions', 'github-actions', 'https://token.actions.githubusercontent.com',
-         'https://token.actions.githubusercontent.com/.well-known/jwks', 'tokengate:0123456789ABCDEF',
-         '["RS256"]', 600, '[]', '[]', 1, ?, ?)`,
-    ).bind(serviceId, now, now),
-    env.DB.prepare(
-      `INSERT INTO issuer_access_rules (id, name, description, credential_access_rule_id, service_id, conditions, rules,
-         enabled, expires_at, created_by, created_at, updated_at)
-       VALUES (?, ?, '', 'cpr_TEST', ?, ?, '[{"methods":["POST"],"path":"/responses"}]', 1, NULL, NULL, ?, ?)`,
-    ).bind(
+  const issuer = 'https://token.actions.githubusercontent.com';
+  await env.DB.prepare(
+    `INSERT INTO access_rules (id, credential_id, name, profile, issuer, issuer_key, jwks_uri, audience,
+       allowed_algs, max_token_age_seconds, tenant_pin, anchor_claims, conditions, rules, enabled,
+       created_at, updated_at)
+     VALUES (?, ?, ?, 'github-actions', ?, ?, ?, 'tokengate:0123456789ABCDEF', '["RS256"]', 600, '[]',
+       '[]', ?, '[{"methods":["POST"],"path":"/responses"}]', 1, ?, ?)`,
+  )
+    .bind(
       id,
-      name,
       serviceId,
+      name,
+      issuer,
+      issuer,
+      `${issuer}/.well-known/jwks`,
       JSON.stringify([
         { claim: 'repository', match: 'exact', values: ['acme/api'] },
         { claim: 'environment', match: 'exact', values: ['production'] },
       ]),
       now,
       now,
-    ),
-  ]);
+    )
+    .run();
 }
 
 beforeEach(async () => {
@@ -193,25 +192,25 @@ describe('token list', () => {
     expect(html).toContain('OpenAI API');
     expect(html).toContain('api.openai.com');
     expect(html).toContain('<span class="vh">Secret ending in </span>WXYZ');
-    expect(html).toContain('0 consumers');
+    expect(html).toContain('No credential access rule');
     expect(html).not.toContain('Add credential');
     expect(html).not.toContain('type="password"');
     expect(html).toContain('Only credential managers can add a token');
     expect(html).not.toContain(SECRET);
   });
 
-  it('shows who uses a token: consumer tiles, a count link and the credential access rule names', async () => {
+  it('shows who uses a credential: issuer tiles, a count link and the issuers', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
-    await insertIssuerAccessRule(id, 'deploy');
+    await insertRule(id, 'deploy');
     const html = await (await adminGet(app, admin, '/admin/credentials')).text();
     expect(html).toMatch(
       /<span class="lstack" aria-hidden="true"><span class="tiles"><span class="logo sm lg-github"/,
     );
     expect(html).toContain(
-      `<a class="nlink" href="/admin/issuer-access-rules?token=${id}">1 credential access rule · 1 access<span class="vh"> can use OpenAI</span></a>`,
+      `<a class="nlink" href="/admin/credential-access-rules?credential=${id}">1 usable rule · 1 access rule<span class="vh"> can use OpenAI</span></a>`,
     );
-    expect(html).toContain('<span class="meta">GitHub Actions · <span class="t-warn">');
+    expect(html).toContain('<span class="meta">github.com · <span class="t-warn">');
   });
 
   it('filters by status and key, and ignores unknown values', async () => {
@@ -267,14 +266,12 @@ describe('token list', () => {
   it('the count link a screen reader hears starts with its visible text (WCAG 2.5.3)', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
-    await insertIssuerAccessRule(id, 'deploy');
+    await insertRule(id, 'deploy');
     const html = await (await adminGet(app, admin, '/admin/credentials')).text();
-    expect(html).toContain(
-      '1 credential access rule · 1 access<span class="vh"> can use OpenAI</span>',
-    );
+    expect(html).toContain('1 usable rule · 1 access rule<span class="vh"> can use OpenAI</span>');
     const page = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
     expect(page).toContain(
-      '<a class="ent-n" href="/admin/issuer-access-rules/grt_TEST">acme/api</a> <span class="ctx">· environment production</span>',
+      `<a class="ent-n" href="/admin/credential-access-rules/${RULE_ID}">deploy</a> <span class="ctx">· acme/api · environment production</span>`,
     );
   });
 
@@ -396,7 +393,7 @@ describe('create', () => {
       await adminGet(app, admin, `/admin/credentials/${id}?notice=created_verified`)
     ).text();
     expect(page).toContain('OpenAI created (slug openai); the secret check passed.');
-    expect(page).toContain('href="/admin/issuer-access-rules/new?token=' + id);
+    expect(page).toContain('href="/admin/credential-access-rules/new?credential=' + id);
     expect(page).toContain('aria-label="Proxy base URL">https://gw.test/proxy/openai</pre>');
     expect(page).not.toContain(SECRET);
   });
@@ -594,11 +591,11 @@ describe('token page', () => {
     const res = await adminGet(app, viewer, `/admin/credentials/${id}`);
     expect(res.status).toBe(200);
     const html = await res.text();
-    for (const section of ['consumers', 'secret', 'use', 'destination']) {
+    for (const section of ['rules', 'secret', 'use', 'destination']) {
       expect(html).toContain(`id="${section}"`);
     }
     expect(html).toContain('<p class="relline">No workload can use OpenAI yet.</p>');
-    expect(html).toContain('No issuer access rules yet');
+    expect(html).toContain('No credential access rules yet');
     expect(html).toContain('OpenAI API');
     // Identity: one H1 with the status, the ID chip, and no header action for a viewer.
     expect(html).toMatch(/<h1>OpenAI <span class="badge ok">/);
@@ -638,41 +635,43 @@ describe('token page', () => {
     expect(html).not.toContain(`action="/admin/credentials/${id}/secret"`);
   });
 
-  it('counts consumers that can use the token and lists the hand-off for credential managers', async () => {
+  it('counts the issuers and rules that can use the credential and lists the hand-off for credential managers', async () => {
     await createUser({ email: 'am@example.com', role: 'access_manager' });
     await createUser({ email: 'gone@example.com', role: 'access_manager', status: 'suspended' });
     const manager = await sessionFor('token_manager');
     const id = await createOpenAi(manager);
-    await insertIssuerAccessRule(id, 'deploy');
-    await insertIssuerAccessRule(id, 'old', 'grt_OLD');
-    await env.DB.prepare("UPDATE issuer_access_rules SET enabled = 0 WHERE id = 'grt_OLD'").run();
+    await insertRule(id, 'deploy');
+    await insertRule(id, 'old', OLD_RULE_ID);
+    await env.DB.prepare('UPDATE access_rules SET enabled = 0 WHERE id = ?')
+      .bind(OLD_RULE_ID)
+      .run();
     const html = await (await adminGet(app, manager, `/admin/credentials/${id}`)).text();
     expect(html).toContain(
-      `<a href="/admin/issuer-access-rules?token=${id}">1 credential access rule</a> can use OpenAI through <a href="/admin/issuer-access-rules?token=${id}">1 access</a>.`,
+      `Jobs of <a href="/admin/credential-access-rules?credential=${id}">1 issuer</a> can use OpenAI through <a href="/admin/credential-access-rules?credential=${id}">1 credential access rule</a>.`,
     );
     expect(html).toContain(
-      '<a class="ent-n" href="/admin/issuer-access-rules/grt_TEST">acme/api</a> <span class="ctx">· environment production</span>',
+      `<a class="ent-n" href="/admin/credential-access-rules/${RULE_ID}">deploy</a> <span class="ctx">· acme/api · environment production</span>`,
     );
     expect(html).toContain('<code>POST /responses</code>');
-    // The disabled access is listed, but not counted as one that can call.
-    expect(html).toContain('href="/admin/issuer-access-rules/grt_OLD"');
+    // The disabled rule is listed, but not counted as one that can call.
+    expect(html).toContain(`href="/admin/credential-access-rules/${OLD_RULE_ID}"`);
+    expect(html).toContain('Access managers add credential access rules. Send them this link:');
     expect(html).toContain(
-      'Issuer access rules is granted by access managers. Send them this link:',
+      `value="https://gw.test/admin/credential-access-rules/new?credential=${id}"`,
     );
-    expect(html).toContain(`value="https://gw.test/admin/issuer-access-rules/new?token=${id}"`);
     expect(html).toContain('mailto:am@example.com?subject=Access%20to%20credential%20OpenAI');
     // The page's one primary hands the token to an access manager, with the link in the mail.
     const header = /<header class="ph">[\s\S]*?<\/header>/.exec(html)?.[0] ?? '';
     expect(header).toMatch(
-      /<a class="btn primary" href="mailto:am@example\.com\?subject=Access%20to%20credential%20OpenAI&amp;body=[^"]*admin%2Fissuer-access-rules%2Fnew%3Ftoken%3D/,
+      /<a class="btn primary" href="mailto:am@example\.com\?subject=Access%20to%20credential%20OpenAI&amp;body=[^"]*admin%2Fcredential-access-rules%2Fnew%3Fcredential%3D/,
     );
     expect(header).toContain('Ask an access manager');
     expect(html).not.toContain('gone@example.com');
-    expect(html).not.toContain('>Add issuer access rule<');
+    expect(html).not.toContain('>Add credential access rule<');
 
     const access = await sessionFor('access_manager', 'am2@example.com');
     const accessHtml = await (await adminGet(app, access, `/admin/credentials/${id}`)).text();
-    expect(accessHtml).toContain(`href="/admin/issuer-access-rules/new?token=${id}"`);
+    expect(accessHtml).toContain(`href="/admin/credential-access-rules/new?credential=${id}"`);
     expect(accessHtml).not.toMatch(/<form\b[^>]*\bmethod="post" action="\/admin\/credentials\//);
   });
 });
@@ -682,13 +681,13 @@ describe('last used', () => {
     await env.TELEMETRY_DB.prepare('DELETE FROM request_rollup_hourly').run();
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
-    await insertIssuerAccessRule(id, 'deploy');
+    await insertRule(id, 'deploy');
     const hour = Math.floor((Date.now() - 3 * 3_600_000) / 3_600_000) * 3_600_000;
     await env.TELEMETRY_DB.prepare(
-      `INSERT INTO request_rollup_hourly (hour, service_id, grant_id, outcome, status_class, requests,
-         upstream_auth_fail, duration_sum_ms) VALUES (?, ?, 'grt_TEST', 'allowed', 2, 4, 0, 40)`,
+      `INSERT INTO request_rollup_hourly (hour, service_id, credential_access_rule_id, outcome, status_class,
+         requests, upstream_auth_fail, duration_sum_ms) VALUES (?, ?, ?, 'allowed', 2, 4, 0, 40)`,
     )
-      .bind(hour, id)
+      .bind(hour, id, RULE_ID)
       .run();
     const list = await (await adminGet(app, admin, '/admin/credentials')).text();
     expect(list).toContain(`<time datetime="${new Date(hour).toISOString()}">3 h ago</time>`);
@@ -1124,10 +1123,10 @@ describe('test, toggle, delete', () => {
     expect(await serviceRow('openai')).toBeNull();
   });
 
-  it('refuses a plain delete while issuer access rules uses the token', async () => {
+  it('refuses a plain delete while credential access rules use the credential', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
-    await insertIssuerAccessRule(id, 'deploy <bot>');
+    await insertRule(id, 'deploy <bot>');
     const blocked = await adminPost(app, admin, `/admin/credentials/${id}/delete`, {
       confirm: '1',
     });

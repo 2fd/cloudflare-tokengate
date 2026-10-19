@@ -7,9 +7,9 @@ import {
   type GithubPresetInput,
   GITLAB_CONTEXTS,
   type GitlabPresetInput,
-  githubIssuerAccessRulePreset,
+  githubAccessRulePreset,
   githubPresetFromConditions,
-  gitlabIssuerAccessRulePreset,
+  gitlabAccessRulePreset,
   gitlabPresetFromConditions,
   PROTECTABLE_CONTEXTS,
 } from '../../../src/policy/presets';
@@ -76,14 +76,14 @@ describe('structured presets round-trip', () => {
   it.each(githubInputs().map((input) => [JSON.stringify(input), input] as const))(
     'GitHub %s',
     (_name, input) => {
-      const built = githubIssuerAccessRulePreset(input);
+      const built = githubAccessRulePreset(input);
       expect(built.errors).toEqual([]);
       const back = githubPresetFromConditions(built.conditions);
       expect(back).not.toBeNull();
       // Same conditions (a release and a tag context can share a pattern only in their events).
-      expect(
-        conditionSetKey(githubIssuerAccessRulePreset(back as GithubPresetInput).conditions),
-      ).toBe(conditionSetKey(built.conditions));
+      expect(conditionSetKey(githubAccessRulePreset(back as GithubPresetInput).conditions)).toBe(
+        conditionSetKey(built.conditions),
+      );
       expect(back).toEqual(input);
     },
   );
@@ -91,14 +91,14 @@ describe('structured presets round-trip', () => {
   it.each(gitlabInputs().map((input) => [JSON.stringify(input), input] as const))(
     'GitLab %s',
     (_name, input) => {
-      const built = gitlabIssuerAccessRulePreset(input);
+      const built = gitlabAccessRulePreset(input);
       expect(built.errors).toEqual([]);
       expect(gitlabPresetFromConditions(built.conditions)).toEqual(input);
     },
   );
 
   it('ignores condition order', () => {
-    const built = githubIssuerAccessRulePreset({
+    const built = githubAccessRulePreset({
       ...githubInputs()[0],
       context: 'branch',
       pattern: 'main',

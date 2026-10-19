@@ -168,7 +168,7 @@ If the configuration reads `$TOKENGATE_URL`, that project can send the token to 
 
 ### Give access from a denied request
 
-1. Run the job once. It fails with `403 no_matching_grant`.
+1. Run the job once. It fails with `403 no_matching_rule`.
 2. In the admin UI, open **Requests**, select the denied request and select **Give this caller access**.
 3. Review the prefilled form: the project as `path (ID)`, the context (environment, branch or tag), the protected-refs choice, and the exact call as an operation (unless the path contains `*` or `%2F`). An untrusted pipeline source opens the rows editor and asks you to accept that risk.
 4. Select **Give access**.
@@ -194,5 +194,5 @@ See [errors.md](../errors.md) for every error code. A response without `x-tokeng
 | `tenant_mismatch` (401) | The project is in a subgroup that is not listed | Add the subgroup on the credential access rule page (**Add groups**). |
 | `token_too_old` (401) | Call made more than **Maximum token age** after the job started | See [Long jobs](#long-jobs). |
 | `event_not_trusted` (403) | `pipeline_source` is not trusted and the grant does not opt in | Add an exact `pipeline_source` condition that lists it. |
-| `no_matching_grant` (403) | No grant matches | Ask an access manager to use **Give this caller access** on the request. |
+| `no_matching_rule` (403) | No grant matches | Ask an access manager to use **Give this caller access** on the request. |
 | `jwks_unavailable` (503) | The gateway cannot fetch the instance's signing keys | Check that the instance is publicly reachable over https. |

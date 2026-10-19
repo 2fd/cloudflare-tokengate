@@ -23,9 +23,9 @@ export const LATENCY_BUCKETS = [
 export interface RollupRow {
   /** Hour start, ms since epoch (UTC). For live aggregates: start of the aggregated window. */
   hour: number;
-  /** '' when unknown (request failed before the service or grant was resolved). */
+  /** '' when unknown (request failed before the service or credential access rule was resolved). */
   service_id: string;
-  grant_id: string;
+  credential_access_rule_id: string;
   outcome: Outcome;
   /** floor(status / 100) of the status the gateway returned. */
   status_class: number;
@@ -51,7 +51,7 @@ const BUCKET_SUMS = LATENCY_BUCKETS.map(({ column, upper }, i) => {
 /** Aggregate of request_log over ids in [?1, ?2), labelled with hour ?3. */
 const AGGREGATE_SELECT = `SELECT ?3 AS hour,
     COALESCE(service_id, '') AS service_id,
-    COALESCE(grant_id, '') AS grant_id,
+    COALESCE(credential_access_rule_id, '') AS credential_access_rule_id,
     outcome,
     status / 100 AS status_class,
     SUM(weight) AS requests,
@@ -60,12 +60,12 @@ const AGGREGATE_SELECT = `SELECT ?3 AS hour,
     ${BUCKET_SUMS}
   FROM request_log
   WHERE id >= ?1 AND id < ?2
-  GROUP BY COALESCE(service_id, ''), COALESCE(grant_id, ''), outcome, status / 100`;
+  GROUP BY COALESCE(service_id, ''), COALESCE(credential_access_rule_id, ''), outcome, status / 100`;
 
 const ROLLUP_COLUMNS = [
   'hour',
   'service_id',
-  'grant_id',
+  'credential_access_rule_id',
   'outcome',
   'status_class',
   'requests',
@@ -100,7 +100,7 @@ export function rollupHourStatement(db: D1Database, hour: number): D1PreparedSta
   return db
     .prepare(
       `INSERT INTO request_rollup_hourly (${ROLLUP_COLUMNS}) ${AGGREGATE_SELECT}
-       ON CONFLICT (hour, service_id, grant_id, outcome, status_class) DO UPDATE SET ${ROLLUP_VALUE_SET}
+       ON CONFLICT (hour, service_id, credential_access_rule_id, outcome, status_class) DO UPDATE SET ${ROLLUP_VALUE_SET}
        WHERE excluded.requests > request_rollup_hourly.requests`,
     )
     .bind(from, to, hour);
@@ -137,7 +137,7 @@ export function rollupFromRow(row: Record<string, unknown>): RollupRow {
     // oxlint-disable-next-line typescript/no-base-to-string -- D1 TEXT or NULL
     service_id: String(row.service_id ?? ''),
     // oxlint-disable-next-line typescript/no-base-to-string -- D1 TEXT or NULL
-    grant_id: String(row.grant_id ?? ''),
+    credential_access_rule_id: String(row.credential_access_rule_id ?? ''),
     outcome: row.outcome as Outcome,
     status_class: Number(row.status_class),
     requests: Number(row.requests ?? 0),
@@ -180,8 +180,8 @@ export function upstreamAuthFailuresStatement(
     .bind(idLowerBound('req', sinceMs), minFailures, minRatio);
 }
 
-export interface IssuerAccessRuleUsage {
-  grant_id: string;
+export interface RuleUsage {
+  credential_access_rule_id: string;
   /** Newest hour with an allowed request. */
   last_hour: number;
   /** Allowed requests in the window. */
@@ -189,50 +189,51 @@ export interface IssuerAccessRuleUsage {
 }
 
 /**
- * Allowed requests per grant in stored rollups for hours in [sinceHour, beforeHour) (a primary-key
+ * Allowed requests per credential access rule in stored rollups for hours in [sinceHour, beforeHour) (a primary-key
  * range scan: `hour` leads the key). The hours not rolled up yet come from
- * aggregateRequestLogStatement; mergeIssuerAccessRuleUsage combines both. The rollup retention minimum
+ * aggregateRequestLogStatement; mergeRuleUsage combines both. The rollup retention minimum
  * (30 days, SETTING_BOUNDS) keeps a 30-day window available.
  */
-export function grantUsageStatement(
+export function ruleUsageStatement(
   db: D1Database,
   sinceHour: number,
   beforeHour: number = Number.MAX_SAFE_INTEGER,
 ): D1PreparedStatement {
   return db
     .prepare(
-      `SELECT grant_id, MAX(hour) AS last_hour, SUM(requests) AS requests
+      `SELECT credential_access_rule_id, MAX(hour) AS last_hour, SUM(requests) AS requests
        FROM request_rollup_hourly
-       WHERE hour >= ? AND hour < ? AND grant_id <> '' AND outcome = 'allowed'
-       GROUP BY grant_id`,
+       WHERE hour >= ? AND hour < ? AND credential_access_rule_id <> '' AND outcome = 'allowed'
+       GROUP BY credential_access_rule_id`,
     )
     .bind(sinceHour, beforeHour);
 }
 
 /**
- * Usage per grant id from grantUsageStatement rows plus live aggregates (rollupFromRow of
+ * Usage per credential access rule id from ruleUsageStatement rows plus live aggregates (rollupFromRow of
  * aggregateRequestLogStatement) for the hours after them. Live rows count at their window start.
  */
-export function mergeIssuerAccessRuleUsage(
+export function mergeRuleUsage(
   stored: ReadonlyArray<Record<string, unknown>>,
   live: readonly RollupRow[],
-): Map<string, IssuerAccessRuleUsage> {
-  const usage = new Map<string, IssuerAccessRuleUsage>();
-  const add = (grantId: string, hour: number, requests: number) => {
-    if (grantId === '' || requests <= 0) return;
-    const current = usage.get(grantId);
-    usage.set(grantId, {
-      grant_id: grantId,
+): Map<string, RuleUsage> {
+  const usage = new Map<string, RuleUsage>();
+  const add = (ruleId: string, hour: number, requests: number) => {
+    if (ruleId === '' || requests <= 0) return;
+    const current = usage.get(ruleId);
+    usage.set(ruleId, {
+      credential_access_rule_id: ruleId,
       last_hour: Math.max(current?.last_hour ?? hour, hour),
       requests: (current?.requests ?? 0) + requests,
     });
   };
   for (const row of stored) {
     // oxlint-disable-next-line typescript/no-base-to-string -- D1 TEXT
-    add(String(row.grant_id ?? ''), Number(row.last_hour), Number(row.requests ?? 0));
+    const ruleId = String(row.credential_access_rule_id ?? '');
+    add(ruleId, Number(row.last_hour), Number(row.requests ?? 0));
   }
   for (const row of live) {
-    if (row.outcome === 'allowed') add(row.grant_id, row.hour, row.requests);
+    if (row.outcome === 'allowed') add(row.credential_access_rule_id, row.hour, row.requests);
   }
   return usage;
 }
@@ -251,7 +252,7 @@ const VALUE_SUMS = [
   .join(', ');
 
 /**
- * Stored rollups for hours in [fromHour, toHour), summed per (service, grant, outcome, status
+ * Stored rollups for hours in [fromHour, toHour), summed per (service, credential access rule, outcome, status
  * class) and labelled with `fromHour`: the same shape as rollupFromRow reads, aggregated in SQL so
  * a 30-day range reads one row per combination instead of one per hour.
  */
@@ -262,9 +263,9 @@ export function edgeTotalsStatement(
 ): D1PreparedStatement {
   return db
     .prepare(
-      `SELECT ?1 AS hour, service_id, grant_id, outcome, status_class, ${VALUE_SUMS}
+      `SELECT ?1 AS hour, service_id, credential_access_rule_id, outcome, status_class, ${VALUE_SUMS}
        FROM request_rollup_hourly WHERE hour >= ?1 AND hour < ?2
-       GROUP BY service_id, grant_id, outcome, status_class`,
+       GROUP BY service_id, credential_access_rule_id, outcome, status_class`,
     )
     .bind(fromHour, toHour);
 }
@@ -304,7 +305,7 @@ export function seriesFromRow(row: Record<string, unknown>): SeriesRow {
 
 /** Denied records grouped by caller, token and reason (Top denials). */
 export interface DenialGroup {
-  /** '' when no consumer was resolved. */
+  /** '' when no credential access rule was resolved. */
   credential_access_rule_id: string;
   /** '' when no token was resolved. */
   service_id: string;
@@ -327,7 +328,7 @@ export const DENIAL_GROUPS_LIMIT = 10;
 
 /**
  * Top denied callers since `sinceMs`: the newest `scanRows` denied records (through the partial
- * index request_log_problems, whose WHERE term is repeated literally), grouped by consumer, token,
+ * index request_log_problems, whose WHERE term is repeated literally), grouped by credential access rule, credential,
  * reason, verification and caller. Each row also says how many records were scanned, so the page
  * can say when the bound was hit.
  */

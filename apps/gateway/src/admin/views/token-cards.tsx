@@ -341,7 +341,7 @@ function TemplateCard(props: {
               and never shown again.
             </li>
             <li>
-              <b>Loading a token gives nobody access.</b> Issuer access rules is given separately.
+              <b>Loading a credential gives nobody access.</b> Credential access rules do.
             </li>
           </ol>
           <p class="hint">

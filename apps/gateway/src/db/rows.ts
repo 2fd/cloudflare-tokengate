@@ -1,16 +1,9 @@
 // D1 row -> domain object mappers. JSON columns are parsed defensively: a malformed stored value
-// becomes an empty/neutral value that fails closed (e.g. a grant with unparsable rules allows nothing).
+// becomes an empty/neutral value that fails closed (e.g. an access rule with unparsable rules allows nothing).
 import type { ProfileId } from '../identity/types';
 import { parseJson } from '../lib/json';
 import type { Condition, Injection, Rule, VerifyCheck } from '../policy/types';
-import type {
-  CredentialAccessRule,
-  IssuerAccessRule,
-  Role,
-  Service,
-  User,
-  UserStatus,
-} from './types';
+import type { AccessRuleRow, Role, Service, User, UserStatus } from './types';
 
 type Row = Record<string, unknown>;
 
@@ -23,8 +16,6 @@ const numOrNull = (value: unknown): number | null =>
   value == null ? null : typeof value === 'number' ? value : Number(value);
 const stringArray = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
-const objectArray = <T>(value: unknown): T[] =>
-  Array.isArray(value) ? value.filter((item): item is T => !!item && typeof item === 'object') : [];
 
 export function userFromRow(row: Row): User {
   return {
@@ -42,26 +33,87 @@ export function userFromRow(row: Row): User {
   };
 }
 
-export function credentialAccessRuleFromRow(row: Row): CredentialAccessRule {
-  return {
-    credential_id: str(row.credential_id),
-    conditions: (() => {
-      const parsed = parseJson(strOrNull(row.conditions));
-      return (Array.isArray(parsed) ? parsed : [null]) as Condition[];
-    })(),
+// Sentinels of access rule limits (ADR 0026, I-AUTHZ-5). A stored value that does not parse, has the
+// wrong type, or (on a global access rule) is an empty list matches nothing; it never reads as "no limit".
+const NO_CONDITION: Condition[] = [null as unknown as Condition];
+const NO_RULE: Rule[] = [null as unknown as Rule];
+const NO_ANCHOR: string[] = [''];
+const NO_ALG: string[] = [];
+
+type Limit<T> = { kind: 'null' } | { kind: 'bad' } | { kind: 'ok'; value: T };
+
+/** A JSON list column: SQL NULL, a value that is not a list (or holds a wrong item), or the list. */
+function listColumn<T>(value: unknown, item: (x: unknown) => boolean): Limit<T[]> {
+  if (value === null || value === undefined) return { kind: 'null' };
+  const parsed = parseJson(typeof value === 'string' ? value : null);
+  if (!Array.isArray(parsed) || !parsed.every(item)) return { kind: 'bad' };
+  return { kind: 'ok', value: parsed as T[] };
+}
+
+const isString = (x: unknown): boolean => typeof x === 'string';
+// Conditions and rules keep malformed items: the policy refuses them one by one (fail closed).
+const anyItem = (): boolean => true;
+
+/** The kind comes from `credential_id`: NULL is a global access rule. */
+export function accessRuleFromRow(row: Row): AccessRuleRow {
+  const base = {
     id: str(row.id),
     name: str(row.name),
+    description: str(row.description),
     profile: str(row.profile) as ProfileId,
     issuer: str(row.issuer),
-    jwks_uri: str(row.jwks_uri),
-    audience: str(row.audience),
-    allowed_algs: stringArray(parseJson(strOrNull(row.allowed_algs))),
-    max_token_age_seconds: num(row.max_token_age_seconds),
-    tenant_pin: objectArray<Condition>(parseJson(strOrNull(row.tenant_pin))),
-    anchor_claims: stringArray(parseJson(strOrNull(row.anchor_claims))),
+    issuer_key: str(row.issuer_key),
     enabled: num(row.enabled) === 1,
+    expires_at: numOrNull(row.expires_at),
+    created_by: strOrNull(row.created_by),
     created_at: num(row.created_at),
     updated_at: num(row.updated_at),
+  };
+  const conditions = listColumn<Condition>(row.conditions, anyItem);
+  const rules = listColumn<Rule>(row.rules, anyItem);
+  const tenantPin = listColumn<Condition>(row.tenant_pin, anyItem);
+  const anchors = listColumn<string>(row.anchor_claims, isString);
+  const algs = listColumn<string>(row.allowed_algs, isString);
+
+  if (row.credential_id !== null && row.credential_id !== undefined) {
+    // Every limit is required (CHECK); an empty tenant pin or anchor list is a valid value here.
+    const value = <T>(limit: Limit<T[]>, sentinel: T[]): T[] =>
+      limit.kind === 'ok' ? limit.value : sentinel;
+    return {
+      ...base,
+      kind: 'credential',
+      credential_id: str(row.credential_id),
+      jwks_uri: str(row.jwks_uri),
+      audience: str(row.audience),
+      allowed_algs: value(algs, NO_ALG),
+      max_token_age_seconds: num(row.max_token_age_seconds),
+      tenant_pin: value(tenantPin, NO_CONDITION),
+      anchor_claims: value(anchors, NO_ANCHOR),
+      conditions: value(conditions, NO_CONDITION),
+      rules: value(rules, NO_RULE),
+    };
+  }
+
+  // NULL is "no limit"; an empty list is as bad as a malformed one (`every` over [] is true).
+  const limit = <T>(column: Limit<T[]>, sentinel: T[]): T[] | null =>
+    column.kind === 'null'
+      ? null
+      : column.kind === 'ok' && column.value.length > 0
+        ? column.value
+        : sentinel;
+  const age = numOrNull(row.max_token_age_seconds);
+  return {
+    ...base,
+    kind: 'global',
+    credential_id: null,
+    jwks_uri: strOrNull(row.jwks_uri),
+    audience: strOrNull(row.audience),
+    allowed_algs: limit(algs, NO_ALG),
+    max_token_age_seconds: age === null ? null : Number.isSafeInteger(age) ? age : 0,
+    tenant_pin: limit(tenantPin, NO_CONDITION),
+    anchor_claims: limit(anchors, NO_ANCHOR),
+    conditions: limit(conditions, NO_CONDITION),
+    rules: limit(rules, NO_RULE),
   };
 }
 
@@ -89,23 +141,6 @@ export function serviceFromRow(row: Row): Service {
     verify: verify && typeof verify === 'object' ? (verify as VerifyCheck) : null,
     template_id: strOrNull(row.template_id),
     enabled: num(row.enabled) === 1,
-    created_at: num(row.created_at),
-    updated_at: num(row.updated_at),
-  };
-}
-
-export function grantFromRow(row: Row): IssuerAccessRule {
-  return {
-    id: str(row.id),
-    name: str(row.name),
-    description: str(row.description),
-    credential_access_rule_id: str(row.credential_access_rule_id),
-    service_id: str(row.service_id),
-    conditions: objectArray<Condition>(parseJson(strOrNull(row.conditions))),
-    rules: objectArray<Rule>(parseJson(strOrNull(row.rules))),
-    enabled: num(row.enabled) === 1,
-    expires_at: numOrNull(row.expires_at),
-    created_by: strOrNull(row.created_by),
     created_at: num(row.created_at),
     updated_at: num(row.updated_at),
   };

@@ -1,7 +1,7 @@
-// Pure display helpers of the credential access rule and issuer access rules pages: the hour-based "last used" time,
+// Pure display helpers of the credential and global access rule pages: the hour-based "last used" time,
 // the status a row leads with, the busiest-first order and the operation names.
 import { describe, expect, it } from 'vitest';
-import type { AccessEdge } from '../../../../src/admin/connections';
+import type { RuleEdge } from '../../../../src/admin/connections';
 import {
   busiestFirst,
   leadStatus,
@@ -70,12 +70,12 @@ describe('busiestFirst', () => {
 });
 
 describe('operationsText', () => {
-  const edge = (rules: AccessEdge['grant']['rules'], template: string | null) =>
+  const edge = (rules: RuleEdge['rule']['rules'], template: string | null) =>
     ({
-      grant: { rules },
-      token: { template_id: template },
+      rule: { rules },
+      credential: { template_id: template },
       subject: 'acme/api',
-    }) as unknown as Pick<AccessEdge, 'grant' | 'token' | 'subject'>;
+    }) as unknown as Pick<RuleEdge, 'rule' | 'credential' | 'subject'>;
 
   it('names a whole preset by its label', () => {
     expect(operationsText(edge([{ methods: ['POST'], path: '/chat.postMessage' }], 'slack'))).toBe(

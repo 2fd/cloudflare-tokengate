@@ -19,15 +19,15 @@ function record(ts: number, overrides: Partial<RequestRecord>): RequestRecord {
     id: newId('req', ts, random),
     ts,
     outcome: 'denied',
-    reason: 'no_matching_grant',
+    reason: 'no_matching_rule',
     status: 403,
     upstream_status: null,
     method: 'POST',
     path: '/chat.postMessage',
     service_slug: 'slack',
     service_id: 'svc_01JAAAAAAAAAAAAAAAAAAAAAAA',
-    credential_access_rule_id: 'cpr_01JAAAAAAAAAAAAAAAAAAAAAAA',
-    grant_id: null,
+    credential_access_rule_id: 'acr_01JAAAAAAAAAAAAAAAAAAAAAAA',
+    global_access_rule_id: null,
     claims_verified: 1,
     caller_subject: 'repo:acme/web:ref:refs/heads/main',
     caller_repository: 'acme/web',
@@ -93,13 +93,13 @@ describe('I-LOG-2: Top denials', () => {
     // Two requests first; then the newest of the single ones.
     expect(rows).toEqual(['acme/web', 'acme/web', 'acme/api']);
     expect(html).toContain(`href="/admin/requests/${web[1]?.id}"`);
-    expect(html).toContain(`href="/admin/issuer-access-rules/new?from_request=${web[1]?.id}"`);
+    expect(html).toContain(`href="/admin/credential-access-rules/new?from_request=${web[1]?.id}"`);
     expect(html).toContain('Give access<span class="vh"> for acme/web on slack</span>');
     // The count links to exactly that group, and names it for screen readers.
     expect(html).toContain('>2<span class="vh"> denied requests from acme/web to slack</span></a>');
     // tenant_mismatch is not fixable by an access: the action is the list of exactly this group.
     expect(html).toContain(
-      'href="/admin/requests?range=24h&amp;outcome=denied&amp;token=svc_01JAAAAAAAAAAAAAAAAAAAAAAA&amp;consumer=cpr_01JAAAAAAAAAAAAAAAAAAAAAAA&amp;reason=tenant_mismatch&amp;repo=acme%2Fweb"',
+      'href="/admin/requests?range=24h&amp;outcome=denied&amp;token=svc_01JAAAAAAAAAAAAAAAAAAAAAAA&amp;rule=acr_01JAAAAAAAAAAAAAAAAAAAAAAA&amp;reason=tenant_mismatch&amp;repo=acme%2Fweb"',
     );
     expect(html).toContain('href="/admin/requests?range=24h&amp;outcome=denied"');
   });
@@ -107,7 +107,7 @@ describe('I-LOG-2: Top denials', () => {
   it('gives an unverified group no create link and keeps its issuer out of every href', async () => {
     const iss = 'https://evil.example/"><script>';
     await insert([
-      record(NOW - 2000, { ...unverified(NOW - 2000, iss), reason: 'no_matching_grant' }),
+      record(NOW - 2000, { ...unverified(NOW - 2000, iss), reason: 'no_matching_rule' }),
       record(NOW - 1000, unverified(NOW - 1000, iss)),
     ]);
     const app = createTestApp({ now: () => NOW });
@@ -138,7 +138,7 @@ describe('I-LOG-2: Top denials', () => {
     await insert([record(NOW - 1000, {}), record(NOW - 900, unverified(NOW - 900, GITHUB_ISSUER))]);
     const app = createTestApp({ now: () => NOW });
     const html = denials(await (await adminGet(app, await loginAs(app, viewer), '/admin')).text());
-    expect(html).not.toContain('/admin/issuer-access-rules/new');
+    expect(html).not.toContain('/admin/credential-access-rules/new');
     expect(html).not.toContain('/admin/credential-access-rules/new');
     expect(html).toContain('See requests');
   });

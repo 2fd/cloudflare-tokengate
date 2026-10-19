@@ -7,7 +7,15 @@ import type { ProfileId } from '../identity/types';
 import { docsUrl } from './views/docs';
 
 export type Range = '24h' | '7d' | '30d';
-export type AuditCategory = 'tokens' | 'consumers' | 'access' | 'users' | 'signins' | 'system';
+export type AuditCategory =
+  | 'tokens'
+  | 'access_rules'
+  | 'global_rules'
+  | 'users'
+  | 'signins'
+  | 'system';
+/** Quick links of the credential access rules list. */
+export type RuleStatusFilter = 'active' | 'disabled' | 'expired' | 'blocked';
 
 type Params = Record<string, string | undefined>;
 
@@ -33,9 +41,8 @@ export const paths = {
     outcome?: 'allowed' | 'denied' | 'error';
     /** A token id, or `none` for requests refused before the token was looked up. */
     token?: string;
-    /** A credential access rule id, or `none` for requests with no verified consumer. */
-    consumer?: string;
-    access?: string;
+    /** A credential access rule id, or `none` for requests that no credential access rule verified. */
+    rule?: string;
     repo?: string;
     reason?: string;
     slug?: string;
@@ -75,46 +82,64 @@ export const paths = {
     tokenId: string,
     o?: {
       open?: 'destination' | 'details';
-      hash?: 'consumers' | 'secret' | 'use' | 'destination' | 'details' | 'danger';
+      hash?: 'rules' | 'secret' | 'use' | 'destination' | 'details' | 'danger';
     },
   ) => build(`/admin/credentials/${id(tokenId)}`, { open: o?.open }, o?.hash),
   tokenHosts: () => '/admin/credentials/hosts',
   tokenKeys: (hash?: 'rewrap') => build('/admin/credentials/keys', undefined, hash),
 
-  consumers: (o?: { hash?: 'add' }) => build('/admin/credential-access-rules', undefined, o?.hash),
-  consumerNew: (o?: { type?: ProfileId; credential?: string }) =>
-    build('/admin/credential-access-rules/new', o),
-  consumer: (
-    consumerId: string,
-    o?: { open?: 'trust'; hash?: 'access' | 'tenants' | 'trust' | 'snippet' | 'danger' },
-  ) => build(`/admin/credential-access-rules/${id(consumerId)}`, { open: o?.open }, o?.hash),
-
-  access: (f?: {
-    /** Map (default; `list` is an alias) or Matrix. */
-    view?: 'matrix' | 'list';
-    consumer?: string;
-    token?: string;
-    repository?: string;
-    status?: 'active' | 'inactive' | 'expiring' | 'expired' | 'unused' | 'risk';
-    /** A credential access rule id the connections map focuses on. */
+  accessRules: (f?: {
+    credential?: string;
+    /** An issuer key. */
+    issuer?: string;
+    status?: RuleStatusFilter;
+    /** List (default), map or matrix (WP-R3; until then both render the list). */
+    view?: 'list' | 'map' | 'matrix';
+    /** A credential access rule id the map focuses on. */
     focus?: string;
-    /** The matrix of the nodes the map grouped ("+ N more"). */
-    consumers?: 'rest';
-    tokens?: 'rest';
-  }) => build('/admin/issuer-access-rules', f),
-  accessNew: (p?: {
-    /** A credential access rule id, or `new` to add the credential access rule inside the access form. */
-    consumer?: string;
-    token?: string;
-    repository?: string;
+  }) => build('/admin/credential-access-rules', f),
+  accessRuleNew: (p?: {
+    credential?: string;
+    type?: ProfileId;
+    /** A credential access rule id whose fields prefill the form. */
     copy?: string;
+    /** A verified request record whose caller and call prefill the form (I-LOG-2). */
     from_request?: string;
-    mode?: 'rows';
-  }) => build('/admin/issuer-access-rules/new', p),
-  accessItem: (
-    accessId: string,
-    o?: { open?: 'edit'; hash?: 'use' | 'edit' | 'copy' | 'danger' },
-  ) => build(`/admin/issuer-access-rules/${id(accessId)}`, { open: o?.open }, o?.hash),
+  }) => build('/admin/credential-access-rules/new', p),
+  accessRule: (
+    ruleId: string,
+    o?: {
+      open?: 'edit';
+      hash?:
+        | 'jobs'
+        | 'operations'
+        | 'tenants'
+        | 'trust'
+        | 'global'
+        | 'snippet'
+        | 'history'
+        | 'danger';
+    },
+  ) =>
+    build(
+      `/admin/credential-access-rules/${id(ruleId)}`,
+      { open: o?.open },
+      o?.hash ?? (o?.open === 'edit' ? 'edit' : undefined),
+    ),
+
+  globalRules: (f?: { issuer?: string; status?: 'enabled' | 'disabled' | 'expired' }) =>
+    build('/admin/global-access-rules', f),
+  globalRuleNew: (p?: { issuer?: string; type?: ProfileId }) =>
+    build('/admin/global-access-rules/new', p),
+  globalRule: (
+    ruleId: string,
+    o?: { open?: 'edit'; hash?: 'limits' | 'affected' | 'history' | 'danger' },
+  ) =>
+    build(
+      `/admin/global-access-rules/${id(ruleId)}`,
+      { open: o?.open },
+      o?.hash ?? (o?.open === 'edit' ? 'edit' : undefined),
+    ),
 
   docs: (path: string) => docsUrl(path),
 };
@@ -136,13 +161,12 @@ export const RETURN_PATHS = {
     list: () => paths.tokens(),
   },
   'POST /admin/credential-access-rules/:id/toggle': {
-    detail: (p: { id: string }) => paths.consumer(p.id),
-    list: () => paths.consumers(),
+    detail: (p: { id: string }) => paths.accessRule(p.id),
+    list: () => paths.accessRules(),
   },
-  'POST /admin/issuer-access-rules/:id/toggle': {
-    detail: (p: { id: string }) => paths.accessItem(p.id),
-    list: () => paths.access({ view: 'list' }),
-    matrix: () => paths.access(),
+  'POST /admin/global-access-rules/:id/toggle': {
+    detail: (p: { id: string }) => paths.globalRule(p.id),
+    list: () => paths.globalRules(),
   },
 } as const;
 

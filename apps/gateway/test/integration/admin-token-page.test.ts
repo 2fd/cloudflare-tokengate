@@ -1,5 +1,6 @@
-// The token page and list on design D (A13.1, A13.3): the "Who can use" map with its scale rule,
-// problems as callouts that name the token, the rail history, the delete dialog's "Disable
+// The credential page and list on design D (A13.1, A13.3, A7.9): the "Who can use" map grouped by
+// issuer with its scale rule and global statuses,
+// problems as callouts that name the credential, the rail history, the delete dialog's "Disable
 // instead" form, and the Allowed hosts and Encryption keys settings pages.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -43,105 +44,134 @@ async function createOpenAi(session: AdminSession): Promise<string> {
   return id;
 }
 
-async function insertConsumer(id: string, name: string): Promise<void> {
-  const now = Date.now();
-  await env.DB.prepare(
-    `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
-       max_token_age_seconds, tenant_pin, anchor_claims, enabled, created_at, updated_at)
-     VALUES (?, (SELECT id FROM credentials ORDER BY id LIMIT 1), ?, 'generic', ?, ?, 'tokengate:0123456789ABCDEF',
-       '["RS256"]', 600, '[]', '[]', 1, ?, ?)`,
-  )
-    .bind(id, name, `https://${id}.example.com`, `https://${id}.example.com/jwks`, now, now)
-    .run();
-}
+/** A credential access rule id from a short Crockford tag. */
+const acr = (tag: string) => `acr_01J${tag.padStart(23, '0')}`;
 
-async function insertAccess(
+let seq = 0;
+
+/** A credential access rule of `credentialId` for `issuer`, allowing POST /responses for `repo`. */
+async function insertRule(
   id: string,
-  consumerId: string,
-  serviceId: string,
+  credentialId: string,
+  issuer: string,
   repo: string,
-  expiresAt: number | null = null,
+  extra: { expiresAt?: number | null; jwksUri?: string; tenantPin?: unknown[] } = {},
 ): Promise<void> {
-  const now = Date.now();
+  const at = Date.now() + seq++;
   await env.DB.prepare(
-    `INSERT INTO issuer_access_rules (id, name, description, credential_access_rule_id, service_id, conditions, rules,
-       enabled, expires_at, created_by, created_at, updated_at)
-     VALUES (?, ?, '', ?, ?, ?, '[{"methods":["POST"],"path":"/responses"}]', 1, ?, NULL, ?, ?)`,
+    `INSERT INTO access_rules (id, credential_id, name, profile, issuer, issuer_key, jwks_uri, audience,
+       allowed_algs, max_token_age_seconds, tenant_pin, anchor_claims, conditions, rules, enabled,
+       expires_at, created_at, updated_at)
+     VALUES (?, ?, ?, 'generic', ?, ?, ?, 'tokengate:0123456789ABCDEF', '["RS256"]', 600, ?, '[]', ?,
+       '[{"methods":["POST"],"path":"/responses"}]', 1, ?, ?, ?)`,
   )
     .bind(
       id,
+      credentialId,
       repo,
-      consumerId,
-      serviceId,
+      issuer,
+      issuer.toLowerCase(),
+      extra.jwksUri ?? `${issuer}/jwks`,
+      JSON.stringify(extra.tenantPin ?? []),
       JSON.stringify([
         { claim: 'repository', match: 'exact', values: [repo] },
         { claim: 'ref', match: 'exact', values: ['refs/heads/main'] },
       ]),
-      expiresAt,
-      now,
-      now,
+      extra.expiresAt ?? null,
+      at,
+      at,
     )
     .run();
 }
 
-describe('who can use a token', () => {
-  it('draws at most 3 consumers and 3 accesses each, and says what it leaves out', async () => {
+/** A global access rule of `issuer` that pins its JWKS URI. */
+async function insertGlobalRule(id: string, issuer: string, jwksUri: string): Promise<void> {
+  const now = Date.now();
+  await env.DB.prepare(
+    `INSERT INTO access_rules (id, credential_id, name, profile, issuer, issuer_key, jwks_uri, enabled,
+       created_at, updated_at)
+     VALUES (?, NULL, 'pinned keys', 'generic', ?, ?, ?, 1, ?, ?)`,
+  )
+    .bind(id, issuer, issuer.toLowerCase(), jwksUri, now, now)
+    .run();
+}
+
+describe('who can use a credential (A7.9)', () => {
+  const ALPHA = 'https://alpha.example.com';
+
+  it('groups the rules by issuer, draws at most 3 issuers and 3 rules each, and says what it leaves out', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
-    for (const [n, name] of ['Alpha CI', 'Beta CI', 'Gamma CI', 'Delta CI'].entries()) {
-      await insertConsumer(`cpr_${n}`, name);
-    }
-    // Alpha has 5 accesses (one expiring), the others one each.
+    // Alpha has 5 rules (the last one expiring), the others one each.
     for (let n = 0; n < 5; n++) {
-      await insertAccess(
-        `grt_A${n}`,
-        'cpr_0',
-        id,
-        `acme/a${n}`,
-        n === 4 ? Date.now() + 3 * DAY : null,
-      );
+      await insertRule(acr(`A${n}`), id, ALPHA, `acme/a${n}`, {
+        expiresAt: n === 4 ? Date.now() + 3 * DAY : null,
+      });
     }
-    await insertAccess('grt_B', 'cpr_1', id, 'acme/b');
-    await insertAccess('grt_C', 'cpr_2', id, 'acme/c');
-    await insertAccess('grt_D', 'cpr_3', id, 'acme/d');
+    await insertRule(acr('B'), id, 'https://beta.example.com', 'acme/b');
+    await insertRule(acr('C'), id, 'https://gamma.example.com', 'acme/c');
+    await insertRule(acr('D'), id, 'https://delta.example.com', 'acme/d');
     const html = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
     const map = /<ul class="wgroups"[\s\S]*?<\/ul>\s*<div class="whub"/.exec(html)?.[0] ?? '';
-    // Groups by requests, then name: Alpha, Beta, Delta drawn; Gamma goes to the matrix node.
+    // Groups by requests, then name: Alpha, Beta, Delta drawn; Gamma goes to the rest node.
     expect(map.match(/<li class="wg">/g)).toHaveLength(3);
-    expect(map).toContain('Alpha CI');
-    expect(map).not.toContain('Gamma CI');
+    expect(map).toContain('alpha.example.com');
+    expect(map).not.toContain('gamma.example.com');
     expect(map.match(/<li class="wrow(?: warn)?">/g)).toHaveLength(5);
+    expect(map).toContain(`href="/admin/credential-access-rules/${acr('A0')}"`);
     expect(map).toContain(
-      `href="/admin/issuer-access-rules?token=${id}&amp;consumer=cpr_0">+ 2 more accesses<span class="vh"> of Alpha CI to OpenAI</span></a>`,
+      `href="/admin/credential-access-rules?credential=${id}&amp;issuer=https%3A%2F%2Falpha.example.com">+ 2 more access rules<span class="vh"> of alpha.example.com to OpenAI</span></a>`,
     );
     expect(map).toContain('<span class="meta">1 expiring</span>');
     expect(map).toContain(
-      `<a class="node group" href="/admin/issuer-access-rules?token=${id}&amp;view=matrix">`,
+      `<a class="node group" href="/admin/credential-access-rules?credential=${id}">`,
     );
-    expect(map).toContain('+ 1 more credential access rule · 1 access');
-    expect(html).toContain('<b>4 credential access rules, 8 accesses.</b>');
-    expect(html).toContain(
-      `<a href="/admin/issuer-access-rules?token=${id}&amp;status=expiring">1 expiring</a>`,
-    );
+    expect(map).toContain('+ 1 more issuer · 1 access rule');
+    expect(html).toContain('<b>4 issuers, 8 access rules.</b>');
     expect(html).toContain('Who can use OpenAI<span class="count">8</span>');
+    // Each row names its jobs and its operations.
+    expect(map).toContain('<code>POST /responses</code>');
   });
 
-  it('an access manager gets "Give another issuer access rules"; nobody else does', async () => {
+  it('marks a rule that the global access rules block, and names the global status in the row', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
-    await insertConsumer('cpr_0', 'Alpha CI');
-    await insertAccess('grt_A', 'cpr_0', id, 'acme/a');
+    await insertRule(acr('OK'), id, ALPHA, 'acme/ok');
+    await insertRule(acr('BAD'), id, ALPHA, 'acme/bad', { jwksUri: `${ALPHA}/other-keys` });
+    await insertGlobalRule('gar_01JAAAAAAAAAAAAAAAAAAAAAAA', ALPHA, `${ALPHA}/jwks`);
+    const html = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
+    const row = (rule: string) =>
+      new RegExp(
+        `<li class="wrow(?: warn)?">(?:(?!</li>)[\\s\\S])*?/admin/credential-access-rules/${rule}"[\\s\\S]*?</li>`,
+      ).exec(html)?.[0] ?? '';
+    expect(row(acr('BAD'))).toContain('<li class="wrow warn">');
+    expect(row(acr('BAD'))).toContain('<span class="t-bad">blocked by global access rules</span>');
+    expect(row(acr('BAD'))).toContain('Blocked by global access rules');
+    expect(row(acr('OK'))).not.toContain('global access rules');
+  });
+
+  it('an access manager gets "Add another credential access rule"; nobody else does', async () => {
+    const admin = await sessionFor('admin');
+    const id = await createOpenAi(admin);
+    await insertRule(acr('A'), id, ALPHA, 'acme/a');
     const html = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
     expect(html).toMatch(
-      /<a class="btn sm ghost" href="\/admin\/issuer-access-rules\/new\?token=[^"]+">[\s\S]*?Give another issuer access rules/,
+      /<a class="btn sm ghost" href="\/admin\/credential-access-rules\/new\?credential=[^"]+">[\s\S]*?Add another credential access rule/,
     );
-    const viewer = await (
-      await adminGet(app, await sessionFor('viewer'), `/admin/credentials/${id}`)
+    const access = await (
+      await adminGet(app, await sessionFor('access_manager'), `/admin/credentials/${id}`)
     ).text();
-    expect(viewer).not.toContain('Give another issuer access rules');
-    expect(viewer).toContain(
-      'Issuer access rules is granted by access managers. Send them this link:',
-    );
+    expect(access).toContain('Add another credential access rule');
+    for (const role of ['viewer', 'token_manager'] as const) {
+      const page = await (
+        await adminGet(app, await sessionFor(role), `/admin/credentials/${id}`)
+      ).text();
+      expect(page, role).not.toContain('Add another credential access rule');
+      expect(page, role).toContain(
+        'Access managers add credential access rules. Send them this link:',
+      );
+      expect(page, role).toContain(`/admin/credential-access-rules/new?credential=${id}`);
+    }
   });
 });
 
@@ -211,15 +241,14 @@ describe('delete dialog', () => {
   it('offers "Disable instead" through a detached form that carries the CSRF token', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
-    await insertConsumer('cpr_0', 'Alpha CI');
-    await insertAccess('grt_A', 'cpr_0', id, 'acme/a');
+    await insertRule(acr('A'), id, 'https://alpha.example.com', 'acme/a');
     const page = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
     const dialog = /<dialog class="dlg" id="dlg-delete"[\s\S]*?<\/dialog>/.exec(page)?.[0] ?? '';
-    expect(dialog).toContain('Delete OpenAI and its 1 issuer access rules?');
+    expect(dialog).toContain('Delete OpenAI and its 1 credential access rule?');
     expect(dialog).toContain('<button class="btn sm secondary" type="submit" form="dlg-disable">');
     expect(dialog).toContain('name="confirm_slug"');
     expect(dialog).toContain('pattern="openai"');
-    expect(dialog).toContain('href="/admin/issuer-access-rules/grt_A"');
+    expect(dialog).toContain(`href="/admin/credential-access-rules/${acr('A')}"`);
     const detached =
       /<form method="post" action="[^"]+\/toggle" id="dlg-disable" hidden="">[\s\S]*?<\/form>/.exec(
         page,

@@ -1,5 +1,5 @@
 // Monitoring › Overview (`GET /admin`): what needs attention (every alert, with its fix), where
-// calls went (the request pipeline), the top denied callers, which consumers use which token (the
+// calls went (the request pipeline), the top denied callers, which issuers use which credential (the
 // connections map), traffic per hour and the latest changes, then every health check, collapsed.
 // An empty install shows the getting-started steps instead. Read-only. Only names, counts and
 // states are shown, never configured values that could be secret (I-CFG-1, I-CRED-1). Denials
@@ -71,10 +71,11 @@ import {
   RANGE_LABEL,
 } from '../../telemetry/ranges';
 import { hourStart } from '../../telemetry/rollup';
-import { type AccessEdge, type Connections, loadConnections } from '../connections';
+import { type Connections, loadConnections, type RuleEdge } from '../connections';
 import { loadDone, type NoticeTable, resolveNotice } from '../notice';
 import { paths } from '../paths';
 import { renderPage, type ViewContext } from '../render';
+import { issuerLogo } from '../views/access-visuals';
 import type { Alert } from '../views/alerts';
 import { AskSomeone } from '../views/components';
 import {
@@ -84,6 +85,7 @@ import {
   loginProviderNames,
   relativeTime,
 } from '../views/format';
+import { issuerNodes } from '../views/matrix';
 import {
   ActorAvatar,
   ApproveOwnerDialogs,
@@ -92,7 +94,6 @@ import {
   AuditTarget,
   auditActorText,
   byUtcDay,
-  consumerLogo,
   dayLabel,
   FindRequest,
   pipelineStages,
@@ -149,11 +150,12 @@ export function registerOverviewRoutes(app: App): void {
       loadAuditPeople(deps.env.DB),
       loadDone(deps, { userId: c.get('viewer').user.id }, c.req.query('done')),
     ]);
-    // `?focus=` is a credential access rule id of the map; anything else is ignored, never echoed.
+    // `?focus=` is a credential access rule id (the map focuses its issuer) or the issuer key of a
+    // map node (the map's focus bar). Anything else is ignored, never echoed.
     const rawFocus = c.req.query('focus');
-    const focus = connections.consumers.some((consumer) => consumer.id === rawFocus)
-      ? rawFocus
-      : undefined;
+    const focus =
+      connections.rules.find((edge) => edge.rule.id === rawFocus)?.rule.issuer_key ??
+      connections.rules.find((edge) => edge.rule.issuer_key === rawFocus)?.rule.issuer_key;
     const steps = setupSteps(connections, overview.alertData, verifiedCall);
     const doneCount = Object.values(steps).filter(Boolean).length;
     // Fresh: nothing set up and nothing to show. Refused calls on a new install are worth showing
@@ -176,7 +178,7 @@ export function registerOverviewRoutes(app: App): void {
           fresh ? (
             <PageHeader
               title="Overview"
-              description={`Nothing calls through ${ctx.host} yet. Four steps connect a CI job to an upstream API without putting the API key in the job.`}
+              description={`Nothing calls through ${ctx.host} yet. Three steps connect a CI job to an upstream API without putting the API key in the job.`}
             />
           ) : (
             <PageHeader
@@ -280,12 +282,12 @@ function OverviewPage(props: PageData) {
   const warnings = alerts.filter((alert) => alert.level === 'warning').length;
   const notes = alerts.filter((alert) => alert.level === 'info').length;
   const errors = alerts.filter((alert) => alert.level === 'error').length;
-  const tokenNames = new Map(connections.tokens.map((t) => [t.id, t.name]));
+  const tokenNames = new Map(connections.credentials.map((t) => [t.id, t.name]));
   const { totals } = data;
   return (
     <>
       <RangeNote show={props.rangeNote} />
-      {props.doneCount < 4 ? (
+      {props.doneCount < 3 ? (
         <GetStarted
           ctx={ctx}
           connections={connections}
@@ -417,8 +419,8 @@ function TopDeniedTray(props: PageData) {
             range={range}
             caption={`Top denied callers since ${since}`}
             now={data.generatedAt}
-            consumers={new Map(connections.consumers.map((c) => [c.id, c]))}
-            tokens={new Map(connections.tokens.map((t) => [t.id, t]))}
+            rules={new Map(connections.rules.map((edge) => [edge.rule.id, edge.rule]))}
+            tokens={new Map(connections.credentials.map((t) => [t.id, t]))}
             ctx={ctx}
           />
         </Panel>
@@ -488,7 +490,7 @@ function TrafficTray(props: { data: OverviewData }) {
       <Tray id="traffic" title={`Requests per ${CHART[range].unit}`}>
         <Panel variant="pad">
           <ZeroState>
-            No requests in the selected range. Requests appear once a credential access rule calls{' '}
+            No requests in the selected range. Requests appear once a caller calls{' '}
             <code>/proxy/&lt;token slug&gt;/…</code>.
           </ZeroState>
         </Panel>
@@ -647,7 +649,7 @@ function FreshOverview(props: PageData) {
             <SummaryRow
               icon="gate"
               title="tokengate"
-              meta="Checks every call against an issuer access rule (step 3)"
+              meta="Checks every call against the credential access rules (step 2)"
             />
             <SummaryWire />
             <SummaryRow
@@ -663,7 +665,7 @@ function FreshOverview(props: PageData) {
           <Tray id="traffic" title="Traffic">
             <Panel variant="pad">
               <p class="muted">
-                No requests yet. They appear here once a credential access rule calls{' '}
+                No requests yet. They appear here once a caller calls{' '}
                 <code>/proxy/&lt;token slug&gt;/…</code>.
               </p>
               <Chips label="Where calls went, all zero">
@@ -695,8 +697,7 @@ function FreshOverview(props: PageData) {
 
 interface SetupSteps {
   token: boolean;
-  consumer: boolean;
-  access: boolean;
+  rule: boolean;
   call: boolean;
 }
 
@@ -707,8 +708,7 @@ function setupSteps(
 ): SetupSteps {
   return {
     token: alertData.credentials.some((s) => s.has_credential),
-    consumer: connections.consumers.length > 0,
-    access: connections.accesses.some((edge) => edge.grant.enabled),
+    rule: connections.rules.some((edge) => edge.rule.enabled),
     call: verifiedCall,
   };
 }
@@ -720,11 +720,9 @@ function GetStarted(props: {
   doneCount: number;
 }) {
   const { ctx, connections, steps } = props;
-  const [newest] = connections.accesses
-    .filter((edge) => edge.grant.enabled)
-    .sort(
-      (a, b) => b.grant.created_at - a.grant.created_at || b.grant.id.localeCompare(a.grant.id),
-    );
+  const [newest] = connections.rules
+    .filter((edge) => edge.rule.enabled)
+    .sort((a, b) => b.rule.created_at - a.rule.created_at || b.rule.id.localeCompare(a.rule.id));
   const guide = paths.docs('callers/github-actions.md');
   const draft: Array<Omit<ChecklistStep, 'state'> & { done: boolean; usable: boolean }> = [
     {
@@ -751,41 +749,20 @@ function GetStarted(props: {
           }),
     },
     {
-      done: steps.consumer,
-      usable: ctx.can('access:write'),
+      done: steps.rule,
+      usable: ctx.can('access:write') && connections.credentials.length > 0,
       title: 'Add a credential access rule',
       why: (
         <>
-          Trust the CI system that will call, for example GitHub Actions for your organization.{' '}
-          <b>Can be a different person</b>, such as an access manager.
+          Say which CI system, repository and environment may use which credential, and for which
+          operations. <b>Can be a different person</b>, such as an access manager.
         </>
       ),
       ...(ctx.can('access:write')
-        ? {
-            action: {
-              href:
-                connections.tokens.length > 0
-                  ? paths.accessNew({ consumer: 'new' })
-                  : paths.consumerNew({ type: 'github-actions' }),
-              label: 'Add a credential access rule',
-            },
-          }
+        ? { action: { href: paths.accessRuleNew(), label: 'Add a credential access rule' } }
         : {
             ask: (
               <AskSomeone permission="access:write" ctx={ctx} verb="add a credential access rule" />
-            ),
-          }),
-    },
-    {
-      done: steps.access,
-      usable: ctx.can('access:write'),
-      title: 'Add issuer access rule',
-      why: 'Say which repository and environment may use which token, and for which operations. Best after steps 1 and 2.',
-      ...(ctx.can('access:write')
-        ? { action: { href: paths.accessNew(), label: 'Give access' } }
-        : {
-            ask: (
-              <AskSomeone permission="access:write" ctx={ctx} verb="give an issuer access rule" />
             ),
           }),
     },
@@ -801,10 +778,10 @@ function GetStarted(props: {
       ),
       action: newest
         ? {
-            href: paths.accessItem(newest.grant.id, { hash: 'use' }),
+            href: paths.accessRule(newest.rule.id, { hash: 'snippet' }),
             label: (
               <>
-                Copy the workflow step<span class="vh"> for {newest.grant.name}</span>
+                Copy the workflow step<span class="vh"> for {newest.rule.name}</span>
               </>
             ),
           }
@@ -816,7 +793,7 @@ function GetStarted(props: {
       ) : (
         <CodeBlock
           label="Workflow snippet preview"
-          caption="Preview of the workflow step. The exact snippet, with your audience, appears on the access page after step 3."
+          caption="Preview of the workflow step. The exact snippet, with your audience, appears on the access rule page after step 2."
         >
           {`- id: tokengate
   uses: 2fd/cloudflare-tokengate/actions/get-token@main
@@ -838,8 +815,8 @@ function GetStarted(props: {
     <Tray
       id="get-started"
       title="Get started: your first connection"
-      description="Steps 1 and 2 can be done in any order, and by different people."
-      actions={<ChecklistProgress done={props.doneCount} total={4} />}
+      description="Each step can be done by a different person."
+      actions={<ChecklistProgress done={props.doneCount} total={3} />}
     >
       <Panel>
         <Checklist steps={checklist} />
@@ -1095,10 +1072,10 @@ function SchemaDetail(props: { database: 'DB' | 'TELEMETRY_DB'; state: keyof typ
 // ---------------------------------------------------------------------------------------------
 // Tokens in use (the connections map)
 
-/** The map wire tone of an access: active, needs attention, broken, or not in use. */
-function accessTone(edge: AccessEdge): MapAccess['tone'] {
+/** The map wire tone of a rule: active, needs attention, broken, or not in use. */
+function accessTone(edge: RuleEdge): MapAccess['tone'] {
   if (edge.status === 'disabled' || edge.status === 'inactive') return 'off';
-  if (edge.status === 'expired') return 'bad';
+  if (edge.status === 'expired' || edge.status === 'global_blocked') return 'bad';
   if (edge.status === 'expiring' || edge.flags.some((flag) => flag.status !== 'unused')) {
     return 'warn';
   }
@@ -1110,27 +1087,23 @@ function TokensInUse(props: PageData) {
   const { range } = data;
   const traffic = new Map(data.tokens.map((t) => [t.serviceId, t]));
   const currentHour = hourStart(data.generatedAt);
-  const consumers: MapConsumer[] = connections.consumers.map((consumer) => {
-    const issuer_access_rules = connections.accesses.filter(
-      (edge) => edge.grant.credential_access_rule_id === consumer.id,
-    );
-    const requests = issuer_access_rules.reduce(
-      (sum, edge) => sum + (data.accessRequests.get(edge.grant.id) ?? 0),
+  const consumers: MapConsumer[] = issuerNodes(connections).map((issuer) => {
+    const rules = connections.rules.filter((edge) => edge.rule.issuer_key === issuer.id);
+    const requests = rules.reduce(
+      (sum, edge) => sum + (data.accessRequests.get(edge.rule.id) ?? 0),
       0,
     );
     return {
-      id: consumer.id,
-      name: consumer.name,
-      logo: consumerLogo(consumer),
-      line: consumer.enabled
-        ? (PROFILES[consumer.profile]?.label ?? consumer.profile)
-        : `${PROFILES[consumer.profile]?.label ?? consumer.profile} · Disabled`,
-      idle: !consumer.enabled || requests === 0,
-      weight: issuer_access_rules.length,
+      id: issuer.id,
+      name: issuer.name,
+      logo: issuerLogo({ ...issuer.first, enabled: true }),
+      line: PROFILES[issuer.first.profile]?.label ?? issuer.first.profile,
+      idle: requests === 0,
+      weight: rules.length,
     };
   });
-  const rows = connections.tokens.map((token) => {
-    const accesses = connections.accesses.filter((edge) => edge.grant.service_id === token.id);
+  const rows = connections.credentials.map((token) => {
+    const accesses = connections.rules.filter((edge) => edge.rule.credential_id === token.id);
     const { status, detail } = tokenStatus(token, data, connections);
     const problem =
       PROBLEM_STATUSES.has(status) || alertsFor(data.alertData, { tokenId: token.id }).length > 0;
@@ -1153,8 +1126,7 @@ function TokensInUse(props: PageData) {
           : max,
       null,
     );
-    const consumerCount = new Set(accesses.map((edge) => edge.grant.credential_access_rule_id))
-      .size;
+    const issuerCount = new Set(accesses.map((edge) => edge.rule.issuer_key)).size;
     const tone = uiTone(STATUS[row.status].tone);
     const idle = idleRows.includes(row);
     return {
@@ -1183,10 +1155,10 @@ function TokensInUse(props: PageData) {
           statusLabel(row.status, row.detail)
         ) : accesses.length === 0 ? (
           <>
-            No access yet<span class="vh">: no consumer can use this token yet.</span>
+            No access rule yet<span class="vh">: no job can use this credential yet.</span>
           </>
         ) : (
-          `${consumerCount} ${consumerCount === 1 ? 'consumer' : 'consumers'}`
+          `${issuerCount} ${issuerCount === 1 ? 'issuer' : 'issuers'}`
         ),
       ...(row.status !== 'active' && (tone === 'warn' || tone === 'bad') ? { lineTone: tone } : {}),
       idle: idle || !token.enabled,
@@ -1195,23 +1167,24 @@ function TokensInUse(props: PageData) {
         : {}),
     };
   });
-  const accesses: MapAccess[] = connections.accesses.map((edge) => {
+  const accesses: MapAccess[] = connections.rules.map((edge) => {
     const flag = edge.flags[0];
     return {
-      consumer: edge.grant.credential_access_rule_id,
-      token: edge.grant.service_id,
+      consumer: edge.rule.issuer_key,
+      token: edge.rule.credential_id,
       tone: accessTone(edge),
       status: `${statusLabel(edge.status, edge.statusDetail)}${flag ? `, ${statusLabel(flag.status, flag.detail)}` : ''}`,
-      consumerLabel: `${edge.consumer?.name ?? 'Deleted credential access rule'} › ${edge.subject}`,
+      consumerLabel: `${edge.rule.name} › ${edge.subject}`,
       context: edge.context,
       operation: edge.operations.join(', ') || undefined,
-      href: paths.accessItem(edge.grant.id),
+      href: paths.accessRule(edge.rule.id),
     };
   });
   const refused = traffic.get('')?.requests ?? 0;
   const deleted = data.tokens
     .filter(
-      (t) => t.serviceId !== '' && !connections.tokens.some((token) => token.id === t.serviceId),
+      (t) =>
+        t.serviceId !== '' && !connections.credentials.some((token) => token.id === t.serviceId),
     )
     .reduce((sum, t) => sum + t.requests, 0);
   const lonely = rows.filter((row) => row.accesses.length === 0);
@@ -1231,8 +1204,8 @@ function TokensInUse(props: PageData) {
   if (ctx.can('access:write')) {
     for (const row of lonely) {
       footer.push(
-        <a href={paths.accessNew({ token: row.token.id })}>
-          Add issuer access rule<span class="vh"> to {row.token.name}</span>
+        <a href={paths.accessRuleNew({ credential: row.token.id })}>
+          Add credential access rule<span class="vh"> to {row.token.name}</span>
         </a>,
       );
     }
@@ -1241,11 +1214,11 @@ function TokensInUse(props: PageData) {
     <Tray
       id="tokens"
       title="Tokens in use"
-      description={`Who calls which token through tokengate, with the traffic in the last ${RANGE_LABEL[range]}. Each line is an issuer access rule.`}
+      description={`Who calls which credential through tokengate, with the traffic in the last ${RANGE_LABEL[range]}. Each line is a credential access rule.`}
       actions={
         <>
-          <LinkAction href={paths.access()} arrow>
-            Open issuer access rules ({formatCount(connections.accesses.length)})
+          <LinkAction href={paths.accessRules()} arrow>
+            Open credential access rules ({formatCount(connections.rules.length)})
           </LinkAction>
           <Segmented
             label="View"
@@ -1256,7 +1229,7 @@ function TokensInUse(props: PageData) {
                 href: `${paths.overview(range === '24h' ? undefined : { range })}#tokens`,
                 current: true,
               },
-              { label: 'Matrix', href: paths.access({ view: 'matrix' }) },
+              { label: 'Matrix', href: paths.accessRules({ view: 'matrix' }) },
             ]}
           />
         </>
@@ -1267,7 +1240,7 @@ function TokensInUse(props: PageData) {
           <EmptyState
             title="No credentials yet"
             icon="token"
-            description="A credential holds one upstream API key. Consumers get access to it."
+            description="A credential holds one upstream API key. Credential access rules let jobs use it."
             actions={
               ctx.can('tokens:write') ? (
                 <Button variant="primary" plus href={paths.tokenNew()}>
@@ -1282,7 +1255,8 @@ function TokensInUse(props: PageData) {
       ) : (
         <ConnectionsMap
           id="ov-map"
-          baseHref={paths.access()}
+          baseHref={paths.accessRules()}
+          filterParams={{ consumer: 'issuer', token: 'credential' }}
           focusHref={paths.overview(range === '24h' ? undefined : { range })}
           focus={props.focus}
           consumers={consumers}

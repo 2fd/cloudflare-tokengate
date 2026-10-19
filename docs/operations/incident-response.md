@@ -11,7 +11,7 @@ streaming keeps running until it ends ([known limitations](../threat-model.md#av
 
 | Action | Where | Effect on the next request | Scope |
 |---|---|---|---|
-| Disable a grant | Issuer access rules > the issuer access rule > "Disable" | Callers that matched only this grant get `403 no_matching_grant` | One grant |
+| Disable a grant | Issuer access rules > the issuer access rule > "Disable" | Callers that matched only this grant get `403 no_matching_rule` | One grant |
 | Disable a service | Services > the service > "Disable service" | Every caller gets `404 service_not_found` | All callers of one service |
 | Disable a credential access rule | Credential access rules > the credential access rule > "Disable" | Every token from that issuer gets `401 issuer_unknown` | All callers of one issuer |
 | Suspend a user | Users > status "Suspended" > "Save" | Every admin request of the user is refused, even with a valid Access session | One admin user |
@@ -153,7 +153,7 @@ By repository, in a time window:
 ```sh
 pnpm wrangler d1 execute TELEMETRY_DB --remote --command "
   SELECT id, datetime(ts / 1000, 'unixepoch') AS time, outcome, reason, status, upstream_status,
-         method, service_slug, path, grant_id, jti, json_extract(caller_claims, '$.run_id') AS run_id
+         method, service_slug, path, credential_access_rule_id, jti, json_extract(caller_claims, '$.run_id') AS run_id
   FROM request_log
   WHERE caller_repository = 'octo-org/app'
     AND ts >= unixepoch('2026-10-12T00:00:00Z') * 1000
@@ -183,7 +183,7 @@ What a service was used for, per repository and grant:
 
 ```sh
 pnpm wrangler d1 execute TELEMETRY_DB --remote --command "
-  SELECT caller_repository, grant_id, method, outcome, SUM(weight) AS requests
+  SELECT caller_repository, credential_access_rule_id, method, outcome, SUM(weight) AS requests
   FROM request_log
   WHERE service_slug = 'slack' AND ts >= unixepoch('2026-10-12T00:00:00Z') * 1000
   GROUP BY 1, 2, 3, 4 ORDER BY requests DESC"

@@ -1,35 +1,33 @@
-// "Add a credential access rule" fields (A14.1, A14.7.1), shared by /admin/credential-access-rules/new and the access form
-// (prefix `new.`): the type as logo cards and each type's few inputs in its branch. Everything else
-// (name, issuer, JWKS, algorithms, token age, audience) is derived, and the Add credential access rule rail says
-// so (SetForYou). Every input sits in a hidden branch, so none carries native validation (A7.6);
-// the server checks them.
-import {
-  Badge,
-  FieldSet,
-  type LogoSpec,
-  More,
-  Panel,
-  RadioCards,
-  RailKeyValue,
-  Reveal,
-  Tray,
-} from '@tokengate/ui';
+// The issuer fields of the credential access rule form (A14.1, A14.7.1, prefix `new.`): the issuer type as
+// logo cards (IssuerCards, shared with the global access rule form) and each type's few inputs in its
+// branch: organizations or groups (the tenant pin, I-TEN-1), a GitHub Enterprise or self-managed
+// GitLab issuer, or a generic issuer with its anchor and pin claims. The token settings (JWKS,
+// algorithms, token age, audience) are derived and sit in the form's "Token settings" disclosure.
+// Every input sits in a hidden branch, so none carries native validation (A7.6); the server checks
+// them.
+import { Badge, FieldSet, type LogoSpec, More, RadioCards, Reveal } from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
-import type { CredentialAccessRule, ClaimLabel } from '../../db/types';
-import { PROFILES } from '../../identity/profiles';
+import { labelFor } from '../../db/claim-labels';
+import type { ClaimLabel, CredentialAccessRule } from '../../db/types';
 import { GITHUB_ACTIONS_ISSUER } from '../../identity/profiles/github-actions';
 import { GITLAB_COM_ISSUER } from '../../identity/profiles/gitlab-ci';
 import type { ProfileId } from '../../identity/types';
 import { CLAIM_NAME_MAX_LENGTH } from '../../policy/conditions';
-import { type Fields, ownerFindCommand, parseOwnerList, text } from '../consumer-access';
-import { type ConsumerInput } from '../ops/credential-access-rules';
+import type { Condition } from '../../policy/types';
+import {
+  pinValues,
+  type RuleLabel,
+  type TenantEntry,
+  tenantClaimOf,
+} from '../ops/credential-access-rules';
 import type { FieldError } from '../ops/shared';
-import { Breakable, useFocusTarget } from './access-visuals';
+import { type Fields, ownerFindCommand, parseOwnerList, text } from '../rule-access';
+import { useFocusTarget } from './access-visuals';
 import { Field, fieldId, IdWithLabelField } from './components';
 
-export const CONSUMER_TYPES: readonly ProfileId[] = ['github-actions', 'gitlab-ci', 'generic'];
+export const ISSUER_TYPES: readonly ProfileId[] = ['github-actions', 'gitlab-ci', 'generic'];
 
-const TYPE_INFO: Readonly<
+export const TYPE_INFO: Readonly<
   Record<ProfileId, { title: string; description: string; logo: LogoSpec }>
 > = {
   'github-actions': {
@@ -59,13 +57,13 @@ export const GENERIC_PRESETS: ReadonlyArray<{ host: string; anchor: string; pin:
   },
 ];
 
-/** Anchor claim suggestions: those of the existing generic consumers, the presets, then `sub`. */
-export function genericAnchorSuggestions(consumers: readonly CredentialAccessRule[]): string[] {
+/** Anchor claim suggestions: those of the existing generic rules, the presets, then `sub`. */
+export function genericAnchorSuggestions(rules: readonly CredentialAccessRule[]): string[] {
   return [
     ...new Set([
-      ...consumers
-        .filter((consumer) => consumer.profile === 'generic')
-        .flatMap((consumer) => consumer.anchor_claims),
+      ...rules
+        .filter((rule) => rule.profile === 'generic')
+        .flatMap((rule) => rule.anchor_claims.filter((claim) => claim !== '')),
       ...GENERIC_PRESETS.map((preset) => preset.anchor),
       'sub',
     ]),
@@ -77,10 +75,8 @@ export const GENERIC_ISSUER_EXAMPLES: readonly string[] = [
   'https://oidc.circleci.com/org/0c9f3e1a-7b2d-4c5e-9f10-123456789abc',
 ];
 
-/** Raw values of the add-consumer fields, kept as text for a re-render. */
-export interface ConsumerForm {
-  credential_id?: string;
-  boundary_filters?: string;
+/** Raw values of the issuer fields, kept as text for a re-render. */
+export interface IssuerForm {
   type: string;
   github_org: string;
   github_enterprise_slug: string;
@@ -93,9 +89,7 @@ export interface ConsumerForm {
   generic_pin_value: string;
 }
 
-const KEYS: ReadonlyArray<keyof ConsumerForm> = [
-  'credential_id',
-  'boundary_filters',
+const KEYS: ReadonlyArray<keyof IssuerForm> = [
   'type',
   'github_org',
   'github_enterprise_slug',
@@ -108,16 +102,92 @@ const KEYS: ReadonlyArray<keyof ConsumerForm> = [
   'generic_pin_value',
 ];
 
-export function blankConsumerForm(type?: string | null): ConsumerForm {
-  const form = Object.fromEntries(KEYS.map((key) => [key, ''])) as unknown as ConsumerForm;
-  form.type = CONSUMER_TYPES.includes(type as ProfileId) ? (type as string) : 'github-actions';
+export function blankIssuerForm(type?: string | null): IssuerForm {
+  const form = Object.fromEntries(KEYS.map((key) => [key, ''])) as unknown as IssuerForm;
+  form.type = ISSUER_TYPES.includes(type as ProfileId) ? (type as string) : 'github-actions';
   return form;
 }
 
-export function readConsumerForm(fields: Fields, prefix: string): ConsumerForm {
+export function readIssuerForm(fields: Fields, prefix: string): IssuerForm {
   const form = Object.fromEntries(
     KEYS.map((key) => [key, text(fields, `${prefix}${key}`)]),
-  ) as unknown as ConsumerForm;
+  ) as unknown as IssuerForm;
+  return form;
+}
+
+/** What the issuer fields describe. */
+export interface IssuerInput {
+  profile: ProfileId;
+  /** The exact issuer: the platform default, a GitHub Enterprise slug issuer, or as typed. */
+  issuer: string;
+  /** Organizations (GitHub) or groups (GitLab), at least one; generic: none. */
+  tenants: TenantEntry[];
+  /** GitHub Enterprise ID, an extra pin; empty for none. */
+  enterprise_id?: string;
+  /** Generic only. */
+  anchor_claims?: string[];
+  /** Generic only: one exact pin condition, or null. */
+  pin?: { claim: string; value: string } | null;
+}
+
+/** The tenant pin and the labels of its IDs that an issuer input stands for (I-TEN-1). */
+export function issuerPin(input: IssuerInput): { tenant_pin: Condition[]; labels: RuleLabel[] } {
+  const claim = tenantClaimOf(input.profile);
+  const pin: Condition[] = [];
+  if (claim !== null && input.tenants.length > 0) {
+    pin.push({ claim, match: 'exact', values: [...new Set(input.tenants.map((t) => t.value))] });
+  }
+  if (input.profile === 'github-actions' && input.enterprise_id) {
+    pin.push({ claim: 'enterprise_id', match: 'exact', values: [input.enterprise_id] });
+  }
+  if (input.profile === 'generic' && input.pin) {
+    pin.push({ claim: input.pin.claim, match: 'exact', values: [input.pin.value] });
+  }
+  return {
+    tenant_pin: pin,
+    labels:
+      claim === null
+        ? []
+        : input.tenants.map((entry) => ({ claim, value: entry.value, label: entry.label })),
+  };
+}
+
+/** The issuer fields of a stored rule (edit, copy): its type, tenants with labels and issuer. */
+export function issuerFormFromRule(
+  rule: Pick<CredentialAccessRule, 'profile' | 'issuer' | 'tenant_pin' | 'anchor_claims'>,
+  labels: readonly ClaimLabel[],
+): IssuerForm {
+  const form = blankIssuerForm(rule.profile);
+  const claim = tenantClaimOf(rule.profile);
+  const pin = rule.tenant_pin.filter((c) => typeof c === 'object' && c !== null);
+  const tenants =
+    claim === null
+      ? ''
+      : pinValues(pin, claim)
+          .map((value) => {
+            const label = labelFor(labels, claim, value);
+            return label ? `${label} (${value})` : value;
+          })
+          .join(', ');
+  if (rule.profile === 'github-actions') {
+    form.github_org = tenants;
+    const slug = rule.issuer.startsWith(`${GITHUB_ACTIONS_ISSUER}/`)
+      ? rule.issuer.slice(GITHUB_ACTIONS_ISSUER.length + 1)
+      : '';
+    form.github_enterprise_slug = slug;
+    form.github_enterprise_id = pinValues(pin, 'enterprise_id')[0] ?? '';
+  } else if (rule.profile === 'gitlab-ci') {
+    form.gitlab_group = tenants;
+    form.gitlab_url = rule.issuer.replace(/\/$/, '') === GITLAB_COM_ISSUER ? '' : rule.issuer;
+  } else {
+    form.generic_issuer = rule.issuer;
+    form.generic_anchor_claims = rule.anchor_claims.join(', ');
+    const [first] = pin;
+    if (first) {
+      form.generic_pin_claim = first.claim;
+      form.generic_pin_value = first.values[0] ?? '';
+    }
+  }
   return form;
 }
 
@@ -137,18 +207,18 @@ function httpsError(raw: string, origin: boolean): string | null {
   return null;
 }
 
-/** The ConsumerInput the fields describe, or the field errors (names prefixed). */
-export function parseConsumerForm(
-  form: ConsumerForm,
+/** The IssuerInput the fields describe, or the field errors (names prefixed). */
+export function parseIssuerForm(
+  form: IssuerForm,
   prefix: string,
-): { ok: true; input: ConsumerInput } | { ok: false; errors: FieldError[] } {
-  const field = (name: keyof ConsumerForm) => `${prefix}${name}`;
+): { ok: true; input: IssuerInput } | { ok: false; errors: FieldError[] } {
+  const field = (name: keyof IssuerForm) => `${prefix}${name}`;
   const errors: FieldError[] = [];
-  const type = CONSUMER_TYPES.find((id) => id === form.type);
+  const type = ISSUER_TYPES.find((id) => id === form.type);
   if (!type)
     return {
       ok: false,
-      errors: [{ field: field('type'), message: 'Choose a credential access rule type.' }],
+      errors: [{ field: field('type'), message: 'Choose where the jobs run.' }],
     };
   if (type === 'github-actions') {
     const orgs = parseOwnerList(form.github_org, { id: type });
@@ -171,7 +241,6 @@ export function parseConsumerForm(
     return {
       ok: true,
       input: {
-        credential_id: form.credential_id ?? '',
         profile: type,
         issuer: slug === '' ? GITHUB_ACTIONS_ISSUER : `${GITHUB_ACTIONS_ISSUER}/${slug}`,
         tenants: orgs.entries.map((entry) => ({ value: entry.id, label: entry.label })),
@@ -194,7 +263,6 @@ export function parseConsumerForm(
     return {
       ok: true,
       input: {
-        credential_id: form.credential_id ?? '',
         profile: type,
         issuer: url === '' ? GITLAB_COM_ISSUER : url,
         tenants: groups.entries.map((entry) => ({ value: entry.id, label: entry.label })),
@@ -246,7 +314,6 @@ export function parseConsumerForm(
   return {
     ok: true,
     input: {
-      credential_id: form.credential_id ?? '',
       profile: 'generic',
       issuer,
       tenants: [],
@@ -266,40 +333,30 @@ function presetFor(issuer: string): (typeof GENERIC_PRESETS)[number] | null {
 }
 
 /** How the type cards take part in the form: a live slot of the page, or a scoped branch. */
-export type ConsumerFieldsLive = 1 | 'scoped';
+export type IssuerFieldsLive = 1 | 'scoped';
 
 /**
- * The fields. The type is a FieldSet of logo cards; each type's inputs sit in its branch: a ui
- * Reveal of live slot 1 on the Add credential access rule page, a scoped branch (`.ga-tbranch`, page-local CSS)
- * in the access form, where `jobs` adds the type's "Which jobs" fields after its inputs.
+ * The issuer type as logo cards (`name` = `${prefix}type`). `fixed` shows only the card of a stored
+ * type (an edit: the profile never changes), still checked, so its branch stays open.
  */
-export function AddConsumerFields(props: {
+export function IssuerCards(props: {
   prefix: string;
-  form: ConsumerForm;
-  errors: readonly FieldError[];
-  /** Existing credential boundaries, used only for suggestions. */
-  existing: readonly CredentialAccessRule[];
-  /** Labels of the existing consumers, for the organizations and groups they already have. */
-  labels?: readonly ClaimLabel[];
-  /** Existing generic anchor claims, offered as suggestions. */
-  anchorSuggestions?: readonly string[];
-  jobs?: Partial<Record<ProfileId, Child>>;
+  value: string;
+  error: string | null;
   legend?: string;
-  live?: ConsumerFieldsLive;
+  live?: IssuerFieldsLive;
+  fixed?: boolean;
 }) {
-  const { prefix, form } = props;
+  const { prefix } = props;
   const scoped = props.live === 'scoped';
-  const error = (name: keyof ConsumerForm) =>
-    props.errors.find((item) => item.field === `${prefix}${name}`)?.message ?? null;
-  const genericIssuers = props.existing.filter((provider) => provider.profile === 'generic');
   const typeId = fieldId(`${prefix}type`);
-  const options = CONSUMER_TYPES.map((type, index) => ({
+  const options = ISSUER_TYPES.map((type, index) => ({
     value: type,
     o: index + 1,
     logo: TYPE_INFO[type].logo,
     title: TYPE_INFO[type].title,
     description:
-      type === 'generic' ? (
+      type === 'generic' && !props.fixed ? (
         <>
           {TYPE_INFO[type].description}
           <span class="d-block con-preset">
@@ -309,11 +366,59 @@ export function AddConsumerFields(props: {
       ) : (
         TYPE_INFO[type].description
       ),
-  }));
+  })).filter((option) => !props.fixed || option.value === props.value);
   useFocusTarget(`${prefix}type`, { id: typeId, options });
-  const typeError = error('type');
+  return (
+    <FieldSet
+      id={typeId}
+      legend={props.legend ?? 'Where do the jobs run?'}
+      live={scoped ? undefined : 1}
+      class={scoped ? 'ga-tf con-types' : 'con-types'}
+      error={props.error}
+      hint={props.fixed ? 'The issuer type of a rule cannot change.' : undefined}
+    >
+      <RadioCards
+        name={`${prefix}type`}
+        columns={props.fixed ? 1 : 3}
+        value={props.value}
+        invalid={props.error ? true : undefined}
+        options={options}
+      />
+    </FieldSet>
+  );
+}
+
+/**
+ * The fields. The type is IssuerCards; each type's inputs sit in its branch: a ui Reveal of live
+ * slot 1 on a page of its own, or a scoped branch (`.ga-tbranch`, page-local CSS) in the rule form,
+ * where `jobs` adds the type's "Which jobs" fields after its inputs.
+ */
+export function IssuerFields(props: {
+  prefix: string;
+  form: IssuerForm;
+  errors: readonly FieldError[];
+  /** Other credential access rules, used only for suggestions. */
+  existing: readonly CredentialAccessRule[];
+  /** Existing generic anchor claims, offered as suggestions. */
+  anchorSuggestions?: readonly string[];
+  jobs?: Partial<Record<ProfileId, Child>>;
+  legend?: string;
+  live?: IssuerFieldsLive;
+  /** Edit: the stored type, the only card shown. */
+  fixedType?: boolean;
+}) {
+  const { prefix, form } = props;
+  const scoped = props.live === 'scoped';
+  const error = (name: keyof IssuerForm) =>
+    props.errors.find((item) => item.field === `${prefix}${name}`)?.message ?? null;
+  const genericIssuers = [
+    ...new Set(
+      props.existing.filter((rule) => rule.profile === 'generic').map((rule) => rule.issuer),
+    ),
+  ];
   const branch = (type: ProfileId, children: Child) => {
-    const o = CONSUMER_TYPES.indexOf(type) + 1;
+    const o = ISSUER_TYPES.indexOf(type) + 1;
+    if (props.fixedType && type !== form.type) return null;
     return scoped ? (
       <div class="ga-tbranch subbox" data-o={String(o)}>
         {children}
@@ -325,28 +430,21 @@ export function AddConsumerFields(props: {
     );
   };
   const jobsBranch = (type: ProfileId) =>
-    scoped && props.jobs?.[type] ? (
-      <div class="ga-tbranch ga-scope" data-o={String(CONSUMER_TYPES.indexOf(type) + 1)}>
+    scoped && props.jobs?.[type] && (!props.fixedType || type === form.type) ? (
+      <div class="ga-tbranch ga-scope" data-o={String(ISSUER_TYPES.indexOf(type) + 1)}>
         {props.jobs[type]}
       </div>
     ) : null;
   return (
     <>
-      <FieldSet
-        id={typeId}
-        legend={props.legend ?? 'Where do the jobs run?'}
-        live={scoped ? undefined : 1}
-        class={scoped ? 'ga-tf con-types' : 'con-types'}
-        error={typeError}
-      >
-        <RadioCards
-          name={`${prefix}type`}
-          columns={3}
-          value={form.type}
-          invalid={typeError ? true : undefined}
-          options={options}
-        />
-      </FieldSet>
+      <IssuerCards
+        prefix={prefix}
+        value={form.type}
+        error={error('type')}
+        legend={props.legend}
+        live={props.live}
+        fixed={props.fixedType}
+      />
       {branch(
         'github-actions',
         <>
@@ -464,9 +562,7 @@ export function AddConsumerFields(props: {
               <>
                 The <code>iss</code> claim of the tokens. When you save, the gateway reads{' '}
                 <code>&lt;issuer&gt;/.well-known/openid-configuration</code>.
-                {genericIssuers.length > 0
-                  ? ` Already added: ${genericIssuers.map((p) => p.issuer).join(', ')}.`
-                  : ''}
+                {genericIssuers.length > 0 ? ` Already used: ${genericIssuers.join(', ')}.` : ''}
               </>
             }
             error={error('generic_issuer')}
@@ -535,67 +631,5 @@ export function AddConsumerFields(props: {
       )}
       {jobsBranch('generic')}
     </>
-  );
-}
-
-/**
- * The rail of the Add credential access rule page: what tokengate derives for the chosen type, so the form asks
- * only for what it cannot derive. One Reveal of live slot 1 per type.
- */
-export function SetForYou(_props: { existing: readonly CredentialAccessRule[] }) {
-  const age = (type: ProfileId) => `${PROFILES[type].defaults.maxTokenAgeSeconds / 60} minutes`;
-  const keys = 'Read from the issuer, refreshed automatically';
-  const audience = () => ({
-    label: 'Audience',
-    value: 'A new value only for this credential access rule',
-  });
-  return (
-    <aside class="rail" aria-labelledby="ad-set-h">
-      <Tray
-        id="ad-set"
-        title="Set for you"
-        description="Derived from the type. You can change them later under Advanced trust settings."
-      >
-        <Panel>
-          <Reveal field={1} option={1} box={false}>
-            <RailKeyValue
-              items={[
-                { label: 'Name', value: 'GitHub Actions (first organization)' },
-                { label: 'Issuer', value: <Breakable text={GITHUB_ACTIONS_ISSUER} />, mono: true },
-                { label: 'Signing keys', value: keys },
-                audience(),
-                { label: 'Max token age', value: age('github-actions') },
-              ]}
-            />
-          </Reveal>
-          <Reveal field={1} option={2} box={false}>
-            <RailKeyValue
-              items={[
-                { label: 'Name', value: 'GitLab (first group)' },
-                {
-                  label: 'Issuer',
-                  value: GITLAB_COM_ISSUER,
-                  mono: true,
-                  note: 'Or your GitLab URL (self-managed)',
-                },
-                { label: 'Signing keys', value: keys },
-                audience(),
-                { label: 'Max token age', value: age('gitlab-ci') },
-              ]}
-            />
-          </Reveal>
-          <Reveal field={1} option={3} box={false}>
-            <RailKeyValue
-              items={[
-                { label: 'Name', value: 'From the issuer host' },
-                { label: 'Signing keys', value: keys },
-                { label: 'Audience', value: 'A new value only for this credential access rule' },
-                { label: 'Max token age', value: age('generic') },
-              ]}
-            />
-          </Reveal>
-        </Panel>
-      </Tray>
-    </aside>
   );
 }

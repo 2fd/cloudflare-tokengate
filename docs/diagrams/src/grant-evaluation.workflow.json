@@ -193,7 +193,7 @@
       "title": "Deny codes",
       "items": [
         "event_not_trusted: only the event guard blocked",
-        "no_matching_grant: everything else"
+        "no_matching_rule: everything else"
       ]
     },
     {

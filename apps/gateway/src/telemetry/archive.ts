@@ -1,13 +1,13 @@
 // Request records as sent to the optional Basin Pipelines stream (REQUEST_ARCHIVE), the long-term
-// archive in R2. Must match pipelines/request-log.v1.schema.json: the stream silently drops
+// archive in R2. Must match pipelines/request-log.v2.schema.json: the stream silently drops
 // records that do not (https://developers.cloudflare.com/basin-pipelines/streams/manage-streams/).
 import { type ArchiveRecord, REQUEST_RECORD_COLUMNS, type RequestRecord } from './types';
 
-export const ARCHIVE_SCHEMA_VERSION = 1 as const;
+export const ARCHIVE_SCHEMA_VERSION = 2 as const;
 
 /**
  * Archived columns: every request_log column except the policy trace, which only makes sense next
- * to the issuer_access_rules it refers to.
+ * to the access rules it refers to.
  */
 export const ARCHIVE_COLUMNS = REQUEST_RECORD_COLUMNS.filter(
   (column): column is Exclude<(typeof REQUEST_RECORD_COLUMNS)[number], 'eval_trace'> =>

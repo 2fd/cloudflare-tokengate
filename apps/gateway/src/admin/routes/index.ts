@@ -7,11 +7,11 @@
 // token-hosts and token-keys before tokens (`/admin/credentials/hosts` is not a token id).
 // test/integration/admin-route-order.test.ts pins this.
 import type { App } from '../../app';
-import { registerAccessRoutes } from './access';
 import { registerAppearanceRoutes } from './appearance';
 import { registerAuditRoutes } from './audit';
-import { registerConsumersRoutes } from './consumers';
+import { registerCredentialAccessRulesRoutes } from './credential-access-rules';
 import { registerExportRoutes } from './export';
+import { registerGlobalAccessRulesRoutes } from './global-access-rules';
 import { registerOverviewRoutes } from './overview';
 import { registerRequestsRoutes } from './requests';
 import { registerRetentionRoutes } from './retention';
@@ -35,9 +35,9 @@ export function registerAdminRoutes(app: App): void {
   registerTokenHostsRoutes(app);
   registerTokenKeysRoutes(app);
   registerTokensRoutes(app);
-  // Credential access rules
-  registerConsumersRoutes(app);
-  registerAccessRoutes(app);
+  // Access rules
+  registerCredentialAccessRulesRoutes(app);
+  registerGlobalAccessRulesRoutes(app);
   // Global
   registerExportRoutes(app);
 }

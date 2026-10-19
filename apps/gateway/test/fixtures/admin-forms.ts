@@ -1,22 +1,20 @@
-// Admin route fixtures shared by the cross-cutting security tests: a seeded "world" (caller
-// provider, service with a sealed credential and a verify check, grant, request record) on the real
-// app, one successful form submission per mutating route of the RBAC table (I-AUDIT-1, I-RBAC-1),
-// and concrete paths for every read route.
+// Admin route fixtures shared by the cross-cutting security tests: a seeded "world" (a service with a
+// sealed credential and a verify check, a credential access rule, a global access rule of another
+// issuer, a request record) on the real app, one successful form submission per mutating route of
+// the RBAC table (I-AUDIT-1, I-RBAC-1), and concrete paths for every read route.
 //
 //   await resetAdminWorld();
 //   const world = await seedAdminWorld(createAdminWorldApp());
-//   const request = await MUTATION_FIXTURES['POST /admin/issuer-access-rules']?.(world);
+//   const request = await MUTATION_FIXTURES['POST /admin/credential-access-rules']?.(world);
 //   await adminPost(world.app, ownerSession, request.path, request.fields);
 import { env } from 'cloudflare:workers';
-import { createCredentialAccessRule } from '../../src/admin/ops/credential-access-rules';
-import { createIssuerAccessRule } from '../../src/admin/ops/issuer_access_rules';
+import { createGlobalAccessRule } from '../../src/admin/ops/global-access-rules';
 import { insertRequestRecordsStatements } from '../../src/db/requests';
-import type { CredentialAccessRule } from '../../src/db/types';
+import type { CredentialAccessRule, GlobalAccessRule } from '../../src/db/types';
 import { newId } from '../../src/lib/ids';
 import type { RequestRecord } from '../../src/telemetry/types';
 import { createUser, resetControlPlane } from '../helpers/admin-auth';
 import { createTestApp, type TestApp } from '../helpers/app';
-import { testCredentialId } from '../unit/admin/ops/helpers';
 import {
   ACTOR,
   fakeNetwork,
@@ -24,8 +22,8 @@ import {
   KEYRING_1_2,
   OWNER_ID,
   REPOSITORY_ID,
-  seedGithubProvider,
-  seedIssuerAccessRule,
+  seedCredentialRule,
+  seedGlobalRule,
   seedService,
 } from '../unit/admin/ops/helpers';
 
@@ -34,10 +32,12 @@ export const WORLD_VERIFY = { method: 'GET' as const, path: '/rate_limit', expec
 
 export interface AdminWorld {
   app: TestApp;
-  provider: CredentialAccessRule;
+  /** A GitHub Actions credential access rule of the world service. */
+  rule: CredentialAccessRule;
+  /** A global access rule of GitLab.com, with no limits: it caps no rule of the world. */
+  global: GlobalAccessRule;
   /** Service with a sealed credential and a verify check that passes against the fake network. */
   serviceId: string;
-  grantId: string;
   requestId: string;
   /** A person (an invitation) for the Users read routes. */
   userId: string;
@@ -67,9 +67,8 @@ export function expectedActions(request: MutationRequest): readonly string[] {
 /** Empties both databases' admin-visible tables. */
 export async function resetAdminWorld(): Promise<void> {
   await env.DB.batch([
-    env.DB.prepare('DELETE FROM issuer_access_rules'),
     env.DB.prepare('DELETE FROM claim_labels'),
-    env.DB.prepare('DELETE FROM credential_access_rules'),
+    env.DB.prepare('DELETE FROM access_rules'),
     env.DB.prepare('DELETE FROM credentials'),
   ]);
   await resetControlPlane();
@@ -86,16 +85,20 @@ export function createAdminWorldApp(fetchImpl: typeof fetch = fakeNetwork().fetc
 
 export async function seedAdminWorld(app: TestApp): Promise<AdminWorld> {
   const serviceId = await seedService(app.deps, { secret: WORLD_SECRET, verify: WORLD_VERIFY });
-  const provider = await seedGithubProvider(app.deps);
-  const grant = await seedIssuerAccessRule(app.deps, provider.id, serviceId);
+  const rule = await seedCredentialRule(app.deps, { credential_id: serviceId });
+  const global = await seedGlobalRule(app.deps, {
+    name: 'GitLab ceiling',
+    profile: 'gitlab-ci',
+    issuer: 'https://gitlab.com',
+  });
   const requestId = newId('req', Date.now(), app.deps.random);
   await env.TELEMETRY_DB.batch(
     insertRequestRecordsStatements(env.TELEMETRY_DB, [
-      worldRequestRecord({ id: requestId, service_id: serviceId, provider_id: provider.id }),
+      worldRequestRecord({ id: requestId, service_id: serviceId, provider_id: rule.id }),
     ]),
   );
   const person = await seedWorldPerson();
-  return { app, provider, serviceId, grantId: grant.id, requestId, userId: person.id };
+  return { app, rule, global, serviceId, requestId, userId: person.id };
 }
 
 function worldRequestRecord(ids: {
@@ -107,7 +110,7 @@ function worldRequestRecord(ids: {
     id: ids.id,
     ts: Date.now(),
     outcome: 'denied',
-    reason: 'no_matching_grant',
+    reason: 'no_matching_rule',
     status: 403,
     upstream_status: null,
     method: 'GET',
@@ -115,7 +118,7 @@ function worldRequestRecord(ids: {
     service_slug: 'github',
     service_id: ids.service_id,
     credential_access_rule_id: ids.provider_id,
-    grant_id: null,
+    global_access_rule_id: null,
     claims_verified: 1,
     caller_subject: 'repo:acme/app:ref:refs/heads/main',
     caller_repository: 'acme/app',
@@ -357,118 +360,88 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
     };
   },
 
-  // == consumers ==
-  'POST /admin/credential-access-rules': async (w) => {
-    const issuer = `https://${unique('idp')}.acme.example`;
-    return {
-      path: '/admin/credential-access-rules',
-      action: 'credential_access_rule.create',
-      app: discoveringApp(issuer),
-      fields: {
-        credential_id: w.serviceId,
-        type: 'generic',
-        generic_issuer: issuer,
-        generic_anchor_claims: 'sub',
-        generic_pin_claim: 'org_id',
-        generic_pin_value: '77',
-      },
-    };
-  },
+  // == access rules ==
+  'POST /admin/credential-access-rules': async (w) => ({
+    path: '/admin/credential-access-rules',
+    action: 'credential_access_rule.create',
+    fields: worldRuleFields(w, { token_id: w.serviceId, token_view: 'fixed' }),
+  }),
   'POST /admin/credential-access-rules/:id': async (w) => ({
-    path: `/admin/credential-access-rules/${w.provider.id}`,
+    path: `/admin/credential-access-rules/${w.rule.id}`,
     action: 'credential_access_rule.update',
-    fields: {
-      intent: 'rename',
-      name: unique('GitHub Actions renamed'),
-      expected_updated_at: String(w.provider.updated_at),
-    },
+    fields: worldRuleFields(w, {
+      intent: 'save',
+      name: unique('read repo renamed'),
+      expected_updated_at: String(w.rule.updated_at),
+      expires: 'keep',
+    }),
   }),
   'POST /admin/credential-access-rules/:id/tenants': async (w) => ({
-    path: `/admin/credential-access-rules/${w.provider.id}/tenants`,
+    path: `/admin/credential-access-rules/${w.rule.id}/tenants`,
     action: 'credential_access_rule.update',
     fields: { intent: 'add', tenant: 'acme-labs (7654321)' },
   }),
+  'POST /admin/credential-access-rules/:id/copy': async (w) => ({
+    path: `/admin/credential-access-rules/${w.rule.id}/copy`,
+    action: 'credential_access_rule.duplicate',
+    fields: { credential_id: '' },
+  }),
   'POST /admin/credential-access-rules/:id/toggle': async (w) => ({
-    path: `/admin/credential-access-rules/${w.provider.id}/toggle`,
+    path: `/admin/credential-access-rules/${w.rule.id}/toggle`,
     action: 'credential_access_rule.disable',
     fields: { enabled: '0' },
   }),
   'POST /admin/credential-access-rules/:id/delete': async (w) => {
-    const created = await createCredentialAccessRule(w.app.deps, ACTOR, {
-      credential_id: await testCredentialId(w.app.deps),
+    const doomed = await seedCredentialRule(w.app.deps, {
+      credential_id: w.serviceId,
       name: unique('doomed'),
+    });
+    return {
+      path: `/admin/credential-access-rules/${doomed.id}/delete`,
+      action: 'credential_access_rule.delete',
+      fields: { confirm: '1' },
+    };
+  },
+  // A generic issuer of its own: the first ceiling of that issuer, confirmed.
+  'POST /admin/global-access-rules': async () => ({
+    path: '/admin/global-access-rules',
+    action: 'global_access_rule.create',
+    fields: {
+      type: 'generic',
+      issuer: `https://${unique('idp')}.acme.example`,
+      name: unique('ceiling'),
+      enabled: '1',
+      confirm_new_ceiling: '1',
+    },
+  }),
+  'POST /admin/global-access-rules/:id': async (w) => ({
+    path: `/admin/global-access-rules/${w.global.id}`,
+    action: 'global_access_rule.update',
+    fields: {
+      name: unique('GitLab ceiling renamed'),
+      expected_updated_at: String(w.global.updated_at),
+    },
+  }),
+  // The only global access rule of GitLab.com: disabling it is the last disable, confirmed.
+  'POST /admin/global-access-rules/:id/toggle': async (w) => ({
+    path: `/admin/global-access-rules/${w.global.id}/toggle`,
+    action: 'global_access_rule.disable',
+    fields: { enabled: '0', confirm_last_disable: '1' },
+  }),
+  'POST /admin/global-access-rules/:id/delete': async (w) => {
+    const created = await createGlobalAccessRule(w.app.deps, ACTOR, {
+      name: unique('doomed ceiling'),
       profile: 'generic',
       issuer: `https://${unique('doomed')}.example.org`,
-      jwks_uri: 'https://doomed.example.org/jwks',
-      anchor_claims: ['sub'],
+      confirm_new_ceiling: true,
     });
     if (!created.ok) throw new Error(`fixture: ${created.errors.join('; ')}`);
-    const grant = await createIssuerAccessRule(w.app.deps, ACTOR, {
-      name: unique('doomed access'),
-      credential_access_rule_id: created.credentialAccessRule.id,
-      service_id: w.serviceId,
-      conditions: [{ claim: 'sub', match: 'exact', values: ['job-1'] }],
-      rules: [{ methods: ['GET'], path: '/repos/**' }],
-    });
-    if (!grant.ok) throw new Error(`fixture: ${grant.errors.join('; ')}`);
     return {
-      path: `/admin/credential-access-rules/${created.credentialAccessRule.id}/delete`,
-      action: 'credential_access_rule.delete',
-      fields: { confirm: '1', with_accesses: '1', access_ids: grant.grant.id },
+      path: `/admin/global-access-rules/${created.rule.id}/delete`,
+      action: 'global_access_rule.delete',
+      fields: { confirm: '1', confirm_widening: '1' },
     };
   },
-  'POST /admin/issuer-access-rules': async (w) => ({
-    path: '/admin/issuer-access-rules',
-    action: 'grant.create',
-    fields: {
-      consumer_id: w.provider.id,
-      token_id: w.serviceId,
-      repository: 'acme/api (987654321)',
-      context: 'branch',
-      branch: 'main',
-      ref_protection: 'protected',
-      op: 'read-repo',
-      expires: 'never',
-    },
-  }),
-  'POST /admin/issuer-access-rules/:id': async (w) => ({
-    path: `/admin/issuer-access-rules/${w.grantId}`,
-    action: 'grant.update',
-    fields: {
-      intent: 'save',
-      repository: `acme/api (${REPOSITORY_ID})`,
-      context: 'branch',
-      branch: 'main',
-      ref_protection: 'protected',
-      op: 'read-repo',
-      expires: 'keep',
-    },
-  }),
-  'POST /admin/issuer-access-rules/:id/copy': async (w) => {
-    // A source with a stored repository name: without one, its literal operations (which may name
-    // the repository) are reviewed in the form first instead of copied in one submit.
-    await env.DB.prepare(
-      `INSERT INTO claim_labels (credential_access_rule_id, claim, value, label, updated_at, updated_by)
-       VALUES (?, 'repository_id', ?, 'acme/api', 1, NULL) ON CONFLICT DO NOTHING`,
-    )
-      .bind(w.provider.id, REPOSITORY_ID)
-      .run();
-    return {
-      path: `/admin/issuer-access-rules/${w.grantId}/copy`,
-      action: 'grant.duplicate',
-      fields: { repository: 'acme/web (987654322)', token_id: w.serviceId },
-    };
-  },
-  'POST /admin/issuer-access-rules/:id/toggle': async (w) => ({
-    path: `/admin/issuer-access-rules/${w.grantId}/toggle`,
-    action: 'grant.disable',
-    fields: { enabled: '0' },
-  }),
-  'POST /admin/issuer-access-rules/:id/delete': async (w) => ({
-    path: `/admin/issuer-access-rules/${w.grantId}/delete`,
-    action: 'grant.delete',
-    fields: { confirm: '1' },
-  }),
 
   // == global ==
   'POST /admin/export': async () => ({
@@ -484,7 +457,7 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
 /**
  * Token submissions that use a field permission, for the token tests (each is a second form of a
  * route above): an owner allowing a blocked template host on the way, and an admin deleting a
- * token together with its issuer access rules.
+ * credential together with its credential access rules.
  */
 export const TOKEN_FIXTURE_VARIANTS = {
   /** settings.upstream_hosts, then service.create (two batches, the allowlist first). */
@@ -504,10 +477,10 @@ export const TOKEN_FIXTURE_VARIANTS = {
       },
     };
   },
-  /** One service.delete row whose diff holds every deleted access. */
-  deleteWithAccesses: async (w: AdminWorld): Promise<MutationRequest> => {
+  /** One service.delete row whose diff lists every deleted credential access rule. */
+  deleteWithRules: async (w: AdminWorld): Promise<MutationRequest> => {
     const { results } = await env.DB.prepare(
-      'SELECT id FROM issuer_access_rules WHERE service_id = ? ORDER BY id',
+      'SELECT id FROM access_rules WHERE credential_id = ? ORDER BY id',
     )
       .bind(w.serviceId)
       .all<{ id: string }>();
@@ -516,8 +489,8 @@ export const TOKEN_FIXTURE_VARIANTS = {
       action: 'service.delete',
       fields: {
         confirm: '1',
-        with_accesses: '1',
-        access_ids: results.map((row) => row.id).join(','),
+        with_rules: '1',
+        rule_ids: results.map((row) => row.id).join(','),
       },
     };
   },
@@ -532,9 +505,9 @@ const READ_IDS: Readonly<Record<string, Readonly<Record<string, (world: AdminWor
     monitoring: { '/admin/requests/:id': (w) => w.requestId },
     users: { '/admin/users/:id': (w) => w.userId },
     tokens: { '/admin/credentials/:id': (w) => w.serviceId },
-    consumers: {
-      '/admin/credential-access-rules/:id': (w) => w.provider.id,
-      '/admin/issuer-access-rules/:id': (w) => w.grantId,
+    'access rules': {
+      '/admin/credential-access-rules/:id': (w) => w.rule.id,
+      '/admin/global-access-rules/:id': (w) => w.global.id,
     },
     global: {},
   };
@@ -551,14 +524,27 @@ export function readPath(routeKey: string, world: AdminWorld): string {
   return pattern;
 }
 
-// == consumers ==
-/** The world app with OIDC discovery for one more issuer (same databases). */
-function discoveringApp(issuer: string): TestApp {
-  return createAdminWorldApp(
-    fakeNetwork(undefined, {
-      'https://token.actions.githubusercontent.com':
-        'https://token.actions.githubusercontent.com/.well-known/jwks',
-      [issuer]: `${issuer}/.well-known/jwks`,
-    }).fetch,
-  );
+// == access rules ==
+/**
+ * The fields of the credential access rule form for the world's GitHub rule: its organization, its
+ * repository on main (protected refs), the "read repo" preset, no expiry.
+ */
+function worldRuleFields(
+  _w: AdminWorld,
+  extra: Record<string, string>,
+): Record<string, string | string[]> {
+  const jobs = 'new.github-actions.';
+  return {
+    'new.type': 'github-actions',
+    'new.github_org': `acme (${OWNER_ID})`,
+    [`${jobs}editor`]: 'structured',
+    [`${jobs}repository`]: `acme/api (${REPOSITORY_ID})`,
+    [`${jobs}context`]: 'branch',
+    [`${jobs}branch`]: 'main',
+    [`${jobs}ref_protection`]: 'protected',
+    ops: '1',
+    op: 'read-repo',
+    expires: 'never',
+    ...extra,
+  };
 }

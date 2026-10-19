@@ -1,5 +1,5 @@
 // "Connect your jobs": the copy-ready CI configuration of a credential access rule, with its audience, this
-// gateway's origin and the real token slugs of its accesses (A14.2, A14.5). The snippet is plain
+// gateway's origin and the slug of its credential (A14.2, A14.5). The snippet is plain
 // text in a focusable ui CodeBlock that selects as a whole (user-select: all), so no script is needed.
 import { CodeBlock } from '@tokengate/ui';
 import type { CredentialAccessRule } from '../../db/types';
@@ -24,7 +24,7 @@ export function yamlScalar(value: string): string {
 const SNIPPET_PATH = /^\/[A-Za-z0-9._~\-/:@%+,;=]*$/;
 
 /**
- * The call the snippet makes for an access: its first literal operation (no wildcard), a GET one
+ * The call the snippet makes for a rule: its first literal operation (no wildcard), a GET one
  * first. Null when every path has a wildcard (the snippet keeps `<path>`).
  */
 export function snippetCall(rules: readonly Rule[]): { method: string; path: string } | null {
@@ -35,9 +35,9 @@ export function snippetCall(rules: readonly Rule[]): { method: string; path: str
   return { method: get ? 'GET' : (rule.methods[0] ?? 'GET'), path: rule.path };
 }
 
-/** The snippet text. `slugs` are the token slugs this credential access rule (or access) can use. */
+/** The snippet text. `slugs` are the slugs of the credentials the rule can use. */
 export function snippetText(
-  consumer: Pick<CredentialAccessRule, 'profile' | 'audience'>,
+  rule: Pick<CredentialAccessRule, 'profile' | 'audience'>,
   origin: string,
   slugs: readonly string[],
   environment?: string | null,
@@ -48,7 +48,7 @@ export function snippetText(
   const path = call ? call.path : '/<path>';
   const method = call && call.method !== 'GET' ? ` -X ${call.method}` : '';
   const more = others.length > 0 ? `  # also: ${others.join(', ')}\n` : '';
-  if (consumer.profile === 'github-actions') {
+  if (rule.profile === 'github-actions') {
     return `jobs:
   call-api:
     runs-on: ubuntu-latest
@@ -56,29 +56,29 @@ ${environment ? `    environment: ${yamlScalar(environment)}\n` : ''}    permiss
     steps:
       - id: tokengate
         uses: 2fd/cloudflare-tokengate/actions/get-token@main   # pin to a full commit SHA in production
-        with: { audience: ${yamlScalar(consumer.audience)}, url: ${yamlScalar(origin)} }
+        with: { audience: ${yamlScalar(rule.audience)}, url: ${yamlScalar(origin)} }
       - run: >-
           curl -sS --fail-with-body${method}
           -H "x-tokengate-token: ${GHA_TOKEN}"
           "${GHA_PROXY_BASE}/${slug}${path}"
 ${more}`;
   }
-  if (consumer.profile === 'gitlab-ci') {
+  if (rule.profile === 'gitlab-ci') {
     return `call-api:
 ${environment ? `  environment: ${yamlScalar(environment)}\n` : ''}  id_tokens:
     TOKENGATE_TOKEN:
-      aud: ${yamlScalar(consumer.audience)}
+      aud: ${yamlScalar(rule.audience)}
   script:
     - curl -sS --fail-with-body${method} -H "x-tokengate-token: $TOKENGATE_TOKEN" "${origin}/proxy/${slug}${path}"
 ${more}`;
   }
-  return `# Mint an OIDC token with audience ${consumer.audience}, then:
+  return `# Mint an OIDC token with audience ${rule.audience}, then:
 curl -sS --fail-with-body${method} -H "x-tokengate-token: $OIDC_TOKEN" "${origin}/proxy/${slug}${path}"
 ${more.replace(/^ {2}/, '')}`;
 }
 
-export function ConsumerSnippet(props: {
-  consumer: Pick<CredentialAccessRule, 'profile' | 'audience'>;
+export function RuleSnippet(props: {
+  rule: Pick<CredentialAccessRule, 'profile' | 'audience'>;
   origin: string;
   slugs: readonly string[];
   environment?: string | null;
@@ -88,10 +88,10 @@ export function ConsumerSnippet(props: {
   return (
     <>
       <CodeBlock label="Workflow snippet" caption="Workflow snippet (click to select, then copy)">
-        {snippetText(props.consumer, props.origin, props.slugs, props.environment, props.call)}
+        {snippetText(props.rule, props.origin, props.slugs, props.environment, props.call)}
       </CodeBlock>
       <p class="hint">
-        Audience <code>{props.consumer.audience}</code>. Gateway <code>{props.origin}</code>.
+        Audience <code>{props.rule.audience}</code>. Gateway <code>{props.origin}</code>.
         {props.slugs.length === 0 ? (
           <> Replace &lt;token-slug&gt; once this credential access rule can use a token.</>
         ) : null}

@@ -1,5 +1,5 @@
 // Workload-identity vocabulary: issuer profiles and the verified caller.
-import type { Condition } from '../policy/types';
+import type { CredentialAccessRule } from '../db/types';
 
 export type ProfileId = 'github-actions' | 'gitlab-ci' | 'generic';
 
@@ -31,21 +31,21 @@ export interface IssuerProfile {
   };
   /** Claim naming the triggering event, if the platform has one. */
   eventClaim?: string;
-  /** Events allowed without an explicit exact opt-in in the grant (I-AUTHZ-3). */
+  /** Events allowed without an explicit exact opt-in in the credential access rule (I-AUTHZ-3). */
   trustedEvents: readonly string[];
   /** Claims a tenant pin may use; empty array = any claim (generic). */
   tenantClaims: readonly string[];
   /** Issuers shared by many tenants; providers using them must have a tenant pin (I-TEN-1). */
   sharedIssuers: readonly string[];
   /**
-   * A grant must satisfy at least one rule: every claim in the rule has an exact, non-negated
-   * condition (I-AUTHZ-2). For `generic`, rules come from the credential access rule's anchor_claims.
+   * A credential access rule must satisfy at least one rule: every claim in the rule has an exact, non-negated
+   * condition (I-AUTHZ-2). For `generic`, rules come from the rule's own anchor_claims.
    */
-  anchorRules(provider: { anchor_claims: string[] }): string[][];
+  anchorRules(rule: Pick<CredentialAccessRule, 'anchor_claims'>): string[][];
   /** Claims jose must find in the token. */
-  verifyRequiredClaims(provider: { anchor_claims: string[]; tenant_pin: Condition[] }): string[];
+  verifyRequiredClaims(rule: Pick<CredentialAccessRule, 'anchor_claims' | 'tenant_pin'>): string[];
   /** Claims copied into the request log; everything else is dropped (I-LOG-1). */
-  logClaimAllowlist(provider: { anchor_claims: string[]; tenant_pin: Condition[] }): string[];
+  logClaimAllowlist(rule: Pick<CredentialAccessRule, 'anchor_claims' | 'tenant_pin'>): string[];
   display(claims: Claims): CallerDisplay;
 }
 

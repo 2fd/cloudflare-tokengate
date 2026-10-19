@@ -1,16 +1,16 @@
-// Autocomplete sources of the issuer access rules form: values that this credential access rule's own accesses and
-// tenant pin already use (environments, branches, tags, PR bases, workflow pins, claim values),
-// and the paths and rule sets of one token's accesses. Control-plane data only: never
-// request_log (I-LOG-2) and never an outbound lookup. Every read is bounded.
+// Autocomplete sources of the credential access rule form: values that the other rules of the same credential
+// already use (environments, branches, tags, PR bases, workflow pins, claim values, tenant pins), and the paths
+// and rule sets of the credential's rules. Control-plane data only: never request_log (I-LOG-2) and never an
+// outbound lookup. Every read is bounded.
 import { canonicalJson, parseJson } from '../lib/json';
 import type { Condition, Rule } from '../policy/types';
 import type { CredentialAccessRule } from './types';
 
-/** Accesses read per consumer or token for suggestions. */
+/** Credential access rules read per credential for suggestions. */
 export const SUGGESTIONS_LIMIT = 200;
 /** Values offered per datalist. */
 export const SUGGESTIONS_SHOWN = 50;
-/** Rule sets offered as "Used by other accesses of this token". */
+/** Rule sets offered as "Used by other access rules of this credential". */
 export const RULE_SETS_SHOWN = 5;
 
 export interface AccessShape {
@@ -18,29 +18,34 @@ export interface AccessShape {
   rules: Rule[];
 }
 
-/** Conditions and rules of up to SUGGESTIONS_LIMIT accesses of one consumer, newest first. */
-export async function consumerAccessShapes(
+/** Conditions and rules of up to SUGGESTIONS_LIMIT rules of one credential and issuer key, newest first. */
+export async function issuerRuleShapes(
   db: D1Database,
-  consumerId: string,
+  credentialId: string,
+  key: string,
 ): Promise<AccessShape[]> {
-  return shapes(db, 'credential_access_rule_id', consumerId);
+  return shapes(db, credentialId, key);
 }
 
-/** Conditions and rules of up to SUGGESTIONS_LIMIT accesses of one token, newest first. */
-export async function tokenAccessShapes(db: D1Database, tokenId: string): Promise<AccessShape[]> {
-  return shapes(db, 'service_id', tokenId);
+/** Conditions and rules of up to SUGGESTIONS_LIMIT rules of one credential, newest first. */
+export async function credentialRuleShapes(
+  db: D1Database,
+  credentialId: string,
+): Promise<AccessShape[]> {
+  return shapes(db, credentialId, null);
 }
 
 async function shapes(
   db: D1Database,
-  column: 'credential_access_rule_id' | 'service_id',
-  id: string,
+  credentialId: string,
+  key: string | null,
 ): Promise<AccessShape[]> {
   const { results } = await db
     .prepare(
-      `SELECT conditions, rules FROM issuer_access_rules WHERE ${column} = ? ORDER BY updated_at DESC, id LIMIT ?`,
+      `SELECT conditions, rules FROM access_rules WHERE credential_id = ?1 AND (?2 IS NULL OR issuer_key = ?2)
+       ORDER BY updated_at DESC, id LIMIT ?3`,
     )
-    .bind(id, SUGGESTIONS_LIMIT)
+    .bind(credentialId, key, SUGGESTIONS_LIMIT)
     .all<{ conditions: string; rules: string }>();
   return results.map((row) => ({
     conditions: arrayOf<Condition>(parseJson(row.conditions)),
@@ -86,20 +91,20 @@ function refNames(shapes: readonly AccessShape[], prefix: string, refType: strin
   });
 }
 
-export interface ConsumerSuggestions {
+export interface JobSuggestions {
   environments: string[];
   branches: string[];
   tags: string[];
   baseRefs: string[];
   workflowRefs: string[];
-  /** Values of one claim in this credential access rule's accesses and tenant pin (rows editor). */
+  /** Values of one claim in the other rules and the tenant pin (rows editor). */
   claimValues: (claim: string) => string[];
 }
 
-export function consumerSuggestions(
+export function jobSuggestions(
   shapes: readonly AccessShape[],
-  provider: Pick<CredentialAccessRule, 'tenant_pin'> | null,
-): ConsumerSuggestions {
+  rule: Pick<CredentialAccessRule, 'tenant_pin'> | null,
+): JobSuggestions {
   return {
     environments: ranked(positive(shapes, 'environment')),
     branches: ranked(refNames(shapes, 'refs/heads/', 'branch')),
@@ -112,12 +117,12 @@ export function consumerSuggestions(
     claimValues: (claim) =>
       ranked([
         ...positive(shapes, claim),
-        ...(provider?.tenant_pin ?? []).filter((c) => c.claim === claim).flatMap((c) => c.values),
+        ...(rule?.tenant_pin ?? []).filter((c) => c.claim === claim).flatMap((c) => c.values),
       ]),
   };
 }
 
-/** Distinct rule paths of one token's accesses, most used first. */
+/** Distinct rule paths of one credential's rules, most used first. */
 export function rulePathSuggestions(shapes: readonly AccessShape[]): string[] {
   return ranked(
     shapes.flatMap((shape) =>
@@ -132,11 +137,11 @@ export interface RuleSet {
   /** Stable id of the set: `used:` plus a hash of its canonical JSON (the `op` value). */
   id: string;
   rules: Rule[];
-  /** Accesses of the token that use exactly this set. */
+  /** Rules of the credential that use exactly this set. */
   count: number;
 }
 
-/** The distinct rule sets of one token's accesses, most used first, at most RULE_SETS_SHOWN. */
+/** The distinct rule sets of one credential's rules, most used first, at most RULE_SETS_SHOWN. */
 export function ruleSets(shapes: readonly AccessShape[]): RuleSet[] {
   const sets = new Map<string, RuleSet>();
   for (const shape of shapes) {

@@ -32,8 +32,8 @@ function record(ts: number, overrides: Partial<RequestRecord> = {}): RequestReco
     path: '/',
     service_slug: 'svc',
     service_id: 'svc_A',
-    credential_access_rule_id: 'cpr_A',
-    grant_id: 'grt_A',
+    credential_access_rule_id: 'acr_A',
+    global_access_rule_id: null,
     claims_verified: 1,
     caller_subject: null,
     caller_repository: null,
@@ -62,7 +62,7 @@ async function insert(records: RequestRecord[]): Promise<void> {
 
 async function rollups(hour: number) {
   const { results } = await env.TELEMETRY_DB.prepare(
-    'SELECT * FROM request_rollup_hourly WHERE hour = ? ORDER BY service_id, grant_id, outcome, status_class',
+    'SELECT * FROM request_rollup_hourly WHERE hour = ? ORDER BY service_id, credential_access_rule_id, outcome, status_class',
   )
     .bind(hour)
     .all<Record<string, unknown>>();
@@ -109,7 +109,7 @@ describe('hour helpers', () => {
 });
 
 describe('rollupHours', () => {
-  it('sums weights per (service, grant, outcome, status class) for requests inside the hour', async () => {
+  it('sums weights per (service, credential access rule, outcome, status class) for requests inside the hour', async () => {
     await insert([
       record(H, { weight: 2 }),
       record(H + 1000, { status: 201, weight: 2 }),
@@ -118,11 +118,16 @@ describe('rollupHours', () => {
         outcome: 'denied',
         status: 403,
         upstream_status: null,
-        grant_id: null,
-        reason: 'no_matching_grant',
+        credential_access_rule_id: null,
+        reason: 'no_matching_rule',
       }),
-      // Pre-trust failure: no service or grant known.
-      record(H + 4000, { outcome: 'denied', status: 401, service_id: null, grant_id: null }),
+      // Pre-trust failure: no service or credential access rule known.
+      record(H + 4000, {
+        outcome: 'denied',
+        status: 401,
+        service_id: null,
+        credential_access_rule_id: null,
+      }),
       // Outside the hour on both sides.
       record(H - 1, { weight: 100 }),
       record(H + HOUR_MS, { weight: 100 }),
@@ -133,7 +138,7 @@ describe('rollupHours', () => {
     const rows = await rollups(H);
     const summary = rows.map((r) => [
       r.service_id,
-      r.grant_id,
+      r.credential_access_rule_id,
       r.outcome,
       r.status_class,
       r.requests,
@@ -141,8 +146,8 @@ describe('rollupHours', () => {
     expect(summary).toEqual([
       ['', '', 'denied', 4, 1],
       ['svc_A', '', 'denied', 4, 1],
-      ['svc_A', 'grt_A', 'allowed', 2, 4],
-      ['svc_A', 'grt_A', 'allowed', 4, 1],
+      ['svc_A', 'acr_A', 'allowed', 2, 4],
+      ['svc_A', 'acr_A', 'allowed', 4, 1],
     ]);
   });
 
@@ -187,30 +192,35 @@ describe('rollupHours', () => {
 
   it('is idempotent and never lowers a stored hour after request_log rows are purged', async () => {
     const first = record(H);
-    await insert([first, record(H + 1), record(H + 2, { grant_id: 'grt_B' })]);
+    await insert([first, record(H + 1), record(H + 2, { credential_access_rule_id: 'acr_B' })]);
     await rollupHours(deps, [H]);
     expect(await rollupHours(deps, [H])).toEqual({ hours: [H], rows: 0 });
 
     // A retention purge removes some rows of an hour that is already rolled up.
-    await env.TELEMETRY_DB.prepare("DELETE FROM request_log WHERE grant_id = 'grt_B' OR id = ?")
+    await env.TELEMETRY_DB.prepare(
+      "DELETE FROM request_log WHERE credential_access_rule_id = 'acr_B' OR id = ?",
+    )
       .bind(first.id)
       .run();
     expect(await rollupHours(deps, [H])).toEqual({ hours: [H], rows: 0 });
-    expect((await rollups(H)).map((r) => [r.grant_id, r.requests])).toEqual([
-      ['grt_A', 2],
-      ['grt_B', 1],
+    expect((await rollups(H)).map((r) => [r.credential_access_rule_id, r.requests])).toEqual([
+      ['acr_A', 2],
+      ['acr_B', 1],
     ]);
   });
 
   it('raises a stored hour when late records arrive', async () => {
     await insert([record(H, { duration_ms: 10 })]);
     await rollupHours(deps, [H]);
-    await insert([record(H + 5, { duration_ms: 3000 }), record(H + 6, { grant_id: 'grt_B' })]);
+    await insert([
+      record(H + 5, { duration_ms: 3000 }),
+      record(H + 6, { credential_access_rule_id: 'acr_B' }),
+    ]);
     expect(await rollupHours(deps, [H])).toEqual({ hours: [H], rows: 2 });
     const rows = await rollups(H);
-    expect(rows.map((r) => [r.grant_id, r.requests, r.duration_sum_ms])).toEqual([
-      ['grt_A', 2, 3010],
-      ['grt_B', 1, 10],
+    expect(rows.map((r) => [r.credential_access_rule_id, r.requests, r.duration_sum_ms])).toEqual([
+      ['acr_A', 2, 3010],
+      ['acr_B', 1, 10],
     ]);
     expect(rows[0]?.buckets).toEqual([1, 0, 0, 0, 0, 0, 1, 0]);
   });

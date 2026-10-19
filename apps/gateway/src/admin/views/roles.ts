@@ -30,8 +30,7 @@ export const ROLE_INFO: Readonly<Record<Role, RoleInfo>> = {
     label: 'Credential manager',
     noun: 'a credential manager',
     plural: 'credential managers',
-    description:
-      'Manages credentials and their allowed issuers and identity filters. Cannot grant access.',
+    description: 'Adds, rotates and deletes credentials. Cannot decide who may use them.',
     tag: 'Loads keys',
     short: 'Adds, rotates and deletes credentials.',
   },
@@ -40,17 +39,18 @@ export const ROLE_INFO: Readonly<Record<Role, RoleInfo>> = {
     noun: 'an access manager',
     plural: 'access managers',
     description:
-      'Creates issuer access rules within the limits set by credential managers. Never sees a secret.',
-    tag: 'Grants access',
-    short: 'Grants access within credential limits. Never sees a secret.',
+      'Creates credential access rules: who may use which credential, within the global access rules. Never sees a secret.',
+    tag: 'Gives access',
+    short: 'Decides who may use which credential. Never sees a secret.',
   },
   admin: {
     label: 'Admin',
     noun: 'an admin',
     plural: 'admins',
-    description: 'Credential manager and Access manager together, plus the configuration export.',
+    description:
+      'Credential manager and Access manager together, plus global access rules and the configuration export.',
     tag: 'Both duties',
-    short: 'Both duties, plus the configuration export.',
+    short: 'Both duties, plus global access rules and the configuration export.',
   },
   owner: {
     label: 'Owner',
@@ -67,9 +67,9 @@ export const ROLE_INFO: Readonly<Record<Role, RoleInfo>> = {
 export const ROLE_POWERS: Readonly<Record<Role, readonly string[]>> = {
   viewer: [],
   token_manager: ['credentials'],
-  access_manager: ['issuer access rules'],
-  admin: ['credentials', 'issuer access rules', 'export'],
-  owner: ['credentials', 'issuer access rules', 'export', 'people', 'settings'],
+  access_manager: ['access rules'],
+  admin: ['credentials', 'access rules', 'global access rules', 'export'],
+  owner: ['credentials', 'access rules', 'global access rules', 'export', 'people', 'settings'],
 };
 
 /** What a person gains and loses when their role changes from `from` to `to`. */
@@ -92,8 +92,11 @@ export const CAPABILITIES: ReadonlyArray<{ text: string; roles: readonly Role[] 
     text: 'Add, rotate, test, disable and delete credentials',
     roles: ['token_manager', 'admin', 'owner'],
   },
-  { text: 'Add and change credential access rules', roles: ['token_manager', 'admin', 'owner'] },
-  { text: 'Create and change issuer access rules', roles: ['access_manager', 'admin', 'owner'] },
+  {
+    text: 'Add and change credential access rules',
+    roles: ['access_manager', 'admin', 'owner'],
+  },
+  { text: 'Add and change global access rules', roles: ['admin', 'owner'] },
   { text: 'Download the configuration export', roles: ['admin', 'owner'] },
   { text: 'People, roles, sign-in policy, admin hosts', roles: ['owner'] },
   { text: 'Allowed hosts, data retention, re-encrypt secrets', roles: ['owner'] },
@@ -129,7 +132,8 @@ export function roleLabelsFor(permission: Permission): string {
 export const PERMISSION_SUBJECT: Readonly<Record<Permission, string>> = {
   read: 'Seeing the admin console',
   'tokens:write': 'Changing credentials',
-  'access:write': 'Changing issuer access rules',
+  'access:write': 'Changing credential access rules',
+  'access_rules:global': 'Changing global access rules',
   'config:export': 'Downloading the configuration export',
   'users:write': 'Changing people and how they sign in',
   'settings:write': 'Changing this setting',

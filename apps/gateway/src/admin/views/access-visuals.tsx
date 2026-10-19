@@ -1,29 +1,29 @@
-// Shared visuals of the credential access rule and issuer access rules pages (design D): the logo tile of a
-// consumer and of a token, the row form of an access status (`.st`, dot + word), and the
+// Shared visuals of the credential and global access rule pages (design D): the logo tile of an
+// issuer and of a credential, the row form of a rule status (`.st`, dot + word), and the
 // ErrorSummary target of a choice group that a page renders with ui choices directly. Display only:
-// nothing here decides what an access allows.
+// nothing here decides what a rule allows.
 import { firstChoiceId, Logo, type LogoSpec, Status, type Tone } from '@tokengate/ui';
 import { useContext } from 'hono/jsx';
 import { labelFor } from '../../db/claim-labels';
 import type { CredentialAccessRule, ClaimLabel, Service } from '../../db/types';
 import { getProfile } from '../../identity/profiles';
 import { operationText } from '../access-summary';
-import type { AccessEdge } from '../connections';
+import type { RuleEdge } from '../connections';
 import { pinValues, tenantClaimOf } from '../ops/credential-access-rules';
 import { REPO_PLACEHOLDER, templateForService } from '../service-templates';
 import { fieldId, FocusTargets } from './components';
 import { STATUS, type StatusKey, statusLabel } from './status';
 
-/** The tile of a credential access rule: its CI system (github, gitlab, buildkite), else the OIDC key. */
-export function consumerLogo(
-  provider: Pick<CredentialAccessRule, 'profile' | 'issuer' | 'enabled'> | null,
+/** The tile of an issuer: its CI system (github, gitlab, buildkite), else the OIDC key. */
+export function issuerLogo(
+  rule: Pick<CredentialAccessRule, 'profile' | 'issuer' | 'enabled'> | null,
 ): LogoSpec {
-  if (!provider) return 'oidc';
+  if (!rule) return 'oidc';
   let brand: 'github' | 'gitlab' | 'buildkite' | 'oidc' = 'oidc';
-  if (provider.profile === 'github-actions') brand = 'github';
-  else if (provider.profile === 'gitlab-ci') brand = 'gitlab';
-  else if (hostOf(provider.issuer) === 'agent.buildkite.com') brand = 'buildkite';
-  return provider.enabled ? brand : { brand, disabled: true };
+  if (rule.profile === 'github-actions') brand = 'github';
+  else if (rule.profile === 'gitlab-ci') brand = 'gitlab';
+  else if (hostOf(rule.issuer) === 'agent.buildkite.com') brand = 'buildkite';
+  return rule.enabled ? brand : { brand, disabled: true };
 }
 
 const TEMPLATE_BRANDS: Readonly<
@@ -58,7 +58,7 @@ function initials(name: string): string {
   return letters.toUpperCase() || '?';
 }
 
-/** The host a credential access rule's jobs run on, as people know it: github.com for GitHub Actions. */
+/** The host an issuer's jobs run on, as people know it: github.com for GitHub Actions. */
 export function issuerHost(issuer: string): string {
   const host = hostOf(issuer);
   return host === 'token.actions.githubusercontent.com' ? 'github.com' : host;
@@ -73,14 +73,15 @@ export function hostOf(url: string): string {
 }
 
 /**
- * The ui tone of an access status in rows, matrix cells and map wires: active ok, expiring and
- * risk warn, expired bad, inactive and disabled off (the word says which).
+ * The ui tone of a rule status in rows, matrix cells and map wires: active ok, expiring and
+ * risk warn, expired and blocked bad, inactive and disabled off (the word says which).
  */
 export function accessTone(status: StatusKey): Exclude<Tone, 'info'> {
   switch (status) {
     case 'active':
       return 'ok';
     case 'expired':
+    case 'global_blocked':
       return 'bad';
     case 'disabled':
     case 'inactive':
@@ -103,14 +104,14 @@ export function Tile(props: { logo: LogoSpec; size?: 'xs' | 'sm' | 'md' }) {
 }
 
 /**
- * The status a dense row or matrix cell leads with: an active access with an accepted risk reads
- * "Risk accepted" (brief A9, A5), so risky accesses differ from the rest by text. The other flags
+ * The status a dense row or matrix cell leads with: an active rule with an accepted risk reads
+ * "Risk accepted" (brief A9, A5), so risky rules differ from the rest by text. The other flags
  * follow as second lines.
  */
-export function leadStatus(edge: Pick<AccessEdge, 'status' | 'statusDetail' | 'flags'>): {
+export function leadStatus(edge: Pick<RuleEdge, 'status' | 'statusDetail' | 'flags'>): {
   status: StatusKey;
   detail?: string;
-  rest: AccessEdge['flags'];
+  rest: RuleEdge['flags'];
 } {
   const risk = edge.flags.find((flag) => flag.status === 'risk_accepted');
   if (edge.status === 'active' && risk) {
@@ -166,13 +167,15 @@ export function PathName(props: { text: string }) {
 }
 
 /**
- * What an access may call, as people name it: the labels of the token's operation presets the
- * access holds whole ("Post messages", "Chat completions, Responses"), then the other rules as
+ * What a rule may call, as people name it: the labels of the credential's operation presets the
+ * rule holds whole ("Post messages", "Chat completions, Responses"), then the other operations as
  * "METHOD /path". Display only.
  */
-export function operationsText(edge: Pick<AccessEdge, 'grant' | 'token' | 'subject'>): string {
-  const template = edge.token ? templateForService(edge.token) : null;
-  const rules = edge.grant.rules;
+export function operationsText(edge: Pick<RuleEdge, 'rule' | 'credential' | 'subject'>): string {
+  const template = edge.credential ? templateForService(edge.credential) : null;
+  const rules = edge.rule.rules.filter(
+    (rule) => typeof rule === 'object' && rule !== null && Array.isArray(rule.methods),
+  );
   const used = new Set<number>();
   const labels: string[] = [];
   for (const preset of template?.operation_presets ?? []) {
@@ -193,8 +196,8 @@ export function operationsText(edge: Pick<AccessEdge, 'grant' | 'token' | 'subje
 }
 
 /**
- * Most accesses first, then by name: the order the map, the lists, the matrix and the give-access
- * form share, so the busiest consumer is always on top.
+ * Most rules first, then by name: the order the map, the lists, the matrix and the rule form
+ * share, so the busiest one is always on top.
  */
 export function busiestFirst<T extends { id: string; name: string }>(
   items: readonly T[],
@@ -232,15 +235,19 @@ export function useFocusTarget(
   );
 }
 
-/** "acme (1234567), acme-labs (7654321)", "org_id=77", or "No pin": what a credential access rule trusts. */
-export function tenantsText(consumer: CredentialAccessRule, labels: readonly ClaimLabel[]): string {
-  const claim = tenantClaimOf(consumer.profile);
+/** "acme (1234567), acme-labs (7654321)", "org_id=77", or "No pin": the tenants a rule admits. */
+export function tenantsText(
+  rule: Pick<CredentialAccessRule, 'profile' | 'tenant_pin'>,
+  labels: readonly ClaimLabel[],
+): string {
+  const pin = rule.tenant_pin.filter((c) => typeof c === 'object' && c !== null);
+  const claim = tenantClaimOf(rule.profile);
   if (claim === null) {
-    return consumer.tenant_pin.length === 0
+    return pin.length === 0
       ? 'No pin'
-      : consumer.tenant_pin.map((c) => `${c.claim}=${c.values.join('|')}`).join(', ');
+      : pin.map((c) => `${c.claim}=${c.values.join('|')}`).join(', ');
   }
-  return pinValues(consumer.tenant_pin, claim)
+  return pinValues(pin, claim)
     .map((value) => {
       const label = labelFor(labels, claim, value);
       return label ? `${label} (${value})` : value;
@@ -248,17 +255,20 @@ export function tenantsText(consumer: CredentialAccessRule, labels: readonly Cla
     .join(', ');
 }
 
-/** "org acme (1234567)", "group acme-group (5678901)", or the type of a generic consumer. */
-export function trustLine(consumer: CredentialAccessRule, labels: readonly ClaimLabel[]): string {
-  const claim = tenantClaimOf(consumer.profile);
-  if (claim === null || pinValues(consumer.tenant_pin, claim).length === 0) {
-    return getProfile(consumer.profile)?.label ?? consumer.profile;
+/** "org acme (1234567)", "group acme-group (5678901)", or the type of a generic rule. */
+export function trustLine(
+  rule: Pick<CredentialAccessRule, 'profile' | 'tenant_pin'>,
+  labels: readonly ClaimLabel[],
+): string {
+  const claim = tenantClaimOf(rule.profile);
+  if (claim === null || pinValues(rule.tenant_pin, claim).length === 0) {
+    return getProfile(rule.profile)?.label ?? rule.profile;
   }
-  const word = consumer.profile === 'gitlab-ci' ? 'group' : 'org';
-  return `${word} ${tenantsText(consumer, labels)}`;
+  const word = rule.profile === 'gitlab-ci' ? 'group' : 'org';
+  return `${word} ${tenantsText(rule, labels)}`;
 }
 
-/** "1 access", "3 accesses". */
-export function accessesText(n: number): string {
-  return `${n} ${n === 1 ? 'access' : 'accesses'}`;
+/** "1 access rule", "3 access rules". */
+export function rulesText(n: number): string {
+  return `${n} ${n === 1 ? 'access rule' : 'access rules'}`;
 }

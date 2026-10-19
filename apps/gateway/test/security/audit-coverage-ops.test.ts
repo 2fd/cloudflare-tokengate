@@ -4,8 +4,11 @@
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  addTenantValue,
   createCredentialAccessRule,
   deleteCredentialAccessRule,
+  duplicateCredentialAccessRule,
+  removeTenantValue,
   setCredentialAccessRuleEnabled,
   updateCredentialAccessRule,
 } from '../../src/admin/ops/credential-access-rules';
@@ -19,18 +22,16 @@ import {
 } from '../../src/admin/ops/credentials';
 import { exportConfiguration } from '../../src/admin/ops/export';
 import {
-  createIssuerAccessRule,
-  deleteIssuerAccessRule,
-  duplicateIssuerAccessRule,
-  setIssuerAccessRuleEnabled,
-  updateIssuerAccessRule,
-} from '../../src/admin/ops/issuer_access_rules';
+  createGlobalAccessRule,
+  deleteGlobalAccessRule,
+  setGlobalAccessRuleEnabled,
+  updateGlobalAccessRule,
+} from '../../src/admin/ops/global-access-rules';
 import { rewrapCredentials } from '../../src/admin/ops/keyring';
 import { addUpstreamHost, updateUpstreamHosts } from '../../src/admin/ops/upstream-hosts';
 import type { CredentialAccessRule } from '../../src/db/types';
 import type { Deps } from '../../src/deps';
 import { newId } from '../../src/lib/ids';
-import { testCredentialId } from '../unit/admin/ops/helpers';
 import {
   ACTOR,
   anchoredConditions,
@@ -39,21 +40,25 @@ import {
   dumpControlPlane,
   fakeNetwork,
   KEYRING_1_2,
+  OWNER_ID,
   opsDeps,
   resetControlPlane,
-  seedGithubProvider,
-  seedIssuerAccessRule,
+  seedCredentialRule,
+  seedGlobalRule,
   seedService,
   serviceInput,
 } from '../unit/admin/ops/helpers';
 
 const CANARY = 'CANARY-tokengate-0123456789abcdefXYZ';
 const VERIFY = { method: 'GET' as const, path: '/rate_limit', expect_status: 200 };
+const PIN = [{ claim: 'repository_owner_id', match: 'exact' as const, values: [OWNER_ID] }];
+const READ = [{ methods: ['GET' as const], path: '/**' }];
 
 let deps: Deps;
-let provider: CredentialAccessRule;
+let rule: CredentialAccessRule;
 let serviceId: string;
 let logLines: string[];
+let seeded = 0;
 
 /** An upstream that echoes the credential back, in the body and in headers. */
 function echoingNetwork() {
@@ -76,7 +81,7 @@ beforeEach(async () => {
   }
   deps = opsDeps({ fetch: echoingNetwork().fetch });
   serviceId = await seedService(deps, { secret: CANARY, verify: VERIFY });
-  provider = await seedGithubProvider(deps);
+  rule = await seedCredentialRule(deps, { credential_id: serviceId });
 });
 
 afterEach(() => {
@@ -90,20 +95,14 @@ interface OpCase {
   run: (deps: Deps, id: string) => Promise<{ ok: boolean }>;
 }
 
-const seedOwnIssuerAccessRule = async (d: Deps) =>
-  (await seedIssuerAccessRule(d, provider.id, serviceId)).id;
-const seedGeneric = async (d: Deps) => {
-  const created = await createCredentialAccessRule(d, ACTOR, {
-    credential_id: await testCredentialId(d),
-    name: 'temp',
-    profile: 'generic',
-    issuer: 'https://temp.example.org',
-    jwks_uri: 'https://temp.example.org/jwks',
-    anchor_claims: ['sub'],
-  });
-  if (!created.ok) throw new Error(created.errors.join());
-  return created.credentialAccessRule.id;
-};
+/** A further credential access rule of the credential, with a unique name. */
+const seedOwnRule = async (d: Deps) =>
+  (await seedCredentialRule(d, { credential_id: serviceId, name: `rule ${++seeded}` })).id;
+/** A global access rule of the GitHub issuer, with a unique name. */
+const seedOwnGlobal =
+  (overrides: Parameters<typeof seedGlobalRule>[1] = {}) =>
+  async (d: Deps) =>
+    (await seedGlobalRule(d, { name: `global ${++seeded}`, tenant_pin: PIN, ...overrides })).id;
 const rotatedKeyring = (d: Deps): Deps => ({
   ...d,
   env: { ...d.env, TOKENGATE_KEK: '', TOKENGATE_KEYRING: KEYRING_1_2 },
@@ -154,15 +153,15 @@ const successes: Array<OpCase & { action: string }> = [
     run: (d, id) => deleteService(d, ACTOR, id),
   },
   {
-    name: 'deleteService (with its accesses)',
+    name: 'deleteService (with its rules)',
     action: 'service.delete',
     setup: async (d) => {
       const id = await seedService(d, { slug: 'cascade' });
-      return `${id}:${(await seedIssuerAccessRule(d, provider.id, id)).id}`;
+      return `${id}:${(await seedCredentialRule(d, { credential_id: id })).id}`;
     },
     run: (d, ids) => {
-      const [id = '', grantId = ''] = ids.split(':');
-      return deleteService(d, ACTOR, id, { withAccesses: true, accessIds: [grantId] });
+      const [id = '', ruleId = ''] = ids.split(':');
+      return deleteService(d, ACTOR, id, { withRules: true, ruleIds: [ruleId] });
     },
   },
   {
@@ -183,78 +182,107 @@ const successes: Array<OpCase & { action: string }> = [
   {
     name: 'createCredentialAccessRule',
     action: 'credential_access_rule.create',
-    run: async (d) =>
+    run: (d) =>
       createCredentialAccessRule(d, ACTOR, {
-        credential_id: await testCredentialId(d),
-        name: 'generic',
+        credential_id: serviceId,
+        name: `created ${++seeded}`,
         profile: 'generic',
         issuer: 'https://idp.example.org',
         jwks_uri: 'https://idp.example.org/jwks',
         anchor_claims: ['sub'],
+        tenant_pin: [{ claim: 'tenant', match: 'exact', values: ['acme'] }],
+        conditions: [{ claim: 'sub', match: 'exact', values: ['ci-bot'] }],
+        rules: READ,
       }),
   },
   {
     name: 'updateCredentialAccessRule',
     action: 'credential_access_rule.update',
-    run: (d) => updateCredentialAccessRule(d, ACTOR, provider.id, { max_token_age_seconds: 120 }),
+    setup: seedOwnRule,
+    run: (d, id) => updateCredentialAccessRule(d, ACTOR, id, { max_token_age_seconds: 120 }),
   },
   {
     name: 'setCredentialAccessRuleEnabled',
     action: 'credential_access_rule.disable',
-    run: (d) => setCredentialAccessRuleEnabled(d, ACTOR, provider.id, false),
+    setup: seedOwnRule,
+    run: (d, id) => setCredentialAccessRuleEnabled(d, ACTOR, id, false),
   },
   {
     name: 'setCredentialAccessRuleEnabled (enable)',
     action: 'credential_access_rule.enable',
-    run: (d) => setCredentialAccessRuleEnabled(d, ACTOR, provider.id, true),
+    setup: seedOwnRule,
+    run: (d, id) => setCredentialAccessRuleEnabled(d, ACTOR, id, true),
+  },
+  {
+    name: 'addTenantValue',
+    action: 'credential_access_rule.update',
+    setup: seedOwnRule,
+    run: (d, id) =>
+      addTenantValue(d, ACTOR, id, {
+        claim: 'repository_owner_id',
+        entries: [{ value: `${++seeded}000`, label: 'other' }],
+      }),
+  },
+  {
+    name: 'removeTenantValue',
+    action: 'credential_access_rule.update',
+    setup: async (d) => {
+      const id = await seedOwnRule(d);
+      await addTenantValue(d, ACTOR, id, {
+        claim: 'repository_owner_id',
+        entries: [{ value: '5', label: 'other' }],
+      });
+      return id;
+    },
+    run: (d, id) => removeTenantValue(d, ACTOR, id, { claim: 'repository_owner_id', value: '5' }),
+  },
+  {
+    name: 'duplicateCredentialAccessRule',
+    action: 'credential_access_rule.duplicate',
+    setup: seedOwnRule,
+    run: (d, id) => duplicateCredentialAccessRule(d, ACTOR, id),
   },
   {
     name: 'deleteCredentialAccessRule',
     action: 'credential_access_rule.delete',
-    setup: seedGeneric,
+    setup: seedOwnRule,
     run: (d, id) => deleteCredentialAccessRule(d, ACTOR, id),
   },
   {
-    name: 'createIssuerAccessRule',
-    action: 'grant.create',
+    name: 'createGlobalAccessRule',
+    action: 'global_access_rule.create',
     run: (d) =>
-      createIssuerAccessRule(d, ACTOR, {
-        name: 'g',
-        credential_access_rule_id: provider.id,
-        service_id: serviceId,
-        conditions: anchoredConditions(),
-        rules: [{ methods: ['GET'], path: '/**' }],
+      createGlobalAccessRule(d, ACTOR, {
+        name: `created global ${++seeded}`,
+        profile: 'github-actions',
+        tenant_pin: PIN,
+        confirm_new_ceiling: true,
+        confirm_widening: true,
       }),
   },
   {
-    name: 'updateIssuerAccessRule',
-    action: 'grant.update',
-    setup: seedOwnIssuerAccessRule,
-    run: (d, id) => updateIssuerAccessRule(d, ACTOR, id, { name: 'renamed' }),
+    name: 'updateGlobalAccessRule',
+    action: 'global_access_rule.update',
+    setup: seedOwnGlobal(),
+    run: (d, id) => updateGlobalAccessRule(d, ACTOR, id, { rules: READ }),
   },
   {
-    name: 'setIssuerAccessRuleEnabled',
-    action: 'grant.disable',
-    setup: seedOwnIssuerAccessRule,
-    run: (d, id) => setIssuerAccessRuleEnabled(d, ACTOR, id, false),
+    name: 'setGlobalAccessRuleEnabled',
+    action: 'global_access_rule.disable',
+    setup: seedOwnGlobal(),
+    run: (d, id) => setGlobalAccessRuleEnabled(d, ACTOR, id, false, { confirm_last_disable: true }),
   },
   {
-    name: 'setIssuerAccessRuleEnabled (enable)',
-    action: 'grant.enable',
-    setup: seedOwnIssuerAccessRule,
-    run: (d, id) => setIssuerAccessRuleEnabled(d, ACTOR, id, true),
+    name: 'setGlobalAccessRuleEnabled (enable)',
+    action: 'global_access_rule.enable',
+    setup: seedOwnGlobal({ enabled: false }),
+    run: (d, id) => setGlobalAccessRuleEnabled(d, ACTOR, id, true, { confirm_widening: true }),
   },
   {
-    name: 'duplicateIssuerAccessRule',
-    action: 'grant.duplicate',
-    setup: seedOwnIssuerAccessRule,
-    run: (d, id) => duplicateIssuerAccessRule(d, ACTOR, id),
-  },
-  {
-    name: 'deleteIssuerAccessRule',
-    action: 'grant.delete',
-    setup: seedOwnIssuerAccessRule,
-    run: (d, id) => deleteIssuerAccessRule(d, ACTOR, id),
+    name: 'deleteGlobalAccessRule',
+    action: 'global_access_rule.delete',
+    setup: seedOwnGlobal(),
+    run: (d, id) => deleteGlobalAccessRule(d, ACTOR, id, { confirm_widening: true }),
   },
   {
     name: 'rewrapCredentials',
@@ -298,14 +326,13 @@ const failures: OpCase[] = [
     run: (d) => testServiceCredential(d, ACTOR, 'svc_nope', CONTEXT),
   },
   {
-    name: 'deleteService (referenced)',
-    setup: seedOwnIssuerAccessRule,
+    name: 'deleteService (has rules)',
     run: (d) => deleteService(d, ACTOR, serviceId),
   },
   {
-    name: 'deleteService (accesses not the confirmed set)',
-    setup: seedOwnIssuerAccessRule,
-    run: (d) => deleteService(d, ACTOR, serviceId, { withAccesses: true, accessIds: [] }),
+    name: 'deleteService (rules not the confirmed set)',
+    setup: seedOwnRule,
+    run: (d) => deleteService(d, ACTOR, serviceId, { withRules: true, ruleIds: [rule.id] }),
   },
   {
     name: 'rotateServiceSecret (unattested)',
@@ -333,75 +360,119 @@ const failures: OpCase[] = [
   },
   {
     name: 'createCredentialAccessRule (no pin on shared issuer)',
-    run: async (d) =>
+    run: (d) =>
       createCredentialAccessRule(d, ACTOR, {
-        credential_id: await testCredentialId(d),
+        credential_id: serviceId,
         name: 'x',
         profile: 'github-actions',
+        conditions: anchoredConditions(),
+        rules: READ,
       }),
+  },
+  {
+    name: 'createCredentialAccessRule (unanchored)',
+    run: (d) =>
+      createCredentialAccessRule(d, ACTOR, {
+        credential_id: serviceId,
+        name: 'x',
+        profile: 'github-actions',
+        tenant_pin: PIN,
+        conditions: [{ claim: 'sub', match: 'glob', values: ['**'] }],
+        rules: READ,
+      }),
+  },
+  {
+    name: 'createCredentialAccessRule (unacknowledged warnings)',
+    run: (d) =>
+      createCredentialAccessRule(d, ACTOR, {
+        credential_id: serviceId,
+        name: 'x',
+        profile: 'github-actions',
+        tenant_pin: PIN,
+        conditions: [...anchoredConditions(), { claim: 'ref', match: 'glob', values: ['*'] }],
+        rules: READ,
+      }),
+  },
+  {
+    name: 'updateCredentialAccessRule (taken name)',
+    setup: seedOwnRule,
+    run: (d, id) => updateCredentialAccessRule(d, ACTOR, id, { name: rule.name.toUpperCase() }),
   },
   {
     name: 'updateCredentialAccessRule (profile change)',
-    run: (d) => updateCredentialAccessRule(d, ACTOR, provider.id, { profile: 'generic' }),
+    run: (d) => updateCredentialAccessRule(d, ACTOR, rule.id, { profile: 'generic' }),
   },
   {
-    name: 'deleteCredentialAccessRule (referenced)',
-    setup: seedOwnIssuerAccessRule,
-    run: (d) => deleteCredentialAccessRule(d, ACTOR, provider.id),
+    name: 'updateCredentialAccessRule (invalid rules)',
+    run: (d) => updateCredentialAccessRule(d, ACTOR, rule.id, { rules: [] }),
   },
   {
-    name: 'createIssuerAccessRule (unanchored)',
+    name: 'setCredentialAccessRuleEnabled (non-boolean)',
+    run: (d) => setCredentialAccessRuleEnabled(d, ACTOR, rule.id, 'false' as never),
+  },
+  {
+    name: 'removeTenantValue (used by its jobs)',
     run: (d) =>
-      createIssuerAccessRule(d, ACTOR, {
+      removeTenantValue(d, ACTOR, rule.id, { claim: 'repository_owner_id', value: OWNER_ID }),
+  },
+  {
+    name: 'deleteCredentialAccessRule (missing)',
+    run: (d) => deleteCredentialAccessRule(d, ACTOR, 'acr_nope'),
+  },
+  {
+    name: 'createGlobalAccessRule (first ceiling, unconfirmed)',
+    run: (d) =>
+      createGlobalAccessRule(d, ACTOR, { name: 'g', profile: 'github-actions', tenant_pin: PIN }),
+  },
+  {
+    name: 'createGlobalAccessRule (empty list)',
+    run: (d) =>
+      createGlobalAccessRule(d, ACTOR, {
         name: 'g',
-        credential_access_rule_id: provider.id,
-        service_id: serviceId,
-        conditions: [{ claim: 'sub', match: 'glob', values: ['**'] }],
-        rules: [{ methods: ['GET'], path: '/**' }],
+        profile: 'github-actions',
+        rules: [],
+        confirm_new_ceiling: true,
       }),
   },
   {
-    name: 'createIssuerAccessRule (unacknowledged warnings)',
+    name: 'createGlobalAccessRule (sibling, unconfirmed widening)',
+    setup: seedOwnGlobal(),
     run: (d) =>
-      createIssuerAccessRule(d, ACTOR, {
+      createGlobalAccessRule(d, ACTOR, {
         name: 'g',
-        credential_access_rule_id: provider.id,
-        service_id: serviceId,
-        conditions: [...anchoredConditions(), { claim: 'ref', match: 'glob', values: ['*'] }],
-        rules: [{ methods: ['GET'], path: '/**' }],
+        profile: 'github-actions',
+        confirm_new_ceiling: true,
       }),
   },
   {
-    name: 'updateIssuerAccessRule (invalid rules)',
-    setup: seedOwnIssuerAccessRule,
-    run: (d, id) => updateIssuerAccessRule(d, ACTOR, id, { rules: [] }),
+    name: 'updateGlobalAccessRule (unconfirmed widening)',
+    setup: seedOwnGlobal(),
+    run: (d, id) => updateGlobalAccessRule(d, ACTOR, id, { tenant_pin: null }),
   },
   {
-    name: 'deleteIssuerAccessRule (missing)',
-    run: (d) => deleteIssuerAccessRule(d, ACTOR, 'grt_nope'),
+    name: 'updateGlobalAccessRule (issuer change)',
+    setup: seedOwnGlobal(),
+    run: (d, id) =>
+      updateGlobalAccessRule(d, ACTOR, id, { issuer: 'https://token.actions.example.com' }),
   },
   {
-    name: 'setIssuerAccessRuleEnabled (non-boolean)',
-    setup: seedOwnIssuerAccessRule,
-    run: (d, id) => setIssuerAccessRuleEnabled(d, ACTOR, id, 'false' as never),
+    name: 'setGlobalAccessRuleEnabled (enable, unconfirmed)',
+    setup: seedOwnGlobal({ enabled: false }),
+    run: (d, id) => setGlobalAccessRuleEnabled(d, ACTOR, id, true, {}),
   },
   {
-    name: 'updateCredentialAccessRule (unconfirmed trust change)',
-    setup: seedOwnIssuerAccessRule,
-    run: async (d) => {
-      const issuer = 'https://token.actions.githubusercontent.com/acme';
-      const network = fakeNetwork(undefined, { [issuer]: `${issuer}/.well-known/jwks` });
-      const result = await updateCredentialAccessRule(
-        { ...d, fetch: network.fetch },
-        ACTOR,
-        provider.id,
-        {
-          issuer,
-        },
-      );
-      expect(result).toMatchObject({ reason: 'confirmation_required' });
-      return result;
-    },
+    name: 'setGlobalAccessRuleEnabled (last disable, unconfirmed)',
+    setup: seedOwnGlobal(),
+    run: (d, id) => setGlobalAccessRuleEnabled(d, ACTOR, id, false, {}),
+  },
+  {
+    name: 'deleteGlobalAccessRule (last, unconfirmed)',
+    setup: seedOwnGlobal(),
+    run: (d, id) => deleteGlobalAccessRule(d, ACTOR, id, {}),
+  },
+  {
+    name: 'deleteGlobalAccessRule (a credential access rule id)',
+    run: (d) => deleteGlobalAccessRule(d, ACTOR, rule.id, { confirm_widening: true }),
   },
   {
     name: 'rewrapCredentials (no keyring)',

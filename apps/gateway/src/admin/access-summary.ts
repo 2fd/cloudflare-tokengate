@@ -1,9 +1,9 @@
-// Short human description of an issuer access rule (a grant): who may call ("acme/api"), in which
+// Short human description of a credential access rule: who may call ("acme/api"), in which
 // context ("environment production") and what ("POST /chat.postMessage"). Derived from the stored
 // conditions and rules only, with claim labels for numeric IDs. Display only: it never decides
 // anything, and an unrecognised condition set still gets a truthful (if generic) summary.
 import { labelFor } from '../db/claim-labels';
-import type { ClaimLabel, IssuerAccessRule } from '../db/types';
+import type { ClaimLabel, CredentialAccessRule } from '../db/types';
 import type { Condition, Rule } from '../policy/types';
 
 export interface AccessSummary {
@@ -15,15 +15,22 @@ export interface AccessSummary {
   operations: string[];
 }
 
-/** `labels` should be those of the grant's consumer (credential access rule). */
+/** `labels` should be those of the rule. */
 export function accessSummary(
-  grant: Pick<IssuerAccessRule, 'conditions' | 'rules'>,
+  rule: Pick<CredentialAccessRule, 'conditions' | 'rules'>,
   labels: readonly ClaimLabel[],
 ): AccessSummary {
+  // A malformed stored row holds sentinels (db/rows.ts); the summary skips what it cannot read.
+  const conditions = (Array.isArray(rule.conditions) ? rule.conditions : []).filter(
+    (c) => typeof c === 'object' && c !== null && Array.isArray(c.values),
+  );
+  const rules = (Array.isArray(rule.rules) ? rule.rules : []).filter(
+    (r) => typeof r === 'object' && r !== null && Array.isArray(r.methods),
+  );
   return {
-    subject: subjectOf(grant.conditions, labels),
-    context: contextOf(grant.conditions),
-    operations: grant.rules.map(operationText),
+    subject: subjectOf(conditions, labels),
+    context: contextOf(conditions),
+    operations: rules.map(operationText),
   };
 }
 
@@ -62,9 +69,7 @@ function subjectOf(conditions: readonly Condition[], labels: readonly ClaimLabel
   const subjects = values(conditions, 'sub');
   if (subjects.length > 0) return subjects.join(', ');
   const first = conditions.find((c) => c.negate !== true && c.match === 'exact');
-  return first
-    ? `${first.claim} ${first.values.join(', ')}`
-    : 'any caller of the credential access rule';
+  return first ? `${first.claim} ${first.values.join(', ')}` : 'any caller of the issuer';
 }
 
 function contextOf(conditions: readonly Condition[]): string {

@@ -86,7 +86,7 @@ describe('purge: rollups and audit log', () => {
   it('deletes rollups older than rollup_retention_days (floor 30)', async () => {
     const insert = (hour: number) =>
       env.TELEMETRY_DB.prepare(
-        `INSERT INTO request_rollup_hourly (hour, service_id, grant_id, outcome, status_class, requests, upstream_auth_fail, duration_sum_ms)
+        `INSERT INTO request_rollup_hourly (hour, service_id, credential_access_rule_id, outcome, status_class, requests, upstream_auth_fail, duration_sum_ms)
          VALUES (?, '', '', 'allowed', 2, 1, 0, 1)`,
       ).bind(hour);
     const hour = Math.floor(NOW / HOUR_MS) * HOUR_MS;
@@ -154,7 +154,7 @@ describe('ROWS_ESTIMATE_SQL (Data retention "Stored now")', () => {
     const hour = NOW - (NOW % 3_600_000) - 5 * 3_600_000;
     await seedRequests(hour + 1000, 3);
     await env.TELEMETRY_DB.prepare(
-      `INSERT INTO request_rollup_hourly (hour, service_id, grant_id, outcome, status_class, requests, upstream_auth_fail, duration_sum_ms)
+      `INSERT INTO request_rollup_hourly (hour, service_id, credential_access_rule_id, outcome, status_class, requests, upstream_auth_fail, duration_sum_ms)
        VALUES (?, '', '', 'allowed', 2, 3, 0, 0), (?, '', '', 'allowed', 2, 100, 0, 0)`,
     )
       .bind(hour, hour - 3_600_000)

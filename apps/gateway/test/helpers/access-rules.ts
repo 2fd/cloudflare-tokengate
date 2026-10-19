@@ -1,6 +1,6 @@
-// Fixtures for the credential access rule and issuer access rules integration tests: a fresh control plane,
-// an app over a fake network that records every outbound call, sessions per role, and seeders for
-// labels and request records.
+// Fixtures for the credential and global access rule integration tests: a fresh control plane, an app over a
+// fake network that records every outbound call, sessions per role, and seeders for labels and
+// request records.
 import { env } from 'cloudflare:workers';
 import { insertRequestRecordsStatements } from '../../src/db/requests';
 import type { Role } from '../../src/db/types';
@@ -18,17 +18,17 @@ import { createTestApp, type TestApp } from './app';
 export const GITLAB_ISSUER = 'https://gitlab.com';
 export const BUILDKITE_ISSUER = 'https://agent.buildkite.com';
 
-export interface ConsumersWorld {
+export interface RulesWorld {
   app: TestApp;
   calls: FetchCall[];
   sessions: Record<Role, AdminSession>;
 }
 
 /** Resets both databases and logs one user per role into an app over a recording fake network. */
-export async function consumersWorld(
+export async function rulesWorld(
   extraIssuers: Record<string, string> = {},
   discovery: Record<string, unknown> = {},
-): Promise<ConsumersWorld> {
+): Promise<RulesWorld> {
   await resetControlPlane();
   await env.TELEMETRY_DB.batch([
     env.TELEMETRY_DB.prepare('DELETE FROM request_log'),
@@ -60,25 +60,25 @@ export async function consumersWorld(
 }
 
 export async function seedLabel(
-  providerId: string,
+  ruleId: string,
   claim: string,
   value: string,
   label: string,
 ): Promise<void> {
   await env.DB.prepare(
-    `INSERT INTO claim_labels (credential_access_rule_id, claim, value, label, updated_at, updated_by)
+    `INSERT INTO claim_labels (access_rule_id, claim, value, label, updated_at, updated_by)
      VALUES (?, ?, ?, ?, 1, NULL)
-     ON CONFLICT (credential_access_rule_id, claim, value) DO UPDATE SET label = excluded.label`,
+     ON CONFLICT (access_rule_id, claim, value) DO UPDATE SET label = excluded.label`,
   )
-    .bind(providerId, claim, value, label)
+    .bind(ruleId, claim, value, label)
     .run();
 }
 
-export async function labels(providerId?: string): Promise<Array<Record<string, unknown>>> {
-  const statement = providerId
+export async function labels(ruleId?: string): Promise<Array<Record<string, unknown>>> {
+  const statement = ruleId
     ? env.DB.prepare(
-        'SELECT claim, value, label FROM claim_labels WHERE credential_access_rule_id = ? ORDER BY claim, value',
-      ).bind(providerId)
+        'SELECT claim, value, label FROM claim_labels WHERE access_rule_id = ? ORDER BY claim, value',
+      ).bind(ruleId)
     : env.DB.prepare('SELECT claim, value, label FROM claim_labels ORDER BY claim, value');
   return (await statement.all<Record<string, unknown>>()).results;
 }
@@ -104,7 +104,7 @@ export function requestRecord(overrides: Partial<RequestRecord> & { id: string }
   return {
     ts: Date.now(),
     outcome: 'denied',
-    reason: 'no_matching_grant',
+    reason: 'no_matching_rule',
     status: 403,
     upstream_status: null,
     method: 'GET',
@@ -112,7 +112,7 @@ export function requestRecord(overrides: Partial<RequestRecord> & { id: string }
     service_slug: 'github',
     service_id: null,
     credential_access_rule_id: null,
-    grant_id: null,
+    global_access_rule_id: null,
     claims_verified: 1,
     caller_subject: null,
     caller_repository: null,

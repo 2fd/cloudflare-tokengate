@@ -16,7 +16,7 @@ CREATE TABLE request_log (
   service_slug TEXT,
   service_id TEXT,
   credential_access_rule_id TEXT,
-  grant_id TEXT,
+  global_access_rule_id TEXT,
   claims_verified INTEGER NOT NULL, -- 0: caller fields are empty (I-LOG-2)
   caller_subject TEXT,
   caller_repository TEXT,
@@ -39,14 +39,14 @@ CREATE INDEX request_log_verified ON request_log (id) WHERE claims_verified = 1;
 -- write. Queries must repeat the WHERE term literally for SQLite to use it (src/db/requests.ts,
 -- src/db/rollups.ts denialGroupsStatement).
 CREATE INDEX request_log_problems ON request_log (id) WHERE outcome <> 'allowed' OR status >= 500;
--- "Requests through this issuer access rules" (Requests ?access=).
-CREATE INDEX request_log_grant ON request_log (grant_id, id);
+-- Requests through this credential access rule (Requests ?rule=).
+CREATE INDEX request_log_rule ON request_log (credential_access_rule_id, id);
 
--- Hourly aggregates, recomputed by the cron from request_log. '' = unknown service/grant.
+-- Hourly aggregates, recomputed by the cron from request_log. '' = unknown service or credential access rule.
 CREATE TABLE request_rollup_hourly (
   hour INTEGER NOT NULL,       -- ms timestamp of the hour start (UTC)
   service_id TEXT NOT NULL,
-  grant_id TEXT NOT NULL,
+  credential_access_rule_id TEXT NOT NULL,
   outcome TEXT NOT NULL,
   status_class INTEGER NOT NULL,
   requests REAL NOT NULL,
@@ -60,5 +60,5 @@ CREATE TABLE request_rollup_hourly (
   le_2500 REAL NOT NULL DEFAULT 0,
   le_5000 REAL NOT NULL DEFAULT 0,
   gt_5000 REAL NOT NULL DEFAULT 0,
-  PRIMARY KEY (hour, service_id, grant_id, outcome, status_class)
+  PRIMARY KEY (hour, service_id, credential_access_rule_id, outcome, status_class)
 ) WITHOUT ROWID;

@@ -103,7 +103,7 @@ jobs:
             -H "x-tokengate-token: $TOKEN"
 ```
 
-The first run fails with `403 no_matching_grant`. Open the denied request in the admin UI, select "Give access from this request", review and save. The next run succeeds. See [actions/get-token](actions/get-token/README.md) for the action's inputs and outputs.
+The first run fails with `403 no_matching_rule`. Open the denied request in the admin UI, select "Give access from this request", review and save. The next run succeeds. See [actions/get-token](actions/get-token/README.md) for the action's inputs and outputs.
 
 ## Security model
 

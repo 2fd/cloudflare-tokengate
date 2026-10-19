@@ -19,15 +19,15 @@ function record(id = 'req_01JT0000000000000000000001'): RequestRecord {
     id,
     ts: 1,
     outcome: 'denied',
-    reason: 'no_matching_grant',
+    reason: 'no_matching_rule',
     status: 403,
     upstream_status: null,
     method: 'GET',
     path: '/a',
     service_slug: 'echo',
     service_id: 'svc_1',
-    credential_access_rule_id: 'cpr_1',
-    grant_id: null,
+    credential_access_rule_id: 'acr_1',
+    global_access_rule_id: null,
     claims_verified: 1,
     caller_subject: 's',
     caller_repository: 'acme/app',
@@ -102,7 +102,7 @@ describe('recordRequest', () => {
     const archive = { send: async (rs: ArchiveRecord[]) => void archived.push(...rs) };
     await recordRequest(deps({ REQUEST_ARCHIVE: archive as never }), record());
     expect(archived).toHaveLength(1);
-    expect(archived[0]).toMatchObject({ id: record().id, schema_version: 1 });
+    expect(archived[0]).toMatchObject({ id: record().id, schema_version: 2 });
     expect(archived[0]).not.toHaveProperty('eval_trace');
   });
 

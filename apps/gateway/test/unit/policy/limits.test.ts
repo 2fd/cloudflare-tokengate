@@ -1,3 +1,4 @@
+import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import { CLOCK_TOLERANCE_SECONDS } from '../../../src/identity/jwt';
 import {
@@ -37,6 +38,25 @@ describe('AR-3: issuerKey', () => {
     ['https://x.example/a/./', 'https://x.example/a/.'],
   ])('%s → %s', (issuer, key) => {
     expect(issuerKey(issuer)).toBe(key);
+  });
+
+  // The ops write issuerKey(issuer) and a CHECK compares it with SQL: they must agree on every
+  // input, or an insert fails (a mismatch can never mis-match a ceiling).
+  it.each([
+    'https://gitlab.com',
+    'https://GitLab.com//',
+    'https://ÉCOLE.example/Ä/',
+    'https://x.example/A%2F/',
+    'https://x.example/a%2f%2F',
+    'https://straße.example/İ/',
+    'https://x.example/ǅ',
+    '/',
+    '',
+  ])('equals lower(rtrim(issuer, "/")) on D1: %j', async (issuer) => {
+    const row = await env.DB.prepare("SELECT lower(rtrim(?, '/')) AS key")
+      .bind(issuer)
+      .first<{ key: string }>();
+    expect(issuerKey(issuer)).toBe(row?.key);
   });
 });
 
@@ -123,6 +143,18 @@ describe('AR-19: the limit registry', () => {
     );
     const known = new Set([...limits, ...NON_LIMIT_COLUMNS]);
     expect(Object.keys(globalRule()).filter((field) => !known.has(field))).toEqual([]);
+  });
+
+  // A future column must be a limit or a named non-limit: pragma_table_xinfo also lists generated
+  // and hidden columns, which table_info leaves out.
+  it('matches the access_rules columns in both directions', async () => {
+    const { results } = await env.DB.prepare(
+      "SELECT name FROM pragma_table_xinfo('access_rules')",
+    ).all<{ name: string }>();
+    const columns = results.map((row) => row.name).sort();
+    const registry = [...GLOBAL_LIMITS.map((limit) => limit.column), ...NON_LIMIT_COLUMNS].sort();
+    expect(columns.filter((column) => !registry.includes(column))).toEqual([]);
+    expect(registry.filter((column) => !columns.includes(column))).toEqual([]);
   });
 });
 

@@ -25,7 +25,6 @@ beforeEach(async () => {
   resetSchemaStatusCacheForTests();
   await env.DB.batch([
     env.DB.prepare('DELETE FROM settings'),
-    env.DB.prepare('DELETE FROM issuer_access_rules'),
     env.DB.prepare('DELETE FROM credentials'),
   ]);
 });

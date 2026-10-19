@@ -32,9 +32,9 @@ A grant matches when all of these hold:
 <sub>Diagram source: [`diagrams/src/`](diagrams/src/) (rendered with [archify](https://github.com/tt-a1i/archify)).</sub>
 
 If a grant fails only on the event guard, the caller gets `403 event_not_trusted`. Otherwise a denied
-request gets `403 no_matching_grant`. The request log stores a trace with one line per grant: `matched`,
+request gets `403 no_matching_rule`. The request log stores a trace with one line per grant: `matched`,
 `invalid_grant`, `condition_failed`, `event_not_trusted` or `no_rule`, plus the first failing check. See
-[errors.md](errors.md#no_matching_grant).
+[errors.md](errors.md#no_matching_rule).
 
 ## Credential access rules and profiles
 
@@ -362,7 +362,7 @@ protected-refs choice.
 
 ## Give access from a denied request
 
-On a request record denied with `no_matching_grant` or `event_not_trusted`, access managers, admins and
+On a request record denied with `no_matching_rule` or `event_not_trusted`, access managers, admins and
 owners see "Give this caller access" when the token was verified ([I-LOG-2](threat-model.md#i-log-2)).
 The form refuses to prefill if the credential access rule or the token no longer exists.
 

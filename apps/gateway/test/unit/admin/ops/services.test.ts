@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { setCredentialAccessRuleEnabled } from '../../../../src/admin/ops/credential-access-rules';
 import {
   checkServiceCreate,
   createService,
@@ -16,6 +17,7 @@ import {
 } from '../../../../src/admin/ops/credentials';
 import { credentialAad, openCredential, sealedKid } from '../../../../src/crypto/envelope';
 import { loadKeyring } from '../../../../src/crypto/keyring';
+import { getAccessRuleRow } from '../../../../src/db/access-rules';
 import { getService } from '../../../../src/db/credentials';
 import { setAdminHosts, setUpstreamHosts, TEST_ACCESS_ENV } from '../../../helpers/app';
 import {
@@ -26,9 +28,10 @@ import {
   fakeNetwork,
   KEK_1,
   opsDeps,
+  racingDeps,
   resetControlPlane,
-  seedGithubProvider,
-  seedIssuerAccessRule,
+  seedCredentialRule,
+  seedGlobalRule,
   seedService,
   serviceInput,
 } from './helpers';
@@ -442,10 +445,15 @@ describe('testServiceCredential', () => {
 });
 
 describe('deleteService', () => {
+  const ruleCount = async () =>
+    Number(
+      (await env.DB.prepare('SELECT count(*) AS n FROM access_rules').first<{ n: number }>())?.n,
+    );
+
   it('deletes and keeps the full non-secret configuration in the audit row', async () => {
     const deps = opsDeps();
     const id = await seedService(deps, { secret: SECRET });
-    expect(await deleteService(deps, ACTOR, id)).toEqual({ ok: true, deletedAccesses: 0 });
+    expect(await deleteService(deps, ACTOR, id)).toEqual({ ok: true, deletedRules: 0 });
     expect(await getService(env.DB, id)).toBeNull();
     const audit = (await auditRows(id)).at(-1);
     expect(audit?.action).toBe('service.delete');
@@ -458,18 +466,98 @@ describe('deleteService', () => {
     expect(JSON.stringify(audit)).not.toContain('credential_sealed');
   });
 
-  it('refuses while issuer_access_rules reference the service', async () => {
+  it('refuses while credential access rules belong to the credential', async () => {
     const deps = opsDeps();
     const id = await seedService(deps);
-    const provider = await seedGithubProvider(deps);
-    await seedIssuerAccessRule(deps, provider.id, id, 'ci deploy');
+    await seedCredentialRule(deps, { credential_id: id, name: 'ci deploy' });
     const before = await auditCount();
     const result = await deleteService(deps, ACTOR, id);
     expect(result).toMatchObject({ ok: false, reason: 'conflict' });
     if (result.ok) return;
     expect(result.errors.join()).toContain('"ci deploy"');
+    expect(result.rules?.map((rule) => rule.name)).toEqual(['ci deploy']);
     expect(await getService(env.DB, id)).not.toBeNull();
     expect(await auditCount()).toBe(before);
+  });
+
+  it('with its rules, deletes exactly the confirmed set and lists every rule in one audit row (I-AUDIT-1)', async () => {
+    const deps = opsDeps();
+    const id = await seedService(deps);
+    const a = await seedCredentialRule(deps, {
+      credential_id: id,
+      name: 'a',
+      labels: [{ claim: 'repository_id', value: '987654321', label: 'acme/api' }],
+    });
+    const b = await seedCredentialRule(deps, { credential_id: id, name: 'b' });
+    await setCredentialAccessRuleEnabled(deps, ACTOR, b.id, false);
+    const global = await seedGlobalRule(deps);
+    const before = await auditCount();
+
+    const stale = await deleteService(deps, ACTOR, id, { withRules: true, ruleIds: [a.id] });
+    expect(stale).toMatchObject({ ok: false, reason: 'conflict' });
+    expect(await auditCount()).toBe(before);
+
+    const result = await deleteService(deps, ACTOR, id, {
+      withRules: true,
+      ruleIds: [b.id, a.id],
+    });
+    expect(result).toEqual({ ok: true, deletedRules: 2 });
+    expect(await getService(env.DB, id)).toBeNull();
+    // The rules and their labels cascade; global access rules stay.
+    expect(await ruleCount()).toBe(1);
+    expect(await getAccessRuleRow(env.DB, global.id)).not.toBeNull();
+    const labels = await env.DB.prepare('SELECT count(*) AS n FROM claim_labels').first<{
+      n: number;
+    }>();
+    expect(labels?.n).toBe(0);
+    const audit = (await auditRows(id)).at(-1);
+    expect(audit).toMatchObject({
+      action: 'service.delete',
+      summary: 'Deleted service github and its 2 credential access rules',
+    });
+    expect(audit?.diff?.before).toMatchObject({
+      access_rules: [
+        { id: a.id, name: 'a', issuer: a.issuer, enabled: true },
+        { id: b.id, name: 'b', issuer: b.issuer, enabled: false },
+      ],
+    });
+    expect(await auditCount()).toBe(before + 1);
+  });
+
+  it('a rule added after the confirmation makes the delete write nothing', async () => {
+    const deps = opsDeps();
+    const id = await seedService(deps);
+    const a = await seedCredentialRule(deps, { credential_id: id, name: 'a' });
+    const before = await auditCount();
+    const racing = racingDeps(deps, () =>
+      seedCredentialRule(deps, { credential_id: id, name: 'late' }),
+    );
+    const result = await deleteService(racing, ACTOR, id, { withRules: true, ruleIds: [a.id] });
+    expect(result).toMatchObject({ ok: false, reason: 'conflict' });
+    if (result.ok) return;
+    expect(result.rules?.map((rule) => rule.name)).toEqual(['a', 'late']);
+    expect(await getService(env.DB, id)).not.toBeNull();
+    expect(await ruleCount()).toBe(2);
+    // Only the racing rule's own audit row was added.
+    expect(await auditCount()).toBe(before + 1);
+  });
+
+  it('refuses the cascade for an actor whose permissions lack access:write', async () => {
+    const deps = opsDeps();
+    const id = await seedService(deps);
+    const a = await seedCredentialRule(deps, { credential_id: id });
+    const actor = {
+      ...ACTOR,
+      authority: {
+        userId: ACTOR.id,
+        loginProvider: 'access',
+        subject: 'sub',
+        permissions: ['tokens:write'],
+      },
+    } as never;
+    const result = await deleteService(deps, actor, id, { withRules: true, ruleIds: [a.id] });
+    expect(result).toMatchObject({ ok: false, reason: 'conflict' });
+    expect(await getService(env.DB, id)).not.toBeNull();
   });
 });
 

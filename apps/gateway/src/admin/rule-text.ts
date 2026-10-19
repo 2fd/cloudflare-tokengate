@@ -1,8 +1,8 @@
-// Text forms of issuer access rules (grant) conditions and rules for the admin UI: the read-only
+// Text forms of access rule conditions and operations for the admin UI: the read-only
 // "Exact conditions" copy, the comma-separated value lists of the rows editor, and the event
-// summary shown next to an access. The UI has no condition or rule text syntax to type: values
+// summary shown next to a rule. The UI has no condition or rule text syntax to type: values
 // are parsed one field at a time (parseValueList); shapes, anchors and warnings are checked by
-// policy/validate.ts when the access is saved.
+// policy/validate-rules.ts when the rule is saved.
 //
 //   conditions (display only): [not] <claim> <exact|glob> <value>[, <value>...]
 //   rules (display only):      <METHOD[,METHOD...]|*> <path-glob>
@@ -73,12 +73,12 @@ function fail(error: string): ParseFailure {
   return { ok: false, error };
 }
 
-/** Which events a grant accepts under the event guard (I-AUTHZ-3). Null when the profile has none. */
+/** Which events a rule accepts under the event guard (I-AUTHZ-3). Null when the profile has none. */
 export interface EventSummary {
   claim: string;
-  /** Trusted events the grant accepts. */
+  /** Trusted events the rule accepts. */
   trusted: string[];
-  /** Untrusted events the grant explicitly opts into (exact, non-negated). */
+  /** Untrusted events the rule explicitly opts into (exact, non-negated). */
   optedIn: string[];
   /** True when an exact condition limits events to `trusted` + `optedIn`. */
   restricted: boolean;

@@ -36,7 +36,7 @@ The columns are defined in `apps/gateway/migrations-telemetry/0001_initial.sql` 
 | `outcome`, `reason` | See above. `reason` is the error code or a finer reason code; `null` when the upstream answered ([reason codes](errors.md#request-record-reason-codes)) |
 | `status`, `upstream_status` | Status returned to the caller; status from the upstream (`null` when not forwarded). `upstream_status` is the raw value fetch reported, any 32-bit signed integer (also outside 100 to 999, 0 or negative) for `upstream_invalid_status` |
 | `method`, `path` | HTTP method; path after `/proxy/<slug>` as received (not decoded), without the query |
-| `service_slug`, `service_id`, `credential_access_rule_id`, `grant_id` | What the pipeline resolved. `service_slug` is the slug from the URL, even for unknown credentials |
+| `service_slug`, `service_id`, `credential_access_rule_id`, `global_access_rule_id` | What the pipeline resolved. `service_slug` is the slug from the URL, even for unknown credentials |
 | `claims_verified` | `1` when the caller token was verified and the tenant pin held, else `0` |
 | `caller_subject`, `caller_repository` | Display values from the verified claims |
 | `caller_claims` | JSON of the profile's allowlisted claims (for example `repository`, `ref`, `run_id`, `sha` for GitHub Actions) |
@@ -113,7 +113,7 @@ Newer and Older links.
   changed. A disabled consumer or token, or a tenant pin that fails, refuses the request before any
   access applies, so the check then says "Would still be refused" even when an access matches.
 - "Give access from this request" is offered for a denied, verified record with reason
-  `no_matching_grant` or `event_not_trusted`, to access managers, admins and owners, until the
+  `no_matching_rule` or `event_not_trusted`, to access managers, admins and owners, until the
   re-check says the request would now be allowed. Records of tokens that were not verified never
   prefill a form ([I-LOG-2](threat-model.md#i-log-2)).
 
@@ -211,7 +211,7 @@ page. Nothing refreshes by itself: the page says when it was built and has a Ref
   "Refused before a token was chosen" counts requests to unknown slugs and earlier failures.
 - **Top denials:** the 10 largest groups of denied requests in the range, by consumer, token,
   reason and repository (or the unverified issuer), from the newest 2,000 denials. The action is
-  "Create access" (a verified `no_matching_grant` or `event_not_trusted` group, for access
+  "Create access" (a verified `no_matching_rule` or `event_not_trusted` group, for access
   managers, admins and owners), "Add a credential access rule" (`issuer_unknown`), or "See requests".
 - **Recent changes:** the last 5 audit events.
 

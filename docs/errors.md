@@ -48,7 +48,7 @@ configured sample rate. See [observability.md](observability.md).
 |---|---|
 | 400 | [`path_invalid`](#path_invalid), [`token_ambiguous`](#token_ambiguous) |
 | 401 | [`token_missing`](#token_missing), [`token_malformed`](#token_malformed), [`issuer_unknown`](#issuer_unknown), [`audience_mismatch`](#audience_mismatch), [`token_expired`](#token_expired), [`token_too_old`](#token_too_old), [`signature_invalid`](#signature_invalid), [`claims_invalid`](#claims_invalid), [`tenant_mismatch`](#tenant_mismatch) |
-| 403 | [`no_matching_grant`](#no_matching_grant), [`event_not_trusted`](#event_not_trusted) |
+| 403 | [`no_matching_rule`](#no_matching_rule), [`event_not_trusted`](#event_not_trusted) |
 | 404 | [`service_not_found`](#service_not_found) |
 | 405 | [`method_not_allowed`](#method_not_allowed) |
 | 429 | [`rate_limited`](#rate_limited) |
@@ -230,7 +230,7 @@ even though it has not expired.
 - **Caller:** fix the URL. Do not send method overrides; use the real HTTP method.
 - **Admin:** the record has reason `path_invalid` or `query_invalid`.
 
-## no_matching_grant
+## no_matching_rule
 
 **Status 403.** No grant allows this caller to make this request ([I-AUTHZ-1](threat-model.md#i-authz-1)).
 
@@ -365,8 +365,9 @@ The reason is the gateway error code, or a finer reason for some codes:
 | `service_disabled` | `service_not_found` | The service exists but is disabled |
 | `path_invalid` | `path_invalid` | The path is not allowed |
 | `query_invalid` | `path_invalid` | The query string is not allowed |
-| `no_matching_grant` | `no_matching_grant` | No grant allows this caller to perform this request |
-| `event_not_trusted` | `event_not_trusted` | The triggering event requires an explicit opt-in in the grant |
+| `no_matching_rule` | `no_matching_rule` | No access rule allows this caller to perform this request |
+| `outside_global_rules` | `no_matching_rule` | A credential access rule allows the request, but no global access rule of the caller's issuer does |
+| `event_not_trusted` | `event_not_trusted` | The triggering event requires an explicit opt-in in the credential access rule |
 | `rate_limited` | `rate_limited` | Rate limit exceeded |
 | `credential_missing` | `credential_unavailable` | The service has no credential yet |
 | `credential_binding_mismatch` | `credential_unavailable` | The stored credential does not belong to this service's current destination or injection |

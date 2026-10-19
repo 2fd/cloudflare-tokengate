@@ -2,8 +2,12 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Permission } from '../../src/admin/auth/rbac';
 import type { AdminActor } from '../../src/admin/auth/types';
+import {
+  type CredentialRuleInput,
+  createCredentialAccessRule,
+} from '../../src/admin/ops/credential-access-rules';
 import { destinationFingerprint, testServiceCredential } from '../../src/admin/ops/credentials';
-import { createIssuerAccessRule } from '../../src/admin/ops/issuer_access_rules';
+import { createGlobalAccessRule } from '../../src/admin/ops/global-access-rules';
 import { updateSettings } from '../../src/admin/ops/settings';
 import { inviteUser, updateUser } from '../../src/admin/ops/users';
 import { getService } from '../../src/db/credentials';
@@ -11,6 +15,7 @@ import {
   anchoredConditions,
   CONTEXT,
   fakeNetwork,
+  OWNER_ID,
   racingDeps,
 } from '../../test/unit/admin/ops/helpers';
 import {
@@ -53,7 +58,6 @@ async function world() {
   return {
     app,
     serviceId: seeded.serviceId,
-    providerId: seeded.provider.id,
     owner,
     admin,
     ownerSession,
@@ -224,25 +228,49 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
       );
     }
 
-    const grantCount = async () =>
-      env.DB.prepare('SELECT count(*) AS n FROM issuer_access_rules').first<number>('n');
+    const ruleCount = async () =>
+      env.DB.prepare('SELECT count(*) AS n FROM access_rules').first<number>('n');
 
-    it('an admin demoted to token_manager cannot create a grant (POST /admin/issuer-access-rules)', async () => {
+    /** A GitHub Actions credential access rule of the world credential. */
+    function ruleInput(w: Awaited<ReturnType<typeof world>>, name: string): CredentialRuleInput {
+      return {
+        credential_id: w.serviceId,
+        name,
+        profile: 'github-actions',
+        tenant_pin: [{ claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID] }],
+        conditions: anchoredConditions(),
+        rules: [{ methods: ['GET'], path: '/repos/**' }],
+        acknowledge_warnings: true,
+      };
+    }
+
+    it('an admin demoted to token_manager cannot create a credential access rule (POST /admin/credential-access-rules)', async () => {
       const w = await world();
-      const before = await grantCount();
-      const result = await createIssuerAccessRule(
+      const before = await ruleCount();
+      const result = await createCredentialAccessRule(
         demotedMidRequest(w, 'token_manager'),
         adminActor(w, ['access:write']),
+        ruleInput(w, 'demoted'),
+      );
+      expect(result).toMatchObject({ ok: false, reason: 'conflict' });
+      expect(await ruleCount()).toBe(before);
+    });
+
+    it('an admin demoted to access_manager cannot create a global access rule (POST /admin/global-access-rules)', async () => {
+      const w = await world();
+      const before = await ruleCount();
+      const result = await createGlobalAccessRule(
+        demotedMidRequest(w, 'access_manager'),
+        adminActor(w, ['access_rules:global']),
         {
-          name: 'demoted',
-          credential_access_rule_id: w.providerId,
-          service_id: w.serviceId,
-          conditions: anchoredConditions(),
-          rules: [{ methods: ['GET'], path: '/repos/**' }],
+          name: 'demoted ceiling',
+          profile: 'generic',
+          issuer: 'https://idp.acme.example',
+          confirm_new_ceiling: true,
         },
       );
       expect(result).toMatchObject({ ok: false, reason: 'conflict' });
-      expect(await grantCount()).toBe(before);
+      expect(await ruleCount()).toBe(before);
     });
 
     it('an admin demoted to access_manager cannot send the stored credential (POST /admin/credentials/:id/test)', async () => {
@@ -261,20 +289,14 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
 
     it('a field permission is re-checked at commit: tokens:write plus access:write needs admin or owner', async () => {
       const w = await world();
-      const before = await grantCount();
-      const result = await createIssuerAccessRule(
+      const before = await ruleCount();
+      const result = await createCredentialAccessRule(
         demotedMidRequest(w, 'access_manager'),
         adminActor(w, ['access:write', 'tokens:write']),
-        {
-          name: 'needs both',
-          credential_access_rule_id: w.providerId,
-          service_id: w.serviceId,
-          conditions: anchoredConditions(),
-          rules: [{ methods: ['GET'], path: '/repos/**' }],
-        },
+        ruleInput(w, 'needs both'),
       );
       expect(result).toMatchObject({ ok: false, reason: 'conflict' });
-      expect(await grantCount()).toBe(before);
+      expect(await ruleCount()).toBe(before);
     });
 
     it('an owner demoted to token_manager mid-request cannot change people (users:write)', async () => {
@@ -314,30 +336,22 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
 
     it('an authority without permissions never commits (fail closed)', async () => {
       const w = await world();
-      const before = await grantCount();
-      const result = await createIssuerAccessRule(w.app.deps, adminActor(w, []), {
-        name: 'no permissions',
-        credential_access_rule_id: w.providerId,
-        service_id: w.serviceId,
-        conditions: anchoredConditions(),
-        rules: [{ methods: ['GET'], path: '/repos/**' }],
-      });
+      const before = await ruleCount();
+      const result = await createCredentialAccessRule(
+        w.app.deps,
+        adminActor(w, []),
+        ruleInput(w, 'no permissions'),
+      );
       expect(result).toMatchObject({ ok: false, reason: 'conflict' });
-      expect(await grantCount()).toBe(before);
+      expect(await ruleCount()).toBe(before);
     });
 
     it('control: the admin commits with both permissions while still an admin', async () => {
       const w = await world();
-      const result = await createIssuerAccessRule(
+      const result = await createCredentialAccessRule(
         w.app.deps,
         adminActor(w, ['access:write', 'tokens:write']),
-        {
-          name: 'still admin',
-          credential_access_rule_id: w.providerId,
-          service_id: w.serviceId,
-          conditions: anchoredConditions(),
-          rules: [{ methods: ['GET'], path: '/repos/**' }],
-        },
+        ruleInput(w, 'still admin'),
       );
       expect(result).toMatchObject({ ok: true });
     });
@@ -475,7 +489,7 @@ describe('I-SESS-1: token writes stop when the role changes mid-request', () => 
     const seeded = await seedAdminWorld(app);
     const admin = await createUser({ email: 'admin@example.com', role: 'admin' });
     const session = await loginAs(app, admin);
-    const request = await TOKEN_FIXTURE_VARIANTS.deleteWithAccesses(seeded);
+    const request = await TOKEN_FIXTURE_VARIANTS.deleteWithRules(seeded);
     armed.beforeNextAuditedWrite(() =>
       env.DB.prepare("UPDATE users SET role = 'token_manager' WHERE id = ?").bind(admin.id).run(),
     );
@@ -487,8 +501,8 @@ describe('I-SESS-1: token writes stop when the role changes mid-request', () => 
         .first('n'),
     ).toBe(1);
     expect(
-      await env.DB.prepare('SELECT count(*) AS n FROM issuer_access_rules WHERE id = ?')
-        .bind(seeded.grantId)
+      await env.DB.prepare('SELECT count(*) AS n FROM access_rules WHERE id = ?')
+        .bind(seeded.rule.id)
         .first('n'),
     ).toBe(1);
   });

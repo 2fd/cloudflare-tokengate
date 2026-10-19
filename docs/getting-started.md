@@ -249,11 +249,11 @@ The secret is encrypted before it is stored. The UI shows only its length and la
    gh run watch --repo OWNER/REPO
    ```
 
-The step fails with HTTP 403. The body contains `"code":"no_matching_grant"` and the `request_id`. This is expected: access is denied by default ([I-AUTHZ-1](threat-model.md#i-authz-1)). The response headers carry `x-tokengate-error` and `x-tokengate-request-id`. All error codes are in [errors.md](errors.md).
+The step fails with HTTP 403. The body contains `"code":"no_matching_rule"` and the `request_id`. This is expected: access is denied by default ([I-AUTHZ-1](threat-model.md#i-authz-1)). The response headers carry `x-tokengate-error` and `x-tokengate-request-id`. All error codes are in [errors.md](errors.md).
 
 ## 15. Give access from the denied request
 
-1. In the admin UI, open Monitoring › Requests and open the denied request. Its reason is `no_matching_grant`.
+1. In the admin UI, open Monitoring › Requests and open the denied request. Its reason is `no_matching_rule`.
 2. Click "Give this caller access". The form "Give an issuer access rule" opens, prefilled with this caller's exact values:
    - Consumer: GitHub Actions (acme). Token: GitHub.
    - Repository: `acme/demo (7654321)`, the name and numeric ID from the verified token.
@@ -265,7 +265,7 @@ The step fails with HTTP 403. The body contains `"code":"no_matching_grant"` and
 
 The access page opens with "Connect your jobs", the snippet with this token's slug. The gateway stores the repository name `acme/demo` as a display label of its ID. Labels never change what an access allows ([I-AUTHZ-2](threat-model.md#i-authz-2)).
 
-Only requests with a verified token that were denied with `no_matching_grant` or `event_not_trusted` offer this button ([I-LOG-2](threat-model.md#i-log-2)). The button requires the role `access_manager`, `admin` or `owner`. The form never suggests values from the request log: its lists come from consumers and accesses that you saved.
+Only requests with a verified token that were denied with `no_matching_rule` or `event_not_trusted` offer this button ([I-LOG-2](threat-model.md#i-log-2)). The button requires the role `access_manager`, `admin` or `owner`. The form never suggests values from the request log: its lists come from consumers and accesses that you saved.
 
 Without a denied request, open Credential access rules › Issuer access rules and click "Give an issuer access rule". Paste the output of `gh api repos/acme/demo --jq '"\(.full_name) (\(.id))"'` into "Repository". Choose when jobs get the token, then click "Give access". The page [policies.md](policies.md#structured-access-form) shows the conditions each choice makes.
 

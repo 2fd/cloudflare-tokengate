@@ -208,14 +208,6 @@ export function serviceCredentialGuard(
   };
 }
 
-/** The service exists and no grant references it (issuer_access_rules are deleted first). */
-export function serviceUnreferencedGuard(id: string): SqlGuard {
-  return {
-    sql: 'EXISTS (SELECT 1 FROM credentials WHERE id = ?) AND NOT EXISTS (SELECT 1 FROM issuer_access_rules WHERE service_id = ?)',
-    binds: [id, id],
-  };
-}
-
 /** Rows needed to open, re-seal or count sealed credentials. */
 export interface SealedCredentialRow {
   id: string;

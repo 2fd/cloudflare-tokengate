@@ -1,13 +1,16 @@
-// Markup rules of the credential access rule and access forms (WCAG 2.2 AA, A7.6, A16), checked on the real
+// Markup rules of the credential access rule pages and form (WCAG 2.2 AA, §A7.6-A7.8), checked on the real
 // pages with HTMLRewriter: labelled controls, grouped radios, rendered describedby ids, one name
 // per branch, no native validation where a control can be hidden, and patterns that browsers
 // compile (`v` flag) and that accept their own placeholder.
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createCredentialAccessRule } from '../../src/admin/ops/credential-access-rules';
+import { type RulesWorld, rulesWorld } from '../helpers/access-rules';
 import { adminGet, adminPost } from '../helpers/admin-auth';
-import { type ConsumersWorld, consumersWorld } from '../helpers/consumers';
-import { testCredentialId } from '../unit/admin/ops/helpers';
-import { ACTOR, seedGithubProvider, seedService } from '../unit/admin/ops/helpers';
+import {
+  OWNER_ID,
+  REPOSITORY_ID,
+  seedCredentialRule,
+  seedService,
+} from '../unit/admin/ops/helpers';
 
 const VOID = new Set(['input', 'br', 'img', 'meta', 'link', 'hr', 'source', 'wbr', 'area', 'col']);
 
@@ -54,8 +57,8 @@ const controls = (nodes: Node[]) =>
 
 /**
  * Classes of a branch that CSS hides until its choice is checked: the old `.reveal`, the ui live
- * reveals (`.rv1` … `.rv8`), and the page-local scoped branches of the access forms (consumer and
- * type branches, token branches, scoped reveals, the copy form's "Another…").
+ * reveals (`.rv1` … `.rv8`), and the page-local scoped branches of the rule form (issuer
+ * type branches, credential branches, scoped reveals, the copy form's "Another…").
  */
 const BRANCH_CLASSES = new Set([
   'reveal',
@@ -150,41 +153,47 @@ async function checkPage(html: string, label: string) {
   return nodes;
 }
 
-let world: ConsumersWorld;
+let world: RulesWorld;
 
 beforeEach(async () => {
-  world = await consumersWorld();
+  world = await rulesWorld();
 });
 
 const session = () => world.sessions.access_manager;
+const RULES = '/admin/credential-access-rules';
+const J = 'new.github-actions.';
 
-describe('issuer access rules markup (WCAG 2.2 AA)', () => {
-  it('the form with nested consumers, tokens and the new-consumer branch', async () => {
-    const created = await createCredentialAccessRule(world.app.deps, ACTOR, {
-      credential_id: await testCredentialId(world.app.deps),
-      profile: 'gitlab-ci',
-      issuer: 'https://gitlab.com',
-      tenant_pin: [{ claim: 'namespace_id', match: 'exact', values: ['9'] }],
-    });
-    if (!created.ok) throw new Error(created.errors.join('; '));
-    await seedGithubProvider(world.app.deps);
-    await createCredentialAccessRule(world.app.deps, ACTOR, {
-      credential_id: await testCredentialId(world.app.deps),
-      profile: 'generic',
-      issuer: 'https://idp.example.org',
-      jwks_uri: 'https://idp.example.org/keys',
-      anchor_claims: ['sub'],
-    });
-    await seedService(world.app.deps);
+function rows(token: string, extra: Record<string, string> = {}) {
+  return {
+    token_id: token,
+    token_view: 'fixed',
+    'new.type': 'github-actions',
+    'new.github_org': `acme (${OWNER_ID})`,
+    [`${J}editor`]: 'rows',
+    [`${J}cond.0.claim`]: 'repository_owner_id',
+    [`${J}cond.0.values`]: OWNER_ID,
+    [`${J}cond.1.claim`]: 'repository_id',
+    [`${J}cond.1.values`]: '5',
+    ops: '1',
+    op: 'custom',
+    'rule.0.m': 'GET',
+    'rule.0.path': '/x',
+    expires: 'never',
+    ...extra,
+  };
+}
+
+describe('credential access rule markup (WCAG 2.2 AA)', () => {
+  it('the form with every issuer type and several credentials to choose from', async () => {
+    const token = await seedService(world.app.deps);
+    await seedCredentialRule(world.app.deps, { credential_id: token });
     await seedService(world.app.deps, {
       slug: 'other',
       name: 'Other',
       base_url: 'https://api.openai.com/v1',
     });
-    const html = await (
-      await adminGet(world.app, session(), '/admin/issuer-access-rules/new')
-    ).text();
-    const nodes = await checkPage(html, 'access form');
+    const html = await (await adminGet(world.app, session(), `${RULES}/new`)).text();
+    const nodes = await checkPage(html, 'rule form');
     // The checks ran on real branches: prefixed fields, several of them hidden in reveals.
     expect(controls(nodes).length).toBeGreaterThan(40);
     expect(controls(nodes).filter(hidden).length).toBeGreaterThan(20);
@@ -192,18 +201,19 @@ describe('issuer access rules markup (WCAG 2.2 AA)', () => {
   });
 
   it('the fixed form, its error re-render and the rows editor', async () => {
-    const provider = await seedGithubProvider(world.app.deps);
     const token = await seedService(world.app.deps);
     await checkPage(
-      await (await adminGet(world.app, session(), '/admin/issuer-access-rules/new')).text(),
+      await (await adminGet(world.app, session(), `${RULES}/new`)).text(),
       'fixed form',
     );
-    const error = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
-      consumer_id: provider.id,
+    const error = await adminPost(world.app, session(), RULES, {
       token_id: token,
-      repository: 'acme/api',
-      context: 'environment',
-      environment: '',
+      'new.type': 'github-actions',
+      'new.github_org': `acme (${OWNER_ID})`,
+      [`${J}repository`]: 'acme/api',
+      [`${J}context`]: 'environment',
+      [`${J}environment`]: '',
+      ops: '1',
       expires: 'date',
       expires_on: 'soon',
     });
@@ -231,29 +241,19 @@ describe('issuer access rules markup (WCAG 2.2 AA)', () => {
       (n) => n.attrs.has('autofocus') && !n.ancestors.some((a) => a.tag === 'dialog'),
     );
     expect(focused).toHaveLength(1);
-    const rows = await adminGet(
-      world.app,
-      session(),
-      `/admin/issuer-access-rules/new?consumer=${provider.id}&mode=rows`,
-    );
-    await checkPage(await rows.text(), 'rows editor');
+    const editor = await adminPost(world.app, session(), RULES, {
+      ...rows(token),
+      _action: `add:${J}cond`,
+    });
+    expect(editor.status).toBe(200);
+    const rowsHtml = await editor.text();
+    expect(rowsHtml).toContain(`name="${J}cond.3.claim"`);
+    await checkPage(rowsHtml, 'rows editor');
   });
 
   it('a risk to accept: the summary link lands on the invalid box', async () => {
-    const provider = await seedGithubProvider(world.app.deps);
     const token = await seedService(world.app.deps);
-    const res = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
-      consumer_id: provider.id,
-      token_id: token,
-      editor: 'rows',
-      'cond.0.claim': 'repository_owner_id',
-      'cond.0.values': '4242',
-      'cond.1.claim': 'repository_id',
-      'cond.1.values': '5',
-      'rule.0.m': 'GET',
-      'rule.0.path': '/x',
-      expires: 'never',
-    });
+    const res = await adminPost(world.app, session(), RULES, rows(token));
     expect(res.status).toBe(422);
     const html = await res.text();
     const nodes = await checkPage(html, 'risk re-render');
@@ -266,69 +266,49 @@ describe('issuer access rules markup (WCAG 2.2 AA)', () => {
     expect(html).toContain('<div class="riskacc always" id="ga-risk"');
   });
 
-  it('the credential access rule list, add form and consumer page', async () => {
-    const provider = await seedGithubProvider(world.app.deps);
-    await seedService(world.app.deps);
-    for (const path of [
-      '/admin/credential-access-rules',
-      '/admin/credential-access-rules/new',
-      `/admin/credential-access-rules/${provider.id}`,
-    ]) {
-      await checkPage(await (await adminGet(world.app, session(), path)).text(), path);
-    }
-  });
-
-  it('the matrix, the list and the access page', async () => {
-    const provider = await seedGithubProvider(world.app.deps);
+  it('the list, the add form, the rule page and its edit form', async () => {
     const token = await seedService(world.app.deps);
-    const res = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
-      consumer_id: provider.id,
+    const res = await adminPost(world.app, session(), RULES, {
       token_id: token,
-      repository: 'acme/api (5)',
-      context: 'branch',
-      branch: 'main',
-      ref_protection: 'protected',
+      'new.type': 'github-actions',
+      'new.github_org': `acme (${OWNER_ID})`,
+      [`${J}repository`]: `acme/api (${REPOSITORY_ID})`,
+      [`${J}context`]: 'branch',
+      [`${J}branch`]: 'main',
+      [`${J}ref_protection`]: 'protected',
+      ops: '1',
       op: 'read-repo',
       expires: 'never',
     });
-    const location = res.headers.get('location') ?? '';
-    // A rows-mode access with warnings: its edit form (closed details) shows the risks up front.
-    const rows = {
-      consumer_id: provider.id,
-      token_id: token,
-      editor: 'rows',
-      'cond.0.claim': 'repository_owner_id',
-      'cond.0.values': '4242',
-      'cond.1.claim': 'repository_id',
-      'cond.1.values': '5',
-      'cond.2.claim': 'ref',
-      'cond.2.match': 'glob',
-      'cond.2.values': 'refs/heads/*',
-      'cond.3.claim': 'actor',
-      'cond.3.values': 'octocat',
-      'rule.0.m': 'GET',
-      'rule.0.path': '/x',
-      expires: 'never',
-    };
-    const first = await adminPost(world.app, session(), '/admin/issuer-access-rules', rows);
+    expect(res.status).toBe(303);
+    const location = (res.headers.get('location') ?? '').split('?')[0] ?? '';
+    // A rows-mode rule with warnings: its edit form shows the risks up front.
+    const risky = rows(token, {
+      [`${J}cond.2.claim`]: 'ref',
+      [`${J}cond.2.match`]: 'glob',
+      [`${J}cond.2.values`]: 'refs/heads/*',
+      [`${J}cond.3.claim`]: 'actor',
+      [`${J}cond.3.values`]: 'octocat',
+      name: 'risky',
+    });
+    const first = await adminPost(world.app, session(), RULES, risky);
     const digest = /name="warnings_digest" value="([0-9a-f]+)"/.exec(await first.text())?.[1] ?? '';
-    const risky = await adminPost(world.app, session(), '/admin/issuer-access-rules', {
-      ...rows,
+    const saved = await adminPost(world.app, session(), RULES, {
+      ...risky,
       warnings_digest: digest,
       acknowledge_warnings: '1',
     });
-    const riskyPath = (risky.headers.get('location') ?? '').split('?')[0] ?? '';
-    const riskyPage = await (await adminGet(world.app, session(), riskyPath)).text();
-    expect(riskyPage).toContain('<div class="riskacc always" id="ga-risk"');
+    expect(saved.status).toBe(303);
+    const riskyPath = (saved.headers.get('location') ?? '').split('?')[0] ?? '';
     for (const path of [
-      '/admin/issuer-access-rules',
-      '/admin/issuer-access-rules?view=list',
-      '/admin/issuer-access-rules?view=matrix',
-      `/admin/issuer-access-rules?token=${token}`,
-      `/admin/issuer-access-rules/new?token=${token}`,
-      location.split('?')[0] ?? '',
-      `${location.split('?')[0]}?open=edit`,
+      RULES,
+      `${RULES}?status=disabled`,
+      `${RULES}?credential=${token}`,
+      `${RULES}/new?credential=${token}`,
+      location,
+      `${location}?open=edit`,
       riskyPath,
+      `${riskyPath}?open=edit`,
     ]) {
       await checkPage(await (await adminGet(world.app, session(), path)).text(), path);
     }

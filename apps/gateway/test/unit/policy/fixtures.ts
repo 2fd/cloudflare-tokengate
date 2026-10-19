@@ -62,14 +62,19 @@ export const genericProfile: IssuerProfile = {
   display,
 };
 
+/** A GitHub credential access rule; validators replace its conditions and rules. */
 export function provider(overrides: Partial<CredentialAccessRule> = {}): CredentialAccessRule {
   return {
+    kind: 'credential',
     credential_id: 'svc_test',
     conditions: [],
-    id: 'cpr_01JTESTPROVIDER000000000000',
+    rules: [{ methods: ['GET'], path: '/**' }],
+    id: 'acr_01JTESTPROVIDER000000000000',
     name: 'GitHub',
+    description: '',
     profile: 'github-actions',
     issuer: 'https://token.actions.githubusercontent.com',
+    issuer_key: 'https://token.actions.githubusercontent.com',
     jwks_uri: 'https://token.actions.githubusercontent.com/.well-known/jwks',
     audience: 'tokengate:01JTESTAUDIENCE00000000000',
     allowed_algs: ['RS256'],
@@ -77,6 +82,8 @@ export function provider(overrides: Partial<CredentialAccessRule> = {}): Credent
     tenant_pin: [{ claim: 'repository_owner_id', match: 'exact', values: ['1000'] }],
     anchor_claims: [],
     enabled: true,
+    expires_at: null,
+    created_by: null,
     created_at: 0,
     updated_at: 0,
     ...overrides,

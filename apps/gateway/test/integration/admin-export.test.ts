@@ -83,11 +83,15 @@ describe('POST /admin/export', () => {
     expect(res.headers.get('cache-control')).toContain('no-store');
     const body = await res.json<{
       schema_version: number;
-      claim_labels: unknown[];
+      credential_access_rules: unknown[];
+      global_access_rules: unknown[];
       users: Array<{ email: string }>;
     }>();
-    expect(body.schema_version).toBe(3);
-    expect(body.claim_labels).toEqual([]);
+    expect(body.schema_version).toBe(4);
+    expect(body.credential_access_rules).toEqual([]);
+    expect(body.global_access_rules).toEqual([]);
+    // Schema 4 keeps the claim labels inside each credential access rule.
+    expect(Object.keys(body)).not.toContain('claim_labels');
     expect(body.users.map((user) => user.email)).toEqual(['admin@example.com']);
     expect(await auditActions()).toEqual(['config.export']);
   });

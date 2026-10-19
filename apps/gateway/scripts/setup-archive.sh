@@ -13,18 +13,18 @@ Usage: apps/gateway/scripts/setup-archive.sh --bucket <r2-bucket> [options]
   --bucket NAME          R2 bucket for archive files (created if missing)   (required)
   --retention-days N     days to keep archive files (default: 90)
   --prefix PATH          object prefix inside the bucket (default: requests)
-  --name NAME            base name for stream/sink/pipeline (default: tokengate_requests)
+  --name NAME            base name for stream/sink/pipeline (default: tokengate_requests_v2)
   -h, --help             show this help
 
-The stream schema (pipelines/request-log.v1.schema.json) and the pipeline SQL cannot be changed
-after creation; a new schema version means a new stream (e.g. tokengate_requests_v2).
+The stream schema (pipelines/request-log.v2.schema.json) and the pipeline SQL cannot be changed
+after creation; a new schema version means a new stream (e.g. tokengate_requests_v3).
 USAGE
 }
 
 bucket=""
 retention_days=90
 prefix="requests"
-name="tokengate_requests"
+name="tokengate_requests_v2"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -66,8 +66,8 @@ if ! [[ "$prefix" =~ ^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$ ]]; then
 fi
 
 gateway_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-schema_file="$gateway_dir/../../pipelines/request-log.v1.schema.json"
-stream="${name}_v1"
+schema_file="$gateway_dir/../../pipelines/request-log.v2.schema.json"
+stream="${name}_stream"
 sink="${name}_r2"
 pipeline="${name}"
 

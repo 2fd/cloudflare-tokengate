@@ -158,17 +158,17 @@ export function tokenLogo(
   return token && !token.enabled ? { brand, disabled: true } : brand;
 }
 
-/** The brand tile of a credential access rule, from its profile; the OIDC key otherwise. */
-export function consumerLogo(
-  consumer: Pick<CredentialAccessRule, 'profile' | 'enabled'> | null | undefined,
+/** The brand tile of a caller, from the profile of its credential access rule; the OIDC key otherwise. */
+export function callerLogo(
+  rule: Pick<CredentialAccessRule, 'profile' | 'enabled'> | null | undefined,
 ): LogoSpec {
   const brand: LogoBrand =
-    consumer?.profile === 'github-actions'
+    rule?.profile === 'github-actions'
       ? 'github'
-      : consumer?.profile === 'gitlab-ci'
+      : rule?.profile === 'gitlab-ci'
         ? 'gitlab'
         : 'oidc';
-  return consumer && !consumer.enabled ? { brand, disabled: true } : brand;
+  return rule && !rule.enabled ? { brand, disabled: true } : brand;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -285,7 +285,7 @@ export function pipelineStages(
       drop: {
         count: c.deniedAfter,
         unit: 'no access',
-        why: 'Verified callers that no issuer access rules allows, or a token problem.',
+        why: 'Verified callers that no access rule allows, or a token problem.',
         go: seeRequests(c.deniedAfter),
         ...(c.deniedAfter > 0 ? { href: paths.requests({ range, outcome: 'denied' }) } : {}),
       },
@@ -335,7 +335,7 @@ function groupHref(g: DenialGroup, range: OverviewRange): string {
     range,
     outcome: 'denied',
     token: g.service_id || 'none',
-    consumer: g.credential_access_rule_id || 'none',
+    rule: g.credential_access_rule_id || 'none',
     ...(g.reason ? { reason: g.reason } : {}),
     ...(g.claims_verified === 1 && g.caller_kind === 'repository' && g.caller
       ? { repo: g.caller }
@@ -352,11 +352,11 @@ export function TopDenied(props: {
   range: OverviewRange;
   caption: string;
   now: number;
-  consumers: ReadonlyMap<string, Pick<CredentialAccessRule, 'name' | 'profile' | 'enabled'>>;
+  rules: ReadonlyMap<string, Pick<CredentialAccessRule, 'name' | 'profile' | 'enabled'>>;
   tokens: ReadonlyMap<string, Pick<Service, 'name' | 'slug' | 'template_id' | 'enabled'>>;
   ctx: ViewContext;
 }) {
-  const { consumers, tokens, ctx, range } = props;
+  const { rules, tokens, ctx, range } = props;
   const tokenName = (g: DenialGroup) => tokens.get(g.service_id)?.name ?? g.service_slug ?? null;
   return (
     <Table
@@ -364,7 +364,7 @@ export function TopDenied(props: {
       caption={props.caption}
       stackable
       columns={[
-        { label: 'Caller → token' },
+        { label: 'Caller → credential' },
         { label: 'Requests', num: true },
         { label: 'Last seen' },
         { label: 'Action', act: true },
@@ -372,9 +372,9 @@ export function TopDenied(props: {
     >
       {props.groups.map((g) => {
         const verified = g.claims_verified === 1;
-        const consumer = consumers.get(g.credential_access_rule_id);
+        const rule = rules.get(g.credential_access_rule_id);
         const token = tokenName(g);
-        const caller = verified ? (g.caller ?? consumer?.name ?? 'unknown caller') : null;
+        const caller = verified ? (g.caller ?? rule?.name ?? 'unknown caller') : null;
         return (
           <Row>
             <RowHeader>
@@ -383,7 +383,7 @@ export function TopDenied(props: {
                   verb="to"
                   consumer={{
                     name: <span class="ent-n">{caller ?? 'Unverified token'}</span>,
-                    logo: verified ? consumerLogo(consumer) : 'oidc',
+                    logo: verified ? callerLogo(rule) : 'oidc',
                     // read from a token that was not trusted: text only, never in a link
                     context:
                       !verified && g.caller ? (
@@ -404,7 +404,7 @@ export function TopDenied(props: {
                     {g.reason ? capitalise(reasonText(g.reason) ?? g.reason) : 'Denied'}
                   </span>{' '}
                   ·{' '}
-                  {consumer?.name ??
+                  {rule?.name ??
                     (g.service_id
                       ? 'no credential access rule'
                       : `refused before a token was chosen${g.service_slug ? ` for /proxy/${g.service_slug}` : ''}`)}
@@ -452,7 +452,7 @@ function DenialAction(props: {
     return (
       <Button
         size="sm"
-        href={paths.accessNew({ from_request: g.latest_verified_id })}
+        href={paths.accessRuleNew({ from_request: g.latest_verified_id })}
         srSuffix={`for ${props.caller ?? 'this caller'}${props.token ? ` on ${props.token}` : ''}`}
       >
         Give access
@@ -467,7 +467,7 @@ function DenialAction(props: {
     return (
       <Button
         size="sm"
-        href={paths.consumerNew(type ? { type } : undefined)}
+        href={paths.accessRuleNew(type ? { type } : undefined)}
         srSuffix="for this issuer"
       >
         Add credential access rule
@@ -722,12 +722,12 @@ export const AUDIT_ACTION_TEXT: Readonly<Record<string, string>> = {
   'credential_access_rule.delete': 'Deleted a credential access rule',
   'credential_access_rule.enable': 'Enabled a credential access rule',
   'credential_access_rule.disable': 'Disabled a credential access rule',
-  'grant.create': 'Gave access',
-  'grant.update': 'Changed access',
-  'grant.delete': 'Deleted access',
-  'grant.enable': 'Enabled access',
-  'grant.disable': 'Disabled access',
-  'grant.duplicate': 'Copied access to another token',
+  'credential_access_rule.duplicate': 'Copied a credential access rule',
+  'global_access_rule.create': 'Added a global access rule',
+  'global_access_rule.update': 'Changed a global access rule',
+  'global_access_rule.delete': 'Deleted a global access rule',
+  'global_access_rule.enable': 'Enabled a global access rule',
+  'global_access_rule.disable': 'Disabled a global access rule',
   'user.invite': 'Invited a person',
   'user.update': 'Changed a person',
   'user.approve': 'Approved a person',
@@ -782,14 +782,14 @@ export const AUDIT_TARGETS: Readonly<
   credential_access_rule: {
     label: 'Credential access rule',
     noun: 'credential access rule',
-    prefix: 'cpr',
-    page: (id) => paths.consumer(id),
+    prefix: 'acr',
+    page: (id) => paths.accessRule(id),
   },
-  grant: {
-    label: 'Issuer access rules',
-    noun: 'access',
-    prefix: 'grt',
-    page: (id) => paths.accessItem(id),
+  global_access_rule: {
+    label: 'Global access rule',
+    noun: 'global access rule',
+    prefix: 'gar',
+    page: (id) => paths.globalRule(id),
   },
   user: { label: 'User', noun: 'user', prefix: 'usr', page: (id) => paths.user(id) },
   settings: {

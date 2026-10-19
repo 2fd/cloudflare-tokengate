@@ -273,7 +273,7 @@ const REASON_GROUPS: readonly FilterOptionGroup[] = (
     [
       'Access',
       [
-        ['no_matching_grant', 'No issuer access rules allows this call', 59],
+        ['no_matching_rule', 'No issuer access rules allows this call', 59],
         ['grant_expired', 'Issuer access rules expired', 6],
         ['grant_disabled', 'Issuer access rules disabled'],
         ['consumer_disabled', 'Consumer disabled'],
@@ -1120,9 +1120,9 @@ export const data: readonly ComponentDoc[] = [
                       count: 182,
                     },
                     {
-                      href: '?reason=no_matching_grant',
+                      href: '?reason=no_matching_rule',
                       label: 'No issuer access rules allows this call',
-                      slug: 'no_matching_grant',
+                      slug: 'no_matching_rule',
                       count: 59,
                     },
                     {
@@ -1145,7 +1145,7 @@ export const data: readonly ComponentDoc[] = [
         ),
         code: `<AddFilter label="Reason" srSuffix="requests" options={[
   { href: '?reason=issuer_unknown', label: 'Unknown issuer', slug: 'issuer_unknown', count: 182 },
-  { href: '?reason=no_matching_grant', label: 'No issuer access rules allows this call', slug: 'no_matching_grant', count: 59 },
+  { href: '?reason=no_matching_rule', label: 'No issuer access rules allows this call', slug: 'no_matching_rule', count: 59 },
   { href: '?reason=upstream_5xx', label: 'Upstream error', slug: 'upstream_5xx', count: 12 },
 ]} />`,
       },
@@ -1259,7 +1259,7 @@ export const data: readonly ComponentDoc[] = [
     …
   ] },
   { group: 'Access', options: [
-    { href: '?reason=no_matching_grant', label: 'No issuer access rules allows this call', slug: 'no_matching_grant', count: 59 },
+    { href: '?reason=no_matching_rule', label: 'No issuer access rules allows this call', slug: 'no_matching_rule', count: 59 },
     …
   ] },
   { group: 'Request', options: […] },

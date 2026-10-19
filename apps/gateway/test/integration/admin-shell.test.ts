@@ -127,7 +127,7 @@ describe('the shell on every page', () => {
       '/admin/credentials/hosts',
       '/admin/credentials/keys',
       '/admin/credential-access-rules',
-      '/admin/issuer-access-rules',
+      '/admin/global-access-rules',
       '/admin/users',
       '/admin/users/sign-in',
       '/admin/users/appearance',
@@ -154,6 +154,20 @@ describe('the shell on every page', () => {
     expect(menu).toContain('<a class="menu-item" href="/cdn-cgi/access/logout">Sign out</a>');
     // The account block is in the sidebar, never inside main.
     expect(html.indexOf('<div class="acct">')).toBeLessThan(html.indexOf('<main'));
+  });
+
+  it('shows the Access Rules section with its two tabs, each current on its own pages', async () => {
+    const list = sideNav(await page(owner, '/admin/global-access-rules'));
+    const section = list.slice(list.indexOf('aria-label="Access Rules"'));
+    expect([...section.matchAll(/class="nav-text">([^<]+)/g)].map((m) => m[1]).slice(0, 2)).toEqual(
+      ['Credential Access Rules', 'Global Access Rules'],
+    );
+    expect(navLink(list, '/admin/global-access-rules')).toContain('aria-current="page"');
+    expect(navLink(list, '/admin/credential-access-rules')).not.toContain('aria-current');
+    const detail = await page(owner, `/admin/global-access-rules/${world.global.id}`);
+    expect(navLink(detail, '/admin/global-access-rules')).toContain('aria-current="true"');
+    const rule = await page(owner, `/admin/credential-access-rules/${world.rule.id}`);
+    expect(navLink(rule, '/admin/credential-access-rules')).toContain('aria-current="true"');
   });
 
   it('marks the current page item as the page or as an ancestor (aria-current)', async () => {
@@ -188,7 +202,7 @@ describe('the shell on every page', () => {
     expect(missing).not.toContain('aria-current');
   });
 
-  it('counts tokens and consumers, and shows none for an empty list', async () => {
+  it('counts credentials and credential access rules, and shows none for an empty list', async () => {
     const nav = sideNav(await page(owner, '/admin/requests'));
     expect(nav).toContain('Credentials</span><span class="nav-count">1</span>');
     expect(nav).toContain('Access Rules</span><span class="nav-count">1</span>');
@@ -260,8 +274,8 @@ describe('health strip', () => {
         if (prop === 'prepare') {
           return (sql: string) =>
             target.prepare(
-              sql.includes('FROM issuer_access_rules ORDER BY name, id')
-                ? sql.replace('FROM issuer_access_rules', 'FROM grants_of_a_newer_migration')
+              sql.includes('FROM access_rules WHERE credential_id IS NOT NULL ORDER BY name, id')
+                ? sql.replace('FROM access_rules', 'FROM rules_of_a_newer_migration')
                 : sql,
             );
         }
@@ -339,7 +353,7 @@ describe('forbidden page', () => {
       world.app,
       await createUser({ email: 'viewer@example.com', role: 'viewer' }),
     );
-    const html = await page(viewer, '/admin/issuer-access-rules/new');
+    const html = await page(viewer, '/admin/credential-access-rules/new');
     const ask = /<p class="ask">(.*?)<\/p>/s.exec(html)?.[1] ?? '';
     expect(ask).toContain('Ask <b>');
     expect(ask.match(/<b>/g)).toHaveLength(3);
@@ -357,7 +371,11 @@ describe('404 page for unlisted admin URLs', () => {
     ],
     [
       '/admin/access?service=x',
-      'Consumer access is now <a href="/admin/issuer-access-rules">Issuer access rules</a>.',
+      'Consumer access is now part of <a href="/admin/credential-access-rules">Credential access rules</a>. <a href="/admin/global-access-rules">Global access rules</a> are the ceilings on every credential access rule of an issuer.',
+    ],
+    [
+      '/admin/issuer-access-rules/new?view=list',
+      'Issuer access rules are now part of <a href="/admin/credential-access-rules">Credential access rules</a>. Each credential access rule now holds its issuer, its jobs and its operations.',
     ],
   ])('GET %s says where the page moved: %s', async (path, hint) => {
     const res = await adminGet(world.app, owner, path);
@@ -507,24 +525,34 @@ describe('_return: row actions go back to a fixed page', () => {
   it.each([
     [undefined, `/admin/credential-access-rules/:id`],
     ['list', '/admin/credential-access-rules'],
+    ['matrix', `/admin/credential-access-rules/:id`],
     ['__proto__', `/admin/credential-access-rules/:id`],
-  ])('consumer toggle with _return=%s goes to %s', async (value, target) => {
-    const res = await toggle(`/admin/credential-access-rules/${world.provider.id}/toggle`, value);
+  ])('credential access rule toggle with _return=%s goes to %s', async (value, target) => {
+    const res = await toggle(`/admin/credential-access-rules/${world.rule.id}/toggle`, value);
     expect(res.headers.get('location')).toBe(
-      `${target.replace(':id', world.provider.id)}?notice=disabled`,
+      `${target.replace(':id', world.rule.id)}?notice=disabled`,
     );
   });
 
   it.each([
-    [undefined, '/admin/issuer-access-rules/:id'],
-    ['list', '/admin/issuer-access-rules?view=list'],
-    ['matrix', '/admin/issuer-access-rules'],
-    ['javascript:alert(1)', '/admin/issuer-access-rules/:id'],
-  ])('access toggle with _return=%s goes to %s', async (value, target) => {
-    const res = await toggle(`/admin/issuer-access-rules/${world.grantId}/toggle`, value);
-    const expected = target.replace(':id', world.grantId);
-    const separator = expected.includes('?') ? '&' : '?';
-    expect(res.headers.get('location')).toBe(`${expected}${separator}notice=disabled`);
+    [undefined, '/admin/global-access-rules/:id'],
+    ['list', '/admin/global-access-rules'],
+    ['javascript:alert(1)', '/admin/global-access-rules/:id'],
+  ])('global access rule toggle with _return=%s goes to %s', async (value, target) => {
+    // The world's only GitLab.com global access rule: disabling it is the last disable.
+    const res = await adminPost(
+      world.app,
+      owner,
+      `/admin/global-access-rules/${world.global.id}/toggle`,
+      {
+        enabled: '0',
+        confirm_last_disable: '1',
+        ...(value === undefined ? {} : { _return: value }),
+      },
+    );
+    expect(res.headers.get('location')).toBe(
+      `${target.replace(':id', world.global.id)}?notice=disabled`,
+    );
   });
 
   it.each([

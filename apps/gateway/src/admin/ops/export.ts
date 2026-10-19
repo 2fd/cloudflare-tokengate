@@ -1,33 +1,47 @@
-// Configuration export (POST /admin/export): credential access rules, credentials, issuer_access_rules, claim labels and
-// users as deterministic JSON keyed by name/slug. No row ids, no sealed values and no secrets (I-CRED-1):
-// credentials appear only as hint and timestamps. Downloading an export is audited (I-AUDIT-1).
-import { credentialAccessRuleFromRow, grantFromRow, serviceFromRow } from '../../db/rows';
-import type { Actor, LabelledClaim, Role, UserStatus } from '../../db/types';
+// Configuration export (POST /admin/export): credentials, credential and global access rules (with the display
+// labels of each rule) and users as deterministic JSON. Credentials are keyed by slug; access rules carry their
+// ids, so a request record or an audit row can be traced to them. No sealed values and no secrets
+// (I-CRED-1): credentials appear only as hint and timestamps. Downloading an export is audited (I-AUDIT-1).
+import { credentialRules, globalRules } from '../../db/access-rules';
+import { accessRuleFromRow, serviceFromRow } from '../../db/rows';
+import type { AccessRuleRow, Actor, LabelledClaim, Role, UserStatus } from '../../db/types';
 import type { Deps } from '../../deps';
 import type { ProfileId } from '../../identity/types';
 import { canonicalJson } from '../../lib/json';
 import type { Condition, Injection, Rule, VerifyCheck } from '../../policy/types';
 import { commitOrConstraintFailure, type OpFailure } from './shared';
 
-/** 3: Credentials and the two access rule entities, including credential boundaries. */
-export const EXPORT_SCHEMA_VERSION = 3;
+/** 4: credential and global access rules in one shape (ADR 0026); labels per rule. */
+export const EXPORT_SCHEMA_VERSION = 4;
+
+interface ExportedLabel {
+  claim: LabelledClaim;
+  value: string;
+  label: string;
+}
+
+/** The fields both kinds export. A global access rule exports null for a limit it does not set. */
+interface ExportedRule {
+  id: string;
+  name: string;
+  description: string;
+  profile: ProfileId;
+  issuer: string;
+  jwks_uri: string | null;
+  audience: string | null;
+  allowed_algs: string[] | null;
+  max_token_age_seconds: number | null;
+  tenant_pin: Condition[] | null;
+  anchor_claims: string[] | null;
+  conditions: Condition[] | null;
+  rules: Rule[] | null;
+  enabled: boolean;
+  expires_at: number | null;
+  labels: ExportedLabel[];
+}
 
 export interface ExportDocument {
   schema_version: typeof EXPORT_SCHEMA_VERSION;
-  credential_access_rules: Array<{
-    credential: string;
-    conditions: Condition[];
-    name: string;
-    profile: ProfileId;
-    issuer: string;
-    jwks_uri: string;
-    audience: string;
-    allowed_algs: string[];
-    max_token_age_seconds: number;
-    tenant_pin: Condition[];
-    anchor_claims: string[];
-    enabled: boolean;
-  }>;
   credentials: Array<{
     slug: string;
     name: string;
@@ -46,94 +60,66 @@ export interface ExportDocument {
       expires_at: number | null;
     } | null;
   }>;
-  issuer_access_rules: Array<{
-    name: string;
-    description: string;
-    /** Credential access rule name. */
-    credential_access_rule: string;
-    /** Credential slug. */
-    credential: string;
-    conditions: Condition[];
-    rules: Rule[];
-    enabled: boolean;
-    expires_at: number | null;
-  }>;
-  /** Display labels of numeric claim IDs, per credential access rule name. */
-  claim_labels: Array<{
-    credential_access_rule: string;
-    claim: LabelledClaim;
-    value: string;
-    label: string;
-  }>;
+  /** `credential` is the credential's slug. */
+  credential_access_rules: Array<ExportedRule & { credential: string }>;
+  global_access_rules: ExportedRule[];
   users: Array<{ email: string; role: Role; status: UserStatus }>;
 }
 
 /** Builds the export. Same database content → byte-identical `exportJson` output. */
 export async function buildExport(db: D1Database): Promise<ExportDocument> {
-  // One batch is one transaction: a consistent snapshot, so every grant finds its references.
-  const [providerRows, serviceRows, grantRows, labelRows, userRows] = await db.batch<
-    Record<string, unknown>
-  >([
-    db.prepare('SELECT * FROM credential_access_rules'),
+  // One batch is one transaction: a consistent snapshot, so every rule finds its credential.
+  const [ruleRows, serviceRows, labelRows, userRows] = await db.batch<Record<string, unknown>>([
+    db.prepare('SELECT * FROM access_rules'),
     db.prepare('SELECT * FROM credentials'),
-    db.prepare('SELECT * FROM issuer_access_rules'),
-    db.prepare('SELECT credential_access_rule_id, claim, value, label FROM claim_labels'),
+    db.prepare('SELECT access_rule_id, claim, value, label FROM claim_labels'),
     db.prepare('SELECT email, role, status FROM users'),
   ]);
-  const providers = (providerRows?.results ?? []).map(credentialAccessRuleFromRow);
+  const rows = (ruleRows?.results ?? []).map(accessRuleFromRow);
   const credentials = (serviceRows?.results ?? []).map(serviceFromRow);
-  const issuer_access_rules = (grantRows?.results ?? []).map(grantFromRow);
   const users = (userRows?.results ?? []).map((row) => ({
     email: String(row.email),
     role: row.role as Role,
     status: row.status as UserStatus,
   }));
-  const providerNames = new Map(providers.map((p) => [p.id, p.name]));
   const serviceSlugs = new Map(credentials.map((s) => [s.id, s.slug]));
-
-  const exportedIssuerAccessRules = issuer_access_rules
-    .map((grant) => ({
-      sortKey: [grant.created_at, grant.id] as const,
-      value: {
-        name: grant.name,
-        description: grant.description,
-        credential_access_rule: providerNames.get(grant.credential_access_rule_id) ?? '',
-        credential: serviceSlugs.get(grant.service_id) ?? '',
-        conditions: grant.conditions,
-        rules: grant.rules,
-        enabled: grant.enabled,
-        expires_at: grant.expires_at,
-      },
-    }))
-    // Service, credential access rule, name; ties keep evaluation order (created_at, id).
-    .sort(
-      (a, b) =>
-        compare(a.value.credential, b.value.credential) ||
-        compare(a.value.credential_access_rule, b.value.credential_access_rule) ||
-        compare(a.value.name, b.value.name) ||
-        a.sortKey[0] - b.sortKey[0] ||
-        compare(a.sortKey[1], b.sortKey[1]),
-    )
-    .map((entry) => entry.value);
+  const labels = new Map<string, ExportedLabel[]>();
+  for (const row of labelRows?.results ?? []) {
+    const id = String(row.access_rule_id);
+    const list = labels.get(id) ?? [];
+    list.push({
+      claim: String(row.claim) as LabelledClaim,
+      value: String(row.value),
+      label: String(row.label),
+    });
+    labels.set(id, list);
+  }
+  const exported = (rule: AccessRuleRow): ExportedRule => ({
+    id: rule.id,
+    name: rule.name,
+    description: rule.description,
+    profile: rule.profile,
+    issuer: rule.issuer,
+    jwks_uri: rule.jwks_uri,
+    audience: rule.audience,
+    allowed_algs: rule.allowed_algs,
+    max_token_age_seconds: rule.max_token_age_seconds,
+    tenant_pin: rule.tenant_pin,
+    anchor_claims: rule.anchor_claims,
+    conditions: rule.conditions,
+    rules: rule.rules,
+    enabled: rule.enabled,
+    expires_at: rule.expires_at,
+    labels: (labels.get(rule.id) ?? []).sort(
+      (a, b) => compare(a.claim, b.claim) || compare(a.value, b.value),
+    ),
+  });
+  // Ties keep evaluation order (created_at, id).
+  const byOrder = (a: AccessRuleRow, b: AccessRuleRow) =>
+    a.created_at - b.created_at || compare(a.id, b.id);
 
   return {
     schema_version: EXPORT_SCHEMA_VERSION,
-    credential_access_rules: providers
-      .map((p) => ({
-        credential: serviceSlugs.get(p.credential_id) ?? '',
-        conditions: p.conditions,
-        name: p.name,
-        profile: p.profile,
-        issuer: p.issuer,
-        jwks_uri: p.jwks_uri,
-        audience: p.audience,
-        allowed_algs: p.allowed_algs,
-        max_token_age_seconds: p.max_token_age_seconds,
-        tenant_pin: p.tenant_pin,
-        anchor_claims: p.anchor_claims,
-        enabled: p.enabled,
-      }))
-      .sort((a, b) => compare(a.name, b.name)),
     credentials: credentials
       .map((s) => ({
         slug: s.slug,
@@ -156,20 +142,18 @@ export async function buildExport(db: D1Database): Promise<ExportDocument> {
               },
       }))
       .sort((a, b) => compare(a.slug, b.slug)),
-    issuer_access_rules: exportedIssuerAccessRules,
-    claim_labels: (labelRows?.results ?? [])
-      .map((row) => ({
-        credential_access_rule: providerNames.get(String(row.credential_access_rule_id)) ?? '',
-        claim: String(row.claim) as LabelledClaim,
-        value: String(row.value),
-        label: String(row.label),
+    credential_access_rules: credentialRules(rows)
+      .sort(byOrder)
+      .map((rule) => ({
+        credential: serviceSlugs.get(rule.credential_id) ?? '',
+        ...exported(rule),
       }))
-      .sort(
-        (a, b) =>
-          compare(a.credential_access_rule, b.credential_access_rule) ||
-          compare(a.claim, b.claim) ||
-          compare(a.value, b.value),
-      ),
+      // Credential, then name; the sort is stable, so ties keep evaluation order.
+      .sort((a, b) => compare(a.credential, b.credential) || compare(a.name, b.name)),
+    global_access_rules: globalRules(rows)
+      .sort(byOrder)
+      .map(exported)
+      .sort((a, b) => compare(a.issuer, b.issuer) || compare(a.name, b.name)),
     users: users
       .map((u) => ({ email: u.email.toLowerCase(), role: u.role, status: u.status }))
       .sort((a, b) => compare(a.email, b.email)),
@@ -197,10 +181,9 @@ export async function exportConfiguration(
       summary: 'Downloaded the configuration export',
       diff: {
         counts: {
-          credential_access_rules: document.credential_access_rules.length,
           credentials: document.credentials.length,
-          issuer_access_rules: document.issuer_access_rules.length,
-          claim_labels: document.claim_labels.length,
+          credential_access_rules: document.credential_access_rules.length,
+          global_access_rules: document.global_access_rules.length,
           users: document.users.length,
         },
       },

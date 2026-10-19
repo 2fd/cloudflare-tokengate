@@ -408,7 +408,7 @@ const MOVED_PAGES: ReadonlyArray<{
     title: 'This page moved',
     description: () => (
       <>
-        Service consumers are now <a href={paths.consumers()}>Credential access rules</a>.
+        Service consumers are now <a href={paths.accessRules()}>Credential access rules</a>.
       </>
     ),
   },
@@ -417,7 +417,20 @@ const MOVED_PAGES: ReadonlyArray<{
     title: 'This page moved',
     description: () => (
       <>
-        Consumer access is now <a href={paths.access()}>Issuer access rules</a>.
+        Consumer access is now part of <a href={paths.accessRules()}>Credential access rules</a>.{' '}
+        <a href={paths.globalRules()}>Global access rules</a> are the ceilings on every credential
+        access rule of an issuer.
+      </>
+    ),
+  },
+  {
+    prefix: '/admin/issuer-access-rules',
+    title: 'This page moved',
+    description: () => (
+      <>
+        Issuer access rules are now part of{' '}
+        <a href={paths.accessRules()}>Credential access rules</a>. Each credential access rule now
+        holds its issuer, its jobs and its operations.
       </>
     ),
   },

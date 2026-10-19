@@ -1,4 +1,4 @@
-// The last 24 hours of traffic per credential, for the connections map of Issuer access rules:
+// The last 24 hours of traffic per credential, for the connections map of credential access rules:
 // requests, denied and errors per token, and the requests refused before a token was chosen.
 // Stored hourly rollups up to the previous hour, then request_log aggregated live for the previous
 // and the current hour, so nothing counts twice whatever the state of the cron. Monitoring data is
@@ -57,7 +57,10 @@ export async function loadTokenTraffic(deps: Pick<Deps, 'env' | 'now'>): Promise
   return { byToken, refused, available: true };
 }
 
-/** An issuer no consumer trusts, seen on refused requests (the text is unverified, I-LOG-2). */
+/**
+ * An issuer that no credential access rule names, seen on refused requests (the text is
+ * unverified, I-LOG-2).
+ */
 export interface UnknownIssuer {
   issuer: string;
   /** Weighted count of refused requests. */
@@ -66,8 +69,9 @@ export interface UnknownIssuer {
 }
 
 /**
- * The issuers of the last 24 hours' `issuer_unknown` refusals, most requests first, for "Callers
- * no consumer trusts" on the credential access rules list. Display only: empty when TELEMETRY_DB cannot be read.
+ * The issuers of the last 24 hours' `issuer_unknown` refusals, most requests first, for the
+ * unknown issuers panel of the credential access rules list. Display only: empty when
+ * TELEMETRY_DB cannot be read.
  */
 export async function loadUnknownIssuers(
   deps: Pick<Deps, 'env' | 'now'>,

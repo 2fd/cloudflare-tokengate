@@ -165,7 +165,7 @@ describe('AddFilter', () => {
             group: 'Caller',
             options: [
               { href: '?reason=issuer_unknown', label: 'Unknown issuer', count: 182 },
-              { href: '?reason=no_matching_grant', label: 'No issuer access rules' },
+              { href: '?reason=no_matching_rule', label: 'No issuer access rules' },
             ],
           },
           {
@@ -179,7 +179,7 @@ describe('AddFilter', () => {
       '<div class="fpop"><a href="?reason=any">Any denial</a>' +
         '<div role="group" aria-label="Caller"><p class="fpop-h" aria-hidden="true">Caller</p>' +
         '<a href="?reason=issuer_unknown">Unknown issuer<span class="n">182<span class="vh"> requests</span></span></a>' +
-        '<a href="?reason=no_matching_grant">No issuer access rules</a></div>' +
+        '<a href="?reason=no_matching_rule">No issuer access rules</a></div>' +
         '<div role="group" aria-label="Upstream"><p class="fpop-h" aria-hidden="true">Upstream</p>' +
         '<a href="?reason=upstream_5xx">Upstream error</a></div></div>',
     );

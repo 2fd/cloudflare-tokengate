@@ -1,24 +1,23 @@
-// The issuer access rules form (A14.4) on design D: a ui LiveForm with numbered steps (Consumer,
-// Which jobs, Allowed operations, Expires), a summary rail that follows the choices without JS,
-// and the risk acceptance when the server asks for one. A choice between several consumers or
-// tokens is a list whose branches hold that choice's own fields, prefixed with its id, so hidden
-// branches never share a field name and the server reads only the chosen one. The live slots of
-// the ui (`.sfN`/`.rvN`) are global to the form, so the fields of a credential access rule branch use the
-// page-local scoped classes (`.ga-scope`, `.ga-fN`, `.ga-rN`; pages.css) instead. The primary
-// submit is the first submit in tree order; "Write conditions by hand", "Add 2 more rows" and
-// "Show fields" are secondary submits after it (formnovalidate), and write nothing.
+// The credential access rule form (A7.7) on design D: a ui LiveForm with numbered steps (Issuer, Which jobs,
+// Credential and operations, Name and expiry) plus the "Token settings" disclosure, a summary rail
+// that follows the choices without JS, and the risk acceptance when the server asks for one. One
+// rule holds its issuer and tenant pin, its jobs and its operations (ADR 0026). The issuer type is a
+// choice of cards; each type's issuer inputs and "Which jobs" fields sit in branches prefixed
+// `new.<type>.`, so hidden branches never share a field name and the server reads only the chosen
+// one. The live slots of the ui (`.sfN`/`.rvN`) are global to the form, so the fields of a type
+// branch use the page-local scoped classes (`.ga-scope`, `.ga-fN`, `.ga-rN`; pages.css) instead.
+// The primary submit is the first submit in tree order; "Write conditions by hand", "Add 2 more
+// rows" and "Show fields" are secondary submits after it (formnovalidate), and write nothing.
 import {
   Badge,
   Button,
   ButtonRow,
-  Callout,
   CheckPresets,
   cx,
   Disclosure,
   FieldSet,
   FixedBar,
   FormStep,
-  Inherit,
   KeyValue,
   LiveForm,
   LivePhrase,
@@ -40,10 +39,14 @@ import {
   Tray,
 } from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
-import { type ConsumerSuggestions, type RuleSet, ruleSetKey } from '../../db/suggestions';
-import type { CredentialAccessRule, ClaimLabel, Service } from '../../db/types';
+import { type JobSuggestions, type RuleSet, ruleSetKey } from '../../db/suggestions';
+import type { ClaimLabel, CredentialAccessRule, GlobalAccessRule, Service } from '../../db/types';
 import type { IssuerProfile, ProfileId } from '../../identity/types';
+import type { GlobalStatus } from '../../policy/global-status';
 import { PROXY_METHODS } from '../../policy/types';
+import { ALLOWED_ALGS } from '../../policy/validate';
+import type { FieldError } from '../ops/shared';
+import { paths } from '../paths';
 import {
   type AccessContext,
   anchorClaims,
@@ -58,13 +61,17 @@ import {
   pinOwnerValues,
   repositoryFindCommand,
   repositoryFindCommandForId,
-} from '../consumer-access';
-import { formatConditions } from '../grant-text';
-import type { FieldError } from '../ops/shared';
-import { paths } from '../paths';
+} from '../rule-access';
 import { REPO_PLACEHOLDER, type ServiceTemplate } from '../service-templates';
-import { consumerLogo, hostOf, Tile, tokenLogo, trustLine, useFocusTarget } from './access-visuals';
-import { type ConsumerForm } from './add-consumer-fields';
+import {
+  hostOf,
+  issuerHost,
+  issuerLogo,
+  Tile,
+  tokenLogo,
+  trustLine,
+  useFocusTarget,
+} from './access-visuals';
 import {
   Checkbox,
   CheckboxGroup,
@@ -73,34 +80,40 @@ import {
   IdWithLabelField,
   Select,
   type Suggestion,
+  TextArea,
 } from './components';
 import { formatTime } from './format';
+import { ISSUER_TYPES, IssuerFields, type IssuerForm } from './issuer-fields';
 import { AddRowsButton, BLANK_ROWS, RepeatingRows } from './rows';
 
-export interface ConsumerBranch {
-  provider: CredentialAccessRule;
+/** The "Which jobs" fields of one issuer type (`new.<type>.`). */
+export interface JobsBranch {
+  /** The rule as the form describes it so far (issuer and tenant pin), built in memory. */
+  rule: CredentialAccessRule;
   profile: IssuerProfile;
   prefix: string;
   jobs: JobsForm;
   labels: ClaimLabel[];
-  suggestions: ConsumerSuggestions;
+  suggestions: JobSuggestions;
   /** Known repositories as `name (ID)`, most used first. */
   repositoryOptions: Suggestion[];
-  /** Accesses per repository option value. */
+  /** Rules per repository option value. */
   repositoryCounts?: Record<string, number>;
-  /** The safe context the credential access rule's accesses use most, or null without accesses. */
+  /** The safe context the credential's rules use most, or null without rules. */
   mostUsedContext?: string | null;
-  /** The repository's organization or group prefix that is not pinned yet (new_owner). */
+  /** The repository's organization or group prefix that the rule does not pin. */
   unknownOwner: string | null;
-  accessCount: number;
+  ruleCount: number;
   /** Extra blank condition rows (after "Add 2 more rows"). */
   extraRows?: number;
 }
 
-export interface NewConsumerBranch {
-  form: ConsumerForm;
-  /** The "Which jobs" fields of each type, prefix `new.<type>.`. */
-  jobs: Record<ProfileId, ConsumerBranch>;
+/** The issuer step: the type cards, the issuer inputs and the jobs of each type. */
+export interface IssuerBranch {
+  form: IssuerForm;
+  jobs: Record<ProfileId, JobsBranch>;
+  /** Edit: the type is stored and cannot change. */
+  fixedType: boolean;
 }
 
 export interface TokenBranch {
@@ -114,17 +127,6 @@ export interface TokenBranch {
   credential: string;
   extraRows?: number;
 }
-
-export type ConsumerChoice =
-  | { kind: 'fixed'; branch: ConsumerBranch; changeHref: string | null; newHref: string | null }
-  | { kind: 'cards'; branches: ConsumerBranch[]; selected: string; newBranch: NewConsumerBranch }
-  | {
-      kind: 'select';
-      options: CredentialAccessRule[];
-      selected: string;
-      branch: ConsumerBranch | null;
-    }
-  | { kind: 'new'; newBranch: NewConsumerBranch; existingHref: string | null };
 
 export type TokenChoice =
   | { kind: 'fixed'; branch: TokenBranch; changeHref: string | null }
@@ -150,15 +152,26 @@ export interface FormEntry {
   request?: RequestFacts | null;
 }
 
-export interface AccessFormModel {
+/** The raw values of the "Token settings" disclosure, as text for a re-render. */
+export interface TokenSettingsForm {
+  audience: string;
+  jwks_uri: string;
+  allowed_algs: string[];
+  max_token_age_seconds: string;
+}
+
+export interface RuleFormModel {
   action: string;
   csrf: string;
   mode: 'create' | 'edit';
-  /** Edit: the access's version. */
+  /** Edit: the rule's version. */
   version?: string;
-  consumer: ConsumerChoice;
+  issuer: IssuerBranch;
   token: TokenChoice;
-  existingConsumers: CredentialAccessRule[];
+  /** The other credential access rules, for suggestions only. */
+  existingRules: CredentialAccessRule[];
+  details: { name: string; description: string };
+  settings: TokenSettingsForm;
   expiry: ExpiryForm;
   /** Edit: the stored expiry ("Keep"). */
   keep?: number | null;
@@ -173,10 +186,20 @@ export interface AccessFormModel {
   hidden?: Record<string, string>;
   /** Page-level focus: the first new row after "Add 2 more rows" (ErrorSummary and notices win). */
   focus?: { group: string; index: number } | null;
+  /** The rule as entered against the global access rules of its issuer (AR-8), after a submit. */
+  global?: { status: GlobalStatus<GlobalAccessRule>; issuer: string } | null;
 }
 
 /** The id of the risk acceptance; its checkbox (`-ack`) is the ErrorSummary target. */
 const RISK_ID = 'ga-risk';
+
+/** Fields of the "Token settings" disclosure; it opens when one of them has an error. */
+export const SETTINGS_FIELDS: readonly string[] = [
+  'audience',
+  'jwks_uri',
+  'allowed_algs',
+  'max_token_age_seconds',
+];
 
 function errorFor(errors: readonly FieldError[], name: string): string | null {
   return errors.find((error) => error.field === name)?.message ?? null;
@@ -184,54 +207,39 @@ function errorFor(errors: readonly FieldError[], name: string): string | null {
 
 type Live = 'global' | 'scoped';
 
-export function AccessForm(props: { model: AccessFormModel }) {
+export function RuleForm(props: { model: RuleFormModel }) {
   const { model } = props;
   const err = (name: string) => errorFor(model.errors, name);
   const edit = model.mode === 'edit';
-  const formId = edit ? 'access-edit' : 'access-form';
-  const consumer = model.consumer;
+  const formId = edit ? 'rule-edit' : 'rule-form';
   const token = model.token;
-  const selectedJobs = selectedConsumerBranch(consumer);
+  const selectedJobs = selectedJobsBranch(model.issuer);
   const selectedToken = selectedTokenBranch(token);
-  const consumerFixed = consumer.kind === 'fixed';
   const tokenFixed = token.kind === 'fixed';
   if (model.ack) useFocusTarget('acknowledge_warnings', `${RISK_ID}-ack`);
   const hidden: Record<string, string> = {
     _csrf: model.csrf,
     ...(model.version !== undefined ? { expected_updated_at: model.version } : {}),
     ...model.hidden,
-    ...(consumer.kind === 'fixed' && !edit ? { consumer_id: consumer.branch.provider.id } : {}),
-    ...(consumer.kind === 'new' ? { consumer_id: 'new' } : {}),
     ...(token.kind === 'fixed' && !edit ? { token_id: token.branch.token.id } : {}),
     ...(model.ack ? { warnings_digest: model.ack.digest } : {}),
   };
-  // Step numbers: a fixed consumer has no Consumer step; a new one has its jobs in that step.
-  const consumerStep =
-    consumer.kind === 'cards' || consumer.kind === 'select' || consumer.kind === 'new';
-  const jobsStep = consumer.kind !== 'new';
-  const opsN = Number(consumerStep) + Number(jobsStep) + 1;
   const steps: Child[] = [
-    consumerStep ? <ConsumerStep model={model} n={1} /> : null,
-    jobsStep ? <JobsStep model={model} n={consumerStep ? 2 : 1} /> : null,
-    <OpsStep model={model} n={opsN} jobs={selectedJobs} />,
-    <ExpiryStep model={model} n={opsN + 1} />,
+    <IssuerStep model={model} n={1} />,
+    <JobsStep model={model} n={2} />,
+    <OpsStep model={model} n={3} jobs={selectedJobs} />,
+    <DetailsStep model={model} n={4} />,
   ];
-  const liveRisk =
-    !model.ack &&
-    consumerFixed &&
-    selectedJobs !== null &&
-    selectedJobs.jobs.editor === 'structured' &&
-    !edit;
-  const tokenName = selectedToken?.token.name ?? 'the token';
-  // Prefilled from a denied request, credential access rule and credential fixed: a review of the values, the risk
+  const tokenName = selectedToken?.token.name ?? 'the credential';
+  // Prefilled from a denied request with the credential fixed: a review of the values, the risk
   // tick and the submit; the full form waits in "Change the prefilled values" (1 tick + 1 submit).
   // The disclosure follows the submit, so Give access stays the first submit in tree order.
   const review =
     !edit &&
     model.entry?.request != null &&
-    consumer.kind === 'fixed' &&
     token.kind === 'fixed' &&
-    consumer.branch.jobs.editor === 'structured';
+    selectedJobs !== null &&
+    selectedJobs.jobs.editor === 'structured';
   const changeOpen =
     review &&
     (model.focus != null ||
@@ -241,14 +249,8 @@ export function AccessForm(props: { model: AccessFormModel }) {
       {!edit && tokenFixed ? (
         <TokenBar branch={token.branch} changeHref={token.changeHref} />
       ) : null}
-      {!edit && consumerFixed ? (
-        <ConsumerBar
-          branch={consumer.branch}
-          changeHref={consumer.changeHref}
-          newHref={consumer.newHref}
-        />
-      ) : null}
       <Stepper>{steps}</Stepper>
+      <TokenSettings model={model} />
     </>
   );
   const secondary = (
@@ -258,7 +260,9 @@ export function AccessForm(props: { model: AccessFormModel }) {
           Write conditions by hand
         </Button>
       ) : null}
-      {selectedJobs && selectedJobs.jobs.editor === 'rows' ? <AddRowsButton group="cond" /> : null}
+      {selectedJobs && selectedJobs.jobs.editor === 'rows' ? (
+        <AddRowsButton group={`${selectedJobs.prefix}cond`} />
+      ) : null}
       {selectedToken &&
       !isPathInjected(selectedToken.token) &&
       // "Other operations" starts with blank rows; more are offered once it is in use.
@@ -269,9 +273,9 @@ export function AccessForm(props: { model: AccessFormModel }) {
           Add {BLANK_ROWS} more operation rows
         </Button>
       ) : null}
-      {consumer.kind === 'select' || token.kind === 'select' ? (
+      {token.kind === 'select' ? (
         <Button type="submit" name="_action" value="refresh" formnovalidate>
-          Show fields for the chosen credential access rule and credential
+          Show fields for the chosen credential
         </Button>
       ) : null}
     </>
@@ -282,11 +286,11 @@ export function AccessForm(props: { model: AccessFormModel }) {
       action={model.action}
       hidden={hidden}
       layout={edit ? 'fields' : 'form-layout'}
-      class={edit ? undefined : cx('ga-form', review && 'ga-reviewing')}
+      class={cx('ga-form', review && 'ga-reviewing')}
       rail={edit ? undefined : <FormRail model={model} />}
     >
-      {review && consumer.kind === 'fixed' && token.kind === 'fixed' ? (
-        <ReviewCard jobs={consumer.branch} ops={token.branch} model={model} />
+      {review && token.kind === 'fixed' && selectedJobs ? (
+        <ReviewCard jobs={selectedJobs} ops={token.branch} model={model} />
       ) : (
         fields
       )}
@@ -296,19 +300,11 @@ export function AccessForm(props: { model: AccessFormModel }) {
           always
           // The edit form sits in a closed disclosure (A7.6): the server enforces it there.
           required={!edit}
-          title={`Accept ${model.ack.warnings.length === 1 ? '1 risk' : `${model.ack.warnings.length} risks`} to save this access`}
+          title={`Accept ${model.ack.warnings.length === 1 ? '1 risk' : `${model.ack.warnings.length} risks`} to save this access rule`}
           risks={model.ack.warnings.map((warning) => ({ label: 'Risk', text: warning }))}
           confirm={`I accept ${model.ack.warnings.length === 1 ? 'this risk' : 'these risks'} for ${subjectOf(selectedJobs)} → ${tokenName}`}
           error={err('acknowledge_warnings')}
-          hint="If you change the constraints or operations, the list may change and you are asked again."
-        />
-      ) : null}
-      {liveRisk ? (
-        <Callout
-          tone="warn"
-          class="ga-risknote"
-          title="This choice accepts a risk."
-          more="Saving accepts it; the access page lists it under Accepted risks. Pick a safer option above to avoid it."
+          hint="If you change the jobs or operations, the list may change and you are asked again."
         />
       ) : null}
       <SubmitRow
@@ -320,9 +316,11 @@ export function AccessForm(props: { model: AccessFormModel }) {
           name={edit ? 'intent' : undefined}
           value={edit ? 'save' : undefined}
         >
-          {edit ? 'Save changes' : 'Give access'}
+          {edit ? 'Save credential access rule' : 'Save credential access rule'}
         </Button>
-        {!edit && model.entry ? (
+        {edit ? (
+          <Button href={model.entry?.cancelHref ?? model.action}>Cancel</Button>
+        ) : model.entry ? (
           <Button href={model.entry.cancelHref}>{model.entry.cancelLabel}</Button>
         ) : null}
         {review ? null : secondary}
@@ -362,23 +360,21 @@ function contextWords(jobs: JobsForm): Child {
     case 'pull_request':
       return <>Pull requests into {value(jobs.pr_base)}</>;
     case 'protected':
-      return 'Any protected branch or tag';
-    case 'any':
-      return 'Any branch, tag or environment';
+      return <>Any protected branch or tag</>;
     default:
-      return jobs.context;
+      return <>Any branch, tag or environment</>;
   }
 }
 
 /**
- * The prefilled values of a give-access-from-a-request form, read-only (con-access-risk): who →
- * which token in the title, then repository, context, refs, operations and expiry. Saving reads
- * the same values from the fields in "Change the prefilled values"; once that is open this card
- * hides (pages.css), so it never shows values the admin has changed.
+ * The prefilled values of a request as one card: the issuer and the credential in the title, then
+ * repository, context, refs, operations and expiry. Saving reads the same values from the fields
+ * in "Change the prefilled values"; once that is open this card hides (pages.css), so it never
+ * shows values the admin has changed.
  */
-function ReviewCard(props: { jobs: ConsumerBranch; ops: TokenBranch; model: AccessFormModel }) {
+function ReviewCard(props: { jobs: JobsBranch; ops: TokenBranch; model: RuleFormModel }) {
   const { jobs: branch, ops: tokenBranch, model } = props;
-  const { jobs, provider } = branch;
+  const { jobs, rule } = branch;
   const token = tokenBranch.token;
   const gitlab = branch.profile.id === 'gitlab-ci';
   const repo = repositoryLabelOf(branch) ?? '‹repository›';
@@ -421,8 +417,8 @@ function ReviewCard(props: { jobs: ConsumerBranch; ops: TokenBranch; model: Acce
       class="ga-review"
       title={
         <span class="ga-review-t">
-          <Tile logo={consumerLogo(provider)} size="sm" />
-          {provider.name}
+          <Tile logo={issuerLogo(rule)} size="sm" />
+          {trustLine(rule, branch.labels)}
           <span aria-hidden="true">→</span>
           <span class="vh">can use</span>
           <Tile logo={tokenLogo(token)} size="sm" />
@@ -435,7 +431,7 @@ function ReviewCard(props: { jobs: ConsumerBranch; ops: TokenBranch; model: Acce
           items={[
             {
               label: gitlab ? 'Project' : 'Repository',
-              value: jobs.repository || 'Any of the credential access rule',
+              value: jobs.repository || 'Any of the organizations',
               mono: jobs.repository !== '',
             },
             { label: 'When', value: contextWords(jobs) },
@@ -475,22 +471,8 @@ function ReviewCard(props: { jobs: ConsumerBranch; ops: TokenBranch; model: Acce
   );
 }
 
-export function selectedConsumerBranch(choice: ConsumerChoice): ConsumerBranch | null {
-  switch (choice.kind) {
-    case 'fixed':
-      return choice.branch;
-    case 'cards':
-      return (
-        choice.branches.find((branch) => branch.provider.id === choice.selected) ??
-        (choice.selected === 'new'
-          ? (choice.newBranch.jobs[choice.newBranch.form.type as ProfileId] ?? null)
-          : null)
-      );
-    case 'select':
-      return choice.branch;
-    case 'new':
-      return choice.newBranch.jobs[choice.newBranch.form.type as ProfileId] ?? null;
-  }
+export function selectedJobsBranch(issuer: IssuerBranch): JobsBranch | null {
+  return issuer.jobs[issuer.form.type as ProfileId] ?? null;
 }
 
 export function selectedTokenBranch(choice: TokenChoice): TokenBranch | null {
@@ -504,15 +486,15 @@ export function selectedTokenBranch(choice: TokenChoice): TokenBranch | null {
   }
 }
 
-function repositoryLabelOf(branch: ConsumerBranch | null): string | null {
+function repositoryLabelOf(branch: JobsBranch | null): string | null {
   const text = branch?.jobs.repository.trim() ?? '';
   const match = /^(.+?)\s*(?:\(\d+\)|#\d+)$/.exec(text);
   return match?.[1] ?? null;
 }
 
-/** "acme/api" or the credential access rule: what a risk confirmation names. */
-function subjectOf(branch: ConsumerBranch | null): string {
-  return repositoryLabelOf(branch) ?? branch?.provider.name ?? 'these jobs';
+/** "acme/api" or the issuer: what a risk confirmation names. */
+function subjectOf(branch: JobsBranch | null): string {
+  return repositoryLabelOf(branch) ?? (branch ? issuerHost(branch.rule.issuer) : 'these jobs');
 }
 
 function secretBadge(credential: string): Child {
@@ -546,203 +528,192 @@ function TokenBar(props: { branch: TokenBranch; changeHref: string | null }) {
       name={`${token.name}${token.enabled ? '' : ' (disabled)'}`}
       meta={`/proxy/${token.slug}`}
       status={secretBadge(props.branch.credential)}
-      change={props.changeHref ? { href: props.changeHref, srSuffix: 'token' } : undefined}
+      change={props.changeHref ? { href: props.changeHref, srSuffix: 'credential' } : undefined}
     />
   );
 }
 
-function ConsumerBar(props: {
-  branch: ConsumerBranch;
-  changeHref: string | null;
-  newHref: string | null;
-}) {
-  const { provider, labels } = props.branch;
-  return (
-    <div class="ga-bar">
-      <FixedBar
-        label="Credential access rule"
-        logo={consumerLogo(provider)}
-        name={`${provider.name}${provider.enabled ? '' : ' (disabled)'}`}
-        meta={trustLine(provider, labels)}
-        change={props.changeHref ? { href: props.changeHref, srSuffix: 'consumer' } : undefined}
-      />
-      {props.newHref ? (
-        <Button variant="ghost" size="sm" plus href={props.newHref}>
-          Add a new credential access rule
-        </Button>
-      ) : null}
-    </div>
-  );
-}
-
-/** "Inherited from GitHub Actions (acme): organization acme (1234567)." */
-function InheritLine(props: { branch: ConsumerBranch }) {
-  const { provider, profile, labels } = props.branch;
-  const claims = anchorClaims(profile);
-  const owners =
-    claims === null
-      ? []
-      : pinOwnerValues(provider, claims.owner).map((value) => {
-          const label = labels.find((l) => l.claim === claims.owner && l.value === value)?.label;
-          return label ? `${label} (${value})` : value;
-        });
-  if (owners.length === 0) {
-    return (
-      <Inherit>
-        Inherited from <b>{provider.name}</b>: its issuer and audience.
-      </Inherit>
-    );
-  }
-  const word = profile.id === 'gitlab-ci' ? 'group' : 'organization';
-  return (
-    <Inherit>
-      Inherited from <b>{provider.name}</b>: {owners.length === 1 ? word : `${word}s`}{' '}
-      <span class="mono">{owners.join(', ')}</span>. Only its repositories can match.
-      {provider.conditions.length > 0 ? <pre>{formatConditions(provider.conditions)}</pre> : null}
-    </Inherit>
-  );
-}
-
 // ---------------------------------------------------------------------------------------------
-// Step: consumer
+// Step: issuer and tenant
 
-function ConsumerStep(props: { model: AccessFormModel; n: number }) {
+function IssuerStep(props: { model: RuleFormModel; n: number }) {
   const { model } = props;
-  const choice = model.consumer;
-  const err = (name: string) => errorFor(model.errors, name);
-  if (choice.kind === 'cards') {
-    const options = choice.branches.map((branch, index) => ({
-      value: branch.provider.id,
-      o: index + 1,
-      logo: consumerLogo(branch.provider),
-      title: `${branch.provider.name}${branch.provider.enabled ? '' : ' (disabled)'}`,
-      meta: `${
-        index === 0 && branch.accessCount > (choice.branches[1]?.accessCount ?? 0)
-          ? 'most used · '
-          : ''
-      }${branch.accessCount === 1 ? '1 access' : `${branch.accessCount} accesses`}`,
-    }));
-    const id = fieldId('consumer_id');
-    useFocusTarget('consumer_id', { id, options });
-    return (
-      <FormStep
-        n={props.n}
-        title="Credential access rule"
-        live={1}
-        id={id}
-        description="The issuer and identity limits defined for the credential."
-        error={err('consumer_id') ?? undefined}
-      >
-        <RowPicker
-          name="consumer_id"
-          value={choice.selected}
-          invalid={err('consumer_id') ? true : undefined}
-          options={options}
-        />
-      </FormStep>
-    );
-  }
-  if (choice.kind === 'select') {
-    return (
-      <FormStep n={props.n} kind="group" id="ga-consumer" title="Credential access rule">
-        <Select
-          name="consumer_id"
-          label="Which credential access rule"
-          value={choice.selected}
-          placeholder="Choose a credential access rule"
-          options={choice.options.map((provider) => ({
-            value: provider.id,
-            label: `${provider.name}${provider.enabled ? '' : ' (disabled)'}`,
-          }))}
-          hint="After choosing, use Show fields for the chosen credential access rule and credential below the form."
-          error={err('consumer_id')}
-        />
-      </FormStep>
-    );
-  }
-  if (choice.kind === 'new') {
-    return (
-      <FormStep n={props.n} kind="group" id="ga-consumer" title="Credential access rule">
-        <p>
-          A credential administrator must define the allowed issuer and identity filters before
-          access can be granted.
-        </p>
-        <Button href={paths.consumers()}>View credential access rules</Button>
-      </FormStep>
-    );
-  }
-  return null;
+  return (
+    <FormStep
+      n={props.n}
+      kind="group"
+      id="ga-issuer"
+      title="Issuer and tenant"
+      description="Where the jobs run and which organizations or groups they belong to. The token of every job carries both."
+    >
+      <IssuerFields
+        prefix="new."
+        form={model.issuer.form}
+        errors={model.errors}
+        existing={model.existingRules}
+        live="scoped"
+        fixedType={model.issuer.fixedType}
+      />
+    </FormStep>
+  );
 }
 
 // ---------------------------------------------------------------------------------------------
 // Step: which jobs
 
-function JobsStep(props: { model: AccessFormModel; n: number }) {
+function JobsStep(props: { model: RuleFormModel; n: number }) {
   const { model } = props;
-  const choice = model.consumer;
-  const edit = model.mode === 'edit';
-  if (choice.kind === 'fixed') {
-    return (
-      <FormStep
-        n={props.n}
-        kind="group"
-        id="ga-jobs"
-        title="Which jobs"
-        description={<InheritLine branch={choice.branch} />}
-      >
-        <JobsFields
-          branch={choice.branch}
-          errors={model.errors}
-          live="global"
-          // Native validation only on a visible create form with a fixed, existing consumer (not
-          // in the review of a prefilled request: its fields wait in a closed disclosure).
-          fixed={!edit && model.entry?.request == null}
-          focus={model.focus}
-        />
-      </FormStep>
-    );
-  }
-  if (choice.kind === 'cards') {
-    return (
-      <FormStep
-        n={props.n}
-        kind="group"
-        id="ga-jobs"
-        title="Which jobs"
-        description="Only the fields of the chosen credential access rule are saved."
-      >
-        {choice.branches.map((branch, index) => (
-          <div class="rv1 ga-branch ga-scope" data-o={String(index + 1)}>
-            <InheritLine branch={branch} />
+  return (
+    <FormStep
+      n={props.n}
+      kind="group"
+      id="ga-jobs"
+      title="Which jobs"
+      description="Only jobs that match every condition get the credential. Each rule pins the repository or another anchor claim exactly (I-AUTHZ-2)."
+    >
+      {ISSUER_TYPES.map((type) => {
+        const branch = model.issuer.jobs[type];
+        if (!branch || (model.issuer.fixedType && type !== model.issuer.form.type)) return null;
+        return (
+          <div class="ga-tbranch ga-scope" data-o={String(ISSUER_TYPES.indexOf(type) + 1)}>
             <JobsFields branch={branch} errors={model.errors} live="scoped" focus={model.focus} />
           </div>
-        ))}
-      </FormStep>
-    );
-  }
-  if (choice.kind === 'select') {
-    return (
-      <FormStep n={props.n} kind="group" id="ga-jobs" title="Which jobs">
-        {choice.branch ? (
-          <>
-            <InheritLine branch={choice.branch} />
-            <JobsFields
-              branch={choice.branch}
-              errors={model.errors}
-              live="global"
-              focus={model.focus}
+        );
+      })}
+    </FormStep>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Step: name, description and expiry
+
+function DetailsStep(props: { model: RuleFormModel; n: number }) {
+  const { model } = props;
+  return (
+    <FormStep n={props.n} kind="group" id="ga-details" title="Name and expiry">
+      <Field
+        name="name"
+        label="Name"
+        optional={model.mode === 'create'}
+        value={model.details.name}
+        example="Slack for acme/api (environment production)"
+        hint={
+          model.mode === 'create'
+            ? 'Empty: derived from the credential and the jobs. Names are unique per credential.'
+            : 'Names are unique per credential.'
+        }
+        maxlength={100}
+        error={errorFor(model.errors, 'name')}
+        autocomplete="off"
+        conditional
+      />
+      <TextArea
+        name="description"
+        label="Description"
+        optional
+        value={model.details.description}
+        hint="Why this rule exists, a ticket link, or an owner to ask."
+        error={errorFor(model.errors, 'description')}
+        autocomplete="off"
+        rows={2}
+        conditional
+      />
+      <ExpiryField model={model} />
+    </FormStep>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Token settings
+
+/**
+ * The token verification settings of the rule (I-JWT-1). Empty values are derived at save: the
+ * audience and JWKS URI of the credential's newest rule of the same issuer, else a new audience
+ * and the issuer's discovery document. It opens when one of its fields has an error, so errors and
+ * set values are never hidden (Content density).
+ */
+function TokenSettings(props: { model: RuleFormModel }) {
+  const { model } = props;
+  const settings = model.settings;
+  const err = (name: string) => errorFor(model.errors, name);
+  const open = SETTINGS_FIELDS.some((name) => err(name) !== null);
+  const create = model.mode === 'create';
+  const generic = ISSUER_TYPES.indexOf('generic') + 1;
+  return (
+    <Tray id="ga-settings-tray" title="Token settings" hideTitle>
+      <Panel variant="pad">
+        <Disclosure
+          id="ga-settings"
+          summary="Token settings"
+          hint={
+            create
+              ? 'audience, signing keys, algorithms and token age; derived when empty'
+              : 'audience, signing keys, algorithms and token age'
+          }
+          open={open}
+        >
+          <Field
+            name="audience"
+            label="Audience"
+            optional={create}
+            mono
+            value={settings.audience}
+            example="tokengate:6qx4bd7mkt3pzw2hylf5c8ran9"
+            hint={
+              create
+                ? 'The aud claim jobs request. Empty: the audience of the other rules of this credential and issuer, else a new one.'
+                : 'The aud claim jobs request. Changing it breaks jobs that use the old one.'
+            }
+            error={err('audience')}
+            autocomplete="off"
+            conditional
+          />
+          <div class="ga-tbranch" data-o={String(generic)}>
+            <Field
+              name="jwks_uri"
+              label="JWKS URI"
+              optional
+              mono
+              type="url"
+              value={settings.jwks_uri}
+              example="https://agent.buildkite.com/.well-known/jwks"
+              hint="Generic issuers only. Empty: read from the issuer's discovery document when you save."
+              error={err('jwks_uri')}
+              autocomplete="off"
+              conditional
             />
-          </>
-        ) : (
-          <p class="hint">
-            Choose a credential access rule above, then use Show fields for the chosen credential
-            access rule and credential.
-          </p>
-        )}
-      </FormStep>
-    );
-  }
-  return null;
+          </div>
+          <CheckboxGroup
+            name="allowed_algs"
+            legend="Signing algorithms"
+            options={ALLOWED_ALGS.map((alg) => ({
+              value: alg,
+              label: alg,
+              checked: settings.allowed_algs.includes(alg),
+            }))}
+            hint={
+              create
+                ? 'None ticked: the issuer type defaults (GitHub and GitLab: RS256).'
+                : undefined
+            }
+            error={err('allowed_algs')}
+          />
+          <Field
+            name="max_token_age_seconds"
+            label="Maximum token age (seconds)"
+            optional={create}
+            inputmode="numeric"
+            value={settings.max_token_age_seconds}
+            example="300"
+            hint="Tokens older than this are refused. Empty: the issuer type default."
+            error={err('max_token_age_seconds')}
+            autocomplete="off"
+            conditional
+          />
+        </Disclosure>
+      </Panel>
+    </Tray>
+  );
 }
 
 const CONTEXT_TEXT: Readonly<
@@ -809,14 +780,14 @@ function Branch(props: { live: Live; n: 3 | 4 | 5; o: number; box?: boolean; chi
   );
 }
 
-/** "Which jobs" of one consumer branch: the structured fields, or the conditions rows editor. */
+/** "Which jobs" of one issuer type branch: the structured fields, or the conditions rows editor. */
 export function JobsFields(props: {
-  branch: ConsumerBranch;
+  branch: JobsBranch;
   errors: readonly FieldError[];
   live: Live;
-  /** A visible create form with a fixed consumer: the repository may carry `pattern`. */
+  /** A visible form with a fixed issuer type: the repository may carry `pattern`. */
   fixed?: boolean;
-  focus?: AccessFormModel['focus'];
+  focus?: RuleFormModel['focus'];
 }) {
   const { branch, errors, live } = props;
   const { prefix, jobs, profile } = branch;
@@ -830,7 +801,7 @@ export function JobsFields(props: {
   const owners =
     claims === null
       ? []
-      : pinOwnerValues(branch.provider, claims.owner).map((value) => ({
+      : pinOwnerValues(branch.rule, claims.owner).map((value) => ({
           value,
           label: branch.labels.find((l) => l.claim === claims.owner && l.value === value)?.label,
         }));
@@ -865,8 +836,8 @@ export function JobsFields(props: {
       ) : null}
       {branch.unknownOwner !== null ? (
         <p class="hint">
-          This organization is outside the credential access limits. Ask a credential administrator
-          to update the boundary.
+          {branch.unknownOwner} is not one of the organizations or groups of this rule. Add it under
+          Issuer and tenant first.
         </p>
       ) : null}
       <ContextFields branch={branch} live={live} error={err('context')} errors={errors} />
@@ -932,7 +903,7 @@ export function JobsFields(props: {
  * with the free-text input, `<p>repository_other`), or one input when none is known yet.
  */
 function RepositoryFields(props: {
-  branch: ConsumerBranch;
+  branch: JobsBranch;
   live: Live;
   conditional: boolean;
   example: string;
@@ -978,7 +949,7 @@ function RepositoryFields(props: {
         detail: parsed ? `(${parsed[2]})` : undefined,
         meta:
           count > 0
-            ? `${index === 0 && count > 0 ? 'most used · ' : ''}${count === 1 ? '1 access' : `${count} accesses`}`
+            ? `${index === 0 && count > 0 ? 'most used · ' : ''}${count === 1 ? '1 rule' : `${count} rules`}`
             : undefined,
       };
     }),
@@ -1025,7 +996,7 @@ function RepositoryFields(props: {
 }
 
 function ContextFields(props: {
-  branch: ConsumerBranch;
+  branch: JobsBranch;
   live: Live;
   error: string | null;
   errors: readonly FieldError[];
@@ -1076,7 +1047,7 @@ function ContextFields(props: {
     <>
       <FieldSet
         id={id}
-        legend="When can its jobs use the token?"
+        legend="When can its jobs use the credential?"
         error={props.error}
         {...slot(live, 4)}
       >
@@ -1115,7 +1086,7 @@ function ContextFields(props: {
 }
 
 function ContextInput(props: {
-  branch: ConsumerBranch;
+  branch: JobsBranch;
   context: AccessContext;
   input: string;
   live: Live;
@@ -1235,7 +1206,7 @@ function ContextInput(props: {
   }
 }
 
-function RefProtection(props: { branch: ConsumerBranch; live: Live }) {
+function RefProtection(props: { branch: JobsBranch; live: Live }) {
   const { branch, live } = props;
   const gitlab = branch.profile.id === 'gitlab-ci';
   const id = fieldId(`${branch.prefix}ref_protection`);
@@ -1273,28 +1244,28 @@ function RefProtection(props: { branch: ConsumerBranch; live: Live }) {
 const CLAIM_HINT = 'Literal top-level claim name.';
 
 function ConditionRows(props: {
-  branch: ConsumerBranch;
+  branch: JobsBranch;
   errors: readonly FieldError[];
-  focus?: AccessFormModel['focus'];
+  focus?: RuleFormModel['focus'];
 }) {
   const { branch, errors } = props;
   const group = `${branch.prefix}cond`;
   const claimOptions = [
     ...new Set([
-      ...branch.profile.anchorRules(branch.provider).flat(),
+      ...branch.profile.anchorRules(branch.rule).flat(),
       ...branch.profile.tenantClaims,
-      ...branch.profile.logClaimAllowlist(branch.provider),
+      ...branch.profile.logClaimAllowlist(branch.rule),
     ]),
   ].map((value) => ({ value }));
   const rows = branch.jobs.cond.length > 0 ? branch.jobs.cond : starterRows(branch);
-  const anchors = new Set(branch.profile.anchorRules(branch.provider).flat());
+  const anchors = new Set(branch.profile.anchorRules(branch.rule).flat());
   return (
     <div class="ga-rows">
       <input type="hidden" name={`${branch.prefix}editor`} value="rows" />
       <p class="hint">
         Every condition must hold. Anchor claims (
         {branch.profile
-          .anchorRules(branch.provider)
+          .anchorRules(branch.rule)
           .map((rule) => rule.join(' + '))
           .join('; or ')}
         ) need an exact, non-negated condition.
@@ -1368,15 +1339,15 @@ function ConditionRows(props: {
 }
 
 /** Empty rows editor: one row per anchor claim of the first anchor rule. */
-function starterRows(branch: ConsumerBranch): JobsForm['cond'] {
-  const [rule] = branch.profile.anchorRules(branch.provider);
+function starterRows(branch: JobsBranch): JobsForm['cond'] {
+  const [rule] = branch.profile.anchorRules(branch.rule);
   return (rule ?? []).map((claim) => ({ claim, match: 'exact', not: false, values: '' }));
 }
 
 // ---------------------------------------------------------------------------------------------
 // Step: allowed operations
 
-function OpsStep(props: { model: AccessFormModel; n: number; jobs: ConsumerBranch | null }) {
+function OpsStep(props: { model: RuleFormModel; n: number; jobs: JobsBranch | null }) {
   const { model } = props;
   const choice = model.token;
   const err = (name: string) => errorFor(model.errors, name);
@@ -1465,7 +1436,7 @@ function OpsStep(props: { model: AccessFormModel; n: number; jobs: ConsumerBranc
         name="token_id"
         label="Which credential"
         value={choice.selected}
-        placeholder="Choose a token"
+        placeholder="Choose a credential"
         options={choice.options.map((token) => ({
           value: token.id,
           label: `${token.name} (/proxy/${token.slug})`,
@@ -1480,10 +1451,10 @@ function OpsStep(props: { model: AccessFormModel; n: number; jobs: ConsumerBranc
   );
 }
 
-/** The operations of one token branch in its own group (the token is a choice). */
+/** The operations of one credential branch in its own group (the credential is a choice). */
 function TokenOps(props: {
   branch: TokenBranch;
-  model: AccessFormModel;
+  model: RuleFormModel;
   repositoryLabel: string | null;
 }) {
   const { branch, model } = props;
@@ -1513,7 +1484,7 @@ export function OpsFields(props: {
   branch: TokenBranch;
   errors: readonly FieldError[];
   repositoryLabel: string | null;
-  focus?: AccessFormModel['focus'];
+  focus?: RuleFormModel['focus'];
 }) {
   const { branch, errors } = props;
   const { prefix } = branch;
@@ -1526,7 +1497,7 @@ export function OpsFields(props: {
   }
   const repo = props.repositoryLabel ?? '‹repository›';
   const presets = branch.template?.operation_presets ?? [];
-  // A set other accesses use that is exactly a preset is the preset's box already; it shows
+  // A set other rules use that is exactly a preset is the preset's box already; it shows
   // only while it is the checked one (a copy), so a checked value is never hidden.
   const presetKeys = new Set(
     presets.map((preset) =>
@@ -1552,7 +1523,7 @@ export function OpsFields(props: {
     })),
     ...ruleSets.map((set) => ({
       value: set.id,
-      title: `Used by ${set.count === 1 ? '1 other access' : `${set.count} other accesses`}`,
+      title: `Used by ${set.count === 1 ? '1 other rule' : `${set.count} other rules`}`,
       code: set.rules.map((rule) => `${rule.methods.join(', ')} ${rule.path}`).join(' · '),
     })),
   ];
@@ -1631,8 +1602,8 @@ export function OpsFields(props: {
 
 const DAY_MS = 86_400_000;
 
-function expiryOptions(model: AccessFormModel) {
-  // "Keep" only for a stored date: for an access that never expires it would repeat "Never".
+function expiryOptions(model: RuleFormModel) {
+  // "Keep" only for a stored date: for a rule that never expires it would repeat "Never".
   const keep = model.mode === 'edit' && model.keep !== undefined && model.keep !== null;
   const keepText =
     model.keep === null || model.keep === undefined
@@ -1648,7 +1619,7 @@ function expiryOptions(model: AccessFormModel) {
   ].map((option, index) => ({ ...option, o: index + 1 }));
 }
 
-function ExpiryStep(props: { model: AccessFormModel; n: number }) {
+function ExpiryField(props: { model: RuleFormModel }) {
   const { model } = props;
   const options = expiryOptions(model);
   const keep = options.some((option) => option.value === 'keep');
@@ -1658,21 +1629,23 @@ function ExpiryStep(props: { model: AccessFormModel; n: number }) {
   const error = errorFor(model.errors, 'expires');
   useFocusTarget('expires', { id, options });
   return (
-    <FormStep n={props.n} title="Expires" live={8} id={id} error={error ?? undefined}>
-      <Picks name="expires" value={value} options={options} />
+    <>
+      <FieldSet id={id} legend="Expires" live={8} error={error}>
+        <Picks name="expires" value={value} options={options} />
+      </FieldSet>
       <Reveal field={8} option={date} box={false}>
         <Field
           name="expires_on"
           label="Last day of access"
           value={model.expiry.expires_on}
           example="2027-01-31"
-          hint="Access stops at the end of this day (UTC). Use a date like 2027-01-31."
+          hint="The rule stops at the end of this day (UTC). Use a date like 2027-01-31."
           error={errorFor(model.errors, 'expires_on')}
           autocomplete="off"
           conditional
         />
       </Reveal>
-    </FormStep>
+    </>
   );
 }
 
@@ -1689,56 +1662,21 @@ const CONTEXT_PHRASE: Readonly<Record<AccessContext, Child>> = {
   any: <span class="t-warn"> · any ref (risk)</span>,
 };
 
-function FormRail(props: { model: AccessFormModel }) {
+function FormRail(props: { model: RuleFormModel }) {
   const { model } = props;
-  const consumer = model.consumer;
   const token = model.token;
   const request = model.entry?.request ?? null;
-  const fixedJobs = consumer.kind === 'fixed' ? consumer.branch : null;
+  const jobs = selectedJobsBranch(model.issuer);
   const tokenBranch = token.kind === 'fixed' ? token.branch : null;
   const expiry = expiryOptions(model);
-  const consumerRow =
-    consumer.kind === 'fixed' ? (
-      <SummaryRow
-        logo={consumerLogo(consumer.branch.provider)}
-        title={consumer.branch.provider.name}
-        meta={<JobsPhrase branch={consumer.branch} />}
-      />
-    ) : consumer.kind === 'cards' ? (
-      <SummaryRow
-        logoSlot={
-          <LivePhrase
-            field={1}
-            decorative
-            phrases={Object.fromEntries([
-              ...consumer.branches.map((branch, index) => [
-                index + 1,
-                <Tile logo={consumerLogo(branch.provider)} />,
-              ]),
-              [consumer.branches.length + 1, <Tile logo="oidc" />],
-            ])}
-            empty={<Tile logo="oidc" />}
-          />
-        }
-        title={
-          <LivePhrase
-            field={1}
-            phrases={Object.fromEntries([
-              ...consumer.branches.map((branch, index) => [index + 1, branch.provider.name]),
-              [consumer.branches.length + 1, 'The new credential access rule'],
-            ])}
-            empty="Choose a credential access rule"
-          />
-        }
-        meta="the jobs you choose in step 2"
-      />
-    ) : (
-      <SummaryRow
-        logo="oidc"
-        title={consumer.kind === 'new' ? 'The new credential access rule' : 'The chosen consumer'}
-        meta="the jobs you choose"
-      />
-    );
+  const fixedType = model.issuer.fixedType;
+  const issuerRow = (
+    <SummaryRow
+      logo={jobs ? issuerLogo(jobs.rule) : 'oidc'}
+      title={jobs ? issuerHost(jobs.rule.issuer) : 'The issuer you choose'}
+      meta={jobs ? <JobsPhrase branch={jobs} /> : 'the jobs you choose in step 2'}
+    />
+  );
   const presets = tokenBranch?.template?.operation_presets ?? [];
   const opsMeta =
     tokenBranch && presets.length > 0 && !isPathInjected(tokenBranch.token) ? (
@@ -1788,17 +1726,17 @@ function FormRail(props: { model: AccessFormModel }) {
           phrases={Object.fromEntries(
             token.branches.map((branch, index) => [index + 1, branch.token.name]),
           )}
-          empty="Choose a token"
+          empty="Choose a credential"
         />
       }
     />
   ) : (
-    <SummaryRow glyph="?" title="The chosen token" />
+    <SummaryRow glyph="?" title="The chosen credential" />
   );
   return (
     <LiveSummary
       id="ga-sum"
-      title={request ? 'The denied request' : 'This access'}
+      title={request ? 'The denied request' : 'This access rule'}
       description={
         request
           ? 'Saving allows this caller to make this call.'
@@ -1808,8 +1746,8 @@ function FormRail(props: { model: AccessFormModel }) {
       {request ? (
         <>
           <SummaryRow
-            logo={fixedJobs ? consumerLogo(fixedJobs.provider) : 'oidc'}
-            title={fixedJobs?.provider.name ?? 'The credential access rule'}
+            logo={jobs ? issuerLogo(jobs.rule) : 'oidc'}
+            title={jobs ? issuerHost(jobs.rule.issuer) : 'The issuer'}
             meta={
               <>
                 {request.repository ? <span class="v">{request.repository}</span> : null}
@@ -1827,7 +1765,7 @@ function FormRail(props: { model: AccessFormModel }) {
           <SummaryWire />
           <SummaryRow
             logo={tokenBranch ? tokenLogo(tokenBranch.token) : { brand: 'custom', text: '?' }}
-            title={tokenBranch?.token.name ?? 'The token'}
+            title={tokenBranch?.token.name ?? 'The credential'}
             meta={`${request.method} ${request.path}`}
             mono
           />
@@ -1835,7 +1773,7 @@ function FormRail(props: { model: AccessFormModel }) {
         </>
       ) : (
         <>
-          {consumerRow}
+          {issuerRow}
           <SummaryWire />
           <SummaryRow glyph="→" title="May call" meta={opsMeta} />
           <SummaryWire />
@@ -1859,18 +1797,51 @@ function FormRail(props: { model: AccessFormModel }) {
               )}
             />
             .{' '}
-            {fixedJobs && fixedJobs.jobs.editor === 'structured' ? (
+            {jobs && jobs.jobs.editor === 'structured' && fixedType ? (
               <RiskSwitch safe="No risks." risk="This choice accepts a risk." />
             ) : null}
           </SummaryFoot>
         </>
       )}
+      {model.global ? <GlobalRail global={model.global} /> : null}
     </LiveSummary>
   );
 }
 
-/** The jobs line of a fixed consumer: repository, context and refs, following the live slots. */
-function JobsPhrase(props: { branch: ConsumerBranch }) {
+/** The rule as entered against the global access rules of its issuer (AR-8): a warning, never a refusal. */
+export function GlobalRail(props: {
+  global: { status: GlobalStatus<GlobalAccessRule>; issuer: string };
+}) {
+  const { status, issuer } = props.global;
+  const link = <a href={paths.globalRules({ issuer })}>Global access rules</a>;
+  switch (status.kind) {
+    case 'not_limited':
+      return <SummaryFoot>{link}: not limited. This issuer has no global access rule.</SummaryFoot>;
+    case 'within':
+      return (
+        <SummaryFoot>
+          {link}: within {status.global.name}.
+        </SummaryFoot>
+      );
+    case 'limited':
+      return (
+        <SummaryFoot>
+          <span class="t-warn">{link}: limited.</span> Some requests this rule allows are outside
+          the global access rules of this issuer and will be refused.
+        </SummaryFoot>
+      );
+    case 'blocked':
+      return (
+        <SummaryFoot>
+          <span class="t-bad">{link}: blocked.</span> They refuse every request of this rule:{' '}
+          {status.reasons.map((reason) => reason.detail).join('; ')}.
+        </SummaryFoot>
+      );
+  }
+}
+
+/** The jobs line of the chosen issuer type: repository, context and refs, following the live slots. */
+function JobsPhrase(props: { branch: JobsBranch }) {
   const { branch } = props;
   if (branch.jobs.editor === 'rows') return <>the conditions you write</>;
   const all = branch.repositoryOptions;

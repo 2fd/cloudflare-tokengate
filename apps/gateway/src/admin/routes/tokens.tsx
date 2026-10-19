@@ -36,14 +36,14 @@ import { sealedKid } from '../../crypto/envelope';
 import { KID_PATTERN, type KeyringError, loadKeyring } from '../../crypto/keyring';
 import { listAuditEvents } from '../../db/audit';
 import { getService, listServices } from '../../db/credentials';
-import type { IssuerAccessRuleUsage } from '../../db/rollups';
+import type { RuleUsage } from '../../db/rollups';
 import { getAllowedUpstreamHosts } from '../../db/settings';
 import type { Service } from '../../db/types';
 import { normalizeCredential, normalizeInjection, validateBaseUrl } from '../../policy/validate';
 import { EXPIRY_WARNING_MS, trafficStats } from '../../telemetry/dashboard';
 import { loadTokenTraffic } from '../access-traffic';
 import { can, type Permission } from '../auth/rbac';
-import { type AccessEdge, loadConnections } from '../connections';
+import { loadConnections, type RuleEdge } from '../connections';
 import { type NoticeContext, type NoticeTable, resolveNotice } from '../notice';
 import { openCredentialDraft, sealCredentialDraft } from '../ops/credential-draft';
 import {
@@ -86,7 +86,7 @@ import {
   templateForService,
   templateIdFor,
 } from '../service-templates';
-import { consumerLogo } from '../views/access-visuals';
+import { issuerHost, issuerLogo } from '../views/access-visuals';
 import { AskSomeone, NotFound, notFoundText, StatusBadge } from '../views/components';
 import { formatCount } from '../views/format';
 import { LearnMore } from '../views/header';
@@ -260,15 +260,18 @@ function siblingText(ctx: TokenNoticeData): string {
 function giveAccessNext(ctx: NoticeContext & TokenNoticeData) {
   return ctx.service && ctx.view.can('access:write')
     ? {
-        next: { href: paths.accessNew({ token: ctx.service.id }), label: 'Add issuer access rule' },
+        next: {
+          href: paths.accessRuleNew({ credential: ctx.service.id }),
+          label: 'Add credential access rule',
+        },
       }
     : {};
 }
 
 const LIST_NOTICES: NoticeTable = {
   deleted: () => ({ text: 'Token deleted.' }),
-  deleted_with_accesses: () => ({ text: 'Token and its issuer access rules deleted.' }),
-  enabled: () => ({ text: 'Token enabled. Consumers with access can use it again.' }),
+  deleted_with_rules: () => ({ text: 'Credential and its credential access rules deleted.' }),
+  enabled: () => ({ text: 'Credential enabled. Its credential access rules allow calls again.' }),
   disabled: () => ({ text: 'Token disabled. Requests through it are refused from now on.' }),
 };
 
@@ -566,7 +569,7 @@ async function listPage(c: AdminContext) {
   const deps = c.get('deps');
   const now = deps.now();
   const [connections, cards] = await Promise.all([loadConnections(deps), cardsData(c)]);
-  const tokens = [...connections.tokens].sort((a, b) => a.name.localeCompare(b.name));
+  const tokens = [...connections.credentials].sort((a, b) => a.name.localeCompare(b.name));
   const rawStatus = c.req.query('status');
   const status = STATUS_FILTERS.find((value) => value === rawStatus) ?? null;
   const usedKids = new Set(
@@ -609,11 +612,11 @@ async function listPage(c: AdminContext) {
       token.slug.toLowerCase().includes(needle));
   const scoped = tokens.filter(inScope);
   const rows = status === null ? scoped : scoped.filter((token) => hasStatus(token, status));
-  const byToken = new Map<string, AccessEdge[]>();
-  for (const edge of connections.accesses) {
-    const list = byToken.get(edge.grant.service_id) ?? [];
+  const byToken = new Map<string, RuleEdge[]>();
+  for (const edge of connections.rules) {
+    const list = byToken.get(edge.rule.credential_id) ?? [];
     list.push(edge);
-    byToken.set(edge.grant.service_id, list);
+    byToken.set(edge.rule.credential_id, list);
   }
   const keepers = { key: key ?? undefined, q: query || undefined };
   return renderPage(
@@ -629,11 +632,11 @@ async function listPage(c: AdminContext) {
           count={tokens.length > 0 ? tokens.length : undefined}
           description={
             <>
-              Secrets of the upstream APIs that consumers call through tokengate. Loading a token
-              gives nobody access; issuer access rules is given separately.
+              Secrets of the upstream APIs that workloads call through tokengate. Loading a
+              credential gives nobody access; credential access rules do.
               <LearnMore
-                path="concepts.md#issuer-access-rule"
-                about="credentials and issuer access rules"
+                path="concepts.md#credential-access-rule"
+                about="credentials and credential access rules"
               />
             </>
           }
@@ -748,8 +751,8 @@ async function listPage(c: AdminContext) {
             }
             actions={
               empty ? undefined : (
-                <LinkAction href={paths.access()} arrow>
-                  Open the connections map
+                <LinkAction href={paths.accessRules()} arrow>
+                  Open the credential access rules
                 </LinkAction>
               )
             }
@@ -772,7 +775,7 @@ async function listPage(c: AdminContext) {
                 <UiEmptyState
                   title="No credentials yet"
                   icon="token"
-                  description="A credential holds the secret of one upstream API. Add one, then give an issuer access rule to it."
+                  description="A credential holds the secret of one upstream API. Add one, then add a credential access rule to it."
                   actions={
                     canWrite ? (
                       cards.keyringError === null ? (
@@ -840,8 +843,8 @@ interface TokenFacts {
 function TokenRow(props: {
   token: Service;
   facts: TokenFacts;
-  edges: AccessEdge[];
-  usage: ReadonlyMap<string, IssuerAccessRuleUsage>;
+  edges: RuleEdge[];
+  usage: ReadonlyMap<string, RuleUsage>;
   usageAvailable: boolean;
   sampleRate: number;
   now: number;
@@ -849,7 +852,7 @@ function TokenRow(props: {
   const { token, facts, edges, now } = props;
   const template = templateForService(token);
   const requests = edges.reduce(
-    (sum, edge) => sum + (props.usage.get(edge.grant.id)?.requests ?? 0),
+    (sum, edge) => sum + (props.usage.get(edge.rule.id)?.requests ?? 0),
     0,
   );
   const recorded = props.usageAvailable && props.sampleRate > 0;
@@ -941,37 +944,33 @@ function SecretCell(props: { token: Service; unreadable: boolean; now: number })
   );
 }
 
-function lastUsedHour(edges: readonly AccessEdge[]): number | null {
+function lastUsedHour(edges: readonly RuleEdge[]): number | null {
   const hours = edges
     .map((edge) => edge.lastUsedHour)
     .filter((hour): hour is number => hour !== null);
   return hours.length > 0 ? Math.max(...hours) : null;
 }
 
-/** Consumer tiles, "2 consumers · 3 accesses" (a link to them), their names and what to watch. */
-function UsedBy(props: { token: Service; edges: AccessEdge[]; now: number }) {
+/** Issuer tiles, "3 credential access rules" (a link to them), their issuers and what to watch. */
+function UsedBy(props: { token: Service; edges: RuleEdge[]; now: number }) {
   const { token, edges } = props;
-  if (edges.length === 0) return <span class="muted">0 consumers</span>;
-  const consumers = new Map<string, AccessEdge['consumer']>();
-  for (const edge of edges) consumers.set(edge.grant.credential_access_rule_id, edge.consumer);
-  const usable = new Set(
-    usableAccesses(edges, props.now).map((edge) => edge.grant.credential_access_rule_id),
-  );
-  const count = token.enabled ? usable.size : 0;
+  if (edges.length === 0) return <span class="muted">No credential access rule</span>;
+  const issuers = new Map<string, RuleEdge['rule']>();
+  for (const edge of edges) issuers.set(edge.rule.issuer_key, edge.rule);
+  const usable = usableAccesses(edges, props.now);
+  const count = token.enabled ? usable.length : 0;
   const expired = edges.filter((edge) => edge.status === 'expired').length;
   const risky = edges.some((edge) => edge.flags.some((flag) => flag.status === 'risk_accepted'));
   const inactive = edges.find((edge) => edge.status === 'inactive');
-  const names = [...consumers.values()].map(
-    (consumer) => consumer?.name ?? 'deleted credential access rule',
-  );
+  const names = [...issuers.values()].map((rule) => issuerHost(rule.issuer));
   return (
     <Entity
       logoSlot={
         <LogoStack
-          brands={[...consumers.values()]
-            .map((consumer) => {
-              // a disabled token: nobody can use it, so its consumers are dimmed too
-              const logo = consumerLogo(consumer);
+          brands={[...issuers.values()]
+            .map((rule) => {
+              // a disabled credential: nobody can use it, so its issuers are dimmed too
+              const logo = issuerLogo(rule);
               if (token.enabled) return logo;
               return typeof logo === 'string'
                 ? { brand: logo, disabled: true }
@@ -981,9 +980,12 @@ function UsedBy(props: { token: Service; edges: AccessEdge[]; now: number }) {
         />
       }
       name={
-        <CountLink href={paths.access({ token: token.id })} srSuffix={`can use ${token.name}`}>
-          {plural(count, 'credential access rule')}
-          {token.enabled ? '' : ' now'} · {plural(edges.length, 'access', 'accesses')}
+        <CountLink
+          href={paths.accessRules({ credential: token.id })}
+          srSuffix={`can use ${token.name}`}
+        >
+          {plural(count, 'usable rule')}
+          {token.enabled ? '' : ' now'} · {plural(edges.length, 'access rule')}
         </CountLink>
       }
       meta={
@@ -1036,13 +1038,13 @@ interface ListProblem {
  */
 function expiryConsequence(
   token: Service,
-  edges: readonly AccessEdge[],
-  usage: ReadonlyMap<string, IssuerAccessRuleUsage> | null,
+  edges: readonly RuleEdge[],
+  usage: ReadonlyMap<string, RuleUsage> | null,
   at: number,
 ): string {
   if (usage === null) return 'Replace it before then.';
-  const used = edges.filter((edge) => (usage.get(edge.grant.id)?.requests ?? 0) > 0);
-  const calls = used.reduce((sum, edge) => sum + (usage.get(edge.grant.id)?.requests ?? 0), 0);
+  const used = edges.filter((edge) => (usage.get(edge.rule.id)?.requests ?? 0) > 0);
+  const calls = used.reduce((sum, edge) => sum + (usage.get(edge.rule.id)?.requests ?? 0), 0);
   if (calls === 0) return 'Replace it before then.';
   const subjects = [...new Set(used.map((edge) => edge.subject))];
   const who =
@@ -1058,9 +1060,9 @@ function ListAlerts(props: {
   tokens: Service[];
   facts: (token: Service) => TokenFacts;
   keyringError: KeyringError | null;
-  edges: (token: Service) => AccessEdge[];
-  /** Allowed requests per access in the last 30 days; null when not recorded. */
-  usage: ReadonlyMap<string, IssuerAccessRuleUsage> | null;
+  edges: (token: Service) => RuleEdge[];
+  /** Allowed requests per credential access rule in the last 30 days; null when not recorded. */
+  usage: ReadonlyMap<string, RuleUsage> | null;
 }) {
   const { ctx, tokens, facts } = props;
   const now = ctx.now;
@@ -1521,7 +1523,7 @@ async function loadPage(c: AdminContext, service: Service): Promise<TokenPageDat
   const deps = c.get('deps');
   const [connections, allowlist, keyring, lastSet, tokens, recent, creator, traffic] =
     await Promise.all([
-      loadConnections(deps, { tokenId: service.id }),
+      loadConnections(deps, { credentialId: service.id }),
       getAllowedUpstreamHosts(deps.env.DB),
       loadKeyring(deps.env),
       lastSecretChange(deps.env.DB, service.id),
@@ -1541,7 +1543,7 @@ async function loadPage(c: AdminContext, service: Service): Promise<TokenPageDat
     keyringError: keyring.ok ? null : keyring.error,
     allowlist,
     outside: storedHostOutside(service.base_url, allowlist),
-    accesses: connections.accesses,
+    rules: connections.rules,
     usage: connections.usage,
     usageAvailable: connections.usageAvailable,
     sampleRate: connections.sampleRate,
@@ -1976,8 +1978,8 @@ async function remove(c: AdminContext) {
     });
   }
   const result = await deleteService(deps, adminActor(c), service.id, {
-    withAccesses: flag(form, 'with_accesses'),
-    accessIds: text(form, 'access_ids')
+    withRules: flag(form, 'with_rules'),
+    ruleIds: text(form, 'rule_ids')
       .split(',')
       .map((id) => id.trim())
       .filter((id) => id !== ''),
@@ -1992,6 +1994,6 @@ async function remove(c: AdminContext) {
   return redirectWithNotice(
     c,
     paths.tokens(),
-    result.deletedAccesses > 0 ? 'deleted_with_accesses' : 'deleted',
+    result.deletedRules > 0 ? 'deleted_with_rules' : 'deleted',
   );
 }

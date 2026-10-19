@@ -35,7 +35,7 @@ import { roleLabel } from './roles';
 
 export type { HealthProblem } from '../shell-health';
 
-export type SectionKey = 'monitoring' | 'users' | 'tokens' | 'consumers';
+export type SectionKey = 'monitoring' | 'users' | 'tokens' | 'rules';
 
 export interface SectionInfo {
   label: string;
@@ -83,14 +83,14 @@ export const SECTIONS: Readonly<Record<SectionKey, SectionInfo>> = {
       { key: 'keys', href: paths.tokenKeys(), label: 'Encryption keys' },
     ],
   },
-  consumers: {
+  rules: {
     label: 'Access Rules',
-    root: paths.consumers(),
+    root: paths.accessRules(),
     help: 'concepts.md#credential-access-rule',
     icon: 'consumer',
     tabs: [
-      { key: 'consumers', href: paths.consumers(), label: 'Credential Access Rules' },
-      { key: 'access', href: paths.access(), label: 'Issuer Access Rules' },
+      { key: 'credential-rules', href: paths.accessRules(), label: 'Credential Access Rules' },
+      { key: 'global-rules', href: paths.globalRules(), label: 'Global Access Rules' },
     ],
   },
 };
@@ -103,15 +103,15 @@ const TAB_ICONS: Readonly<Record<string, IconName>> = {
   tokens: 'token',
   hosts: 'home',
   keys: 'gate',
-  consumers: 'consumer',
-  access: 'gate',
+  'credential-rules': 'consumer',
+  'global-rules': 'gate',
   appearance: 'palette',
   people: 'users',
   'sign-in': 'user',
 };
 
 /** Sidebar order (ADR 0022): the product's core in the middle. */
-export const SECTION_ORDER: readonly SectionKey[] = ['monitoring', 'tokens', 'consumers', 'users'];
+export const SECTION_ORDER: readonly SectionKey[] = ['monitoring', 'tokens', 'rules', 'users'];
 
 export interface ShellProps {
   brand?: AppShellBrand;
@@ -128,7 +128,7 @@ export interface ShellProps {
   /** People who need an owner's decision (pill on Users, `users:write` holders only). */
   needsDecision: number;
   /** Sidebar counts; a zero shows nothing. */
-  counts: { tokens: number; consumers: number };
+  counts: { tokens: number; rules: number; globals: number };
   health: HealthSummary;
   /** Error-level problems for the health strip; empty on the Overview, which lists them. */
   problems: HealthProblem[];
@@ -235,8 +235,7 @@ export function BareLayout(props: {
 export function sideNavSections(shell: ShellProps): SideNavSection[] {
   return SECTION_ORDER.map((key) => {
     const info = SECTIONS[key];
-    const count =
-      key === 'tokens' ? shell.counts.tokens : key === 'consumers' ? shell.counts.consumers : 0;
+    const count = key === 'tokens' ? shell.counts.tokens : key === 'rules' ? shell.counts.rules : 0;
     const pending = key === 'users' && shell.view.can('users:write') ? shell.needsDecision : 0;
     return {
       label: info.label,

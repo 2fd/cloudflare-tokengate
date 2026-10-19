@@ -164,7 +164,7 @@ describe('Cloudflare Access login', () => {
     // Same browser (cookie), another person's JWT: the JWT decides.
     const swapped = await adminGet(app, o, '/admin', { [ACCESS_JWT_HEADER]: v.assertion });
     expect(await swapped.text()).toBe('ok viewer');
-    // Without a JWT the cookie alone issuer_access_rules nothing.
+    // Without a JWT the cookie alone allows nothing.
     const bare = await app.request('/admin', { headers: { cookie: o.cookie } });
     expect(bare.status).toBe(401);
   });

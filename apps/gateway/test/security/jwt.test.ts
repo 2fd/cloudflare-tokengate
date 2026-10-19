@@ -27,14 +27,10 @@ import {
 
 let clock: ReturnType<typeof createClock>;
 let github: TestIssuer;
-let provider: CredentialAccessRule;
+let rule: CredentialAccessRule;
 const nowSeconds = () => Math.floor(clock.now() / 1000);
 
-function verify(
-  token: string,
-  target: CredentialAccessRule = provider,
-  issuer: TestIssuer = github,
-) {
+function verify(token: string, target: CredentialAccessRule = rule, issuer: TestIssuer = github) {
   return verifyCallerToken(token, target, PROFILES[target.profile], {
     fetch: issuer.fetch,
     now: clock.now,
@@ -52,7 +48,7 @@ beforeEach(async () => {
   resetJwksCacheForTests();
   clock = createClock();
   github = await createTestIssuer({ issuer: GITHUB_ISSUER, now: clock.now });
-  provider = testCredentialAccessRule(github);
+  rule = testCredentialAccessRule(github);
 });
 
 afterEach(() => {
@@ -88,8 +84,8 @@ describe('I-JWT-1: only correctly signed, fresh, audience-bound tokens of the ex
     expect(await verify(token)).toEqual({ ok: false, code: 'token_malformed' });
   });
 
-  it('rejects HS256 even when a corrupted provider row lists it as allowed', async () => {
-    const corrupted = { ...provider, allowed_algs: ['RS256', 'HS256'] };
+  it('rejects HS256 even when a corrupted credential access rule row lists it as allowed', async () => {
+    const corrupted = { ...rule, allowed_algs: ['RS256', 'HS256'] };
     const claims = {
       ...githubClaims(),
       iss: GITHUB_ISSUER,
@@ -104,9 +100,9 @@ describe('I-JWT-1: only correctly signed, fresh, audience-bound tokens of the ex
     expect(await verify(token, corrupted)).toEqual({ ok: false, code: 'token_malformed' });
   });
 
-  it('rejects an algorithm the provider does not allow, even when the signature is valid', async () => {
+  it('rejects an algorithm the rule does not allow, even when the signature is valid', async () => {
     const token = await github.sign(githubClaims());
-    expect(await verify(token, { ...provider, allowed_algs: ['ES256'] })).toEqual({
+    expect(await verify(token, { ...rule, allowed_algs: ['ES256'] })).toEqual({
       ok: false,
       code: 'token_malformed',
     });
@@ -158,9 +154,7 @@ describe('I-JWT-1: only correctly signed, fresh, audience-bound tokens of the ex
   });
 
   it('accepts an aud array that contains our audience', async () => {
-    const token = await github.sign(
-      githubClaims({ aud: ['sts.amazonaws.com', provider.audience] }),
-    );
+    const token = await github.sign(githubClaims({ aud: ['sts.amazonaws.com', rule.audience] }));
     expect((await verify(token)).ok).toBe(true);
   });
 
@@ -174,27 +168,27 @@ describe('I-JWT-1: only correctly signed, fresh, audience-bound tokens of the ex
     expect(await verify(token)).toEqual({ ok: false, code: 'audience_mismatch' });
   });
 
-  it('fails closed when the provider audience is empty, even for a token with aud ""', async () => {
+  it('fails closed when the rule audience is empty, even for a token with aud ""', async () => {
     const token = await github.sign(githubClaims({ aud: '' }));
     for (const audience of ['', '   ']) {
-      expect(await verify(token, { ...provider, audience })).toEqual({
+      expect(await verify(token, { ...rule, audience })).toEqual({
         ok: false,
         code: 'audience_mismatch',
       });
     }
   });
 
-  it('fails closed when the provider issuer is empty', async () => {
+  it('fails closed when the rule issuer is empty', async () => {
     const token = await github.sign(githubClaims({ iss: '' }));
-    expect(await verify(token, { ...provider, issuer: '' })).toEqual({
+    expect(await verify(token, { ...rule, issuer: '' })).toEqual({
       ok: false,
       code: 'claims_invalid',
     });
   });
 
-  it('fails closed when the profile does not match the provider row', async () => {
+  it('fails closed when the profile does not match the credential access rule row', async () => {
     const token = await github.sign(githubClaims());
-    const result = await verifyCallerToken(token, provider, PROFILES.generic, {
+    const result = await verifyCallerToken(token, rule, PROFILES.generic, {
       fetch: github.fetch,
       now: clock.now,
     });
@@ -221,7 +215,7 @@ describe('I-JWT-1: only correctly signed, fresh, audience-bound tokens of the ex
     expect(await verify(token)).toEqual({ ok: false, code: 'claims_invalid' });
   });
 
-  it('rejects iss of a GitHub enterprise-slug issuer against the shared-issuer provider', async () => {
+  it('rejects iss of a GitHub enterprise-slug issuer against the shared-issuer rule', async () => {
     const token = await github.sign(githubClaims({ iss: `${GITHUB_ISSUER}/acme` }));
     expect(await verify(token)).toEqual({ ok: false, code: 'claims_invalid' });
   });
@@ -276,7 +270,7 @@ describe('I-JWT-1: only correctly signed, fresh, audience-bound tokens of the ex
   it('fails closed on a non-positive max_token_age_seconds', async () => {
     const token = await github.sign(githubClaims());
     for (const age of [0, -1, Number.NaN]) {
-      expect(await verify(token, { ...provider, max_token_age_seconds: age })).toEqual({
+      expect(await verify(token, { ...rule, max_token_age_seconds: age })).toEqual({
         ok: false,
         code: 'token_too_old',
       });
@@ -367,7 +361,7 @@ describe('I-JWT-1: only correctly signed, fresh, audience-bound tokens of the ex
       new TextEncoder().encode(signingInput),
     );
     const token = `${signingInput}.${base64url.encode(new Uint8Array(signature))}`;
-    const result = await verifyCallerToken(token, provider, PROFILES['github-actions'], {
+    const result = await verifyCallerToken(token, rule, PROFILES['github-actions'], {
       fetch: async () => Response.json({ keys: [jwk] }),
       now: clock.now,
     });
@@ -379,7 +373,7 @@ describe('I-JWT-1: only correctly signed, fresh, audience-bound tokens of the ex
     const twice: typeof fetch = async () => Response.json({ keys: [key, key] });
     const result = await verifyCallerToken(
       await github.sign(githubClaims()),
-      provider,
+      rule,
       PROFILES['github-actions'],
       { fetch: twice, now: clock.now },
     );
@@ -392,7 +386,7 @@ describe('I-JWT-1: only correctly signed, fresh, audience-bound tokens of the ex
     ['userinfo', 'https://user:pass@token.actions.githubusercontent.com/.well-known/jwks'],
   ])('refuses a jwks_uri with %s without fetching', async (_label, jwksUri) => {
     const token = await github.sign(githubClaims());
-    expect(await verify(token, { ...provider, jwks_uri: jwksUri })).toEqual({
+    expect(await verify(token, { ...rule, jwks_uri: jwksUri })).toEqual({
       ok: false,
       code: 'jwks_unavailable',
     });
@@ -509,23 +503,13 @@ describe('I-JWT-2: JWKS refetch is gated per jwks_uri', () => {
     const deps = { fetch: paused.fetch, now: clock.now };
     const profile = PROFILES['github-actions'];
     const first = await github.sign(githubClaims());
-    expect((await verifyCallerToken(first, provider, profile, deps)).ok).toBe(true);
+    expect((await verifyCallerToken(first, rule, profile, deps)).ok).toBe(true);
 
     advance(600_000 + 1_000); // past jose's 10 min cache age: the next request refreshes
     paused.pause();
-    const refreshing = verifyCallerToken(
-      await github.sign(githubClaims()),
-      provider,
-      profile,
-      deps,
-    );
+    const refreshing = verifyCallerToken(await github.sign(githubClaims()), rule, profile, deps);
     await paused.untilCalls(2);
-    const during = await verifyCallerToken(
-      await github.sign(githubClaims()),
-      provider,
-      profile,
-      deps,
-    );
+    const during = await verifyCallerToken(await github.sign(githubClaims()), rule, profile, deps);
     paused.resume();
 
     expect(during.ok).toBe(true);
@@ -562,7 +546,7 @@ describe('I-JWT-2: JWKS refetch is gated per jwks_uri', () => {
       const profile = PROFILES['github-actions'];
       github.failJwks('network');
       expect(
-        (await verifyCallerToken(await github.sign(githubClaims()), provider, profile, deps)).ok,
+        (await verifyCallerToken(await github.sign(githubClaims()), rule, profile, deps)).ok,
       ).toBe(false);
       expect(github.jwksFetchCount()).toBe(1);
 
@@ -571,7 +555,7 @@ describe('I-JWT-2: JWKS refetch is gated per jwks_uri', () => {
         Array.from({ length: 20 }, () => github.sign(githubClaims())),
       );
       if (hold) paused.pause();
-      const pending = tokens.map((token) => verifyCallerToken(token, provider, profile, deps));
+      const pending = tokens.map((token) => verifyCallerToken(token, rule, profile, deps));
       if (hold) {
         await paused.untilCalls(2);
         await new Promise((resolve) => setTimeout(resolve, 10));
@@ -661,9 +645,9 @@ describe('I-TEN-1: tenant pin is exact and fails closed', () => {
   const claims = githubClaims();
 
   it('holds when every pin condition matches the raw claim', () => {
-    expect(tenantPinHolds(provider, claims)).toBe(true);
+    expect(tenantPinHolds(rule, claims)).toBe(true);
     const twoConditions = {
-      ...provider,
+      ...rule,
       tenant_pin: [
         { claim: 'repository_owner_id', match: 'exact' as const, values: ['1', '4242'] },
         { claim: 'enterprise_id', match: 'exact' as const, values: ['77'] },
@@ -675,7 +659,7 @@ describe('I-TEN-1: tenant pin is exact and fails closed', () => {
 
   it('fails for a different owner even when names look right', () => {
     expect(
-      tenantPinHolds(provider, {
+      tenantPinHolds(rule, {
         ...claims,
         repository_owner_id: '9999',
         repository_owner: 'acme',
@@ -692,11 +676,11 @@ describe('I-TEN-1: tenant pin is exact and fails closed', () => {
   ])('fails when the pinned claim is %s', (_label, value) => {
     const tampered: Record<string, unknown> = { ...claims, repository_owner_id: value };
     if (value === undefined) delete tampered.repository_owner_id;
-    expect(tenantPinHolds(provider, tampered)).toBe(false);
+    expect(tenantPinHolds(rule, tampered)).toBe(false);
   });
 
   it('matches numeric claims by their decimal text', () => {
-    expect(tenantPinHolds(provider, { ...claims, repository_owner_id: 4242 })).toBe(true);
+    expect(tenantPinHolds(rule, { ...claims, repository_owner_id: 4242 })).toBe(true);
   });
 
   it('fails closed on glob or negated pin conditions', () => {
@@ -704,7 +688,7 @@ describe('I-TEN-1: tenant pin is exact and fails closed', () => {
       { claim: 'repository_owner_id', match: 'glob' as const, values: ['*'] },
       { claim: 'repository_owner_id', match: 'exact' as const, values: ['1'], negate: true },
     ]) {
-      expect(tenantPinHolds({ ...provider, tenant_pin: [condition] }, claims)).toBe(false);
+      expect(tenantPinHolds({ ...rule, tenant_pin: [condition] }, claims)).toBe(false);
     }
   });
 
@@ -733,10 +717,10 @@ describe('I-TEN-1: tenant pin is exact and fails closed', () => {
     ];
     for (const condition of malformed) {
       const tenant_pin = [condition] as unknown as Condition[];
-      expect(tenantPinHolds({ ...provider, tenant_pin }, claims)).toBe(false);
+      expect(tenantPinHolds({ ...rule, tenant_pin }, claims)).toBe(false);
     }
     const notAList = 'repository_owner_id=4242' as unknown as Condition[];
-    expect(tenantPinHolds({ ...provider, tenant_pin: notAList }, claims)).toBe(false);
+    expect(tenantPinHolds({ ...rule, tenant_pin: notAList }, claims)).toBe(false);
   });
 
   it('reads only own claims, never the prototype chain', () => {
@@ -744,7 +728,7 @@ describe('I-TEN-1: tenant pin is exact and fails closed', () => {
       { claim, match: 'exact', values: ['[object Object]'] },
     ];
     for (const claim of ['constructor', '__proto__', 'toString']) {
-      expect(tenantPinHolds({ ...provider, tenant_pin: pin(claim) }, claims)).toBe(false);
+      expect(tenantPinHolds({ ...rule, tenant_pin: pin(claim) }, claims)).toBe(false);
     }
   });
 });

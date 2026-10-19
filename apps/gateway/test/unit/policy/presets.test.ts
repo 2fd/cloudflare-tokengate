@@ -1,16 +1,30 @@
 import { describe, expect, it } from 'vitest';
+import type { CredentialAccessRule } from '../../../src/db/types';
+import type { IssuerProfile } from '../../../src/identity/types';
 import {
   GITHUB_CONTEXTS,
   type GithubPresetInput,
   GITLAB_CONTEXTS,
   type GitlabPresetInput,
-  githubIssuerAccessRulePreset,
-  gitlabIssuerAccessRulePreset,
+  githubAccessRulePreset,
+  gitlabAccessRulePreset,
   PROTECTABLE_CONTEXTS,
 } from '../../../src/policy/presets';
-import type { Rule } from '../../../src/policy/types';
-import { validateIssuerAccessRule } from '../../../src/policy/validate';
+import type { Condition, Rule } from '../../../src/policy/types';
+import { validateCredentialAccessRule } from '../../../src/policy/validate-rules';
 import { githubProfile, gitlabProfile, provider } from './fixtures';
+
+/** The merged validator on `rule` with these jobs and operations (ADR 0026). */
+function validateJobs(
+  input: { conditions: Condition[]; rules: Rule[] },
+  profile: IssuerProfile,
+  rule: CredentialAccessRule,
+) {
+  return validateCredentialAccessRule({ ...rule, ...input }, profile, null, {
+    injection: { kind: 'bearer' },
+    rules: [],
+  });
+}
 
 const base: GithubPresetInput = {
   ownerId: '1000',
@@ -41,9 +55,9 @@ const PATTERNS: Record<string, string> = {
   any: '',
 };
 
-describe('githubIssuerAccessRulePreset', () => {
+describe('githubAccessRulePreset', () => {
   it('builds the branch preset', () => {
-    expect(githubIssuerAccessRulePreset(base)).toEqual({
+    expect(githubAccessRulePreset(base)).toEqual({
       conditions: [
         { claim: 'repository_owner_id', match: 'exact', values: ['1000'] },
         { claim: 'repository_id', match: 'exact', values: ['2000'] },
@@ -62,7 +76,7 @@ describe('githubIssuerAccessRulePreset', () => {
     ['tag', 'refs/tags/v*', ['push']],
     ['release', 'refs/tags/v*', ['release']],
   ] as const)('builds the %s preset', (context, ref, events) => {
-    const { conditions, errors } = githubIssuerAccessRulePreset({
+    const { conditions, errors } = githubAccessRulePreset({
       ...base,
       context,
       pattern: 'v*',
@@ -74,7 +88,7 @@ describe('githubIssuerAccessRulePreset', () => {
   });
 
   it('builds the pull request preset with its risk, and no protection choice', () => {
-    const { conditions, risks } = githubIssuerAccessRulePreset({
+    const { conditions, risks } = githubAccessRulePreset({
       ...base,
       context: 'pull_request',
       requireProtectedRef: false,
@@ -90,7 +104,7 @@ describe('githubIssuerAccessRulePreset', () => {
   });
 
   it('builds the protected and any contexts', () => {
-    const protectedRefs = githubIssuerAccessRulePreset({
+    const protectedRefs = githubAccessRulePreset({
       ...base,
       context: 'protected',
       pattern: '',
@@ -101,14 +115,14 @@ describe('githubIssuerAccessRulePreset', () => {
       { claim: 'ref_protected', match: 'exact', values: ['true'] },
     ]);
     expect(protectedRefs.risks).toEqual([]);
-    const any = githubIssuerAccessRulePreset({ ...base, context: 'any', pattern: '' });
+    const any = githubAccessRulePreset({ ...base, context: 'any', pattern: '' });
     expect(any.conditions).toHaveLength(2);
     expect(any.risks).toEqual(['any_ref']);
     expect(any.warnings).toHaveLength(1);
   });
 
   it('uses exact environments and refuses a wildcard in them', () => {
-    const exact = githubIssuerAccessRulePreset({
+    const exact = githubAccessRulePreset({
       ...base,
       context: 'environment',
       pattern: 'prod',
@@ -119,7 +133,7 @@ describe('githubIssuerAccessRulePreset', () => {
       values: ['prod'],
     });
     expect(exact.risks).toEqual([]);
-    const glob = githubIssuerAccessRulePreset({
+    const glob = githubAccessRulePreset({
       ...base,
       context: 'environment',
       pattern: 'prod-*',
@@ -133,14 +147,14 @@ describe('githubIssuerAccessRulePreset', () => {
   });
 
   it('marks unprotected refs as a risk', () => {
-    const result = githubIssuerAccessRulePreset({ ...base, requireProtectedRef: false });
+    const result = githubAccessRulePreset({ ...base, requireProtectedRef: false });
     expect(result.risks).toEqual(['unprotected_ref']);
     expect(result.warnings).toHaveLength(1);
   });
 
   it('adds the runner and workflow toggles', () => {
     const workflowRef = 'acme/infra/.github/workflows/deploy.yml@refs/heads/main';
-    const { conditions, errors } = githubIssuerAccessRulePreset({
+    const { conditions, errors } = githubAccessRulePreset({
       ...base,
       repositoryId: null,
       requireGithubHosted: true,
@@ -178,17 +192,17 @@ describe('githubIssuerAccessRulePreset', () => {
     ['double wildcard', { pattern: 'release/**' }, 'pattern'],
     ['whitespace', { pattern: 'my branch' }, 'pattern'],
   ])('reports %s on its field', (_name, patch, field) => {
-    const { errors } = githubIssuerAccessRulePreset({ ...base, ...patch });
+    const { errors } = githubAccessRulePreset({ ...base, ...patch });
     expect(errors.map((error) => error.field)).toContain(field);
   });
 
   it.each(GITHUB_CONTEXTS)('produces an access that passes validation (%s)', (context) => {
-    const { conditions, risks } = githubIssuerAccessRulePreset({
+    const { conditions, risks } = githubAccessRulePreset({
       ...base,
       context,
       pattern: PATTERNS[context] ?? '',
     });
-    const result = validateIssuerAccessRule({ conditions, rules }, githubProfile, provider());
+    const result = validateJobs({ conditions, rules }, githubProfile, provider());
     expect(result.errors).toEqual([]);
     // Every warning the validator finds is one of the risks the selection names.
     expect(result.warningDetails.map((detail) => detail.code)).toEqual(
@@ -202,13 +216,13 @@ describe('githubIssuerAccessRulePreset', () => {
   it.each(PROTECTABLE_CONTEXTS)(
     'unprotected %s carries exactly the unprotected_ref code in the validator too',
     (context) => {
-      const { conditions, risks } = githubIssuerAccessRulePreset({
+      const { conditions, risks } = githubAccessRulePreset({
         ...base,
         context: context as GithubPresetInput['context'],
         pattern: PATTERNS[context] ?? '',
         requireProtectedRef: false,
       });
-      const codes = validateIssuerAccessRule(
+      const codes = validateJobs(
         { conditions, rules },
         githubProfile,
         provider(),
@@ -219,11 +233,11 @@ describe('githubIssuerAccessRulePreset', () => {
   );
 });
 
-describe('githubIssuerAccessRulePreset ref patterns', () => {
+describe('githubAccessRulePreset ref patterns', () => {
   it.each(['branch', 'tag', 'release', 'pull_request'] as const)(
     'refuses a %s pattern that already has the refs/ prefix',
     (context) => {
-      const result = githubIssuerAccessRulePreset({ ...base, context, pattern: 'refs/heads/main' });
+      const result = githubAccessRulePreset({ ...base, context, pattern: 'refs/heads/main' });
       expect(result.errors[0]?.field).toBe('pattern');
       expect(result.errors[0]?.message).toMatch(/without the refs\//);
     },
@@ -231,7 +245,7 @@ describe('githubIssuerAccessRulePreset ref patterns', () => {
 
   it('never produces a glob event condition', () => {
     for (const context of GITHUB_CONTEXTS) {
-      const { conditions } = githubIssuerAccessRulePreset({
+      const { conditions } = githubAccessRulePreset({
         ...base,
         context,
         pattern: PATTERNS[context] ?? '',
@@ -242,7 +256,7 @@ describe('githubIssuerAccessRulePreset ref patterns', () => {
   });
 });
 
-describe('gitlabIssuerAccessRulePreset', () => {
+describe('gitlabAccessRulePreset', () => {
   const gitlab = () =>
     provider({
       profile: 'gitlab-ci',
@@ -251,7 +265,7 @@ describe('gitlabIssuerAccessRulePreset', () => {
     });
 
   it('builds bare GitLab refs with ref_type and leaves the pipeline source implicit', () => {
-    expect(gitlabIssuerAccessRulePreset(gitlabBase).conditions).toEqual([
+    expect(gitlabAccessRulePreset(gitlabBase).conditions).toEqual([
       { claim: 'namespace_id', match: 'exact', values: ['3000'] },
       { claim: 'project_id', match: 'exact', values: ['4000'] },
       { claim: 'ref_type', match: 'exact', values: ['branch'] },
@@ -262,7 +276,7 @@ describe('gitlabIssuerAccessRulePreset', () => {
 
   it('pins a pipeline configuration and refuses a wildcard in it', () => {
     const configRef = 'gitlab.com/acme-group/app//.gitlab-ci.yml@refs/heads/main';
-    const pinned = gitlabIssuerAccessRulePreset({ ...gitlabBase, projectId: null, configRef });
+    const pinned = gitlabAccessRulePreset({ ...gitlabBase, projectId: null, configRef });
     expect(pinned.errors).toEqual([]);
     expect(pinned.conditions).toContainEqual({
       claim: 'ci_config_ref_uri',
@@ -270,7 +284,7 @@ describe('gitlabIssuerAccessRulePreset', () => {
       values: [configRef],
     });
     expect(
-      gitlabIssuerAccessRulePreset({
+      gitlabAccessRulePreset({
         ...gitlabBase,
         configRef: 'gitlab.com/acme/*//x.yml@refs/heads/main',
       }).errors[0]?.field,
@@ -278,12 +292,12 @@ describe('gitlabIssuerAccessRulePreset', () => {
   });
 
   it.each(GITLAB_CONTEXTS)('produces an access that passes validation (%s)', (context) => {
-    const { conditions } = gitlabIssuerAccessRulePreset({
+    const { conditions } = gitlabAccessRulePreset({
       ...gitlabBase,
       context,
       pattern: PATTERNS[context] ?? '',
     });
-    const result = validateIssuerAccessRule({ conditions, rules }, gitlabProfile, gitlab());
+    const result = validateJobs({ conditions, rules }, gitlabProfile, gitlab());
     expect(result.errors).toEqual([]);
     expect(result.warnings).toEqual([]);
   });

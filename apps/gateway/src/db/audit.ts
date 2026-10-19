@@ -218,14 +218,14 @@ export async function auditCountByActor(
 
 /**
  * What one user changed since `since`, counted per audit category (the Audit log's categories:
- * tokens, consumers, access, users, system). Sign-in events (user.bootstrap, user.join, user.link)
+ * tokens, access rules, global access rules, users, system). Sign-in events (user.bootstrap, user.join, user.link)
  * are the user's own sign-ins, not changes, and are left out.
  */
 export async function auditCountByActorAndCategory(
   db: D1Database,
   actorId: string,
   since: number,
-): Promise<Record<'tokens' | 'consumers' | 'access' | 'users' | 'system', number>> {
+): Promise<Record<'tokens' | 'access_rules' | 'global_rules' | 'users' | 'system', number>> {
   const { results } = await db
     .prepare(
       `SELECT action, count(*) AS n FROM audit_log
@@ -233,7 +233,7 @@ export async function auditCountByActorAndCategory(
     )
     .bind(actorId, since)
     .all<{ action: string; n: number }>();
-  const counts = { tokens: 0, consumers: 0, access: 0, users: 0, system: 0 };
+  const counts = { tokens: 0, access_rules: 0, global_rules: 0, users: 0, system: 0 };
   for (const row of results) {
     const category = changeCategory(row.action);
     if (category) counts[category] += Number(row.n);
@@ -252,8 +252,8 @@ function changeCategory(
   ) {
     return 'tokens';
   }
-  if (action.startsWith('credential_access_rule.')) return 'consumers';
-  if (action.startsWith('grant.')) return 'access';
+  if (action.startsWith('credential_access_rule.')) return 'access_rules';
+  if (action.startsWith('global_access_rule.')) return 'global_rules';
   if (['user.bootstrap', 'user.join', 'user.link'].includes(action)) return null;
   if (action.startsWith('user.') || action === 'settings.admin_hosts') return 'users';
   return 'system';

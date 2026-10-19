@@ -11,6 +11,11 @@ import {
 import { sha256Hex } from '../../crypto/hash';
 import { type Keyring, loadKeyring } from '../../crypto/keyring';
 import {
+  exactCredentialRuleSetGuard,
+  listCredentialAccessRules,
+  noCredentialRulesGuard,
+} from '../../db/access-rules';
+import {
   deleteServiceStatement,
   getService,
   getServiceBySlug,
@@ -19,24 +24,18 @@ import {
   type ServiceFields,
   serviceCredentialGuard,
   serviceExistsGuard,
-  serviceUnreferencedGuard,
   serviceVersionGuard,
   setServiceEnabledStatement,
   updateServiceCredentialStatement,
   updateServiceFieldsStatement,
 } from '../../db/credentials';
 import {
-  deleteIssuerAccessRulesByIdsStatement,
-  exactIssuerAccessRuleSetGuard,
-  listIssuerAccessRules,
-} from '../../db/issuer_access_rules';
-import {
   getAdminHosts,
   getAllowedUpstreamHosts,
   getState,
   recordKeyCheckValueStatement,
 } from '../../db/settings';
-import type { Actor, IssuerAccessRule, Service } from '../../db/types';
+import type { Actor, CredentialAccessRule, Service } from '../../db/types';
 import type { Deps } from '../../deps';
 import { newId } from '../../lib/ids';
 import { canonicalJson } from '../../lib/json';
@@ -1062,62 +1061,46 @@ export async function testServiceCredential(
 // Delete
 
 export interface ServiceDeleteOptions {
-  /** Also delete the issuer access rules (issuer_access_rules) of the token: needs access:write too. */
-  withAccesses?: boolean;
-  /** The grant ids the admin confirmed; the delete applies only while they are exactly the set. */
-  accessIds?: readonly string[];
+  /** Also delete the credential access rules of the credential: needs access:write too. */
+  withRules?: boolean;
+  /** The rule ids the admin confirmed; the delete applies only while they are exactly the set. */
+  ruleIds?: readonly string[];
 }
 
 /**
- * Deletes a token. While issuer access rules references it, it is refused unless `withAccesses` names
- * exactly the current set: then the accesses and the token go in one batch with one audit row
- * whose diff holds every deleted row (I-AUDIT-1), or nothing goes (a 409 when the set changed).
+ * Deletes a credential. While credential access rules belong to it, it is refused unless `withRules`
+ * names exactly the current set: then the credential and its rules (with their labels, by foreign
+ * key cascade) go in one batch with one audit row whose diff lists every deleted rule (I-AUDIT-1),
+ * or nothing goes (a 409 when the set changed).
  */
 export async function deleteService(
   deps: Deps,
   actor: Actor,
   serviceId: string,
   options: ServiceDeleteOptions = {},
-): Promise<
-  { ok: true; deletedAccesses: number } | (OpFailure & { accesses?: IssuerAccessRule[] })
-> {
+): Promise<{ ok: true; deletedRules: number } | (OpFailure & { rules?: CredentialAccessRule[] })> {
   const db = deps.env.DB;
   const existing = await getService(db, serviceId);
   if (!existing) return opFailure('not_found', ['service not found']);
-  const issuer_access_rules = await listIssuerAccessRules(db, { service_id: serviceId });
-  if (issuer_access_rules.length > 0 && options.withAccesses !== true)
-    return referencedBy(issuer_access_rules);
-  if (issuer_access_rules.length > 0 && !actorMayDeleteAccess(actor)) {
+  const rules = await listCredentialAccessRules(db, { credential_id: serviceId });
+  if (rules.length > 0 && options.withRules !== true) return referencedBy(rules);
+  if (rules.length > 0 && !actorMayDeleteRules(actor)) {
     return opFailure('conflict', [
-      'deleting issuer access rules needs a role that also manages issuer access rules; nothing was deleted',
+      'deleting credential access rules needs a role that also manages access rules; nothing was deleted',
     ]);
   }
-  const ids = issuer_access_rules.map((grant) => grant.id).sort();
-  const confirmed = [...new Set(options.accessIds ?? [])].sort();
-  if (issuer_access_rules.length > 0 && JSON.stringify(ids) !== JSON.stringify(confirmed)) {
-    return accessSetChanged(issuer_access_rules);
+  const ids = rules.map((rule) => rule.id).sort();
+  const confirmed = [...new Set(options.ruleIds ?? [])].sort();
+  if (rules.length > 0 && JSON.stringify(ids) !== JSON.stringify(confirmed)) {
+    return ruleSetChanged(rules);
   }
 
-  // The audit row and the grant delete see the same state, so both apply or neither does. After
-  // the issuer_access_rules are gone the token goes only if no grant references it any more, and, in a cascade,
-  // only if this batch wrote its audit row: when the confirmed accesses were removed concurrently,
-  // the exact-set guard is false and the token must stay (I-AUDIT-1). A service.delete row for a
-  // service that still exists can only come from this batch: every earlier one that wrote it
-  // also deleted the service in the same transaction.
+  // The audit row and the delete see the same state, so both apply or neither does: the
+  // credential goes only while its rules are exactly the confirmed set (none without a cascade).
   const guard =
-    issuer_access_rules.length > 0
-      ? allOf(
-          serviceExistsGuard(serviceId),
-          exactIssuerAccessRuleSetGuard('service_id', serviceId, ids),
-        )
-      : serviceUnreferencedGuard(serviceId);
-  const deleteGuard =
-    issuer_access_rules.length > 0
-      ? allOf(serviceUnreferencedGuard(serviceId), {
-          sql: "EXISTS (SELECT 1 FROM audit_log WHERE action = 'service.delete' AND target_type = 'service' AND target_id = ?)",
-          binds: [serviceId],
-        })
-      : serviceUnreferencedGuard(serviceId);
+    rules.length > 0
+      ? allOf(serviceExistsGuard(serviceId), exactCredentialRuleSetGuard(serviceId, ids))
+      : noCredentialRulesGuard(serviceId);
   const view = serviceView(existing);
   const outcome = await commitOrConstraintFailure(
     deps,
@@ -1127,58 +1110,64 @@ export async function deleteService(
       targetType: 'service',
       targetId: serviceId,
       summary:
-        issuer_access_rules.length > 0
-          ? `Deleted service ${existing.slug} and its ${issuer_access_rules.length} issuer access rules${issuer_access_rules.length === 1 ? '' : 'es'}`
+        rules.length > 0
+          ? `Deleted service ${existing.slug} and its ${rules.length} credential access rule${rules.length === 1 ? '' : 's'}`
           : `Deleted service ${existing.slug}`,
       diff: {
-        before: issuer_access_rules.length > 0 ? { ...view, accesses: issuer_access_rules } : view,
+        before:
+          rules.length > 0
+            ? {
+                ...view,
+                access_rules: rules.map((rule) => ({
+                  id: rule.id,
+                  name: rule.name,
+                  issuer: rule.issuer,
+                  enabled: rule.enabled,
+                })),
+              }
+            : view,
       },
     },
     guard,
-    [
-      ...(issuer_access_rules.length > 0
-        ? [deleteIssuerAccessRulesByIdsStatement(db, ids, guard)]
-        : []),
-      deleteServiceStatement(db, serviceId, deleteGuard),
-    ],
+    [deleteServiceStatement(db, serviceId, guard)],
   );
   if (!outcome.ok) return outcome;
   if (!outcome.committed) {
-    const current = await listIssuerAccessRules(db, { service_id: serviceId });
-    if (issuer_access_rules.length > 0 || current.length > 0) {
-      return options.withAccesses === true ? accessSetChanged(current) : referencedBy(current);
+    const current = await listCredentialAccessRules(db, { credential_id: serviceId });
+    if (rules.length > 0 || current.length > 0) {
+      return options.withRules === true ? ruleSetChanged(current) : referencedBy(current);
     }
     return concurrentChange('the service');
   }
-  return { ok: true, deletedAccesses: issuer_access_rules.length };
+  return { ok: true, deletedRules: rules.length };
 }
 
 /** The admin route passes access:write as a field permission; an op caller must hold it too. */
-function actorMayDeleteAccess(actor: Actor): boolean {
+function actorMayDeleteRules(actor: Actor): boolean {
   const authority = (actor as { authority?: { permissions?: readonly string[] } }).authority;
   return authority === undefined || (authority.permissions ?? []).includes('access:write');
 }
 
 function referencedBy(
-  issuer_access_rules: IssuerAccessRule[],
-): OpFailure & { accesses: IssuerAccessRule[] } {
-  const names = issuer_access_rules.map((grant) => JSON.stringify(grant.name)).join(', ');
+  rules: CredentialAccessRule[],
+): OpFailure & { rules: CredentialAccessRule[] } {
+  const names = rules.map((rule) => JSON.stringify(rule.name)).join(', ');
   return {
     ...opFailure('conflict', [
-      `the service is used by ${issuer_access_rules.length} issuer access rules${issuer_access_rules.length === 1 ? '' : 'es'}: ${names}; delete them first`,
+      `the service has ${rules.length} credential access rule${rules.length === 1 ? '' : 's'}: ${names}; delete them first`,
     ]),
-    accesses: issuer_access_rules,
+    rules,
   };
 }
 
-function accessSetChanged(
-  issuer_access_rules: IssuerAccessRule[],
-): OpFailure & { accesses: IssuerAccessRule[] } {
+function ruleSetChanged(
+  rules: CredentialAccessRule[],
+): OpFailure & { rules: CredentialAccessRule[] } {
   return {
     ...opFailure('conflict', [
-      `the issuer access rules of this token changed since the page was loaded; nothing was deleted. Check the ${issuer_access_rules.length} listed now and confirm again`,
+      `the credential access rules of this credential changed since the page was loaded; nothing was deleted. Check the ${rules.length} listed now and confirm again`,
     ]),
-    accesses: issuer_access_rules,
+    rules,
   };
 }
 

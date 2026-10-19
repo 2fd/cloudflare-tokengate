@@ -3,9 +3,9 @@
 //
 //   const clock = createClock();
 //   const issuer = await createTestIssuer({ now: clock.now });          // GitHub issuer by default
-//   const provider = testCredentialAccessRule(issuer);                         // matching credential access rule row
+//   const rule = testCredentialAccessRule(issuer);                      // matching credential access rule row
 //   const token = await issuer.sign(githubClaims({ ref: 'refs/heads/dev' }));
-//   await verifyCallerToken(token, provider, PROFILES[provider.profile], { fetch: issuer.fetch, now: clock.now });
+//   await verifyCallerToken(token, rule, PROFILES[rule.profile], { fetch: issuer.fetch, now: clock.now });
 import {
   CompactSign,
   exportJWK,
@@ -16,6 +16,7 @@ import {
 } from 'jose';
 import type { CredentialAccessRule } from '../../src/db/types';
 import type { ProfileId } from '../../src/identity/types';
+import { issuerKey } from '../../src/policy/limits';
 import type { Condition } from '../../src/policy/types';
 
 export const GITHUB_ISSUER = 'https://token.actions.githubusercontent.com';
@@ -310,12 +311,16 @@ export function testCredentialAccessRule(
 ): CredentialAccessRule {
   const profile = overrides.profile ?? defaultProfile(issuer.issuer);
   return {
+    kind: 'credential',
     credential_id: 'svc_test',
     conditions: [],
-    id: 'cpr_01JTESTPROVIDER0000000000',
+    rules: [{ methods: ['*'], path: '/**' }],
+    id: 'acr_01JTESTPROVIDER0000000000',
     name: `test ${profile}`,
+    description: '',
     profile,
     issuer: issuer.issuer,
+    issuer_key: issuerKey(issuer.issuer),
     jwks_uri: issuer.jwksUri,
     audience: TEST_AUDIENCE,
     allowed_algs: [issuer.alg ?? 'RS256'],
@@ -323,6 +328,8 @@ export function testCredentialAccessRule(
     tenant_pin: structuredClone(DEFAULT_PINS[profile]),
     anchor_claims: profile === 'generic' ? ['sub'] : [],
     enabled: true,
+    expires_at: null,
+    created_by: null,
     created_at: TEST_EPOCH_MS,
     updated_at: TEST_EPOCH_MS,
     ...overrides,

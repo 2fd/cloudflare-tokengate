@@ -14,29 +14,15 @@ import {
   type RequestFacts,
   someRuleMatches,
 } from './limits';
-import type { Condition } from './types';
+import type { Condition, DenyCode, TraceEntry } from './types';
 
 export { ruleMatches } from './limits';
 
-/** Public 403 codes of a policy refusal (AR-13). Callers never learn which side refused. */
-export type RuleDenyCode = 'no_matching_rule' | 'event_not_trusted';
+/** Public 403 codes of a policy refusal (AR-13). */
+export type RuleDenyCode = DenyCode;
 
 /** One step of request evaluation, stored in request_log.eval_trace. */
-export interface RuleTraceEntry {
-  /** The credential access rule. */
-  rule_id: string;
-  /** The global access rule that held (`matched`) or refused (`global_blocked`). */
-  global_rule_id?: string;
-  /** `invalid_rule`: the stored rule does not satisfy its anchor rules (I-AUTHZ-2). */
-  result:
-    | 'matched'
-    | 'invalid_rule'
-    | 'condition_failed'
-    | 'event_not_trusted'
-    | 'no_rule'
-    | 'global_blocked';
-  detail: string;
-}
+export type RuleTraceEntry = TraceEntry;
 
 export type OwnResult =
   | { result: 'matched' }

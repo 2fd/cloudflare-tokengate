@@ -165,11 +165,11 @@ export interface AlertService {
   has_credential: boolean;
 }
 
-export interface AlertIssuerAccessRule {
+/** A credential access rule, for the expiry and missing-secret alerts. */
+export interface AlertAccessRule {
   id: string;
   name: string;
-  service_id: string;
-  credential_access_rule_id: string;
+  credential_id: string;
   enabled: boolean;
   expires_at: number | null;
 }
@@ -177,7 +177,7 @@ export interface AlertIssuerAccessRule {
 export interface AlertData {
   now: number;
   credentials: AlertService[];
-  issuer_access_rules: AlertIssuerAccessRule[];
+  access_rules: AlertAccessRule[];
   /** Sealed kid per token with a credential; null for a value that is not sealed JSON. */
   sealedKids: Array<{ id: string; slug: string; name: string; kid: string | null }>;
   keyring: KeyringHealth;
@@ -202,7 +202,7 @@ export async function loadAlertData(deps: Pick<Deps, 'env' | 'now'>): Promise<Al
   const db = deps.env.DB;
   const telemetry = deps.env.TELEMETRY_DB;
   const [
-    [cronRows, kidRows, kcvRows, serviceRows, grantRows, ownerRows, hostRows, settingRows],
+    [cronRows, kidRows, kcvRows, serviceRows, ruleRows, ownerRows, hostRows, settingRows],
     loaded,
     schema,
     needsDecision,
@@ -219,7 +219,7 @@ export async function loadAlertData(deps: Pick<Deps, 'env' | 'now'>): Promise<Al
          FROM credentials ORDER BY name, id`,
       ),
       db.prepare(
-        'SELECT id, name, service_id, credential_access_rule_id, enabled, expires_at FROM issuer_access_rules ORDER BY name, id',
+        'SELECT id, name, credential_id, enabled, expires_at FROM access_rules WHERE credential_id IS NOT NULL ORDER BY name, id',
       ),
       db.prepare(`SELECT COUNT(*) AS n FROM users WHERE role = 'owner' AND status = 'active'`),
       upstreamHostsStatement(db),
@@ -256,11 +256,10 @@ export async function loadAlertData(deps: Pick<Deps, 'env' | 'now'>): Promise<Al
         row.credential_expires_at == null ? null : Number(row.credential_expires_at),
       has_credential: Number(row.has_credential) === 1,
     })),
-    issuer_access_rules: rowsOf<Record<string, unknown>>(grantRows).map((row) => ({
+    access_rules: rowsOf<Record<string, unknown>>(ruleRows).map((row) => ({
       id: String(row.id),
       name: String(row.name),
-      service_id: String(row.service_id),
-      credential_access_rule_id: String(row.credential_access_rule_id),
+      credential_id: String(row.credential_id),
       enabled: Number(row.enabled) === 1,
       expires_at: row.expires_at == null ? null : Number(row.expires_at),
     })),
@@ -461,23 +460,24 @@ export function overviewAlerts(data: AlertData): Alert[] {
     });
   }
   const accessCount = new Map<string, number>();
-  for (const grant of data.issuer_access_rules) {
-    if (grant.enabled)
-      accessCount.set(grant.service_id, (accessCount.get(grant.service_id) ?? 0) + 1);
+  for (const rule of data.access_rules) {
+    if (rule.enabled)
+      accessCount.set(rule.credential_id, (accessCount.get(rule.credential_id) ?? 0) + 1);
   }
   const missing = data.credentials.filter(
     (s) => !s.has_credential && (accessCount.get(s.id) ?? 0) > 0,
   );
   const [firstMissing] = missing;
   if (firstMissing) {
-    const accesses = (s: AlertService) => count(accessCount.get(s.id) ?? 0, 'access', 'accesses');
+    const accesses = (s: AlertService) =>
+      count(accessCount.get(s.id) ?? 0, 'access rule', 'access rules');
     add(firstMissing.name, {
       code: 'credential_missing_used',
       level: 'warning',
       title:
         missing.length === 1
           ? `Token ${firstMissing.name} has no secret, so its ${accesses(firstMissing)} cannot work.`
-          : `${missing.length} credentials have no secret, so their accesses cannot work: ${missing.map((s) => `${s.name} (${accesses(s)})`).join(', ')}.`,
+          : `${missing.length} credentials have no secret, so their access rules cannot work: ${missing.map((s) => `${s.name} (${accesses(s)})`).join(', ')}.`,
       detail: '',
       objects: tokenLinks(missing, () => paths.tokens({ status: 'no_credential' })),
       fix: {
@@ -621,7 +621,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
     });
   }
 
-  const expiringAccess = data.issuer_access_rules
+  const expiringAccess = data.access_rules
     .filter(
       (g) =>
         g.enabled &&
@@ -637,14 +637,14 @@ export function overviewAlerts(data: AlertData): Alert[] {
       level: 'warning',
       title:
         expiringAccess.length === 1
-          ? `Access "${firstAccess.name}" expires on ${formatDate(firstAccess.expires_at as number)}.`
-          : `${expiringAccess.length} accesses expire soon: ${expiringAccess.map((g) => `"${g.name}" (${formatDate(g.expires_at as number)})`).join(', ')}.`,
+          ? `Credential access rule "${firstAccess.name}" expires on ${formatDate(firstAccess.expires_at as number)}.`
+          : `${expiringAccess.length} credential access rules expire soon: ${expiringAccess.map((g) => `"${g.name}" (${formatDate(g.expires_at as number)})`).join(', ')}.`,
       detail: '',
       objects: expiringAccess
         .slice(0, ALERT_OBJECTS_SHOWN)
-        .map((g) => ({ href: paths.accessItem(g.id), label: g.name })),
+        .map((g) => ({ href: paths.accessRule(g.id), label: g.name })),
       fix: {
-        href: paths.accessItem(firstAccess.id, { open: 'edit', hash: 'edit' }),
+        href: paths.accessRule(firstAccess.id, { open: 'edit' }),
         label: `Extend "${firstAccess.name}"`,
         short: { label: 'Extend', srSuffix: `"${firstAccess.name}"` },
         permission: 'access:write',
@@ -688,17 +688,17 @@ export function overviewAlerts(data: AlertData): Alert[] {
 
 /**
  * The alerts of one object page: a token's own secret, key and host problems (plus a keyring that
- * did not load, when it holds a secret), or the expiry of a credential access rule's or one access. Deployment-
+ * did not load, when it holds a secret), or the expiry of one credential access rule. Deployment-
  * wide problems stay on the Overview and the health strip.
  */
 export function alertsFor(
   data: AlertData,
-  target: { tokenId: string } | { consumerId: string } | { accessId: string },
+  target: { tokenId: string } | { ruleId: string },
 ): Alert[] {
   const quiet: AlertData = {
     ...data,
     credentials: [],
-    issuer_access_rules: [],
+    access_rules: [],
     sealedKids: [],
     keyring: {
       ...data.keyring,
@@ -728,7 +728,7 @@ export function alertsFor(
     return overviewAlerts({
       ...quiet,
       credentials: data.credentials.filter((s) => s.id === target.tokenId),
-      issuer_access_rules: data.issuer_access_rules.filter((g) => g.service_id === target.tokenId),
+      access_rules: data.access_rules.filter((g) => g.credential_id === target.tokenId),
       sealedKids: sealed,
       keyring: {
         ...data.keyring,
@@ -743,11 +743,8 @@ export function alertsFor(
       ),
     }).filter((alert) => alert.code !== 'access_expiring');
   }
-  const issuer_access_rules =
-    'consumerId' in target
-      ? data.issuer_access_rules.filter((g) => g.credential_access_rule_id === target.consumerId)
-      : data.issuer_access_rules.filter((g) => g.id === target.accessId);
-  return overviewAlerts({ ...quiet, issuer_access_rules }).filter(
+  const access_rules = data.access_rules.filter((g) => g.id === target.ruleId);
+  return overviewAlerts({ ...quiet, access_rules }).filter(
     (alert) => alert.code === 'access_expiring',
   );
 }
@@ -780,7 +777,7 @@ export interface OverviewData {
   series: SeriesBucket[];
   /** Per token (and '' for requests refused before a token was chosen), by requests. */
   tokens: TokenTraffic[];
-  /** Requests per issuer access rules in the range. */
+  /** Requests per credential access rule in the range. */
   accessRequests: Map<string, number>;
   denials: { groups: DenialGroup[]; bounded: boolean };
   recentChanges: AuditEvent[];
@@ -871,8 +868,9 @@ export async function loadOverview(
     const list = byService.get(row.service_id) ?? [];
     list.push(row);
     byService.set(row.service_id, list);
-    if (row.grant_id !== '') {
-      accessRequests.set(row.grant_id, (accessRequests.get(row.grant_id) ?? 0) + row.requests);
+    if (row.credential_access_rule_id !== '') {
+      const id = row.credential_access_rule_id;
+      accessRequests.set(id, (accessRequests.get(id) ?? 0) + row.requests);
     }
   }
   const tokens: TokenTraffic[] = [...byService]

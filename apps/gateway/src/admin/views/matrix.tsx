@@ -1,8 +1,9 @@
-// "Which credential access rules can use which tokens" (A14.3): one column per token, one row group per
-// consumer and one row per anchor (a repository, a workflow pin, a generic anchor value, or a
-// custom condition set). A cell lists the accesses of that consumer, anchor and token, each with
-// its status as words; an empty cell is a "+" that opens the access form prefilled. The ui Matrix
-// sits in a labelled, focusable region that scrolls on its own; the access list is its linear form.
+// "Which issuers can use which credentials" (A14.3): one column per credential, one row group per issuer
+// and one row per anchor (a repository, a workflow pin, a generic anchor value, or a custom
+// condition set). A cell lists the credential access rules of that issuer, anchor and credential,
+// each with its status as words; an empty cell is a "+" that opens the rule form prefilled. The ui
+// Matrix sits in a labelled, focusable region that scrolls on its own; the rule list is its linear
+// form. WP-R3 redraws it for credential and global access rules (§A7.10).
 import {
   formatTime,
   Matrix,
@@ -12,18 +13,18 @@ import {
   type MatrixRow as UiMatrixRow,
 } from '@tokengate/ui';
 import { labelFor } from '../../db/claim-labels';
-import type { CredentialAccessRule, ClaimLabel, Service } from '../../db/types';
+import type { ClaimLabel, CredentialAccessRule, Service } from '../../db/types';
 import { getProfile } from '../../identity/profiles';
-import type { AccessEdge, Connections } from '../connections';
+import type { Connections, RuleEdge } from '../connections';
 import { paths } from '../paths';
 import type { ViewContext } from '../render';
 import {
   accessTone,
   busiestFirst,
-  consumerLogo,
+  issuerHost,
+  issuerLogo,
   leadStatus,
   tokenLogo,
-  trustLine,
 } from './access-visuals';
 import { STATUS, statusLabel } from './status';
 
@@ -39,13 +40,21 @@ export interface MatrixRow {
   subject: string;
   /** The repository or project ID of the row, for the "+" prefill. */
   repositoryId: string | null;
-  cells: Map<string, AccessEdge[]>;
-  /** The first access of the row (evaluation order), copied by the "+" links. */
+  cells: Map<string, RuleEdge[]>;
+  /** The first rule of the row (evaluation order), copied by the "+" links. */
   firstAccessId: string;
 }
 
+/** The rules of one issuer key: the matrix row group (and a map node). */
+export interface IssuerNode {
+  id: string;
+  name: string;
+  /** The oldest rule of the issuer: its issuer, profile and logo stand for the group. */
+  first: CredentialAccessRule;
+}
+
 export interface MatrixGroup {
-  consumer: CredentialAccessRule;
+  issuer: IssuerNode;
   rows: MatrixRow[];
 }
 
@@ -62,16 +71,30 @@ interface Anchor {
   repositoryId: string | null;
 }
 
-function exactValues(edge: AccessEdge, claim: string): string[] {
-  return edge.grant.conditions
-    .filter((c) => c.claim === claim && c.match === 'exact' && c.negate !== true)
+function exactValues(edge: RuleEdge, claim: string): string[] {
+  return edge.rule.conditions
+    .filter((c) => c?.claim === claim && c.match === 'exact' && c.negate !== true)
     .flatMap((c) => c.values);
 }
 
-/** The matrix rows an access appears in: each repository of a rows-mode access gets its own. */
-export function anchorsOf(edge: AccessEdge, labels: readonly ClaimLabel[]): Anchor[] {
-  const consumer = edge.consumer;
-  const profile = consumer ? getProfile(consumer.profile) : null;
+/** The issuers of the rules, by issuer key, oldest rule first. */
+export function issuerNodes(connections: Pick<Connections, 'rules'>): IssuerNode[] {
+  const nodes = new Map<string, IssuerNode>();
+  for (const edge of connections.rules) {
+    if (nodes.has(edge.rule.issuer_key)) continue;
+    nodes.set(edge.rule.issuer_key, {
+      id: edge.rule.issuer_key,
+      name: issuerHost(edge.rule.issuer),
+      first: edge.rule,
+    });
+  }
+  return [...nodes.values()];
+}
+
+/** The matrix rows a rule appears in: each repository of a rows-mode rule gets its own. */
+export function anchorsOf(edge: RuleEdge, labels: readonly ClaimLabel[]): Anchor[] {
+  const rule = edge.rule;
+  const profile = getProfile(rule.profile);
   for (const claim of ['repository_id', 'project_id']) {
     const ids = [...new Set(exactValues(edge, claim))];
     if (ids.length > 0) {
@@ -103,8 +126,8 @@ export function anchorsOf(edge: AccessEdge, labels: readonly ClaimLabel[]): Anch
       ];
     }
   }
-  if (profile?.id === 'generic' && consumer) {
-    for (const claim of consumer.anchor_claims) {
+  if (profile?.id === 'generic') {
+    for (const claim of rule.anchor_claims) {
       const values = [...new Set(exactValues(edge, claim))];
       if (values.length > 0) {
         return values.map((value) => ({
@@ -118,27 +141,27 @@ export function anchorsOf(edge: AccessEdge, labels: readonly ClaimLabel[]): Anch
   }
   return [
     {
-      key: `custom:${edge.grant.id}`,
-      header: `Custom conditions: ${edge.grant.name}`,
-      subject: edge.grant.name,
+      key: `custom:${edge.rule.id}`,
+      header: `Custom conditions: ${edge.rule.name}`,
+      subject: edge.rule.name,
       repositoryId: null,
     },
   ];
 }
 
 /**
- * The matrix model. Columns: the busiest tokens first (`tokenWeight`, the 24-hour requests the map
- * also sorts by; else their number of accesses), disabled ones last. Rows: the busiest consumers
+ * The matrix model. Columns: the busiest credentials first (`tokenWeight`, the 24-hour requests the
+ * map also sorts by; else their number of rules), disabled ones last. Rows: the busiest issuers
  * first, as on the map and in the lists.
  */
 export function buildMatrix(
   connections: Connections,
   tokenWeight?: (tokenId: string) => number,
 ): MatrixModel {
-  const accessCount = (key: 'credential_access_rule_id' | 'service_id', id: string) =>
-    connections.accesses.filter((edge) => edge.grant[key] === id).length;
-  const weight = tokenWeight ?? ((id: string) => accessCount('service_id', id));
-  const columns = [...connections.tokens].sort(
+  const ruleCount = (key: 'issuer_key' | 'credential_id', id: string) =>
+    connections.rules.filter((edge) => edge.rule[key] === id).length;
+  const weight = tokenWeight ?? ((id: string) => ruleCount('credential_id', id));
+  const columns = [...connections.credentials].sort(
     (a, b) =>
       Number(b.enabled) - Number(a.enabled) ||
       weight(b.id) - weight(a.id) ||
@@ -146,25 +169,21 @@ export function buildMatrix(
   );
   const groups: MatrixGroup[] = [];
   let rowCount = 0;
-  const consumers = busiestFirst(connections.consumers, (id) =>
-    accessCount('credential_access_rule_id', id),
-  );
-  for (const consumer of consumers) {
-    const labels = connections.labels.filter(
-      (label) => label.credential_access_rule_id === consumer.id,
-    );
+  const issuers = busiestFirst(issuerNodes(connections), (id) => ruleCount('issuer_key', id));
+  for (const issuer of issuers) {
     const rows = new Map<string, MatrixRow>();
-    for (const edge of connections.accesses) {
-      if (edge.grant.credential_access_rule_id !== consumer.id) continue;
+    for (const edge of connections.rules) {
+      if (edge.rule.issuer_key !== issuer.id) continue;
+      const labels = connections.labels.filter((label) => label.access_rule_id === edge.rule.id);
       for (const anchor of anchorsOf(edge, labels)) {
         const row = rows.get(anchor.key) ?? {
           ...anchor,
-          cells: new Map<string, AccessEdge[]>(),
-          firstAccessId: edge.grant.id,
+          cells: new Map<string, RuleEdge[]>(),
+          firstAccessId: edge.rule.id,
         };
-        const cell = row.cells.get(edge.grant.service_id) ?? [];
+        const cell = row.cells.get(edge.rule.credential_id) ?? [];
         cell.push(edge);
-        row.cells.set(edge.grant.service_id, cell);
+        row.cells.set(edge.rule.credential_id, cell);
         rows.set(anchor.key, row);
       }
     }
@@ -174,7 +193,7 @@ export function buildMatrix(
       (a, b) => size(b) - size(a) || a.header.localeCompare(b.header),
     );
     rowCount += sorted.length;
-    groups.push({ consumer, rows: sorted });
+    groups.push({ issuer, rows: sorted });
   }
   return { columns, groups, rowCount };
 }
@@ -219,11 +238,11 @@ function ColumnState(props: { token: Service; connections: Connections; now: num
   return <>✓ Secret set</>;
 }
 
-/** One matrix cell per access: the status in words, the constraint and the operations. */
-function cellOf(edge: AccessEdge, subject: string, now: number): MatrixCell {
+/** One matrix cell per rule: the status in words, the constraint and the operations. */
+function cellOf(edge: RuleEdge, subject: string, now: number): MatrixCell {
   const unused = edge.flags.some((flag) => flag.status === 'unused');
   const credentialExpired = edge.flags.some((flag) => flag.status === 'credential_expired_warning');
-  const expires = edge.grant.expires_at;
+  const expires = edge.rule.expires_at;
   const operations = [
     operationsText(edge.operations.length),
     ...(expires !== null && expires > now
@@ -235,8 +254,8 @@ function cellOf(edge: AccessEdge, subject: string, now: number): MatrixCell {
   const lead = leadStatus(edge);
   const tone = accessTone(lead.status);
   return {
-    href: paths.accessItem(edge.grant.id),
-    srPrefix: `${subject} can use ${edge.token?.name ?? 'a deleted credential'}:`,
+    href: paths.accessRule(edge.rule.id),
+    srPrefix: `${subject} can use ${edge.credential?.name ?? 'a deleted credential'}:`,
     tone,
     status: statusLabel(lead.status, lead.detail),
     // The legend's glyphs: an access that cannot work reads ⏸ like the dashed cell it sits in.
@@ -247,9 +266,9 @@ function cellOf(edge: AccessEdge, subject: string, now: number): MatrixCell {
 }
 
 /**
- * The access matrix (ui Matrix): tokens across, each credential access rule's repositories down, one cell per
- * access (overlapping accesses stack in one cell). Access managers get "+" in an empty cell, which
- * opens the form prefilled with the row's constraints and the column's token; others get "—".
+ * The rule matrix (ui Matrix): credentials across, each issuer's repositories down, one cell per
+ * rule (overlapping rules stack in one cell). Access managers get "+" in an empty cell, which
+ * opens the form prefilled with the row's values and the column's credential; others get "—".
  */
 export function AccessMatrix(props: {
   model: MatrixModel;
@@ -258,19 +277,15 @@ export function AccessMatrix(props: {
 }) {
   const { model, connections, ctx } = props;
   const canWrite = ctx.can('access:write');
-  const source = new Map<UiMatrixRow, { consumer: CredentialAccessRule; row: MatrixRow | null }>();
+  const source = new Map<UiMatrixRow, { issuer: IssuerNode; row: MatrixRow | null }>();
   const groups: UiMatrixGroup[] = model.groups.map((group) => {
-    const { consumer } = group;
-    const labels = connections.labels.filter((l) => l.credential_access_rule_id === consumer.id);
-    const count = connections.accesses.filter(
-      (edge) => edge.grant.credential_access_rule_id === consumer.id,
-    ).length;
+    const { issuer } = group;
+    const count = connections.rules.filter((edge) => edge.rule.issuer_key === issuer.id).length;
     const rows: UiMatrixRow[] =
       group.rows.length === 0
-        ? [{ label: 'No access yet', mono: false, cells: {} }]
+        ? [{ label: 'No access rule yet', mono: false, cells: {} }]
         : group.rows.map((row) => ({
             label: row.subject,
-            href: row.repositoryId ? paths.access({ repository: row.repositoryId }) : undefined,
             meta: row.repositoryId ?? undefined,
             mono: !row.key.startsWith('custom:'),
             cells: Object.fromEntries(
@@ -281,13 +296,13 @@ export function AccessMatrix(props: {
             ),
           }));
     rows.forEach((ui, index) => {
-      source.set(ui, { consumer, row: group.rows[index] ?? null });
+      source.set(ui, { issuer, row: group.rows[index] ?? null });
     });
     return {
-      name: `${consumer.name}${consumer.enabled ? '' : ' (disabled)'}`,
-      logo: consumerLogo(consumer),
-      href: paths.consumer(consumer.id),
-      meta: `${trustLine(consumer, labels)} · ${count === 1 ? '1 access' : `${count} accesses`}`,
+      name: issuer.name,
+      logo: issuerLogo({ ...issuer.first, enabled: true }),
+      href: paths.accessRules({ issuer: issuer.id }),
+      meta: `${issuer.id} · ${count === 1 ? '1 access rule' : `${count} access rules`}`,
       rows,
     };
   });
@@ -305,20 +320,19 @@ export function AccessMatrix(props: {
   }));
   return (
     <Matrix
-      label="Which credential access rules can use which tokens"
-      caption="Which credential access rules can use which tokens"
-      corner="Consumer › repository"
+      label="Which issuers can use which credentials"
+      caption="Which issuers can use which credentials"
+      corner="Issuer › repository"
       columns={columns}
       groups={groups}
       addHref={
         canWrite
           ? (row, column) => {
               const from = source.get(row);
-              if (!from) return paths.accessNew({ token: column.id });
-              return paths.accessNew({
-                consumer: from.consumer.id,
-                token: column.id,
-                repository: from.row?.repositoryId ?? undefined,
+              if (!from) return paths.accessRuleNew({ credential: column.id });
+              return paths.accessRuleNew({
+                credential: column.id,
+                type: from.issuer.first.profile,
                 copy: from.row?.firstAccessId,
               });
             }
@@ -326,7 +340,7 @@ export function AccessMatrix(props: {
       }
       addLabel={(row, column) => {
         const from = source.get(row);
-        const subject = from && from.row === null ? from.consumer.name : row.label;
+        const subject = from && from.row === null ? from.issuer.name : row.label;
         return `Give ${subject} access to ${column.name}`;
       }}
     />

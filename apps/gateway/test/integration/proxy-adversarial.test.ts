@@ -1,8 +1,6 @@
 // Hostile callers, hostile upstreams, tampered rows and failing bindings against the full pipeline.
 import { env } from 'cloudflare:workers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { newId } from '../../src/lib/ids';
-import { TEST_AUDIENCE } from '../helpers/jwt';
 import {
   type ProxyFixture,
   sealFor,
@@ -40,27 +38,26 @@ async function rebind(fx: ProxyFixture, baseUrl: string, injectionJson: string):
 }
 
 describe('proxy: authorization scope', () => {
-  it("a grant of another credential access rule on the same service does not apply to this provider's callers", async () => {
-    const fx = await setupProxy({ grant: false });
-    const otherProvider = newId('cpr', fx.clock.now(), (n) => new Uint8Array(n).fill(1));
-    await env.DB.prepare(
-      `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
-         max_token_age_seconds, tenant_pin, anchor_claims, enabled, created_at, updated_at)
-       VALUES (?, (SELECT id FROM credentials ORDER BY id LIMIT 1), 'other', 'generic', 'https://ci.example.org', 'https://ci.example.org/jwks', ?,
-         '["RS256"]', 600, '[]', '["sub"]', 1, 0, 0)`,
-    )
-      .bind(otherProvider, TEST_AUDIENCE)
-      .run();
-    await fx.addIssuerAccessRule({ credentialAccessRuleId: otherProvider });
+  it('a credential access rule for another issuer on the same credential does not apply to callers of this issuer', async () => {
+    const fx = await setupProxy({ rule: false });
+    await fx.addRule({
+      profile: 'generic',
+      issuer: 'https://ci.example.org',
+      jwksUri: 'https://ci.example.org/jwks',
+      allowedAlgs: ['RS256'],
+      tenantPin: [],
+      anchorClaims: ['sub'],
+      conditions: [{ claim: 'sub', match: 'exact', values: ['ci'] }],
+    });
     const response = await fx.call('/a');
-    expect(response.status).toBe(403);
-    expect(errorOf(response)).toBe('no_matching_grant');
+    expect(response.status).toBe(401);
+    expect(errorOf(response)).toBe('issuer_unknown');
     expect(fx.upstreamCalls).toHaveLength(0);
   });
 
   it('method-override headers are never forwarded, so rules see the real method', async () => {
     const fx = await setupProxy({
-      grant: { rules: [{ methods: ['GET'], path: '/**' }] },
+      rule: { rules: [{ methods: ['GET'], path: '/**' }] },
       service: { forwardHeaders: ['x-request-id'] },
     });
     const response = await fx.call('/a', {
@@ -80,7 +77,7 @@ describe('proxy: authorization scope', () => {
   it('URL and method override headers in stored forward_headers are dropped at request time', async () => {
     const overrides = ['x-original-url', 'x-rewrite-url', 'x-original-method', 'x-override-url'];
     const fx = await setupProxy({
-      grant: { rules: [{ methods: ['GET'], path: '/a' }] },
+      rule: { rules: [{ methods: ['GET'], path: '/a' }] },
       service: { forwardHeaders: [...overrides, 'x-request-id'] },
     });
     const response = await fx.call('/a', {
@@ -99,7 +96,7 @@ describe('proxy: authorization scope', () => {
   });
 
   it('a lowercase method is matched and forwarded in upper case', async () => {
-    const fx = await setupProxy({ grant: { rules: [{ methods: ['PATCH'], path: '/**' }] } });
+    const fx = await setupProxy({ rule: { rules: [{ methods: ['PATCH'], path: '/**' }] } });
     const response = await fx.call('/a', { method: 'patch', body: '{}' });
     expect(response.status).toBe(200);
     expect(fx.upstreamCalls[0]?.method).toBe('PATCH');

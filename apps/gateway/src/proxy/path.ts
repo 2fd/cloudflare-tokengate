@@ -36,7 +36,7 @@ export type CanonicalPath = { ok: true; path: string; matchPath: string } | { ok
 
 /**
  * Validates the path after `/proxy/<slug>`. `path` is forwarded unchanged; `matchPath` (with
- * `%2F` read as "/") is what grant rules are matched against.
+ * `%2F` read as "/") is what access rule operations are matched against.
  */
 export function canonicalizePath(rawPath: string): CanonicalPath {
   const path = rawPath === '' ? '/' : rawPath;
@@ -100,7 +100,7 @@ export function removeQueryParam(search: string, param: string): string | null {
 
 /**
  * Query parameter names that frameworks read as a method override (Symfony/Laravel `_method`,
- * Express method-override, the X-HTTP-Method-Override family). IssuerAccessRule rules match the request
+ * Express method-override, the X-HTTP-Method-Override family). Access rule operations match the request
  * method only, so forwarding one would bypass them, like the headers in NEVER_FORWARD (I-AUTHZ-1).
  */
 export const METHOD_OVERRIDE_PARAMS: readonly string[] = [

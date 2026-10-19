@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import schema from '../../../../../pipelines/request-log.v1.schema.json';
+import schema from '../../../../../pipelines/request-log.v2.schema.json';
 import { ARCHIVE_FIELDS, toArchiveRecord } from '../../../src/telemetry/archive';
 import {
   type ArchiveRecord,
@@ -19,8 +19,8 @@ const record: RequestRecord = {
   path: '/a',
   service_slug: 'echo',
   service_id: 'svc_1',
-  credential_access_rule_id: 'cpr_1',
-  grant_id: 'grt_1',
+  credential_access_rule_id: 'acr_1',
+  global_access_rule_id: 'gar_1',
   claims_verified: 1,
   caller_subject: 'repo:acme/app:ref:refs/heads/main',
   caller_repository: 'acme/app',
@@ -48,7 +48,7 @@ function schemaTypeOf(value: unknown): string[] {
   return [];
 }
 
-describe('pipelines/request-log.v1.schema.json', () => {
+describe('pipelines/request-log.v2.schema.json', () => {
   it('lists exactly the ArchiveRecord fields, derived from REQUEST_RECORD_COLUMNS', () => {
     const expected = [
       ...REQUEST_RECORD_COLUMNS.filter((c) => c !== 'eval_trace'),
@@ -91,6 +91,6 @@ describe('toArchiveRecord', () => {
     } as RequestRecord);
     expect(archived).not.toHaveProperty('eval_trace');
     expect(archived).not.toHaveProperty('secret');
-    expect(archived.schema_version).toBe(1);
+    expect(archived.schema_version).toBe(2);
   });
 });

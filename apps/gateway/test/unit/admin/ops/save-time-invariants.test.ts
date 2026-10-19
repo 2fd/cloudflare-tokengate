@@ -3,8 +3,9 @@
 import { env } from 'cloudflare:workers';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import {
-  type CredentialAccessRuleCreateInput,
+  type CredentialRuleInput,
   createCredentialAccessRule,
+  setCredentialAccessRuleEnabled,
   updateCredentialAccessRule,
 } from '../../../../src/admin/ops/credential-access-rules';
 import {
@@ -14,28 +15,23 @@ import {
   setServiceCredential,
 } from '../../../../src/admin/ops/credentials';
 import {
-  createIssuerAccessRule,
-  setIssuerAccessRuleEnabled,
-  updateIssuerAccessRule,
-} from '../../../../src/admin/ops/issuer_access_rules';
-import { getIssuerAccessRule } from '../../../../src/db/issuer_access_rules';
+  createGlobalAccessRule,
+  type GlobalRuleInput,
+} from '../../../../src/admin/ops/global-access-rules';
 import type { Condition } from '../../../../src/policy/types';
 import { setUpstreamHosts } from '../../../helpers/app';
 import { testCredentialId } from './helpers';
 import {
   ACTOR,
   anchoredConditions,
-  auditCount,
   CONTEXT,
   dumpControlPlane,
   fakeNetwork,
   GITHUB_ISSUER,
   OWNER_ID,
   opsDeps,
-  racingDeps,
   resetControlPlane,
-  seedGithubProvider,
-  seedIssuerAccessRule,
+  seedCredentialRule,
   seedService,
   serviceInput,
 } from './helpers';
@@ -43,6 +39,7 @@ import {
 const SECRET = 'ghp_0123456789abcdefghijklmnopqrstuvwxyz';
 const VERIFY = { method: 'GET' as const, path: '/rate_limit', expect_status: 200 };
 const PIN: Condition[] = [{ claim: 'repository_owner_id', match: 'exact', values: [OWNER_ID] }];
+const RULES = [{ methods: ['GET' as const], path: '/**' }];
 
 beforeEach(resetControlPlane);
 
@@ -58,13 +55,36 @@ async function expectRefusedQuietly(
   expect(network.calls.length).toBe(calls);
 }
 
+type RulePatch = Omit<CredentialRuleInput, 'credential_id' | 'conditions' | 'rules'> &
+  Partial<Pick<CredentialRuleInput, 'conditions' | 'rules'>>;
+
+/** Creates a credential access rule on the test credential, with anchored jobs unless given. */
+async function createRule(network: ReturnType<typeof fakeNetwork>, input: RulePatch) {
+  return createCredentialAccessRule(opsDeps({ fetch: network.fetch }), ACTOR, {
+    credential_id: await testCredentialId(opsDeps()),
+    conditions: anchoredConditions(),
+    rules: RULES,
+    ...input,
+  });
+}
+
 describe('I-TEN-1: shared issuers need a tenant pin', () => {
   beforeEach(async () => {
     await testCredentialId(opsDeps());
   });
-  const cases: Array<[string, CredentialAccessRuleCreateInput]> = [
+  const cases: Array<[string, RulePatch]> = [
     ['github-actions without a pin', { name: 'gh', profile: 'github-actions' }],
-    ['gitlab-ci without a pin', { name: 'gl', profile: 'gitlab-ci' }],
+    [
+      'gitlab-ci without a pin',
+      {
+        name: 'gl',
+        profile: 'gitlab-ci',
+        conditions: [
+          { claim: 'namespace_id', match: 'exact', values: ['1'] },
+          { claim: 'project_id', match: 'exact', values: ['2'] },
+        ],
+      },
+    ],
     [
       'a glob pin',
       {
@@ -97,25 +117,23 @@ describe('I-TEN-1: shared issuers need a tenant pin', () => {
         issuer: GITHUB_ISSUER,
         jwks_uri: `${GITHUB_ISSUER}/.well-known/jwks`,
         anchor_claims: ['sub'],
+        conditions: [
+          { claim: 'sub', match: 'exact', values: ['repo:acme/app:ref:refs/heads/main'] },
+        ],
       },
     ],
   ];
   it.each(cases)('refuses %s before discovery', async (_, input) => {
     const network = fakeNetwork();
-    await expectRefusedQuietly(network, async () =>
-      createCredentialAccessRule(opsDeps({ fetch: network.fetch }), ACTOR, {
-        ...input,
-        credential_id: await testCredentialId(opsDeps()),
-      }),
-    );
+    await expectRefusedQuietly(network, () => createRule(network, input));
   });
 
   it('refuses removing the pin later', async () => {
     const network = fakeNetwork();
     const deps = opsDeps({ fetch: network.fetch });
-    const provider = await seedGithubProvider(deps);
+    const rule = await seedCredentialRule(deps);
     await expectRefusedQuietly(network, async () =>
-      updateCredentialAccessRule(deps, ACTOR, provider.id, { tenant_pin: [] }),
+      updateCredentialAccessRule(deps, ACTOR, rule.id, { tenant_pin: [] }),
     );
   });
 });
@@ -135,38 +153,37 @@ describe('I-JWT-1: algorithm allowlist, audience and token age are checked at sa
     ['a token age above the profile limit', { max_token_age_seconds: 3600 }],
   ])('refuses %s', async (_, patch) => {
     const network = fakeNetwork();
-    await expectRefusedQuietly(network, async () =>
-      createCredentialAccessRule(opsDeps({ fetch: network.fetch }), ACTOR, {
-        credential_id: await testCredentialId(opsDeps({ fetch: network.fetch })),
-        ...base,
-        ...patch,
-      }),
-    );
+    await expectRefusedQuietly(network, () => createRule(network, { ...base, ...patch }));
   });
 
   it('never stores an empty audience', async () => {
-    const result = await createCredentialAccessRule(opsDeps(), ACTOR, {
-      credential_id: await testCredentialId(opsDeps()),
-      ...base,
-      audience: '  ',
-    });
+    const result = await createRule(fakeNetwork(), { ...base, audience: '  ' });
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.credentialAccessRule.audience).toMatch(/^tokengate:[a-z2-7]{26}$/);
+    if (result.ok) expect(result.rule.audience).toMatch(/^tokengate:[a-z2-7]{26}$/);
+  });
+
+  it('refuses a fifth JWKS URI and audience pair for one credential and issuer (AR-10)', async () => {
+    const deps = opsDeps();
+    for (const n of [1, 2, 3, 4]) {
+      await seedCredentialRule(deps, { name: `r${n}`, audience: `tokengate:audience-0000${n}` });
+    }
+    const network = fakeNetwork();
+    await expectRefusedQuietly(network, () =>
+      createRule(network, { ...base, name: 'r5', audience: 'tokengate:audience-00005' }),
+    );
+    // A pair already in use is accepted.
+    expect(
+      (await createRule(network, { ...base, name: 'r6', audience: 'tokengate:audience-00001' })).ok,
+    ).toBe(true);
   });
 });
 
-describe('I-AUTHZ-2: issuer_access_rules must pin an anchor rule exactly', () => {
-  let deps: ReturnType<typeof opsDeps>;
-  let providerId: string;
-  let serviceId: string;
-  const rules = [{ methods: ['GET' as const], path: '/**' }];
+describe('I-AUTHZ-2: a credential access rule must pin an anchor rule exactly', () => {
   const owner = anchoredConditions()[0] as Condition;
   const repo = anchoredConditions()[1] as Condition;
 
   beforeEach(async () => {
-    deps = opsDeps();
-    providerId = (await seedGithubProvider(deps)).id;
-    serviceId = await seedService(deps);
+    await testCredentialId(opsDeps());
   });
 
   it.each([
@@ -175,46 +192,81 @@ describe('I-AUTHZ-2: issuer_access_rules must pin an anchor rule exactly', () =>
     ['the repository negated', [owner, { ...repo, negate: true }]],
     ['a repository outside the tenant pin', [{ ...owner, values: ['1'] }, repo]],
   ])('refuses %s', async (_, conditions) => {
-    const audits = await auditCount();
-    const result = await createIssuerAccessRule(deps, ACTOR, {
-      name: 'g',
-      credential_access_rule_id: providerId,
-      service_id: serviceId,
-      conditions,
-      rules,
-      acknowledge_warnings: true,
-    });
-    expect(result).toMatchObject({ ok: false, reason: 'invalid' });
-    expect(await auditCount()).toBe(audits);
+    const network = fakeNetwork();
+    await expectRefusedQuietly(network, () =>
+      createRule(network, {
+        name: 'g',
+        profile: 'github-actions',
+        tenant_pin: PIN,
+        conditions,
+        acknowledge_warnings: true,
+      }),
+    );
   });
 
   it('refuses an update that drops the anchor', async () => {
-    const grant = await seedIssuerAccessRule(deps, providerId, serviceId);
-    const result = await updateIssuerAccessRule(deps, ACTOR, grant.id, { conditions: [owner] });
+    const deps = opsDeps();
+    const rule = await seedCredentialRule(deps);
+    const result = await updateCredentialAccessRule(deps, ACTOR, rule.id, { conditions: [owner] });
     expect(result).toMatchObject({ ok: false, reason: 'invalid' });
   });
 
-  it('refuses to enable a grant whose stored conditions were edited in D1', async () => {
-    const grant = await seedIssuerAccessRule(deps, providerId, serviceId);
-    expect((await setIssuerAccessRuleEnabled(deps, ACTOR, grant.id, false)).ok).toBe(true);
-    await env.DB.prepare('UPDATE issuer_access_rules SET conditions = ? WHERE id = ?')
-      .bind(JSON.stringify([owner]), grant.id)
+  it('refuses an anchor change that leaves its own jobs unanchored', async () => {
+    const deps = opsDeps({
+      fetch: fakeNetwork(undefined, { 'https://idp.acme.example': 'https://idp.acme.example/keys' })
+        .fetch,
+    });
+    const rule = await seedCredentialRule(deps, {
+      profile: 'generic',
+      issuer: 'https://idp.acme.example',
+      audience: 'tokengate:acme-gateway-01',
+      anchor_claims: ['sub'],
+      tenant_pin: [{ claim: 'tenant', match: 'exact', values: ['acme'] }],
+      conditions: [{ claim: 'sub', match: 'exact', values: ['ci-bot'] }],
+      rules: RULES,
+    });
+    const result = await updateCredentialAccessRule(deps, ACTOR, rule.id, {
+      anchor_claims: ['project'],
+    });
+    expect(result).toMatchObject({ ok: false, reason: 'invalid' });
+    if (!result.ok) expect(result.errors.join()).toMatch(/I-AUTHZ-2/);
+  });
+
+  it('refuses to enable a rule whose stored conditions were edited in D1', async () => {
+    const deps = opsDeps();
+    const rule = await seedCredentialRule(deps);
+    expect((await setCredentialAccessRuleEnabled(deps, ACTOR, rule.id, false)).ok).toBe(true);
+    await env.DB.prepare('UPDATE access_rules SET conditions = ? WHERE id = ?')
+      .bind(JSON.stringify([owner]), rule.id)
       .run();
-    expect(await setIssuerAccessRuleEnabled(deps, ACTOR, grant.id, true)).toMatchObject({
+    expect(await setCredentialAccessRuleEnabled(deps, ACTOR, rule.id, true)).toMatchObject({
       ok: false,
       reason: 'invalid',
     });
   });
+});
 
-  it('a caller provider change between validation and write discards the grant write', async () => {
-    const grant = await seedIssuerAccessRule(deps, providerId, serviceId);
-    // Concurrently the caller provider changes, so the grant was validated against a stale version.
-    const racing = racingDeps(deps, () =>
-      updateCredentialAccessRule(deps, ACTOR, providerId, { max_token_age_seconds: 120 }),
+describe('I-AUTHZ-5: a global access rule never stores an empty limit', () => {
+  it.each<[string, Partial<GlobalRuleInput>]>([
+    ['an empty tenant pin', { tenant_pin: [] }],
+    ['no algorithms', { allowed_algs: [] }],
+    ['no anchor claims', { anchor_claims: [] }],
+    ['no jobs', { conditions: [] }],
+    ['no operations', { rules: [] }],
+    ['alg none', { allowed_algs: ['none'] }],
+    ['a negated tenant pin', { tenant_pin: [{ ...PIN[0], negate: true } as Condition] }],
+    ['a token age above the profile limit', { max_token_age_seconds: 3600 }],
+    ['an http JWKS URI', { jwks_uri: 'http://token.actions.githubusercontent.com/jwks' }],
+  ])('refuses %s', async (_, patch) => {
+    const network = fakeNetwork();
+    await expectRefusedQuietly(network, () =>
+      createGlobalAccessRule(opsDeps({ fetch: network.fetch }), ACTOR, {
+        name: 'ceiling',
+        profile: 'github-actions',
+        ...patch,
+        confirm_new_ceiling: true,
+      }),
     );
-    const result = await updateIssuerAccessRule(racing, ACTOR, grant.id, { name: 'renamed' });
-    expect(result).toMatchObject({ ok: false, reason: 'conflict' });
-    expect((await getIssuerAccessRule(env.DB, grant.id))?.name).toBe(grant.name);
   });
 });
 

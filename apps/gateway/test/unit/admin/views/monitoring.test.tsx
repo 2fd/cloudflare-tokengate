@@ -6,7 +6,7 @@ import { NEXT_ACTIONS, splitFirstSentence } from '../../../../src/admin/routes/r
 import type { Alert } from '../../../../src/admin/views/alerts';
 import {
   byUtcDay,
-  consumerLogo,
+  callerLogo,
   dayLabel,
   pipelineCounts,
   pipelineStages,
@@ -124,8 +124,8 @@ describe('logo tiles', () => {
       disabled: true,
     });
     expect(tokenLogo(null)).toBe('custom');
-    expect(consumerLogo({ profile: 'gitlab-ci', enabled: true })).toBe('gitlab');
-    expect(consumerLogo({ profile: 'generic', enabled: true })).toBe('oidc');
+    expect(callerLogo({ profile: 'gitlab-ci', enabled: true })).toBe('gitlab');
+    expect(callerLogo({ profile: 'generic', enabled: true })).toBe('oidc');
   });
 });
 

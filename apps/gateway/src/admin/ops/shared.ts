@@ -16,11 +16,11 @@ export type OpFailureReason =
   /** Input failed validation; `errors` say why. */
   | 'invalid'
   | 'not_found'
-  /** Refused because of other rows (e.g. issuer_access_rules still reference it) or a concurrent change. */
+  /** Refused because of other rows (e.g. access rules still belong to it) or a concurrent change. */
   | 'conflict'
   /** Valid, but has warnings; re-submit with `acknowledge_warnings`. */
   | 'acknowledgement_required'
-  /** Changes trust of enabled issuer_access_rules; re-submit with `confirm_trust_change`. */
+  /** Needs an explicit confirmation (a destination change, a wider global access rule); re-submit with it. */
   | 'confirmation_required'
   /** The credential check failed; re-submit with `save_anyway` to store it regardless. */
   | 'verify_failed'
@@ -174,21 +174,16 @@ const CONSTRAINT_FAILURES: ReadonlyArray<[RegExp, OpFailureReason, string]> = [
     'conflict',
     'another service already uses this slug; choose a different slug',
   ],
+  [/UNIQUE constraint failed: index 'access_rules_name'/, 'conflict', 'This name is taken.'],
+  [/too_many_credential_rules/, 'invalid', 'A credential can have at most 100 access rules.'],
+  [/too_many_global_rules/, 'invalid', 'An issuer can have at most 20 global access rules.'],
   [
-    /UNIQUE constraint failed: credential_access_rules\.name/,
-    'conflict',
-    'another credential access rule already uses this name; choose a different name',
-  ],
-  [
-    /UNIQUE constraint failed: credential_access_rules\.issuer/,
-    'conflict',
-    'another credential access rule already has this issuer; edit that credential access rule instead',
-  ],
-  [
-    /FOREIGN KEY constraint failed/,
+    /too_many_verification_settings/,
     'invalid',
-    'the referenced credential access rule or service no longer exists',
+    'The access rules of one credential can use at most 4 different JWKS URI and audience pairs per issuer.',
   ],
+  [/immutable_row/, 'conflict', 'This access rule cannot change that way. Reload the page.'],
+  [/FOREIGN KEY constraint failed/, 'invalid', 'the referenced credential no longer exists'],
 ];
 
 /**

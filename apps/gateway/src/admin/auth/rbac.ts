@@ -1,16 +1,20 @@
 // Admin RBAC (I-RBAC-1): one static table maps every registered admin route (method + Hono path
 // pattern) to the permission it needs; unlisted routes are denied. `read` covers every page, since
-// no page shows secret material. Token and access duties are separate roles (ADR 0018): token
+// no page shows secret material. Token and access duties are separate roles (ADR 0018, ADR 0026): token
 // managers decide which credentials and destinations exist, access managers decide who may use
-// them, and neither can do the other's job.
+// them (credential access rules), and neither can do the other's job. Only admins and owners set
+// global access rules, the ceilings on every credential access rule of an issuer; every role that
+// may do so also manages credential access rules (U7).
 import type { Role } from '../../db/types';
 
 export type Permission =
   | 'read'
-  /** Credentials and their access boundaries: create, edit, toggle and delete. */
+  /** Credentials: create, edit, test, toggle and delete. */
   | 'tokens:write'
-  /** Issuer access rules: grant access within credential boundaries. */
+  /** Credential access rules: create, edit, copy, toggle and delete; who may use which credential. */
   | 'access:write'
+  /** Global access rules: the ceilings on every credential access rule of an issuer. */
+  | 'access_rules:global'
   /** The configuration export: every user's email and both halves of the policy. */
   | 'config:export'
   | 'users:write'
@@ -33,11 +37,12 @@ const ROLE_PERMISSIONS: Record<Role, ReadonlySet<Permission>> = {
   viewer: new Set(['read']),
   token_manager: new Set(['read', 'tokens:write']),
   access_manager: new Set(['read', 'access:write']),
-  admin: new Set(['read', 'tokens:write', 'access:write', 'config:export']),
+  admin: new Set(['read', 'tokens:write', 'access:write', 'access_rules:global', 'config:export']),
   owner: new Set([
     'read',
     'tokens:write',
     'access:write',
+    'access_rules:global',
     'config:export',
     'users:write',
     'settings:write',
@@ -72,6 +77,8 @@ const tokensForm: RoutePermission = { permission: 'tokens:write', mutates: false
 const tokensWrite: RoutePermission = { permission: 'tokens:write', mutates: true };
 const accessForm: RoutePermission = { permission: 'access:write', mutates: false };
 const accessWrite: RoutePermission = { permission: 'access:write', mutates: true };
+const globalForm: RoutePermission = { permission: 'access_rules:global', mutates: false };
+const globalWrite: RoutePermission = { permission: 'access_rules:global', mutates: true };
 const usersWrite: RoutePermission = { permission: 'users:write', mutates: true };
 const settingsWrite: RoutePermission = { permission: 'settings:write', mutates: true };
 const exportWrite: RoutePermission = { permission: 'config:export', mutates: true };
@@ -129,29 +136,29 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, RoutePermission>> = Obje
   },
   'POST /admin/credentials/:id/test': tokensWrite,
   'POST /admin/credentials/:id/toggle': tokensWrite,
-  // Deleting the issuer access rules of the token with it is an access change.
+  // Deleting the credential access rules of the credential with it is an access change.
   'POST /admin/credentials/:id/delete': {
     ...tokensWrite,
-    fieldPermissions: { with_accesses: 'access:write' },
+    fieldPermissions: { with_rules: 'access:write' },
   },
 
-  // == consumers ==
+  // == access rules ==
   'GET /admin/credential-access-rules': read,
-  'GET /admin/credential-access-rules/new': tokensForm,
-  'POST /admin/credential-access-rules': tokensWrite,
+  'GET /admin/credential-access-rules/new': accessForm,
+  'POST /admin/credential-access-rules': accessWrite,
   'GET /admin/credential-access-rules/:id': read,
-  'POST /admin/credential-access-rules/:id': tokensWrite,
-  'POST /admin/credential-access-rules/:id/tenants': tokensWrite,
-  'POST /admin/credential-access-rules/:id/toggle': tokensWrite,
-  'POST /admin/credential-access-rules/:id/delete': tokensWrite,
-  'GET /admin/issuer-access-rules': read,
-  'GET /admin/issuer-access-rules/new': accessForm,
-  'POST /admin/issuer-access-rules': accessWrite,
-  'GET /admin/issuer-access-rules/:id': read,
-  'POST /admin/issuer-access-rules/:id': accessWrite,
-  'POST /admin/issuer-access-rules/:id/copy': accessWrite,
-  'POST /admin/issuer-access-rules/:id/toggle': accessWrite,
-  'POST /admin/issuer-access-rules/:id/delete': accessWrite,
+  'POST /admin/credential-access-rules/:id': accessWrite,
+  'POST /admin/credential-access-rules/:id/tenants': accessWrite,
+  'POST /admin/credential-access-rules/:id/copy': accessWrite,
+  'POST /admin/credential-access-rules/:id/toggle': accessWrite,
+  'POST /admin/credential-access-rules/:id/delete': accessWrite,
+  'GET /admin/global-access-rules': read,
+  'GET /admin/global-access-rules/new': globalForm,
+  'POST /admin/global-access-rules': globalWrite,
+  'GET /admin/global-access-rules/:id': read,
+  'POST /admin/global-access-rules/:id': globalWrite,
+  'POST /admin/global-access-rules/:id/toggle': globalWrite,
+  'POST /admin/global-access-rules/:id/delete': globalWrite,
 
   // == global ==
   // No secrets (I-CRED-1), but every user's email and the full policy: admins and owners only.

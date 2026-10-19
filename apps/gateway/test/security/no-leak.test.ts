@@ -289,7 +289,7 @@ beforeEach(async () => {
   }
 
   fx = await setupProxy({
-    grant: false,
+    rule: false,
     upstream: echoUpstream,
     env: {
       REQUEST_LOG_QUEUE: {
@@ -302,8 +302,8 @@ beforeEach(async () => {
       },
     } as never,
   });
-  // setupProxy always creates one service; it gets a grant and a canary like the others.
-  // Keep the original credential: deleting it also deletes its boundary.
+  // setupProxy always creates one credential, here without an access rule; every credential below
+  // gets a credential access rule and a canary.
   for (const spec of SERVICE_SPECS) {
     const canary = credentialCanary(spec.slug.replace('svc-', ''));
     credentials.push({ label: spec.slug, value: canary });
@@ -314,18 +314,21 @@ beforeEach(async () => {
       timeoutMs: spec.timeoutMs,
     });
     serviceIds.set(spec.slug, id);
-    await fx.addIssuerAccessRule({ serviceId: id });
+    await fx.addRule({ serviceId: id });
   }
   const noCredential = await fx.addService({ slug: 'svc-nocred', secret: null });
-  await fx.addIssuerAccessRule({ serviceId: noCredential.id });
+  await fx.addRule({ serviceId: noCredential.id });
   // Sealed for one base URL, then repointed in D1: the AAD no longer matches (I-CRED-2).
   const tamperedCanary = credentialCanary('tampered');
   credentials.push({ label: 'svc-tampered', value: tamperedCanary });
   const tampered = await fx.addService({ slug: 'svc-tampered', secret: tamperedCanary });
-  await fx.addIssuerAccessRule({ serviceId: tampered.id });
+  await fx.addRule({ serviceId: tampered.id });
   await env.DB.prepare("UPDATE credentials SET base_url = 'https://api.other.test/v1' WHERE id = ?")
     .bind(tampered.id)
     .run();
+
+  // A global access rule of the issuer with no limits: it caps nothing, and its pages render.
+  await fx.addGlobalRule({ name: 'GitHub ceiling' });
 
   foreignIssuer = await createTestIssuer({ issuer: 'https://unknown-issuer.example' });
   // Same issuer and kid as the configured one, different key: signature_invalid.
@@ -429,7 +432,7 @@ async function driveProxy(): Promise<void> {
   expect((await proxy('path traversal', 'svc-bearer', '/a/..%2fb')).status).toBe(400);
   expect(
     (
-      await proxy('no grant', 'svc-bearer', '/ok', {
+      await proxy('no matching rule', 'svc-bearer', '/ok', {
         token: await callerToken({ repository_id: '1' }),
       })
     ).status,
@@ -592,9 +595,13 @@ async function driveAdmin(): Promise<void> {
     'SELECT id FROM request_log ORDER BY id',
   ).all<{ id: string }>();
   expect(requestRows.length).toBeGreaterThan(20);
-  const { results: grantRows } = await env.DB.prepare('SELECT id FROM issuer_access_rules').all<{
-    id: string;
-  }>();
+  const { results: ruleRows } = await env.DB.prepare(
+    'SELECT id FROM access_rules WHERE credential_id IS NOT NULL ORDER BY id',
+  ).all<{ id: string }>();
+  const { results: globalRows } = await env.DB.prepare(
+    'SELECT id FROM access_rules WHERE credential_id IS NULL ORDER BY id',
+  ).all<{ id: string }>();
+  expect(globalRows.length).toBe(1);
   const { results: userRows } = await env.DB.prepare('SELECT id FROM users').all<{ id: string }>();
   // Seeded ids (or full URLs) per `:id` route, one block per admin section.
   const ids: Record<string, string[]> = {
@@ -607,9 +614,15 @@ async function driveAdmin(): Promise<void> {
     '/admin/users/:id': userRows.map((row) => row.id),
     // == tokens ==
     '/admin/credentials/:id': [...serviceIds.values()],
-    // == consumers ==
-    '/admin/credential-access-rules/:id': [fx.providerId],
-    '/admin/issuer-access-rules/:id': grantRows.map((row) => row.id),
+    // == access rules ==
+    '/admin/credential-access-rules/:id': ruleRows.flatMap((row) => [
+      row.id,
+      `/admin/credential-access-rules/${row.id}?open=edit`,
+    ]),
+    '/admin/global-access-rules/:id': globalRows.flatMap((row) => [
+      row.id,
+      `/admin/global-access-rules/${row.id}?open=edit`,
+    ]),
   };
   for (const key of Object.keys(ROUTE_PERMISSIONS)) {
     if (!key.startsWith('GET ')) continue;
@@ -633,7 +646,7 @@ async function driveAdmin(): Promise<void> {
     '/admin/requests?outcome=denied',
     '/admin/requests?outcome=error',
     `/admin/requests?range=1h&outcome=denied&token=${firstService}`,
-    ...grantRows.map((row) => `/admin/requests?access=${row.id}`),
+    ...[...ruleRows, ...globalRows].map((row) => `/admin/requests?rule=${row.id}`),
     ...requestRows.slice(0, 3).map((row) => `/admin/requests?id=${row.id}`),
     `/admin/audit?target=${firstService}&category=tokens`,
     '/admin/retention',
@@ -654,17 +667,24 @@ async function driveAdmin(): Promise<void> {
     '/admin/credentials/hosts',
     '/admin/credentials/keys',
   ];
-  const consumersVariants = [
-    ...requestRows.map((row) => `/admin/issuer-access-rules/new?from_request=${row.id}`),
-    '/admin/issuer-access-rules?view=list',
-    // The token cards of the access form show the credential state, never its hint.
-    ...[...serviceIds.values()].map((id) => `/admin/issuer-access-rules/new?token=${id}`),
+  const accessRulesVariants = [
+    ...requestRows.map((row) => `/admin/credential-access-rules/new?from_request=${row.id}`),
+    ...ruleRows.map((row) => `/admin/credential-access-rules/new?copy=${row.id}`),
+    '/admin/credential-access-rules?view=map',
+    '/admin/credential-access-rules?status=blocked',
+    // The credential cards of the access rule form show the credential state, never its hint.
+    ...[...serviceIds.values()].flatMap((id) => [
+      `/admin/credential-access-rules/new?credential=${id}`,
+      `/admin/credential-access-rules?credential=${id}`,
+    ]),
+    `/admin/global-access-rules?issuer=${encodeURIComponent(GITHUB_ISSUER)}`,
+    `/admin/global-access-rules/new?issuer=${encodeURIComponent(GITHUB_ISSUER)}`,
   ];
   for (const url of [
     ...monitoringVariants,
     ...usersVariants,
     ...tokensVariants,
-    ...consumersVariants,
+    ...accessRulesVariants,
   ]) {
     expect((await admin(url, url)).status, url).toBeLessThan(500);
   }

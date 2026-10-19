@@ -10,7 +10,7 @@ Each ADR uses the format from [0001](0001-record-architecture-decisions.md): Sta
 | [0002](0002-workload-identity-tokens-for-callers.md) | Callers authenticate with workload identity tokens | Accepted |
 | [0003](0003-cloudflare-workers-and-two-d1-databases.md) | Cloudflare Workers with two D1 databases | Accepted |
 | [0004](0004-envelope-encryption-bound-to-destination.md) | Envelope encryption bound to the destination, not Secrets Store | Accepted |
-| [0005](0005-grant-model.md) | IssuerAccessRule model: Conditions, anchor rules, trusted events, tenant pin | Accepted |
+| [0005](0005-grant-model.md) | Grant model: Conditions, anchor rules, trusted events, tenant pin | Accepted; entity part superseded by [0026](0026-global-and-credential-access-rules.md) |
 | [0006](0006-no-policy-caching.md) | No policy caching | Accepted |
 | [0007](0007-server-rendered-admin-ui-without-client-javascript.md) | Server-rendered admin UI without client JavaScript | Accepted |
 | [0008](0008-login-providers-from-environment.md) | Login providers from the environment; email linking only for invited users | Superseded by [0015](0015-cloudflare-access-only-admin-login.md) |
@@ -30,6 +30,8 @@ Each ADR uses the format from [0001](0001-record-architecture-decisions.md): Sta
 | [0022](0022-admin-ui-on-design-system-d.md) | Admin UI on design system D: sidebar shell, section order, export in the account menu, stylesheets served by the Worker | Accepted |
 | [0023](0023-teams-replace-roles.md) | Teams replace roles; scoped visibility of credentials and consumers; no escalation enforced in SQL | Accepted |
 | [0024](0024-secret-reveal-over-ecdh.md) | Secret reveal over ECDH and one client script | Accepted |
+| [0025](0025-credential-access-boundaries.md) | Credential access boundaries replace standalone issuers | Superseded by [0026](0026-global-and-credential-access-rules.md) |
+| [0026](0026-global-and-credential-access-rules.md) | Global and credential access rules in one table | Accepted |
 
 ## Adding an ADR
 

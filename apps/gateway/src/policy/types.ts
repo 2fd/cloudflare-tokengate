@@ -6,7 +6,7 @@ export type ProxyMethod = (typeof PROXY_METHODS)[number];
 
 /**
  * A test on one verified token claim.
- * `claim` is a literal top-level claim name. All conditions of a grant must hold (AND);
+ * `claim` is a literal top-level claim name. All conditions of an access rule must hold (AND);
  * `values` are alternatives (OR). Missing or non-scalar claims never match, even negated.
  */
 export interface Condition {
@@ -50,15 +50,22 @@ export interface ValidationResult {
   warnings: string[];
 }
 
-export type DenyCode = 'no_matching_grant' | 'event_not_trusted';
+/** Public 403 codes of a policy refusal (AR-13). Callers never learn which side refused. */
+export type DenyCode = 'no_matching_rule' | 'event_not_trusted';
 
+/** One step of request evaluation, stored in request_log.eval_trace. */
 export interface TraceEntry {
-  grant_id: string;
-  /** `invalid_grant`: the stored grant does not satisfy the provider's anchor rules (I-AUTHZ-2). */
-  result: 'matched' | 'invalid_grant' | 'condition_failed' | 'event_not_trusted' | 'no_rule';
+  /** The credential access rule. */
+  rule_id: string;
+  /** The global access rule that held (`matched`) or refused (`global_blocked`). */
+  global_rule_id?: string;
+  /** `invalid_rule`: the stored rule does not satisfy its anchor rules (I-AUTHZ-2). */
+  result:
+    | 'matched'
+    | 'invalid_rule'
+    | 'condition_failed'
+    | 'event_not_trusted'
+    | 'no_rule'
+    | 'global_blocked';
   detail: string;
 }
-
-export type Decision<G> =
-  | { decision: 'allow'; grant: G; trace: TraceEntry[] }
-  | { decision: 'deny'; code: DenyCode; trace: TraceEntry[] };

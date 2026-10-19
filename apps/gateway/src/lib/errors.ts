@@ -1,5 +1,5 @@
 // Every response the gateway generates on the proxy path goes through gatewayError().
-// Codes are a public, documented contract (docs/errors.md); hints never reveal grant details.
+// Codes are a public, documented contract (docs/errors.md); hints never reveal access rule details.
 
 export const GATEWAY_ERRORS = {
   path_invalid: { status: 400, message: 'the request path is not allowed' },
@@ -20,13 +20,13 @@ export const GATEWAY_ERRORS = {
   signature_invalid: { status: 401, message: 'the token signature is invalid' },
   claims_invalid: { status: 401, message: 'the token is missing required claims' },
   tenant_mismatch: { status: 401, message: 'the caller is outside the allowed tenant' },
-  no_matching_grant: {
+  no_matching_rule: {
     status: 403,
-    message: 'no grant allows this caller to perform this request',
+    message: 'no access rule allows this caller to perform this request',
   },
   event_not_trusted: {
     status: 403,
-    message: 'the triggering event requires an explicit opt-in in the grant',
+    message: 'the triggering event requires an explicit opt-in in the credential access rule',
   },
   service_not_found: { status: 404, message: 'unknown or disabled service' },
   method_not_allowed: { status: 405, message: 'HTTP method not supported by the proxy' },

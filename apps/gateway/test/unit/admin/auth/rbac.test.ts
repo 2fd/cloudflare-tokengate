@@ -57,23 +57,23 @@ const DOCUMENTED_ADMIN_ROUTES = [
   'POST /admin/credentials/:id/delete',
   'POST /admin/credentials/:id/toggle',
 
-  // == consumers ==
+  // == access rules ==
   'GET /admin/credential-access-rules',
   'GET /admin/credential-access-rules/new',
   'GET /admin/credential-access-rules/:id',
   'POST /admin/credential-access-rules',
   'POST /admin/credential-access-rules/:id',
+  'POST /admin/credential-access-rules/:id/copy',
   'POST /admin/credential-access-rules/:id/delete',
   'POST /admin/credential-access-rules/:id/tenants',
   'POST /admin/credential-access-rules/:id/toggle',
-  'GET /admin/issuer-access-rules',
-  'GET /admin/issuer-access-rules/new',
-  'GET /admin/issuer-access-rules/:id',
-  'POST /admin/issuer-access-rules',
-  'POST /admin/issuer-access-rules/:id',
-  'POST /admin/issuer-access-rules/:id/copy',
-  'POST /admin/issuer-access-rules/:id/delete',
-  'POST /admin/issuer-access-rules/:id/toggle',
+  'GET /admin/global-access-rules',
+  'GET /admin/global-access-rules/new',
+  'GET /admin/global-access-rules/:id',
+  'POST /admin/global-access-rules',
+  'POST /admin/global-access-rules/:id',
+  'POST /admin/global-access-rules/:id/delete',
+  'POST /admin/global-access-rules/:id/toggle',
 
   // == global ==
   'POST /admin/export',
@@ -84,7 +84,7 @@ const FIELD_PERMISSIONS: Record<string, Record<string, Permission>> = {
   // == tokens ==
   'POST /admin/credentials': { allow_host: 'settings:write' },
   'POST /admin/credentials/:id/destination': { allow_host: 'settings:write' },
-  'POST /admin/credentials/:id/delete': { with_accesses: 'access:write' },
+  'POST /admin/credentials/:id/delete': { with_rules: 'access:write' },
 };
 
 const ROLES: Role[] = ['viewer', 'token_manager', 'access_manager', 'admin', 'owner'];
@@ -94,6 +94,7 @@ const MATRIX: Record<Permission, [boolean, boolean, boolean, boolean, boolean]> 
   read: [true, true, true, true, true],
   'tokens:write': [false, true, false, true, true],
   'access:write': [false, false, true, true, true],
+  'access_rules:global': [false, false, false, true, true],
   'config:export': [false, false, false, true, true],
   'users:write': [false, false, false, false, true],
   'settings:write': [false, false, false, false, true],
@@ -135,22 +136,32 @@ describe('I-RBAC-1: permission matrix and route table', () => {
     }
   });
 
-  it('token routes need tokens:write, consumer and access routes need access:write', () => {
+  it('credential routes need tokens:write, credential access rules access:write, global access rules access_rules:global (AR-15)', () => {
     for (const [key, rule] of Object.entries(ROUTE_PERMISSIONS)) {
       if (key.startsWith('GET ') && rule.permission === 'read') continue;
       if (/^\w+ \/admin\/credentials(?!\/(hosts|keys))/.test(key))
         expect(rule.permission, key).toBe('tokens:write');
-      if (/^\w+ \/admin\/(consumers|access)/.test(key)) {
+      if (/^\w+ \/admin\/credential-access-rules/.test(key)) {
         expect(rule.permission, key).toBe('access:write');
+      }
+      if (/^\w+ \/admin\/global-access-rules/.test(key)) {
+        expect(rule.permission, key).toBe('access_rules:global');
       }
     }
     expect(routePermission('GET', '/admin/credentials/new')?.permission).toBe('tokens:write');
-    expect(routePermission('GET', '/admin/issuer-access-rules/new')?.permission).toBe(
+    expect(routePermission('GET', '/admin/credential-access-rules/new')?.permission).toBe(
       'access:write',
     );
-    expect(routePermission('GET', '/admin/credential-access-rules/new')?.permission).toBe(
-      'tokens:write',
+    expect(routePermission('GET', '/admin/global-access-rules/new')?.permission).toBe(
+      'access_rules:global',
     );
+    expect(routePermission('GET', '/admin/global-access-rules')?.permission).toBe('read');
+  });
+
+  it('U7: every role that manages global access rules also manages credential access rules', () => {
+    const global = rolesWith('access_rules:global');
+    expect(global).toEqual(['admin', 'owner']);
+    expect(global.filter((role) => !rolesWith('access:write').includes(role))).toEqual([]);
   });
 
   it('owner-only operations', () => {
@@ -249,7 +260,7 @@ describe('I-RBAC-1: requestPermissions adds the field permissions of submitted f
       'settings:write',
       'tokens:write',
     ]);
-    expect(requestPermissions(remove, { with_accesses: '1' })).toEqual([
+    expect(requestPermissions(remove, { with_rules: '1' })).toEqual([
       'access:write',
       'tokens:write',
     ]);

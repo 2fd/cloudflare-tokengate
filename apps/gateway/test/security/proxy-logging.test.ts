@@ -81,7 +81,7 @@ describe('I-LOG-1: no token or credential reaches any sink; only allowlisted cla
 
   it('the policy trace does not reveal values of non-allowlisted claims', async () => {
     const fx = await setupProxy({
-      grant: {
+      rule: {
         conditions: [
           { claim: 'repository_owner_id', match: 'exact', values: ['4242'] },
           { claim: 'repository_id', match: 'exact', values: ['987654321'] },
@@ -129,7 +129,8 @@ describe('I-LOG-2: unverified claims are never stored', () => {
       caller_repository: null,
       caller_claims: null,
       jti: null,
-      grant_id: null,
+      credential_access_rule_id: null,
+      global_access_rule_id: null,
       untrusted_iss: 'https://token.actions.githubusercontent.com',
     });
     expect(JSON.stringify(record)).not.toContain(CANARY_CLAIM);

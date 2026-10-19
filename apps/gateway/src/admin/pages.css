@@ -214,13 +214,26 @@ dialog#retention-edit[open] {
   }
 }
 
-/* == section: consumers == */
+/* == section: access rules == */
 /* A muted fact under a value, on its own line; a name segment that never splits. */
 .d-block {
   display: block;
 }
 .nw {
   white-space: nowrap;
+}
+/* Credential access rules list: eight columns share the page width, so claim names, tenant labels
+   and operation paths break inside their cell instead of scrolling Status and Actions out of view. */
+#rule-list td .mono,
+#rule-list td[data-label='Operations'] {
+  overflow-wrap: anywhere;
+}
+/* Global access rules list: an issuer group heading breaks its issuer URL inside the panel. */
+#global-list .grp-in > span {
+  min-width: 0;
+}
+#global-list .grp .mono {
+  overflow-wrap: anywhere;
 }
 /* Forms inside a panel or a disclosure: fields 24px apart. */
 .con-stack {
@@ -235,6 +248,11 @@ dialog#retention-edit[open] {
 }
 .con-preset {
   margin-top: var(--sp-1);
+}
+/* Three issuer type cards share a 30rem column: "Selected" follows the title instead of sitting
+   in the corner, where it would cover the logo of a narrow card. */
+.con-types .rc-b > .logo ~ .rc-t .sel {
+  position: static;
 }
 .con-types .rc-b .badge {
   height: auto;
@@ -442,6 +460,25 @@ ul.operations {
 .ga-rows {
   display: grid;
   gap: var(--sp-4);
+}
+
+/* Global access rule form: a limit's fields show while its box is ticked (no JS). */
+.gr-form .gr-limit {
+  display: grid;
+  gap: var(--sp-3);
+}
+.gr-form .gr-limit > .gr-fields {
+  display: none;
+}
+.gr-form .gr-limit:has(> .gr-box input:checked) > .gr-fields {
+  display: grid;
+  gap: var(--sp-4);
+}
+/* The token settings limits fill the form column like the limits above them. */
+.gr-form details.disc > .disc-b {
+  display: grid;
+  gap: var(--sp-6);
+  justify-items: stretch;
 }
 
 /* Copy to another repository: "Another…" shows its input. */

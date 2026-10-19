@@ -1,19 +1,15 @@
-// Save-time validation of credentials, credential access rules and issuer_access_rules (docs/policies.md, docs/concepts.md); pure, no I/O.
+// Save-time validation of credentials and the shared helpers of access rule validation (docs/policies.md, docs/concepts.md); pure, no I/O.
 // Enforces anchor rules (I-AUTHZ-2), tenant pins (I-TEN-1), algs/audience/token age (I-JWT-1),
 // base URLs (I-SSRF-1), injection and forward-header shapes (I-INJ-1) and credential hygiene.
 import { hostListed, upstreamHostAllowed } from '../config';
-import type { CredentialAccessRule, Service } from '../db/types';
 import type { IssuerProfile, ProfileId } from '../identity/types';
 import { canonicalJson } from '../lib/json';
 import { headerListed, NEVER_FORWARD, REQUEST_ALLOWLIST } from '../proxy/headers';
-import { conditionsWithin } from './boundaries';
-import { CLAIM_NAME_MAX_LENGTH, conditionShapeError, satisfiesAnchorRule } from './conditions';
 import { globError } from './glob';
 import {
   type Condition,
   type Injection,
   PROXY_METHODS,
-  type Rule,
   type ValidationResult,
   type VerifyCheck,
 } from './types';
@@ -405,124 +401,7 @@ function verifyHeaderErrors(headers: unknown, injection: Injection | null): stri
 }
 
 // ---------------------------------------------------------------------------------------------
-// Credential access rules
-
-export interface CredentialAccessRuleInput {
-  name: string;
-  profile: ProfileId;
-  issuer: string;
-  jwks_uri: string;
-  audience: string;
-  allowed_algs: string[];
-  max_token_age_seconds: number;
-  tenant_pin: Condition[];
-  anchor_claims: string[];
-}
-
-/**
- * Validates a credential access rule against its profile. `existing` is the stored row on update
- * (the profile cannot change after creation).
- */
-export function validateCredentialAccessRule(
-  input: CredentialAccessRuleInput,
-  profile: IssuerProfile,
-  existing: CredentialAccessRule | null,
-): ValidationResult {
-  const errors: string[] = [];
-  const warnings: string[] = [];
-
-  const nameError = requiredTextError(input.name, 100);
-  if (nameError !== null) errors.push(`name ${nameError}`);
-  if (input.profile !== profile.id) errors.push('profile does not match the selected profile');
-  if (existing !== null && existing.profile !== input.profile) {
-    errors.push('profile cannot be changed after the credential access rule is created');
-  }
-
-  // OpenID Connect Discovery 1.0 §3: issuer is https with no query or fragment.
-  // https://openid.net/specs/openid-connect-discovery-1_0.html#ProviderMetadata
-  const issuerError = httpsUrlError(input.issuer);
-  if (issuerError !== null) errors.push(`issuer ${issuerError}`);
-  const jwksError = httpsUrlError(input.jwks_uri);
-  if (jwksError !== null) errors.push(`JWKS URI ${jwksError}`);
-
-  const issuerHost = issuerError === null ? new URL(input.issuer).hostname : null;
-  const requiredProfile = issuerHost === null ? undefined : CI_ISSUER_HOSTS.get(issuerHost);
-  if (requiredProfile !== undefined && requiredProfile !== profile.id) {
-    errors.push(`issuers on ${issuerHost} must use the ${requiredProfile} profile`);
-  }
-
-  if (!Array.isArray(input.allowed_algs) || input.allowed_algs.length === 0) {
-    errors.push('at least one signing algorithm is required');
-  } else {
-    for (const alg of input.allowed_algs) {
-      if (!(ALLOWED_ALGS as readonly string[]).includes(alg)) {
-        errors.push(`signing algorithm ${JSON.stringify(alg)} is not allowed`);
-      }
-    }
-    if (new Set(input.allowed_algs).size !== input.allowed_algs.length) {
-      errors.push('signing algorithms are listed twice');
-    }
-  }
-
-  errors.push(...audienceErrors(input.audience));
-
-  const pin = Array.isArray(input.tenant_pin) ? input.tenant_pin : null;
-  if (pin === null) {
-    errors.push('tenant pin must be a list of conditions');
-  } else {
-    for (const condition of pin) {
-      const shapeError = conditionShapeError(condition);
-      if (shapeError !== null) {
-        errors.push(`tenant pin: ${shapeError}`);
-        continue;
-      }
-      if (condition.match !== 'exact' || condition.negate === true) {
-        errors.push(`tenant pin: ${condition.claim} must be an exact, non-negated condition`);
-      }
-      if (profile.tenantClaims.length > 0 && !profile.tenantClaims.includes(condition.claim)) {
-        errors.push(
-          `tenant pin: claim ${condition.claim} is not allowed; use ${profile.tenantClaims.join(' or ')}`,
-        );
-      }
-    }
-    const issuerKey = typeof input.issuer === 'string' ? input.issuer.replace(/\/$/, '') : '';
-    const shared = profile.sharedIssuers.some((issuer) => issuer.replace(/\/$/, '') === issuerKey);
-    if (shared && pin.length === 0) {
-      errors.push('a tenant pin is required: this issuer signs tokens for every tenant (I-TEN-1)');
-    } else if (profile.id === 'generic' && pin.length === 0) {
-      warnings.push(
-        'no tenant pin: every token this issuer signs for this audience reaches grant evaluation',
-      );
-    }
-  }
-
-  if (!Array.isArray(input.anchor_claims)) {
-    errors.push('anchor claims must be a list');
-  } else if (profile.id === 'generic') {
-    if (input.anchor_claims.length === 0 || input.anchor_claims.length > 8) {
-      errors.push(
-        'generic credential access rules need 1-8 anchor claims (immutable identity claims)',
-      );
-    }
-    for (const claim of input.anchor_claims) {
-      const claimError = requiredTextError(claim, CLAIM_NAME_MAX_LENGTH);
-      if (claimError !== null) errors.push(`anchor claim ${claimError}`);
-    }
-    if (new Set(input.anchor_claims).size !== input.anchor_claims.length) {
-      errors.push('anchor claims are listed twice');
-    }
-  } else if (input.anchor_claims.length > 0) {
-    errors.push(`anchor claims are defined by the ${profile.id} profile and cannot be set`);
-  }
-
-  const maxAge = input.max_token_age_seconds;
-  const maxAgeLimit = profile.defaults.maxTokenAgeLimitSeconds;
-  if (!Number.isInteger(maxAge) || maxAge < 60 || maxAge > maxAgeLimit) {
-    errors.push(`maximum token age must be an integer between 60 and ${maxAgeLimit} seconds`);
-  }
-
-  return { errors, warnings };
-}
+// Access rule helpers (src/policy/validate-rules.ts uses them)
 
 /**
  * The audience must be unique to this gateway so tokens minted for other relying parties
@@ -551,16 +430,8 @@ export function audienceErrors(audience: unknown): string[] {
   return [];
 }
 
-// ---------------------------------------------------------------------------------------------
-// IssuerAccessRules
-
-export interface IssuerAccessRuleInput {
-  conditions: Condition[];
-  rules: Rule[];
-}
-
 /**
- * Stable codes of the risks a grant can carry (A7.7). The validator emits all but `any_ref`, which
+ * Stable codes of the risks an access rule can carry (A7.7). The validator emits all but `any_ref`, which
  * only the structured builder knows (src/policy/presets.ts). Pages compare codes, never texts.
  */
 export type WarningCode =
@@ -579,90 +450,6 @@ export interface WarningDetail {
   message: string;
 }
 
-export interface IssuerAccessRuleValidationResult extends ValidationResult {
-  /** The warnings with their codes, in the order of `warnings`. */
-  warningDetails: WarningDetail[];
-}
-
-/**
- * Validates grant conditions and rules: shapes, anchor rules (I-AUTHZ-2), containment in the
- * credential access rule's tenant pin, and warnings for risky patterns (docs/policies.md). `service`, when given,
- * adds warnings that depend on how the grant's service injects its credential.
- */
-export function validateIssuerAccessRule(
-  input: IssuerAccessRuleInput,
-  profile: IssuerProfile,
-  provider: CredentialAccessRule,
-  service: Pick<Service, 'injection'> | null = null,
-): IssuerAccessRuleValidationResult {
-  const errors: string[] = [];
-  const details: WarningDetail[] = [];
-  if (profile.id !== provider.profile) {
-    errors.push(
-      `profile ${profile.id} does not match the credential access rule (${provider.profile})`,
-    );
-  }
-
-  const conditions: Condition[] = [];
-  if (!Array.isArray(input.conditions) || input.conditions.length === 0) {
-    errors.push('at least one condition is required');
-  } else if (input.conditions.length > 32) {
-    errors.push('at most 32 conditions');
-  } else {
-    for (const [index, condition] of input.conditions.entries()) {
-      const shapeError = conditionShapeError(condition);
-      if (shapeError === null) conditions.push(condition);
-      else errors.push(`condition ${index + 1}: ${shapeError}`);
-    }
-  }
-
-  if (!Array.isArray(input.rules) || input.rules.length === 0) {
-    errors.push('at least one rule is required');
-  } else if (input.rules.length > 50) {
-    errors.push('at most 50 rules');
-  } else {
-    for (const [index, rule] of input.rules.entries()) {
-      const ruleError = ruleShapeError(rule);
-      if (ruleError !== null) errors.push(`rule ${index + 1}: ${ruleError}`);
-    }
-  }
-
-  const pinned = conditions.filter((c) => c.match === 'exact' && c.negate !== true);
-
-  const anchorRules = profile.anchorRules(provider);
-  if (!satisfiesAnchorRule(conditions, anchorRules)) {
-    const options = anchorRules.map((rule) => rule.join(' + ')).join('; or ');
-    errors.push(
-      options === ''
-        ? 'the credential access rule defines no anchor claims, so no grant can be anchored'
-        : `the grant must have exact, non-negated conditions on ${options} (I-AUTHZ-2)`,
-    );
-  }
-
-  // Values outside the tenant pin can never match; refusing them avoids issuer_access_rules that look
-  // broader than they are and catches owner IDs from the wrong organization.
-  for (const claim of new Set(provider.tenant_pin.map((c) => c.claim))) {
-    const allowed = tenantPinValues(provider.tenant_pin, claim);
-    for (const condition of pinned.filter((c) => c.claim === claim)) {
-      const outside = condition.values.filter((value) => !allowed.has(value));
-      if (outside.length > 0) {
-        errors.push(
-          `${claim} values ${JSON.stringify(outside)} are outside the credential access rule's tenant pin`,
-        );
-      }
-    }
-  }
-
-  if (!conditionsWithin(conditions, provider.conditions)) {
-    errors.push('Issuer access rule filters must stay within the credential access rule limits.');
-  }
-  details.push(...grantWarnings(conditions, profile));
-  if (service?.injection.kind === 'path' && Array.isArray(input.rules)) {
-    details.push(...pathInjectionRuleWarnings(input.rules));
-  }
-  return { errors, warnings: details.map((detail) => detail.message), warningDetails: details };
-}
-
 /** Values every pin condition on `claim` accepts (pin conditions are ANDed). */
 export function tenantPinValues(pin: Condition[], claim: string): Set<string> {
   const onClaim = pin.filter((condition) => condition.claim === claim);
@@ -671,7 +458,8 @@ export function tenantPinValues(pin: Condition[], claim: string): Set<string> {
   return new Set(first.values.filter((value) => rest.every((c) => c.values.includes(value))));
 }
 
-export function grantWarnings(conditions: Condition[], profile: IssuerProfile): WarningDetail[] {
+/** Risk warnings of an access rule's conditions (I-AUTHZ-3). */
+export function riskWarnings(conditions: Condition[], profile: IssuerProfile): WarningDetail[] {
   const warnings: WarningDetail[] = [];
   const warn = (code: WarningCode, message: string) => warnings.push({ code, message });
 
@@ -767,7 +555,7 @@ export function pathInjectionRuleWarnings(rules: unknown[]): WarningDetail[] {
   return [
     {
       code: 'path_injection_non_post',
-      message: `the service injects the credential into the URL path and this grant allows ${[...methods].join(', ')}; webhook APIs such as Discord return the credential in the response body for GET and PATCH on the webhook URL, and response bodies are not redacted; allow only POST`,
+      message: `the service injects the credential into the URL path and this access rule allows ${[...methods].join(', ')}; webhook APIs such as Discord return the credential in the response body for GET and PATCH on the webhook URL, and response bodies are not redacted; allow only POST`,
     },
   ];
 }

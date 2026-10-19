@@ -30,7 +30,7 @@ function record(overrides: Partial<RequestRecord>): RequestRecord {
     service_slug: 'slack',
     service_id: SVC,
     credential_access_rule_id: null,
-    grant_id: null,
+    global_access_rule_id: null,
     claims_verified: 0,
     caller_subject: null,
     caller_repository: null,
@@ -182,18 +182,18 @@ describe('Request detail actions', () => {
 
 describe('I-LOG-2: Give access from this request', () => {
   it('is offered for a verified denial and hidden once the re-evaluation says allowed', async () => {
-    const fixture = await setupProxy({ grant: { rules: [{ methods: ['GET'], path: '/ok/**' }] } });
+    const fixture = await setupProxy({ rule: { rules: [{ methods: ['GET'], path: '/ok/**' }] } });
     const owner = await createUser({ email: 'own2@example.com', role: 'owner' });
     expect((await fixture.call('/other', { method: 'POST' })).status).toBe(403);
-    const denial = (await fixture.records()).find((r) => r.reason === 'no_matching_grant');
+    const denial = (await fixture.records()).find((r) => r.reason === 'no_matching_rule');
     const session = await loginAs(fixture.app, owner);
     const before = await (
       await adminGet(fixture.app, session, `/admin/requests/${denial?.id}`)
     ).text();
     expect(before).toContain(
-      `href="/admin/issuer-access-rules/new?from_request=${denial?.id}">Give access from this request</a>`,
+      `href="/admin/credential-access-rules/new?from_request=${denial?.id}">Give access from this request</a>`,
     );
-    await fixture.addIssuerAccessRule({ rules: [{ methods: ['POST'], path: '/other' }] });
+    await fixture.addRule({ name: 'post other', rules: [{ methods: ['POST'], path: '/other' }] });
     const after = await (
       await adminGet(fixture.app, session, `/admin/requests/${denial?.id}`)
     ).text();

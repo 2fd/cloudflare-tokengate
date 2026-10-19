@@ -34,7 +34,7 @@ async function insert(
   serviceId: string | null = 'svc_A',
 ): Promise<void> {
   await env.TELEMETRY_DB.prepare(
-    `INSERT INTO request_log (id, ts, outcome, status, method, path, service_id, grant_id, claims_verified, duration_ms, weight)
+    `INSERT INTO request_log (id, ts, outcome, status, method, path, service_id, credential_access_rule_id, claims_verified, duration_ms, weight)
      VALUES (?, ?, ?, ?, 'GET', '/', ?, ?, 1, 40, 1)`,
   )
     .bind(
@@ -43,7 +43,7 @@ async function insert(
       outcome,
       status,
       serviceId,
-      outcome === 'allowed' ? 'grt_A' : null,
+      outcome === 'allowed' ? 'acr_A' : null,
     )
     .run();
 }

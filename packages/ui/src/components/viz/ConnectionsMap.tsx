@@ -79,6 +79,11 @@ export interface ConnectionsMapProps {
   /** The access page every link points at, with query parameters. Default `/admin/issuer-access-rules`. */
   baseHref?: string;
   /**
+   * Query parameter names of the consumer and token filter links on `baseHref`. Default
+   * `{ consumer: 'consumer', token: 'token' }`.
+   */
+  filterParams?: { consumer: string; token: string };
+  /**
    * Base of the focus bar and `?focus=` links, so a map on another page keeps its focus there
    * (the Overview: `/admin`). Default `baseHref`.
    */
@@ -187,6 +192,7 @@ function Num(props: { href: string | undefined; children: Child }) {
 export function ConnectionsMap(props: ConnectionsMapProps) {
   const base = props.baseHref ?? '/admin/issuer-access-rules';
   const focusBase = props.focusHref ?? base;
+  const filterParams = props.filterParams ?? { consumer: 'consumer', token: 'token' };
   const range = props.rangeLabel ?? { short: 'Req 24 h', long: 'requests in 24 hours' };
   // the narrow-screen unit stays outside a count link
   const unit = (
@@ -266,8 +272,8 @@ export function ConnectionsMap(props: ConnectionsMapProps) {
   const consumerHref = (c: MapConsumer) =>
     focused && c.id !== focused.id
       ? link(focusBase, { focus: c.id })
-      : link(base, { consumer: c.id });
-  const tokenHref = (t: MapToken) => link(base, { token: t.id });
+      : link(base, { [filterParams.consumer]: c.id });
+  const tokenHref = (t: MapToken) => link(base, { [filterParams.token]: t.id });
   const matrixHref = link(base, { view: 'matrix' });
   const usedBy = (t: MapToken) => {
     const names = [

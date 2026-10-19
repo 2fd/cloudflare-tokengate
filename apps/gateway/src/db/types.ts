@@ -23,24 +23,60 @@ export interface User {
   last_refused_subject: string | null;
 }
 
-export interface CredentialAccessRule {
-  credential_id: string;
-  /** Mandatory filters; access rules may only narrow them. */
-  conditions: Condition[];
+/** Fields that both kinds of access rule share (ADR 0026). */
+interface AccessRuleBase {
   id: string;
   name: string;
+  description: string;
   profile: ProfileId;
+  /** Exact; jose compares it with `iss`. */
   issuer: string;
+  /** Stored `lower(rtrim(issuer, '/'))`; global access rules match on it (AR-3). */
+  issuer_key: string;
+  enabled: boolean;
+  /** Milliseconds since the epoch, or null for no expiry. */
+  expires_at: number | null;
+  created_by: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/**
+ * Lets workloads whose tokens `issuer` signs, and that match `conditions`, use one credential for
+ * `rules`. It holds its own token verification settings, so every limit is set.
+ */
+export interface CredentialAccessRule extends AccessRuleBase {
+  kind: 'credential';
+  credential_id: string;
   jwks_uri: string;
   audience: string;
   allowed_algs: string[];
   max_token_age_seconds: number;
   tenant_pin: Condition[];
   anchor_claims: string[];
-  enabled: boolean;
-  created_at: number;
-  updated_at: number;
+  conditions: Condition[];
+  rules: Rule[];
 }
+
+/**
+ * A ceiling on every credential access rule with the same `issuer_key`. A null limit is "no limit".
+ * It never lets a request in by itself; disabled or expired, it still caps its issuer (AR-4).
+ */
+export interface GlobalAccessRule extends AccessRuleBase {
+  kind: 'global';
+  credential_id: null;
+  jwks_uri: string | null;
+  audience: string | null;
+  allowed_algs: string[] | null;
+  max_token_age_seconds: number | null;
+  tenant_pin: Condition[] | null;
+  anchor_claims: string[] | null;
+  conditions: Condition[] | null;
+  rules: Rule[] | null;
+}
+
+/** A row of `access_rules` of either kind (a storage name, not a domain term). */
+export type AccessRuleRow = CredentialAccessRule | GlobalAccessRule;
 
 export interface Credential {
   id: string;
@@ -71,21 +107,6 @@ export interface Credential {
 /** Historical internal name; the persisted domain entity is Credential. */
 export type Service = Credential;
 
-export interface IssuerAccessRule {
-  id: string;
-  name: string;
-  description: string;
-  credential_access_rule_id: string;
-  service_id: string;
-  conditions: Condition[];
-  rules: Rule[];
-  enabled: boolean;
-  expires_at: number | null;
-  created_by: string | null;
-  created_at: number;
-  updated_at: number;
-}
-
 export interface AuditEvent {
   id: string;
   ts: number;
@@ -114,11 +135,11 @@ export interface Actor {
 export type LabelledClaim = 'repository_owner_id' | 'repository_id' | 'namespace_id' | 'project_id';
 
 /**
- * Human label for one numeric claim value, per credential access rule, e.g. repository_id 987654321 →
+ * Human label for one numeric claim value, per access rule, e.g. repository_id 987654321 →
  * "acme/api". Display and form derivation only: policy evaluation never reads it.
  */
 export interface ClaimLabel {
-  credential_access_rule_id: string;
+  access_rule_id: string;
   claim: LabelledClaim;
   value: string;
   label: string;

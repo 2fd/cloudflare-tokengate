@@ -75,8 +75,8 @@ describe('proxy: allowed requests', () => {
       path: '/items/1',
       service_slug: 'echo',
       service_id: fx.serviceId,
-      credential_access_rule_id: fx.providerId,
-      grant_id: fx.grantId,
+      credential_access_rule_id: fx.ruleId,
+      global_access_rule_id: null,
       claims_verified: 1,
       caller_repository: 'acme/app',
       untrusted_iss: null,
@@ -248,12 +248,12 @@ describe('proxy: gateway errors', () => {
     expect(response.status).toBe(403);
     expect(body.error.code).toBe('event_not_trusted');
     expect(body.error.message).toContain('"pull_request"');
-    expect(body.error.message).not.toContain('grant 1');
+    expect(body.error.message).not.toContain('rule 1');
     const [record] = await fx.records();
     expect(record?.eval_trace).toContain('event_not_trusted');
   });
 
-  it('applies the optional rate limiter per grant', async () => {
+  it('applies the optional rate limiter per credential access rule', async () => {
     const keys: string[] = [];
     const fx = await setupProxy({
       env: {
@@ -269,7 +269,7 @@ describe('proxy: gateway errors', () => {
     expect(response.status).toBe(429);
     expect(response.headers.get('retry-after')).toBe('60');
     expect(await errorCode(response)).toBe('rate_limited');
-    expect(keys).toEqual([`grant:${fx.grantId}`]);
+    expect(keys).toEqual([`rule:${fx.ruleId}`]);
     expect(fx.upstreamCalls).toHaveLength(0);
   });
 

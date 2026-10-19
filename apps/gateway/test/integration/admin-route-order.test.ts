@@ -37,7 +37,7 @@ describe('I-RBAC-1: static admin routes are registered before their :id siblings
     ['GET /admin/credentials/keys', 'GET /admin/credentials/:id'],
     ['GET /admin/credentials/new', 'GET /admin/credentials/:id'],
     ['GET /admin/credential-access-rules/new', 'GET /admin/credential-access-rules/:id'],
-    ['GET /admin/issuer-access-rules/new', 'GET /admin/issuer-access-rules/:id'],
+    ['GET /admin/global-access-rules/new', 'GET /admin/global-access-rules/:id'],
   ])('%s comes before %s', (first, second) => {
     expect(position(first)).toBeLessThan(position(second));
   });
@@ -46,12 +46,12 @@ describe('I-RBAC-1: static admin routes are registered before their :id siblings
     ['/admin/credentials/keys', '<title>Encryption keys – Credentials – tokengate</title>'],
     ['/admin/credentials/hosts', '<title>Allowed hosts – Credentials – tokengate</title>'],
     [
-      '/admin/issuer-access-rules/new',
-      '<title>Add issuer access rule – Access Rules – tokengate</title>',
+      '/admin/global-access-rules/new',
+      '<title>Add global access rule – Access Rules – tokengate</title>',
     ],
     [
       '/admin/credential-access-rules/new',
-      '<title>Add a credential access rule – Access Rules – tokengate</title>',
+      '<title>Add credential access rule – Access Rules – tokengate</title>',
     ],
     ['/admin/users/sign-in', '<title>Sign-in – Users – tokengate</title>'],
   ])('GET %s renders its own page', async (path, title) => {
@@ -59,6 +59,17 @@ describe('I-RBAC-1: static admin routes are registered before their :id siblings
     const res = await adminGet(app, await sessionFor(app, 'owner'), path);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain(title);
+  });
+
+  it('GET /admin/global-access-rules/new keeps its own permission, not the read of :id', async () => {
+    const app = createTestApp();
+    const res = await adminGet(
+      app,
+      await sessionFor(app, 'access_manager'),
+      '/admin/global-access-rules/new',
+    );
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain('Your role does not allow this action.');
   });
 
   it('POST /admin/credentials/hosts is the allowlist route, not a token edit', async () => {
