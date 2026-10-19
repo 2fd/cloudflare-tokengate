@@ -142,7 +142,7 @@ CREATE TABLE audit_log (
   diff TEXT,                           -- JSON object, e.g. {before, after}; secrets redacted (I-CRED-1)
   ip TEXT,
   user_agent TEXT,
-  -- svc_/cpr_ ids this row reveals (I-SCOPE-1); '["*"]' marks deployment-wide content
+  -- svc_ ids of the credentials this row reveals (I-SCOPE-1); '["*"]' marks deployment-wide content
   resources TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(resources) AND json_type(resources) = 'array')
 );
 CREATE INDEX audit_log_ts ON audit_log (ts);
@@ -152,21 +152,24 @@ CREATE INDEX audit_log_actor ON audit_log (actor_id, id);
 CREATE INDEX audit_log_action ON audit_log (action, id);
 
 -- Admin teams (ADR 0023). Not the Cloudflare Access team domain.
--- Levels: 0 none (all-scope columns only), 1 view, 2 edit, 3 delete. Each level implies the lower ones.
--- A team's scope per kind is "all" (the *_all column, current and future resources) or a list of
--- rows in team_tokens / team_consumers, never both (the *_one_mode triggers).
+-- A team's scope is on credentials only. Levels: 0 none (the all-scope column only), 1 view,
+-- 2 edit, 3 delete; each implies the lower ones. Flags (reveal, access_rules) each imply view.
+-- The scope is "all" (credentials_all > 0, current and future credentials) or a list of rows in
+-- team_credentials, never both (the *_one_mode triggers). The permission access_rules:global also
+-- implies access_rules on every credential the member can view (src/db/authority.ts, scope.ts); a team
+-- may hold it only with credentials_all >= 1 (the *_global_rules_scope triggers, D23).
 CREATE TABLE teams (
   id TEXT PRIMARY KEY,
   builtin TEXT UNIQUE CHECK (builtin IN ('owner', 'admin', 'token_manager', 'access_manager', 'viewer')),
   name TEXT NOT NULL UNIQUE COLLATE NOCASE CHECK (length(trim(name)) BETWEEN 1 AND 64),
   description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 280),
-  tokens_all INTEGER NOT NULL DEFAULT 0 CHECK (tokens_all IN (0, 1, 2, 3)),
-  tokens_all_reveal INTEGER NOT NULL DEFAULT 0 CHECK (tokens_all_reveal IN (0, 1)),
-  consumers_all INTEGER NOT NULL DEFAULT 0 CHECK (consumers_all IN (0, 1, 2, 3)),
+  credentials_all INTEGER NOT NULL DEFAULT 0 CHECK (credentials_all IN (0, 1, 2, 3)),
+  credentials_all_reveal INTEGER NOT NULL DEFAULT 0 CHECK (credentials_all_reveal IN (0, 1)),
+  credentials_all_access_rules INTEGER NOT NULL DEFAULT 0 CHECK (credentials_all_access_rules IN (0, 1)),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,         -- version: MAX(now, updated_at + 1) on every change to this team
   created_by TEXT,
-  CHECK (tokens_all_reveal = 0 OR tokens_all >= 1),
+  CHECK (credentials_all >= 1 OR (credentials_all_reveal = 0 AND credentials_all_access_rules = 0)),
   CHECK ((builtin IS NOT NULL AND id = 'tea_' || builtin)
       OR (builtin IS NULL AND length(id) = 30 AND id GLOB 'tea_[0-9A-HJKMNP-TV-Z]*'))
 );
@@ -184,42 +187,41 @@ CREATE INDEX team_members_user ON team_members (user_id, team_id);
 CREATE TABLE team_permissions (
   team_id TEXT NOT NULL REFERENCES teams (id) ON DELETE CASCADE,
   permission TEXT NOT NULL CHECK (permission IN
-    ('tokens:create', 'consumers:create', 'config:export', 'users:write', 'settings:write', 'keyring:rewrap')),
+    ('credentials:create', 'config:export', 'users:write', 'settings:write', 'keyring:rewrap',
+     'access_rules:global')),
   PRIMARY KEY (team_id, permission)
 ) WITHOUT ROWID;
 
--- Explicit scope rows. Deleting a service or caller provider deletes its rows (foreign keys).
-CREATE TABLE team_tokens (
+-- Explicit credential rows. Deleting a credential deletes its rows (foreign key).
+CREATE TABLE team_credentials (
   team_id TEXT NOT NULL REFERENCES teams (id) ON DELETE CASCADE,
-  service_id TEXT NOT NULL REFERENCES credentials (id) ON DELETE CASCADE,
+  credential_id TEXT NOT NULL REFERENCES credentials (id) ON DELETE CASCADE,
   level INTEGER NOT NULL CHECK (level IN (1, 2, 3)),
   reveal INTEGER NOT NULL DEFAULT 0 CHECK (reveal IN (0, 1)),
-  PRIMARY KEY (team_id, service_id)
+  access_rules INTEGER NOT NULL DEFAULT 0 CHECK (access_rules IN (0, 1)),
+  PRIMARY KEY (team_id, credential_id)
 ) WITHOUT ROWID;
-CREATE INDEX team_tokens_service ON team_tokens (service_id);
-
-CREATE TABLE team_consumers (
-  team_id TEXT NOT NULL REFERENCES teams (id) ON DELETE CASCADE,
-  credential_access_rule_id TEXT NOT NULL REFERENCES credential_access_rules (id) ON DELETE CASCADE,
-  level INTEGER NOT NULL CHECK (level IN (1, 2, 3)),
-  PRIMARY KEY (team_id, credential_access_rule_id)
-) WITHOUT ROWID;
-CREATE INDEX team_consumers_consumer ON team_consumers (credential_access_rule_id);
+CREATE INDEX team_credentials_credential ON team_credentials (credential_id);
 
 -- The built-in teams (code mirror: BUILTIN_TEAMS in src/db/teams.ts). The seed runs before the
 -- triggers below exist, because they refuse every change to a built-in team.
-INSERT INTO teams (id, builtin, name, description, tokens_all, tokens_all_reveal, consumers_all, created_at, updated_at) VALUES
-  ('tea_owner', 'owner', 'Owners', 'Everything: people, teams, settings, keys, and copying secrets.', 3, 1, 3, 0, 0),
-  ('tea_admin', 'admin', 'Admins', 'Every credential and consumer, issuer access rules, and the export.', 3, 0, 3, 0, 0),
-  ('tea_token_manager', 'token_manager', 'Credential managers', 'Add, change and delete credentials. See every credential access rule.', 3, 0, 1, 0, 0),
-  ('tea_access_manager', 'access_manager', 'Access managers', 'Add, change and delete consumers and their access. See every credential.', 1, 0, 3, 0, 0),
-  ('tea_viewer', 'viewer', 'Viewers', 'See every credential and consumer. Change nothing.', 1, 0, 1, 0, 0);
+INSERT INTO teams (id, builtin, name, description, credentials_all, credentials_all_reveal,
+                   credentials_all_access_rules, created_at, updated_at) VALUES
+  ('tea_owner', 'owner', 'Owners',
+   'Everything: people, teams, settings, keys, global access rules, and copying secrets.', 3, 1, 1, 0, 0),
+  ('tea_admin', 'admin', 'Admins',
+   'Every credential and its access rules, global access rules, and the export.', 3, 0, 1, 0, 0),
+  ('tea_token_manager', 'token_manager', 'Credential managers',
+   'Add, change and delete credentials. See every access rule.', 3, 0, 0, 0, 0),
+  ('tea_access_manager', 'access_manager', 'Access managers',
+   'Add, change and delete credential access rules. See every credential and global access rule.', 1, 0, 1, 0, 0),
+  ('tea_viewer', 'viewer', 'Viewers',
+   'See every credential and access rule. Change nothing.', 1, 0, 0, 0, 0);
 INSERT INTO team_permissions (team_id, permission) VALUES
-  ('tea_owner', 'tokens:create'), ('tea_owner', 'consumers:create'), ('tea_owner', 'config:export'),
-  ('tea_owner', 'users:write'), ('tea_owner', 'settings:write'), ('tea_owner', 'keyring:rewrap'),
-  ('tea_admin', 'tokens:create'), ('tea_admin', 'consumers:create'), ('tea_admin', 'config:export'),
-  ('tea_token_manager', 'tokens:create'),
-  ('tea_access_manager', 'consumers:create');
+  ('tea_owner', 'credentials:create'), ('tea_owner', 'config:export'), ('tea_owner', 'users:write'),
+  ('tea_owner', 'settings:write'), ('tea_owner', 'keyring:rewrap'), ('tea_owner', 'access_rules:global'),
+  ('tea_admin', 'credentials:create'), ('tea_admin', 'config:export'), ('tea_admin', 'access_rules:global'),
+  ('tea_token_manager', 'credentials:create');
 
 -- I-RBAC-3: built-in teams are immutable. Their membership is not.
 CREATE TRIGGER teams_builtin_insert BEFORE INSERT ON teams WHEN NEW.builtin IS NOT NULL
@@ -238,33 +240,33 @@ BEGIN SELECT RAISE(ABORT, 'builtin_team'); END;
 CREATE TRIGGER team_permissions_no_update BEFORE UPDATE ON team_permissions
 BEGIN SELECT RAISE(ABORT, 'immutable_row'); END;
 
--- Built-in teams never have explicit rows, so only the inserts need a trigger.
-CREATE TRIGGER team_tokens_builtin_insert BEFORE INSERT ON team_tokens
+-- Built-in teams never have explicit rows, so only the insert needs a trigger.
+CREATE TRIGGER team_credentials_builtin_insert BEFORE INSERT ON team_credentials
 WHEN EXISTS (SELECT 1 FROM teams WHERE id = NEW.team_id AND builtin IS NOT NULL)
 BEGIN SELECT RAISE(ABORT, 'builtin_team'); END;
-CREATE TRIGGER team_consumers_builtin_insert BEFORE INSERT ON team_consumers
-WHEN EXISTS (SELECT 1 FROM teams WHERE id = NEW.team_id AND builtin IS NOT NULL)
-BEGIN SELECT RAISE(ABORT, 'builtin_team'); END;
-CREATE TRIGGER team_tokens_keys_fixed BEFORE UPDATE OF team_id, service_id ON team_tokens
-BEGIN SELECT RAISE(ABORT, 'immutable_row'); END;
-CREATE TRIGGER team_consumers_keys_fixed BEFORE UPDATE OF team_id, credential_access_rule_id ON team_consumers
+CREATE TRIGGER team_credentials_keys_fixed BEFORE UPDATE OF team_id, credential_id ON team_credentials
 BEGIN SELECT RAISE(ABORT, 'immutable_row'); END;
 CREATE TRIGGER team_members_no_update BEFORE UPDATE ON team_members
 BEGIN SELECT RAISE(ABORT, 'immutable_row'); END;
 
--- Scope mode: per kind, "all" (teams.*_all > 0) or a list of rows, never both.
-CREATE TRIGGER team_tokens_one_mode BEFORE INSERT ON team_tokens
-WHEN EXISTS (SELECT 1 FROM teams WHERE id = NEW.team_id AND tokens_all <> 0)
+-- Scope mode: "all" (credentials_all > 0) or a list of rows, never both.
+CREATE TRIGGER team_credentials_one_mode BEFORE INSERT ON team_credentials
+WHEN EXISTS (SELECT 1 FROM teams WHERE id = NEW.team_id AND credentials_all <> 0)
 BEGIN SELECT RAISE(ABORT, 'scope_mixed'); END;
-CREATE TRIGGER team_consumers_one_mode BEFORE INSERT ON team_consumers
-WHEN EXISTS (SELECT 1 FROM teams WHERE id = NEW.team_id AND consumers_all <> 0)
+CREATE TRIGGER teams_credentials_one_mode BEFORE UPDATE OF credentials_all ON teams
+WHEN NEW.credentials_all <> 0 AND EXISTS (SELECT 1 FROM team_credentials WHERE team_id = NEW.id)
 BEGIN SELECT RAISE(ABORT, 'scope_mixed'); END;
-CREATE TRIGGER teams_tokens_one_mode BEFORE UPDATE OF tokens_all ON teams
-WHEN NEW.tokens_all <> 0 AND EXISTS (SELECT 1 FROM team_tokens WHERE team_id = NEW.id)
-BEGIN SELECT RAISE(ABORT, 'scope_mixed'); END;
-CREATE TRIGGER teams_consumers_one_mode BEFORE UPDATE OF consumers_all ON teams
-WHEN NEW.consumers_all <> 0 AND EXISTS (SELECT 1 FROM team_consumers WHERE team_id = NEW.id)
-BEGIN SELECT RAISE(ABORT, 'scope_mixed'); END;
+
+-- D23: access_rules:global only on a team with all-scope view, in both directions, so the implied
+-- access_rules flag never combines one team's permission with another team's visibility.
+CREATE TRIGGER team_permissions_global_rules_scope BEFORE INSERT ON team_permissions
+WHEN NEW.permission = 'access_rules:global'
+  AND NOT EXISTS (SELECT 1 FROM teams WHERE id = NEW.team_id AND credentials_all >= 1)
+BEGIN SELECT RAISE(ABORT, 'global_rules_scope'); END;
+CREATE TRIGGER teams_global_rules_scope BEFORE UPDATE OF credentials_all ON teams
+WHEN NEW.credentials_all = 0
+  AND EXISTS (SELECT 1 FROM team_permissions WHERE team_id = NEW.id AND permission = 'access_rules:global')
+BEGIN SELECT RAISE(ABORT, 'global_rules_scope'); END;
 
 -- I-OWNER-1: once an active Owners member exists, one always exists. The condition is "no OTHER
 -- active owner", so it holds in any order the foreign-key cascades run in.
@@ -282,18 +284,18 @@ BEGIN SELECT RAISE(ABORT, 'last_owner'); END;
 CREATE TRIGGER settings_join_team_insert BEFORE INSERT ON settings
 WHEN NEW.key = 'join_team' AND NOT EXISTS (
   SELECT 1 FROM teams t
-  WHERE t.id = json_extract(NEW.value, '$') AND t.id <> 'tea_owner' AND t.tokens_all_reveal = 0
+  WHERE t.id = json_extract(NEW.value, '$') AND t.id <> 'tea_owner' AND t.credentials_all_reveal = 0
     AND NOT EXISTS (SELECT 1 FROM team_permissions p WHERE p.team_id = t.id
                     AND p.permission IN ('users:write', 'settings:write', 'keyring:rewrap'))
-    AND NOT EXISTS (SELECT 1 FROM team_tokens x WHERE x.team_id = t.id AND x.reveal = 1))
+    AND NOT EXISTS (SELECT 1 FROM team_credentials x WHERE x.team_id = t.id AND x.reveal = 1))
 BEGIN SELECT RAISE(ABORT, 'join_team_unsafe'); END;
 CREATE TRIGGER settings_join_team_update BEFORE UPDATE OF value ON settings
 WHEN NEW.key = 'join_team' AND NOT EXISTS (
   SELECT 1 FROM teams t
-  WHERE t.id = json_extract(NEW.value, '$') AND t.id <> 'tea_owner' AND t.tokens_all_reveal = 0
+  WHERE t.id = json_extract(NEW.value, '$') AND t.id <> 'tea_owner' AND t.credentials_all_reveal = 0
     AND NOT EXISTS (SELECT 1 FROM team_permissions p WHERE p.team_id = t.id
                     AND p.permission IN ('users:write', 'settings:write', 'keyring:rewrap'))
-    AND NOT EXISTS (SELECT 1 FROM team_tokens x WHERE x.team_id = t.id AND x.reveal = 1))
+    AND NOT EXISTS (SELECT 1 FROM team_credentials x WHERE x.team_id = t.id AND x.reveal = 1))
 BEGIN SELECT RAISE(ABORT, 'join_team_unsafe'); END;
 
 CREATE TRIGGER teams_default_delete BEFORE DELETE ON teams
@@ -303,15 +305,15 @@ CREATE TRIGGER team_permissions_default_safe BEFORE INSERT ON team_permissions
 WHEN NEW.permission IN ('users:write', 'settings:write', 'keyring:rewrap')
   AND EXISTS (SELECT 1 FROM settings WHERE key = 'join_team' AND json_extract(value, '$') = NEW.team_id)
 BEGIN SELECT RAISE(ABORT, 'join_team_unsafe'); END;
-CREATE TRIGGER teams_default_reveal BEFORE UPDATE OF tokens_all_reveal ON teams
-WHEN NEW.tokens_all_reveal = 1
+CREATE TRIGGER teams_default_reveal BEFORE UPDATE OF credentials_all_reveal ON teams
+WHEN NEW.credentials_all_reveal = 1
   AND EXISTS (SELECT 1 FROM settings WHERE key = 'join_team' AND json_extract(value, '$') = NEW.id)
 BEGIN SELECT RAISE(ABORT, 'join_team_unsafe'); END;
-CREATE TRIGGER team_tokens_default_reveal_insert BEFORE INSERT ON team_tokens
+CREATE TRIGGER team_credentials_default_reveal_insert BEFORE INSERT ON team_credentials
 WHEN NEW.reveal = 1
   AND EXISTS (SELECT 1 FROM settings WHERE key = 'join_team' AND json_extract(value, '$') = NEW.team_id)
 BEGIN SELECT RAISE(ABORT, 'join_team_unsafe'); END;
-CREATE TRIGGER team_tokens_default_reveal_update BEFORE UPDATE OF reveal ON team_tokens
+CREATE TRIGGER team_credentials_default_reveal_update BEFORE UPDATE OF reveal ON team_credentials
 WHEN NEW.reveal = 1
   AND EXISTS (SELECT 1 FROM settings WHERE key = 'join_team' AND json_extract(value, '$') = NEW.team_id)
 BEGIN SELECT RAISE(ABORT, 'join_team_unsafe'); END;

@@ -39,7 +39,7 @@ async function actorFor(email: string, status: 'active' | 'suspended' = 'active'
   return { user, actor: { userId: user.id, loginProvider: PROVIDER, subject: `sub|${email}` } };
 }
 
-const insertService = (id: string) =>
+const insertCredential = (id: string) =>
   db
     .prepare(
       `INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
@@ -47,26 +47,34 @@ const insertService = (id: string) =>
     )
     .bind(id, id.toLowerCase().replace('_', '-'), id, T, T);
 
-const insertConsumer = (id: string) =>
-  db
+/** The two triggers that hold access_rules:global to all-scope view (D23). */
+const D23_TRIGGERS = ['team_permissions_global_rules_scope', 'teams_global_rules_scope'];
+
+/**
+ * Runs `body` with the D23 triggers dropped, then re-creates them from their stored SQL. The SQL
+ * check and the model must agree even on worlds that D23 forbids (defence in depth).
+ */
+async function withoutD23<R>(body: () => Promise<R>): Promise<R> {
+  const { results: triggers } = await db
     .prepare(
-      `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
-         max_token_age_seconds, created_at, updated_at)
-       VALUES (?, (SELECT id FROM credentials ORDER BY id LIMIT 1), ?, 'generic', ?, 'https://issuer.example.com/jwks', 'tokengate:0123456789abcdef',
-         '["RS256"]', 900, ?, ?)`,
+      `SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name IN (${D23_TRIGGERS.map(() => '?').join(', ')})`,
     )
-    .bind(id, id, `https://${id}.example.com`, T, T);
+    .bind(...D23_TRIGGERS)
+    .all<{ name: string; sql: string }>();
+  if (triggers.length !== D23_TRIGGERS.length) throw new Error('D23 triggers missing');
+  await db.batch(triggers.map((trigger) => db.prepare(`DROP TRIGGER ${trigger.name}`)));
+  try {
+    return await body();
+  } finally {
+    await db.batch(triggers.map((trigger) => db.prepare(trigger.sql)));
+  }
+}
 
 beforeEach(resetControlPlane);
 
 describe('I-SESS-1: the actor check, claim by claim', () => {
   beforeEach(async () => {
-    await db.batch([
-      insertService('svc_a'),
-      insertService('svc_b'),
-      insertConsumer('cpr_x'),
-      insertConsumer('cpr_y'),
-    ]);
+    await db.batch([insertCredential('svc_a'), insertCredential('svc_b')]);
   });
 
   it('requires the linked identity of an active user and a non-empty claim list', async () => {
@@ -93,54 +101,123 @@ describe('I-SESS-1: the actor check, claim by claim', () => {
     const { user, actor } = await actorFor('a@example.com');
     const creators = await createTeam({
       name: 'Creators',
-      permissions: ['tokens:create'],
+      permissions: ['credentials:create'],
       members: [user],
     });
-    const other = await createTeam({ name: 'Other', permissions: ['consumers:create'] });
-    expect(await passes(actor, [{ k: 'perm', p: 'tokens:create' }])).toBe(true);
-    expect(await passes(actor, [{ k: 'perm', p: 'consumers:create' }])).toBe(false);
-    expect(await passes(actor, [{ k: 'member', t: creators, p: 'tokens:create' }])).toBe(true);
-    expect(await passes(actor, [{ k: 'member', t: creators, p: 'consumers:create' }])).toBe(false);
-    expect(await passes(actor, [{ k: 'member', t: other, p: 'consumers:create' }])).toBe(false);
+    const other = await createTeam({ name: 'Other', permissions: ['credentials:create'] });
+    const exporters = await createTeam({
+      name: 'Exporters',
+      permissions: ['config:export'],
+      members: [user],
+    });
+    expect(await passes(actor, [{ k: 'perm', p: 'credentials:create' }])).toBe(true);
+    expect(await passes(actor, [{ k: 'perm', p: 'users:write' }])).toBe(false);
+    expect(await passes(actor, [{ k: 'member', t: creators, p: 'credentials:create' }])).toBe(true);
+    expect(await passes(actor, [{ k: 'member', t: other, p: 'credentials:create' }])).toBe(false);
+    expect(await passes(actor, [{ k: 'member', t: exporters, p: 'credentials:create' }])).toBe(
+      false,
+    );
   });
 
-  it('token, credential access rule and credential_reveal: an explicit row or an all-scope', async () => {
+  it('credential and credential_flag: an explicit row or an all-scope, unioned over teams', async () => {
     const { user, actor } = await actorFor('a@example.com');
     await createTeam({
       name: 'Payments',
-      tokens: { svc_a: { level: 2, reveal: true } },
-      consumers: { all: 1 },
+      credentials: { svc_a: { level: 2, reveal: true } },
       members: [user],
     });
-    expect(await passes(actor, [{ k: 'token', id: 'svc_a', l: 2 }])).toBe(true);
-    expect(await passes(actor, [{ k: 'token', id: 'svc_a', l: 3 }])).toBe(false);
-    expect(await passes(actor, [{ k: 'token', id: 'svc_b', l: 1 }])).toBe(false);
-    expect(await passes(actor, [{ k: 'token_reveal', id: 'svc_a' }])).toBe(true);
-    expect(await passes(actor, [{ k: 'token_reveal', id: 'svc_b' }])).toBe(false);
-    expect(await passes(actor, [{ k: 'consumer', id: 'cpr_y', l: 1 }])).toBe(true);
-    expect(await passes(actor, [{ k: 'consumer', id: 'cpr_y', l: 2 }])).toBe(false);
-    // Powers combine over teams: one team gives view, another edit.
-    await createTeam({ name: 'Editors', consumers: { cpr_x: { level: 2 } }, members: [user] });
-    expect(await passes(actor, [{ k: 'consumer', id: 'cpr_x', l: 2 }])).toBe(true);
-    expect(await passes(actor, [{ k: 'consumer', id: 'cpr_y', l: 2 }])).toBe(false);
+    const flag = (id: string, f: string) => passes(actor, [{ k: 'credential_flag', id, f }]);
+    expect(await passes(actor, [{ k: 'credential', id: 'svc_a', l: 2 }])).toBe(true);
+    expect(await passes(actor, [{ k: 'credential', id: 'svc_a', l: 3 }])).toBe(false);
+    expect(await passes(actor, [{ k: 'credential', id: 'svc_b', l: 1 }])).toBe(false);
+    expect(await flag('svc_a', 'reveal')).toBe(true);
+    expect(await flag('svc_a', 'access_rules')).toBe(false);
+    expect(await flag('svc_b', 'reveal')).toBe(false);
+    // Powers combine over teams: one team gives view, another the access_rules flag.
+    await createTeam({
+      name: 'Rules',
+      credentials: { svc_b: { level: 1, accessRules: true } },
+      members: [user],
+    });
+    expect(await flag('svc_b', 'access_rules')).toBe(true);
+    expect(await flag('svc_b', 'reveal')).toBe(false);
+    expect(await flag('svc_a', 'access_rules')).toBe(false);
+    // An all-scope covers every credential, with its flags.
+    await addMember('tea_access_manager', user.id);
+    expect(await passes(actor, [{ k: 'credential', id: 'svc_b', l: 1 }])).toBe(true);
+    expect(await passes(actor, [{ k: 'credential', id: 'svc_none', l: 1 }])).toBe(true);
+    expect(await flag('svc_a', 'access_rules')).toBe(true);
+    expect(await flag('svc_b', 'reveal')).toBe(false);
   });
 
-  it('token_all, consumer_all and token_all_reveal: all-scopes only', async () => {
+  it('credential_all and credential_all_flag: all-scopes only', async () => {
     const { user, actor } = await actorFor('a@example.com');
     await createTeam({
       name: 'Rows',
-      tokens: { svc_a: { level: 3, reveal: true } },
+      credentials: { svc_a: { level: 3, reveal: true, accessRules: true } },
       members: [user],
     });
-    expect(await passes(actor, [{ k: 'token_all', l: 1 }])).toBe(false);
-    expect(await passes(actor, [{ k: 'token_all_reveal' }])).toBe(false);
+    const allFlag = (f: string) => passes(actor, [{ k: 'credential_all_flag', f }]);
+    expect(await passes(actor, [{ k: 'credential_all', l: 1 }])).toBe(false);
+    expect(await allFlag('reveal')).toBe(false);
+    expect(await allFlag('access_rules')).toBe(false);
     await addMember('tea_token_manager', user.id);
-    expect(await passes(actor, [{ k: 'token_all', l: 3 }])).toBe(true);
-    expect(await passes(actor, [{ k: 'consumer_all', l: 1 }])).toBe(true);
-    expect(await passes(actor, [{ k: 'consumer_all', l: 2 }])).toBe(false);
-    expect(await passes(actor, [{ k: 'token_all_reveal' }])).toBe(false);
+    expect(await passes(actor, [{ k: 'credential_all', l: 3 }])).toBe(true);
+    expect(await allFlag('reveal')).toBe(false);
+    expect(await allFlag('access_rules')).toBe(false);
+    await addMember('tea_access_manager', user.id);
+    expect(await allFlag('access_rules')).toBe(true);
+    expect(await allFlag('reveal')).toBe(false);
     await addMember('tea_owner', user.id);
-    expect(await passes(actor, [{ k: 'token_all_reveal' }])).toBe(true);
+    expect(await allFlag('reveal')).toBe(true);
+  });
+
+  it('access_rules:global implies access_rules on every visible credential, never the reverse', async () => {
+    const { user, actor } = await actorFor('a@example.com');
+    const flag = (id: string) => passes(actor, [{ k: 'credential_flag', id, f: 'access_rules' }]);
+    await createTeam({
+      name: 'Global rules',
+      permissions: ['access_rules:global'],
+      credentials: { all: 1 },
+      members: [user],
+    });
+    expect(await flag('svc_a')).toBe(true);
+    expect(await flag('svc_none')).toBe(true);
+    expect(await passes(actor, [{ k: 'credential_all_flag', f: 'access_rules' }])).toBe(true);
+    // The implication gives no level and no reveal.
+    expect(await passes(actor, [{ k: 'credential', id: 'svc_a', l: 2 }])).toBe(false);
+    expect(await passes(actor, [{ k: 'credential_flag', id: 'svc_a', f: 'reveal' }])).toBe(false);
+    // The flag alone never gives the permission.
+    const { user: other, actor: otherActor } = await actorFor('b@example.com');
+    await addMember('tea_access_manager', other.id);
+    await createTeam({
+      name: 'Rows',
+      credentials: { svc_a: { level: 3, accessRules: true } },
+      members: [other],
+    });
+    expect(await passes(otherActor, [{ k: 'credential_all_flag', f: 'access_rules' }])).toBe(true);
+    expect(await passes(otherActor, [{ k: 'perm', p: 'access_rules:global' }])).toBe(false);
+  });
+
+  it('without D23, the implication still covers only the credentials the actor can view', async () => {
+    const { user, actor } = await actorFor('a@example.com');
+    await withoutD23(async () => {
+      await createTeam({
+        name: 'Global rules, no scope',
+        permissions: ['access_rules:global'],
+        members: [user],
+      });
+      await createTeam({
+        name: 'View A',
+        credentials: { svc_a: { level: 1 } },
+        members: [user],
+      });
+    });
+    const flag = (id: string) => passes(actor, [{ k: 'credential_flag', id, f: 'access_rules' }]);
+    expect(await passes(actor, [{ k: 'perm', p: 'access_rules:global' }])).toBe(true);
+    expect(await flag('svc_a')).toBe(true);
+    expect(await flag('svc_b')).toBe(false);
+    expect(await passes(actor, [{ k: 'credential_all_flag', f: 'access_rules' }])).toBe(false);
   });
 
   it('not_self and not_member', async () => {
@@ -156,28 +233,29 @@ describe('I-SESS-1: the actor check, claim by claim', () => {
     );
   });
 
-  it('dominates_team: every permission, all-scope and explicit row of the team', async () => {
+  it('dominates_team: every permission, all-scope, flag and explicit row of the team', async () => {
     const { user, actor } = await actorFor('a@example.com');
     await createTeam({
       name: 'Manager',
-      permissions: ['users:write', 'tokens:create'],
-      tokens: { svc_a: { level: 2 } },
-      consumers: { all: 1 },
+      permissions: ['users:write', 'credentials:create'],
+      credentials: { svc_a: { level: 2, accessRules: true } },
       members: [user],
     });
     const weaker = await createTeam({
       name: 'Weaker',
-      permissions: ['tokens:create'],
-      tokens: { svc_a: { level: 1 } },
-      consumers: { cpr_x: { level: 1 } },
+      permissions: ['credentials:create'],
+      credentials: { svc_a: { level: 1, accessRules: true } },
     });
-    const hiddenRow = await createTeam({ name: 'Hidden row', tokens: { svc_b: { level: 1 } } });
+    const hiddenRow = await createTeam({
+      name: 'Hidden row',
+      credentials: { svc_b: { level: 1 } },
+    });
     const reveal = await createTeam({
       name: 'Reveal',
-      tokens: { svc_a: { level: 1, reveal: true } },
+      credentials: { svc_a: { level: 1, reveal: true } },
     });
     const morePerms = await createTeam({ name: 'Exporters', permissions: ['config:export'] });
-    const allTokens = await createTeam({ name: 'All tokens', tokens: { all: 1 } });
+    const allView = await createTeam({ name: 'All view', credentials: { all: 1 } });
     // Amendment A1: a team that holds users:write is dominated like any other team.
     const managers = await createTeam({ name: 'Managers', permissions: ['users:write'] });
     const dominates = (t: string) => passes(actor, [{ k: 'dominates_team', t }]);
@@ -186,9 +264,54 @@ describe('I-SESS-1: the actor check, claim by claim', () => {
     expect(await dominates(hiddenRow)).toBe(false);
     expect(await dominates(reveal)).toBe(false);
     expect(await dominates(morePerms)).toBe(false);
-    expect(await dominates(allTokens)).toBe(false);
+    expect(await dominates(allView)).toBe(false);
     expect(await dominates('tea_viewer')).toBe(false);
     expect(await dominates('tea_01HZZZZZZZZZZZZZZZZZZZZZZZ')).toBe(false);
+  });
+
+  it('dominates_team: the access_rules flag needs the flag or access_rules:global with view', async () => {
+    const { user, actor } = await actorFor('a@example.com');
+    const rowRules = await createTeam({
+      name: 'Rules on A',
+      credentials: { svc_a: { level: 1, accessRules: true } },
+    });
+    const allRules = await createTeam({
+      name: 'All rules',
+      credentials: { all: 1, accessRules: true },
+    });
+    const globalRules = await createTeam({
+      name: 'Global rules',
+      permissions: ['access_rules:global'],
+      credentials: { all: 1 },
+    });
+    const dominates = (t: string) => passes(actor, [{ k: 'dominates_team', t }]);
+    // View on A only: a team with access_rules on A is not dominated.
+    const viewA = await createTeam({
+      name: 'View A',
+      credentials: { svc_a: { level: 1 } },
+      members: [user],
+    });
+    expect(await dominates(rowRules)).toBe(false);
+    // The flag (all-scope, from Access managers) dominates the flag, not the permission.
+    await addMember('tea_access_manager', user.id);
+    expect(await dominates(rowRules)).toBe(true);
+    expect(await dominates(allRules)).toBe(true);
+    expect(await dominates(globalRules)).toBe(false);
+    // access_rules:global with view dominates both flags and the permission.
+    await db
+      .prepare("DELETE FROM team_members WHERE user_id = ? AND team_id = 'tea_access_manager'")
+      .bind(user.id)
+      .run();
+    await createTeam({
+      name: 'Global rules member',
+      permissions: ['access_rules:global'],
+      credentials: { all: 1 },
+      members: [user],
+    });
+    expect(await dominates(rowRules)).toBe(true);
+    expect(await dominates(allRules)).toBe(true);
+    expect(await dominates(globalRules)).toBe(true);
+    expect(await dominates(viewA)).toBe(true);
   });
 
   it('dominates_team: only an Owners member dominates the Owners team', async () => {
@@ -197,8 +320,7 @@ describe('I-SESS-1: the actor check, claim by claim', () => {
     await createTeam({
       name: 'Shadow owners',
       permissions: [...GLOBAL_PERMISSIONS],
-      tokens: { all: 3, reveal: true },
-      consumers: { all: 3 },
+      credentials: { all: 3, reveal: true, accessRules: true },
       members: [user],
     });
     expect(await passes(actor, [{ k: 'dominates_team', t: 'tea_admin' }])).toBe(true);
@@ -215,10 +337,12 @@ describe('I-SESS-1: the actor check, claim by claim', () => {
     expect(await passes(actor, [claim])).toBe(true); // in no team
     await addMember('tea_viewer', target.id);
     expect(await passes(actor, [claim])).toBe(true);
-    const hidden = await createTeam({ name: 'Hidden', tokens: { svc_b: { level: 1 } } });
-    expect(await passes(actor, [claim])).toBe(true);
+    const hidden = await createTeam({
+      name: 'Hidden',
+      credentials: { svc_b: { level: 1, accessRules: true } },
+    });
     await addMember(hidden, target.id);
-    expect(await passes(actor, [claim])).toBe(true); // admins see every token
+    expect(await passes(actor, [claim])).toBe(true); // admins see every credential
     await addMember('tea_owner', target.id);
     expect(await passes(actor, [claim])).toBe(false);
     expect(await passes(actor, [{ k: 'dominates_user', u: 'usr_unknown' }])).toBe(false);
@@ -230,6 +354,13 @@ describe('I-SESS-1: the actor check, claim by claim', () => {
     ['an array', [{ k: 'read' }]],
     ['an unknown kind', { k: 'superuser' }],
     ['a missing kind', {}],
+    ['the removed kind token', { k: 'token', id: 'svc_a', l: 1 }],
+    ['the removed kind consumer', { k: 'consumer', id: 'svc_a', l: 1 }],
+    ['the removed kind token_all', { k: 'token_all', l: 1 }],
+    ['the removed kind consumer_all', { k: 'consumer_all', l: 1 }],
+    ['the removed kind token_reveal', { k: 'token_reveal', id: 'svc_a' }],
+    ['the removed kind token_all_reveal', { k: 'token_all_reveal' }],
+    ['the removed kind dominates_members', { k: 'dominates_members', t: 'tea_admin' }],
     ['dominates_user without u', { k: 'dominates_user' }],
     ['dominates_user with an unknown user', { k: 'dominates_user', u: 'usr_nobody' }],
     ['dominates_user with a numeric u', { k: 'dominates_user', u: 1 }],
@@ -238,19 +369,33 @@ describe('I-SESS-1: the actor check, claim by claim', () => {
     ['not_member without t', { k: 'not_member' }],
     ['member without p', { k: 'member', t: 'tea_owner' }],
     ['perm without p', { k: 'perm' }],
-    ['token without id', { k: 'token', l: 1 }],
-    ['token_reveal without id', { k: 'token_reveal' }],
-    ['token with level 0', { k: 'token', id: 'svc_a', l: 0 }],
-    ['token with level -1', { k: 'token', id: 'svc_a', l: -1 }],
-    ['token with level 4', { k: 'token', id: 'svc_a', l: 4 }],
-    ['token with level 1.5', { k: 'token', id: 'svc_a', l: 1.5 }],
-    ['token with level "1"', { k: 'token', id: 'svc_a', l: '1' }],
-    ['token with level null', { k: 'token', id: 'svc_a', l: null }],
-    ['token without level', { k: 'token', id: 'svc_a' }],
-    ['consumer with level 0', { k: 'consumer', id: 'cpr_x', l: 0 }],
-    ['token_all with level 0', { k: 'token_all', l: 0 }],
-    ['token_all with level "1"', { k: 'token_all', l: '1' }],
-    ['consumer_all with level null', { k: 'consumer_all', l: null }],
+    ['credential without id', { k: 'credential', l: 1 }],
+    ['credential with level 0', { k: 'credential', id: 'svc_a', l: 0 }],
+    ['credential with level -1', { k: 'credential', id: 'svc_a', l: -1 }],
+    ['credential with level 4', { k: 'credential', id: 'svc_a', l: 4 }],
+    ['credential with level 1.5', { k: 'credential', id: 'svc_a', l: 1.5 }],
+    ['credential with level "1"', { k: 'credential', id: 'svc_a', l: '1' }],
+    ['credential with level null', { k: 'credential', id: 'svc_a', l: null }],
+    ['credential without level', { k: 'credential', id: 'svc_a' }],
+    ['credential_all with level 0', { k: 'credential_all', l: 0 }],
+    ['credential_all with level "1"', { k: 'credential_all', l: '1' }],
+    ['credential_all with level null', { k: 'credential_all', l: null }],
+    ['credential_flag without id', { k: 'credential_flag', f: 'reveal' }],
+    ['credential_flag without f', { k: 'credential_flag', id: 'svc_a' }],
+    ['credential_flag with f "view"', { k: 'credential_flag', id: 'svc_a', f: 'view' }],
+    ['credential_flag with f ""', { k: 'credential_flag', id: 'svc_a', f: '' }],
+    ['credential_flag with f null', { k: 'credential_flag', id: 'svc_a', f: null }],
+    ['credential_flag with f 1', { k: 'credential_flag', id: 'svc_a', f: 1 }],
+    [
+      'credential_flag with the removed f boundaries',
+      { k: 'credential_flag', id: 'svc_a', f: 'boundaries' },
+    ],
+    [
+      'credential_flag with the removed f issuer_rules',
+      { k: 'credential_flag', id: 'svc_a', f: 'issuer_rules' },
+    ],
+    ['credential_all_flag with an unknown f', { k: 'credential_all_flag', f: 'delete' }],
+    ['credential_all_flag without f', { k: 'credential_all_flag' }],
   ])('refuses %s, even for an owner', async (_name, claim) => {
     const { user, actor } = await actorFor('o@example.com');
     await addMember('tea_owner', user.id);
@@ -273,10 +418,12 @@ function prng(seed: number): () => number {
   };
 }
 
-const SERVICES = ['svc_a', 'svc_b', 'svc_c', 'svc_d'];
-const CONSUMERS = ['cpr_w', 'cpr_x', 'cpr_y', 'cpr_z'];
+const CREDENTIALS = ['svc_a', 'svc_b', 'svc_c', 'svc_d'];
+const FLAGS = ['reveal', 'access_rules'] as const;
 const WORLDS = 50;
 const CLAIM_LISTS_PER_WORLD = 10;
+/** Every WITHOUT_D23-th world is built with the D23 triggers dropped. */
+const WITHOUT_D23 = 4;
 
 async function readWorld(): Promise<World> {
   const all = async <R>(sql: string) => (await db.prepare(sql).all<R>()).results;
@@ -286,16 +433,14 @@ async function readWorld(): Promise<World> {
       'SELECT login_provider AS loginProvider, subject, user_id AS userId FROM user_identities',
     ),
     teams: await all(
-      `SELECT id, tokens_all AS tokensAll, tokens_all_reveal AS tokensAllReveal,
-         consumers_all AS consumersAll FROM teams`,
+      `SELECT id, credentials_all AS credentialsAll, credentials_all_reveal AS credentialsAllReveal,
+         credentials_all_access_rules AS credentialsAllAccessRules FROM teams`,
     ),
     members: await all('SELECT team_id AS teamId, user_id AS userId FROM team_members'),
     permissions: await all('SELECT team_id AS teamId, permission FROM team_permissions'),
-    teamTokens: await all(
-      'SELECT team_id AS teamId, service_id AS serviceId, level, reveal FROM team_tokens',
-    ),
-    teamConsumers: await all(
-      'SELECT team_id AS teamId, credential_access_rule_id AS consumerId, level FROM team_consumers',
+    teamCredentials: await all(
+      `SELECT team_id AS teamId, credential_id AS credentialId, level, reveal,
+         access_rules AS accessRules FROM team_credentials`,
     ),
   };
 }
@@ -304,13 +449,15 @@ describe('I-SESS-1: the actor check agrees with the JS model (property test)', (
   it(`${WORLDS * CLAIM_LISTS_PER_WORLD} random cases, malformed claims included`, async () => {
     let checked = 0;
     let passed = 0;
+    let impliedChecks = 0;
     for (let seed = 1; seed <= WORLDS; seed++) {
       const random = prng(seed);
       const pick = <V>(values: readonly V[]): V =>
         values[Math.floor(random() * values.length)] as V;
       const chance = (p: number) => random() < p;
+      const d23 = seed % WITHOUT_D23 !== 0;
       await resetControlPlane();
-      await db.batch([...SERVICES.map(insertService), ...CONSUMERS.map(insertConsumer)]);
+      await db.batch(CREDENTIALS.map(insertCredential));
 
       // People: the actor and a few others. Statuses vary; the actor is usually active.
       const actorSeed = await actorFor(
@@ -328,33 +475,31 @@ describe('I-SESS-1: the actor check agrees with the JS model (property test)', (
         );
       }
 
-      // Custom teams: random permissions, and per kind none, all or a list.
+      // Custom teams: random permissions, and a scope that is none, all (with flags) or a list.
+      // With D23, access_rules:global goes only to teams with all-scope view.
       const customs: string[] = [];
       const teamCount = Math.floor(random() * 5);
-      for (let i = 0; i < teamCount; i++) {
-        const level = () => pick([1, 2, 3] as const);
-        const tokens = chance(0.35)
-          ? { all: level(), reveal: chance(0.3) }
-          : Object.fromEntries(
-              SERVICES.filter(() => chance(0.4)).map((id) => [
-                id,
-                { level: level(), reveal: chance(0.3) },
-              ]),
-            );
-        const consumers = chance(0.35)
-          ? { all: level() }
-          : Object.fromEntries(
-              CONSUMERS.filter(() => chance(0.4)).map((id) => [id, { level: level() }]),
-            );
-        customs.push(
-          await createTeam({
-            name: `Team ${seed}-${i}`,
-            permissions: GLOBAL_PERMISSIONS.filter(() => chance(0.25)),
-            tokens,
-            consumers,
-          }),
-        );
-      }
+      const build = async () => {
+        for (let i = 0; i < teamCount; i++) {
+          const level = () => pick([1, 2, 3] as const);
+          const all = chance(0.35);
+          const credentials = all
+            ? { all: level(), reveal: chance(0.3), accessRules: chance(0.3) }
+            : Object.fromEntries(
+                CREDENTIALS.filter(() => chance(0.4)).map((id) => [
+                  id,
+                  { level: level(), reveal: chance(0.3), accessRules: chance(0.3) },
+                ]),
+              );
+          const permissions = GLOBAL_PERMISSIONS.filter(
+            (p) =>
+              chance(p === 'access_rules:global' ? 0.35 : 0.25) &&
+              (all || !d23 || p !== 'access_rules:global'),
+          );
+          customs.push(await createTeam({ name: `Team ${seed}-${i}`, permissions, credentials }));
+        }
+      };
+      await (d23 ? build() : withoutD23(build));
       const teamIds = [...BUILTIN_TEAM_ORDER.map((key) => `tea_${key}`), ...customs];
       // Memberships: the actor joins 0 to 3 teams, built-ins less often; others join at random.
       for (const person of people) {
@@ -373,6 +518,10 @@ describe('I-SESS-1: the actor check agrees with the JS model (property test)', (
       const level = () => (chance(0.85) ? validLevel() : badLevel());
       const text = <V>(values: readonly V[]) =>
         chance(0.9) ? pick(values) : pick([undefined, null, 7]);
+      const flag = () =>
+        chance(0.85)
+          ? pick(FLAGS)
+          : pick(['view', '', null, 1, undefined, 'boundaries', 'issuer_rules']);
       const claim = (): unknown => {
         switch (Math.floor(random() * 16)) {
           case 0:
@@ -386,18 +535,17 @@ describe('I-SESS-1: the actor check agrees with the JS model (property test)', (
             return {
               k: 'member',
               t: text(knownTeams),
-              p: pick(['tokens:create', 'consumers:create']),
+              p: pick(['credentials:create', 'config:export']),
             };
           case 3:
-            return { k: 'token', id: text([...SERVICES, 'svc_none']), l: level() };
+            return { k: 'credential', id: text([...CREDENTIALS, 'svc_none']), l: level() };
           case 4:
-            return { k: 'consumer', id: text([...CONSUMERS, 'cpr_none']), l: level() };
           case 5:
-            return { k: 'token_reveal', id: text([...SERVICES, 'svc_none']) };
+            return { k: 'credential_flag', id: text([...CREDENTIALS, 'svc_none']), f: flag() };
           case 6:
-            return { k: pick(['token_all', 'consumer_all']), l: level() };
+            return { k: 'credential_all', l: level() };
           case 7:
-            return { k: 'token_all_reveal' };
+            return { k: 'credential_all_flag', f: flag() };
           case 8:
           case 9:
             return { k: 'dominates_team', t: text(knownTeams) };
@@ -417,9 +565,14 @@ describe('I-SESS-1: the actor check agrees with the JS model (property test)', (
               { k: 'superuser' },
               {},
               { k: 'dominates_members', t: customs[0] ?? 'tea_admin' },
+              { k: 'token', id: 'svc_a', l: 1 },
+              { k: 'consumer', id: 'svc_a', l: 1 },
+              { k: 'token_all', l: 1 },
+              { k: 'consumer_all', l: 1 },
+              { k: 'token_reveal', id: 'svc_a' },
             ]);
           default:
-            return { k: pick(['token', 'consumer']), l: validLevel() };
+            return { k: 'credential', l: validLevel() };
         }
       };
 
@@ -433,8 +586,9 @@ describe('I-SESS-1: the actor check agrees with the JS model (property test)', (
         const json: unknown = JSON.parse(JSON.stringify(claims));
         const expected = evaluateClaims(world, who, json);
         const actual = await passes(who, claims);
-        expect({ seed, case: i, claims: json, actual }).toEqual({
+        expect({ seed, d23, case: i, claims: json, actual }).toEqual({
           seed,
+          d23,
           case: i,
           claims: json,
           actual: expected,
@@ -443,38 +597,38 @@ describe('I-SESS-1: the actor check agrees with the JS model (property test)', (
         if (actual) passed++;
       }
 
-      // The JS form (scope.ts) agrees too: dominatesTeam per team and holds per resource.
+      // The JS form (scope.ts) agrees too: dominatesTeam per team and holds per credential.
       if (world.users.find((u) => u.id === actor.userId)?.status === 'active') {
         const scope = await loadScope(db, actor.userId);
         const inOwners = scope.teams.some((team) => team.builtin === 'owner');
         for (const teamId of teamIds) {
           const powers = await getTeamPowers(db, teamId);
           if (!powers) throw new Error(`missing team ${teamId}`);
-          expect({ seed, teamId, js: dominatesTeam(scope, powers, inOwners) }).toEqual({
+          expect({ seed, d23, teamId, js: dominatesTeam(scope, powers, inOwners) }).toEqual({
             seed,
+            d23,
             teamId,
             js: await passes(actor, [{ k: 'dominates_team', t: teamId }]),
           });
         }
-        for (let i = 0; i < 6; i++) {
-          const kind = pick(['token', 'consumer'] as const);
-          const id = pick(kind === 'token' ? SERVICES : CONSUMERS);
-          const need = pick(
-            kind === 'token'
-              ? (['view', 'edit', 'delete', 'reveal'] as const)
-              : (['view', 'edit', 'delete'] as const),
-          ) as Need;
-          const sqlClaim =
-            need === 'reveal'
-              ? { k: 'token_reveal', id }
-              : { k: kind, id, l: { view: 1, edit: 2, delete: 3 }[need] };
-          expect({ seed, kind, id, need, js: holds(scope, { kind, id, need }) }).toEqual({
-            seed,
-            kind,
-            id,
-            need,
-            js: await passes(actor, [sqlClaim]),
-          });
+        for (const id of [...CREDENTIALS, 'svc_none']) {
+          for (const need of ['view', 'edit', 'delete', 'reveal', 'access_rules'] as const) {
+            const sqlClaim =
+              need === 'reveal' || need === 'access_rules'
+                ? { k: 'credential_flag', id, f: need }
+                : { k: 'credential', id, l: { view: 1, edit: 2, delete: 3 }[need] };
+            const js = holds(scope, { id, need: need as Need });
+            expect({ seed, d23, id, need, js }).toEqual({
+              seed,
+              d23,
+              id,
+              need,
+              js: await passes(actor, [sqlClaim]),
+            });
+            const implied =
+              need === 'access_rules' && js && scope.permissions.has('access_rules:global');
+            if (implied) impliedChecks++;
+          }
         }
       }
     }
@@ -482,5 +636,7 @@ describe('I-SESS-1: the actor check agrees with the JS model (property test)', (
     // The generator must reach both outcomes often enough to mean something.
     expect(passed).toBeGreaterThan(checked * 0.1);
     expect(passed).toBeLessThan(checked * 0.9);
-  }, 120_000);
+    // And it must reach the implication of access_rules:global.
+    expect(impliedChecks).toBeGreaterThan(0);
+  }, 180_000);
 });

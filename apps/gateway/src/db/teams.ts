@@ -1,28 +1,37 @@
 // Admin teams (ADR 0023): reads and the code mirror of the built-in teams. A team is a named set of
-// users that holds global permissions and resource scopes. It is not the Cloudflare Access team
+// users that holds global permissions and a credential scope. It is not the Cloudflare Access team
 // domain. The schema and its integrity rules (triggers) are in migrations/0001_initial.sql.
 import type { UserStatus } from './types';
 
-/** Permissions that a team holds for the whole deployment, not for one token or consumer. */
+/**
+ * Permissions that a team holds for the whole deployment, not for one credential. A team may hold
+ * `access_rules:global` only with all-scope view (D23, the *_global_rules_scope triggers).
+ */
 export type GlobalPermission =
-  | 'tokens:create'
-  | 'consumers:create'
+  | 'credentials:create'
   | 'config:export'
   | 'users:write'
   | 'settings:write'
-  | 'keyring:rewrap';
+  | 'keyring:rewrap'
+  | 'access_rules:global';
 
 export const GLOBAL_PERMISSIONS: readonly GlobalPermission[] = [
-  'tokens:create',
-  'consumers:create',
+  'credentials:create',
   'config:export',
   'users:write',
   'settings:write',
   'keyring:rewrap',
+  'access_rules:global',
 ];
 
-/** Level on a token or consumer: 1 view, 2 edit, 3 delete. Each level implies the lower ones. */
+/** Level on a credential: 1 view, 2 edit, 3 delete. Each level implies the lower ones. */
 export type Level = 1 | 2 | 3;
+
+/**
+ * Flags on a credential, each implies view. `reveal`: copy the secret. `access_rules`: manage the
+ * credential's credential access rules.
+ */
+export type CredentialFlag = 'reveal' | 'access_rules';
 
 export type BuiltinTeam = 'owner' | 'admin' | 'token_manager' | 'access_manager' | 'viewer';
 
@@ -41,18 +50,29 @@ export interface TeamRef {
   readonly builtin: BuiltinTeam | null;
 }
 
-/** What one team allows: its global permissions, its all-scopes and its explicit rows. */
+/** A team's power over one credential (an explicit row), or the union of such rows. */
+export interface CredentialPowers {
+  readonly level: Level;
+  readonly reveal: boolean;
+  readonly accessRules: boolean;
+}
+
+/**
+ * What one team allows, as stored: its global permissions, its all-scope and its explicit rows. The
+ * implied access_rules flag of `access_rules:global` is not included.
+ */
 export interface TeamPowers {
   id: string;
   builtin: BuiltinTeam | null;
   permissions: ReadonlySet<GlobalPermission>;
-  /** All-scope level on tokens (current and future); 0 when the team uses a list or has none. */
-  tokensAll: 0 | Level;
-  /** Reveal on every token. Implies tokensAll >= 1. */
-  tokensAllReveal: boolean;
-  consumersAll: 0 | Level;
-  tokens: ReadonlyMap<string, { level: Level; reveal: boolean }>;
-  consumers: ReadonlyMap<string, { level: Level }>;
+  /** All-scope level on credentials (current and future); 0 when the team uses a list or has none. */
+  credentialsAll: 0 | Level;
+  /** Reveal on every credential. Implies credentialsAll >= 1. */
+  allReveal: boolean;
+  /** Manage the access rules of every credential. Implies credentialsAll >= 1. */
+  allAccessRules: boolean;
+  /** Explicit rows by credential id (list mode). */
+  credentials: ReadonlyMap<string, CredentialPowers>;
 }
 
 export interface BuiltinTeamPowers extends TeamPowers {
@@ -66,7 +86,7 @@ function builtin(
   name: string,
   description: string,
   permissions: GlobalPermission[],
-  scopes: { tokens: Level; reveal?: boolean; consumers: Level },
+  scope: { all: Level; reveal?: boolean; accessRules?: boolean },
 ): BuiltinTeamPowers {
   return {
     id: `tea_${key}`,
@@ -74,52 +94,55 @@ function builtin(
     name,
     description,
     permissions: new Set(permissions),
-    tokensAll: scopes.tokens,
-    tokensAllReveal: scopes.reveal ?? false,
-    consumersAll: scopes.consumers,
-    tokens: new Map(),
-    consumers: new Map(),
+    credentialsAll: scope.all,
+    allReveal: scope.reveal ?? false,
+    allAccessRules: scope.accessRules ?? false,
+    credentials: new Map(),
   };
 }
 
 /**
  * The seeded built-in teams. The migration seed is the source of truth; a unit test pins this
  * table against the seeded rows. Only Owners hold reveal, so no other built-in team can extract a
- * secret.
+ * secret. Credential managers do not manage access rules: a credential access rule is what lets a
+ * workload use a credential (D21).
  */
 export const BUILTIN_TEAMS: Readonly<Record<BuiltinTeam, BuiltinTeamPowers>> = Object.freeze({
   owner: builtin(
     'owner',
     'Owners',
-    'Everything: people, teams, settings, keys, and copying secrets.',
+    'Everything: people, teams, settings, keys, global access rules, and copying secrets.',
     [...GLOBAL_PERMISSIONS],
-    { tokens: 3, reveal: true, consumers: 3 },
+    { all: 3, reveal: true, accessRules: true },
   ),
   admin: builtin(
     'admin',
     'Admins',
-    'Every credential and consumer, issuer access rules, and the export.',
-    ['tokens:create', 'consumers:create', 'config:export'],
-    { tokens: 3, consumers: 3 },
+    'Every credential and its access rules, global access rules, and the export.',
+    ['credentials:create', 'config:export', 'access_rules:global'],
+    { all: 3, accessRules: true },
   ),
   token_manager: builtin(
     'token_manager',
     'Credential managers',
-    'Add, change and delete credentials. See every credential access rule.',
-    ['tokens:create'],
-    { tokens: 3, consumers: 1 },
+    'Add, change and delete credentials. See every access rule.',
+    ['credentials:create'],
+    { all: 3 },
   ),
   access_manager: builtin(
     'access_manager',
     'Access managers',
-    'Add, change and delete consumers and their access. See every credential.',
-    ['consumers:create'],
-    { tokens: 1, consumers: 3 },
+    'Add, change and delete credential access rules. See every credential and global access rule.',
+    [],
+    { all: 1, accessRules: true },
   ),
-  viewer: builtin('viewer', 'Viewers', 'See every credential and consumer. Change nothing.', [], {
-    tokens: 1,
-    consumers: 1,
-  }),
+  viewer: builtin(
+    'viewer',
+    'Viewers',
+    'See every credential and access rule. Change nothing.',
+    [],
+    { all: 1 },
+  ),
 });
 
 /** SQL rank that sorts built-in teams first, in privilege order. Custom teams rank last. */
@@ -131,9 +154,9 @@ export interface Team {
   builtin: BuiltinTeam | null;
   name: string;
   description: string;
-  tokens_all: 0 | Level;
-  tokens_all_reveal: boolean;
-  consumers_all: 0 | Level;
+  credentials_all: 0 | Level;
+  credentials_all_reveal: boolean;
+  credentials_all_access_rules: boolean;
   created_at: number;
   updated_at: number;
   created_by: string | null;
@@ -182,9 +205,9 @@ export function teamFromRow(row: Row): Team {
     builtin: isBuiltinTeam(row.builtin) ? row.builtin : null,
     name: str(row.name),
     description: str(row.description),
-    tokens_all: levelOrZero(row.tokens_all),
-    tokens_all_reveal: num(row.tokens_all_reveal) === 1,
-    consumers_all: levelOrZero(row.consumers_all),
+    credentials_all: levelOrZero(row.credentials_all),
+    credentials_all_reveal: num(row.credentials_all_reveal) === 1,
+    credentials_all_access_rules: num(row.credentials_all_access_rules) === 1,
     created_at: num(row.created_at),
     updated_at: num(row.updated_at),
     created_by: strOrNull(row.created_by),
@@ -215,28 +238,30 @@ export async function getTeam(db: D1Database, id: string): Promise<Team | null> 
   return row ? teamFromRow(row) : null;
 }
 
-/** One team's powers (one D1 batch), or null when the team does not exist. */
+/** One team's powers as stored (one D1 batch), or null when the team does not exist. */
 export async function getTeamPowers(db: D1Database, id: string): Promise<TeamPowers | null> {
-  const [team, permissions, tokens, consumers] = await db.batch<Row>([
+  const [team, permissions, credentials] = await db.batch<Row>([
     db.prepare('SELECT * FROM teams WHERE id = ?').bind(id),
     db.prepare('SELECT permission FROM team_permissions WHERE team_id = ?').bind(id),
-    db.prepare('SELECT service_id, level, reveal FROM team_tokens WHERE team_id = ?').bind(id),
     db
-      .prepare('SELECT credential_access_rule_id, level FROM team_consumers WHERE team_id = ?')
+      .prepare(
+        'SELECT credential_id, level, reveal, access_rules FROM team_credentials WHERE team_id = ?',
+      )
       .bind(id),
   ]);
   const row = team?.results[0];
   if (!row) return null;
   const decoded = teamFromRow(row);
-  const tokenRows = new Map<string, { level: Level; reveal: boolean }>();
-  for (const x of tokens?.results ?? []) {
+  const rows = new Map<string, CredentialPowers>();
+  for (const x of credentials?.results ?? []) {
     const level = levelOrZero(x.level);
-    if (level !== 0) tokenRows.set(str(x.service_id), { level, reveal: num(x.reveal) === 1 });
-  }
-  const consumerRows = new Map<string, { level: Level }>();
-  for (const x of consumers?.results ?? []) {
-    const level = levelOrZero(x.level);
-    if (level !== 0) consumerRows.set(str(x.credential_access_rule_id), { level });
+    if (level !== 0) {
+      rows.set(str(x.credential_id), {
+        level,
+        reveal: num(x.reveal) === 1,
+        accessRules: num(x.access_rules) === 1,
+      });
+    }
   }
   return {
     id: decoded.id,
@@ -244,11 +269,10 @@ export async function getTeamPowers(db: D1Database, id: string): Promise<TeamPow
     permissions: new Set(
       (permissions?.results ?? []).map((p) => p.permission).filter(isGlobalPermission),
     ),
-    tokensAll: decoded.tokens_all,
-    tokensAllReveal: decoded.tokens_all_reveal,
-    consumersAll: decoded.consumers_all,
-    tokens: tokenRows,
-    consumers: consumerRows,
+    credentialsAll: decoded.credentials_all,
+    allReveal: decoded.credentials_all_reveal,
+    allAccessRules: decoded.credentials_all_access_rules,
+    credentials: rows,
   };
 }
 

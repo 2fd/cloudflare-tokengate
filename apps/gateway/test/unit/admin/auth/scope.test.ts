@@ -7,15 +7,18 @@ import {
   type AdminScope,
   auditScopeSql,
   canAny,
+  type CredentialPowers,
+  type CredentialScope,
   dominatesTeam,
+  effectiveAllAccessRules,
   highestBuiltin,
   holds,
   isElevated,
   isGlobalViewer,
   isJoinSafe,
-  type KindScope,
   type Level,
   loadScope,
+  type Need,
   raises,
   recordScopeSql,
   recordVisible,
@@ -31,35 +34,44 @@ import { addMember, createTeam } from '../../../helpers/teams';
 const db = env.DB;
 const T = 1_700_000_000_000;
 
-function kinds(
+type RowInput = Level | { level: Level; reveal?: boolean; accessRules?: boolean };
+
+const row = (input: RowInput): CredentialPowers =>
+  typeof input === 'number'
+    ? { level: input, reveal: false, accessRules: false }
+    : {
+        level: input.level,
+        reveal: input.reveal ?? false,
+        accessRules: input.accessRules ?? false,
+      };
+
+function rows(explicit: Record<string, RowInput>): Map<string, CredentialPowers> {
+  return new Map(Object.entries(explicit).map(([id, value]) => [id, row(value)]));
+}
+
+function credentials(
   all: 0 | Level,
-  explicit: Record<string, Level | { level: Level; reveal: boolean }> = {},
-  allReveal = false,
-): KindScope {
+  explicit: Record<string, RowInput> = {},
+  flags: { reveal?: boolean; accessRules?: boolean } = {},
+): CredentialScope {
   return {
     all,
-    allReveal,
-    explicit: new Map(
-      Object.entries(explicit).map(([id, row]) => [
-        id,
-        typeof row === 'number' ? { level: row, reveal: false } : row,
-      ]),
-    ),
+    allReveal: flags.reveal ?? false,
+    allAccessRules: flags.accessRules ?? false,
+    explicit: rows(explicit),
   };
 }
 
 function scopeOf(input: {
   permissions?: GlobalPermission[];
-  tokens?: KindScope;
-  consumers?: KindScope;
+  credentials?: CredentialScope;
   teams?: AdminScope['teams'];
 }): AdminScope {
   return {
     userId: 'usr_me',
     teams: input.teams ?? [],
     permissions: new Set(input.permissions ?? []),
-    tokens: input.tokens ?? kinds(0),
-    consumers: input.consumers ?? kinds(0),
+    credentials: input.credentials ?? credentials(0),
   };
 }
 
@@ -68,103 +80,142 @@ function team(input: Partial<TeamPowers> & { id?: string }): TeamPowers {
     id: input.id ?? 'tea_01HZZZZZZZZZZZZZZZZZZZZZZZ',
     builtin: input.builtin ?? null,
     permissions: input.permissions ?? new Set(),
-    tokensAll: input.tokensAll ?? 0,
-    tokensAllReveal: input.tokensAllReveal ?? false,
-    consumersAll: input.consumersAll ?? 0,
-    tokens: input.tokens ?? new Map(),
-    consumers: input.consumers ?? new Map(),
+    credentialsAll: input.credentialsAll ?? 0,
+    allReveal: input.allReveal ?? false,
+    allAccessRules: input.allAccessRules ?? false,
+    credentials: input.credentials ?? new Map(),
   };
 }
 
-/** A restricted viewer: token A (edit, reveal), consumer X (view). */
+/** A restricted viewer: credential A (edit, reveal), credential C (view, access rules). */
 const RESTRICTED = scopeOf({
-  tokens: kinds(0, { svc_a: { level: 2, reveal: true } }),
-  consumers: kinds(0, { cpr_x: 1 }),
+  credentials: credentials(0, {
+    svc_a: { level: 2, reveal: true },
+    svc_c: { level: 1, accessRules: true },
+  }),
 });
 /** A global viewer, like every built-in team. */
-const GLOBAL = scopeOf({ tokens: kinds(1), consumers: kinds(1) });
+const GLOBAL = scopeOf({ credentials: credentials(1) });
+/** A team with access_rules:global and all-scope view (D23). */
+const GLOBAL_RULES = scopeOf({
+  permissions: ['access_rules:global'],
+  credentials: credentials(1),
+});
 
-describe('holds and canAny', () => {
+const NEEDS: readonly Need[] = ['view', 'edit', 'delete', 'reveal', 'access_rules'];
+
+describe('holds, canAny and effectiveAllAccessRules', () => {
   it('takes the highest of the all-scope and the explicit row', () => {
-    const scope = scopeOf({ tokens: kinds(1, { svc_a: 3 }), consumers: kinds(2) });
-    expect(holds(scope, { kind: 'token', id: 'svc_a', need: 'delete' })).toBe(true);
-    expect(holds(scope, { kind: 'token', id: 'svc_b', need: 'view' })).toBe(true);
-    expect(holds(scope, { kind: 'token', id: 'svc_b', need: 'edit' })).toBe(false);
-    expect(holds(scope, { kind: 'consumer', id: 'cpr_any', need: 'edit' })).toBe(true);
-    expect(holds(scope, { kind: 'consumer', id: 'cpr_any', need: 'delete' })).toBe(false);
+    const scope = scopeOf({ credentials: credentials(1, { svc_a: 3 }) });
+    expect(holds(scope, { id: 'svc_a', need: 'delete' })).toBe(true);
+    expect(holds(scope, { id: 'svc_b', need: 'view' })).toBe(true);
+    expect(holds(scope, { id: 'svc_b', need: 'edit' })).toBe(false);
   });
 
-  it('gives reveal on tokens only, from the flag or the all-scope reveal', () => {
-    expect(holds(RESTRICTED, { kind: 'token', id: 'svc_a', need: 'reveal' })).toBe(true);
-    expect(holds(RESTRICTED, { kind: 'token', id: 'svc_b', need: 'reveal' })).toBe(false);
-    expect(holds(RESTRICTED, { kind: 'consumer', id: 'cpr_x', need: 'reveal' })).toBe(false);
-    const owner = scopeOf({ tokens: kinds(3, {}, true), consumers: kinds(3) });
-    expect(holds(owner, { kind: 'token', id: 'svc_any', need: 'reveal' })).toBe(true);
-    expect(holds(GLOBAL, { kind: 'token', id: 'svc_any', need: 'reveal' })).toBe(false);
+  it('gives each flag from the all-scope flag or the row flag', () => {
+    expect(holds(RESTRICTED, { id: 'svc_a', need: 'reveal' })).toBe(true);
+    expect(holds(RESTRICTED, { id: 'svc_a', need: 'access_rules' })).toBe(false);
+    expect(holds(RESTRICTED, { id: 'svc_c', need: 'access_rules' })).toBe(true);
+    expect(holds(RESTRICTED, { id: 'svc_c', need: 'reveal' })).toBe(false);
+    expect(holds(RESTRICTED, { id: 'svc_b', need: 'reveal' })).toBe(false);
+    const owner = scopeOf({ credentials: credentials(3, {}, { reveal: true, accessRules: true }) });
+    expect(holds(owner, { id: 'svc_any', need: 'reveal' })).toBe(true);
+    expect(holds(owner, { id: 'svc_any', need: 'access_rules' })).toBe(true);
+    expect(holds(GLOBAL, { id: 'svc_any', need: 'reveal' })).toBe(false);
+    expect(holds(GLOBAL, { id: 'svc_any', need: 'access_rules' })).toBe(false);
+  });
+
+  it('access_rules:global gives access_rules on every visible credential, and nothing else', () => {
+    for (const need of NEEDS) {
+      expect(holds(GLOBAL_RULES, { id: 'svc_any', need }), need).toBe(
+        need === 'view' || need === 'access_rules',
+      );
+    }
+    expect(effectiveAllAccessRules(GLOBAL_RULES)).toBe(true);
+    expect(canAny(GLOBAL_RULES, 'access_rules')).toBe(true);
+    // Without D23 (a list scope), only the listed credentials.
+    const listed = scopeOf({
+      permissions: ['access_rules:global'],
+      credentials: credentials(0, { svc_a: 1 }),
+    });
+    expect(holds(listed, { id: 'svc_a', need: 'access_rules' })).toBe(true);
+    expect(holds(listed, { id: 'svc_b', need: 'access_rules' })).toBe(false);
+    expect(effectiveAllAccessRules(listed)).toBe(false);
+    expect(canAny(listed, 'access_rules')).toBe(true);
+    // No visible credential: nothing.
+    const blind = scopeOf({ permissions: ['access_rules:global'] });
+    expect(holds(blind, { id: 'svc_a', need: 'access_rules' })).toBe(false);
+    expect(canAny(blind, 'access_rules')).toBe(false);
+    expect(effectiveAllAccessRules(blind)).toBe(false);
+  });
+
+  it('the access_rules flag never gives access_rules:global', () => {
+    const flagged = scopeOf({ credentials: credentials(1, {}, { accessRules: true }) });
+    expect(effectiveAllAccessRules(flagged)).toBe(true);
+    expect(flagged.permissions.has('access_rules:global')).toBe(false);
+    expect(effectiveAllAccessRules(GLOBAL)).toBe(false);
   });
 
   it('hides everything from a user in no team', () => {
     const none = scopeOf({});
-    expect(holds(none, { kind: 'token', id: 'svc_a', need: 'view' })).toBe(false);
-    expect(canAny(none, 'consumer', 'view')).toBe(false);
+    for (const need of NEEDS) {
+      expect(holds(none, { id: 'svc_a', need }), need).toBe(false);
+      expect(canAny(none, need), need).toBe(false);
+    }
   });
 
   it('canAny looks at every row and at the all-scope', () => {
-    expect(canAny(RESTRICTED, 'token', 'edit')).toBe(true);
-    expect(canAny(RESTRICTED, 'token', 'delete')).toBe(false);
-    expect(canAny(RESTRICTED, 'token', 'reveal')).toBe(true);
-    expect(canAny(RESTRICTED, 'consumer', 'view')).toBe(true);
-    expect(canAny(RESTRICTED, 'consumer', 'edit')).toBe(false);
-    expect(canAny(RESTRICTED, 'consumer', 'reveal')).toBe(false);
-    expect(canAny(GLOBAL, 'consumer', 'view')).toBe(true);
-    expect(canAny(GLOBAL, 'token', 'reveal')).toBe(false);
+    expect(canAny(RESTRICTED, 'edit')).toBe(true);
+    expect(canAny(RESTRICTED, 'delete')).toBe(false);
+    expect(canAny(RESTRICTED, 'reveal')).toBe(true);
+    expect(canAny(RESTRICTED, 'access_rules')).toBe(true);
+    expect(canAny(scopeOf({ credentials: credentials(0, { svc_a: 3 }) }), 'access_rules')).toBe(
+      false,
+    );
+    expect(canAny(GLOBAL, 'view')).toBe(true);
+    expect(canAny(GLOBAL, 'edit')).toBe(false);
+    expect(canAny(GLOBAL, 'reveal')).toBe(false);
   });
 });
 
 describe('visibleIds, isGlobalViewer and recordVisible', () => {
-  it('lists explicit ids, sorted, unless the all-scope covers the kind', () => {
-    const scope = scopeOf({ tokens: kinds(0, { svc_b: 1, svc_a: 3 }), consumers: kinds(1) });
-    expect(visibleIds(scope, 'token')).toEqual({ all: false, ids: ['svc_a', 'svc_b'] });
-    expect(visibleIds(scope, 'consumer')).toEqual({ all: true });
+  it('lists explicit ids, sorted, unless the all-scope covers every credential', () => {
+    const scope = scopeOf({ credentials: credentials(0, { svc_b: 1, svc_a: 3 }) });
+    expect(visibleIds(scope)).toEqual({ all: false, ids: ['svc_a', 'svc_b'] });
+    expect(visibleIds(GLOBAL)).toEqual({ all: true });
+    expect(visibleIds(scopeOf({}))).toEqual({ all: false, ids: [] });
     expect(isGlobalViewer(scope)).toBe(false);
     expect(isGlobalViewer(GLOBAL)).toBe(true);
+    // access_rules:global does not make a viewer global; the scope does.
+    expect(isGlobalViewer(scopeOf({ permissions: ['access_rules:global'] }))).toBe(false);
   });
 
   it.each([
-    ['visible consumer, no token', null, 'cpr_x', true],
-    ['visible consumer, visible token', 'svc_a', 'cpr_x', true],
-    ['visible consumer, hidden token', 'svc_b', 'cpr_x', false],
-    ['hidden consumer, visible token', 'svc_a', 'cpr_y', false],
-    ['no consumer (pre-trust)', 'svc_a', null, false],
-    ['empty consumer (rollup)', 'svc_a', '', false],
-    ['visible consumer, empty token (rollup)', '', 'cpr_x', true],
-  ])('%s → %s', (_name, service, consumer, expected) => {
-    expect(
-      recordVisible(RESTRICTED, { service_id: service, credential_access_rule_id: consumer }),
-    ).toBe(expected);
-    expect(
-      recordVisible(GLOBAL, { service_id: service, credential_access_rule_id: consumer }),
-    ).toBe(true);
+    ['visible credential', 'svc_a', true],
+    ['view-only credential with a flag', 'svc_c', true],
+    ['hidden credential', 'svc_b', false],
+    ['no credential (pre-trust)', null, false],
+    ['empty credential (rollup)', '', false],
+  ])('%s → %s', (_name, service, expected) => {
+    expect(recordVisible(RESTRICTED, { service_id: service })).toBe(expected);
+    expect(recordVisible(GLOBAL, { service_id: service })).toBe(true);
   });
 });
 
-/** Ids of the rows of `values` (id, service, consumer) that `guard` keeps, run in D1. */
+/** Ids of the rows of `values` (id, service) that `guard` keeps, run in D1. */
 async function kept(
-  values: Array<[string, string | null, string | null]>,
+  values: Array<[string, string | null]>,
   guard: SqlGuard,
   leading: unknown[] = [],
 ): Promise<string[]> {
-  const rows = values.map(() => '(?, ?, ?)').join(', ');
   // Numbered binds first (when `leading` is given), then the VALUES rows as numbered binds too, so
   // anonymous and numbered parameters are never mixed in one statement.
   const numbered = leading.length > 0;
   const start = leading.length + guard.binds.length + 1;
   const valueSql = numbered
-    ? values
-        .map((_, i) => `(?${start + i * 3}, ?${start + i * 3 + 1}, ?${start + i * 3 + 2})`)
-        .join(', ')
-    : rows;
-  const sql = `WITH r(id, service_id, credential_access_rule_id) AS (VALUES ${valueSql})
+    ? values.map((_, i) => `(?${start + i * 2}, ?${start + i * 2 + 1})`).join(', ')
+    : values.map(() => '(?, ?)').join(', ');
+  const sql = `WITH r(id, service_id) AS (VALUES ${valueSql})
     SELECT id FROM r WHERE ${guard.sql} ORDER BY id`;
   const binds = numbered
     ? [...leading, ...guard.binds, ...values.flat()]
@@ -173,7 +224,7 @@ async function kept(
     .prepare(sql)
     .bind(...binds)
     .all<{ id: string }>();
-  return results.map((row) => row.id);
+  return results.map((r) => r.id);
 }
 
 describe('scopeSql', () => {
@@ -184,11 +235,11 @@ describe('scopeSql', () => {
       sql: 'service_id IN (SELECT value FROM json_each(?))',
       binds: ['["svc_a","svc_c"]'],
     });
-    const values: Array<[string, string | null, string | null]> = [
-      ['1', 'svc_a', null],
-      ['2', 'svc_b', null],
-      ['3', 'svc_c', null],
-      ['4', null, null],
+    const values: Array<[string, string | null]> = [
+      ['1', 'svc_a'],
+      ['2', 'svc_b'],
+      ['3', 'svc_c'],
+      ['4', null],
     ];
     expect(await kept(values, guard)).toEqual(['1', '3']);
     expect(await kept(values, scopeSql({ all: false, ids: [] }, 'service_id'))).toEqual([]);
@@ -197,9 +248,9 @@ describe('scopeSql', () => {
   it('numbers its bind with `at`', async () => {
     const guard = scopeSql({ all: false, ids: ['svc_b'] }, 'service_id', { at: 2 });
     expect(guard.sql).toBe('service_id IN (SELECT value FROM json_each(?2))');
-    const values: Array<[string, string | null, string | null]> = [
-      ['1', 'svc_a', null],
-      ['2', 'svc_b', null],
+    const values: Array<[string, string | null]> = [
+      ['1', 'svc_a'],
+      ['2', 'svc_b'],
     ];
     expect(
       await kept(values, { sql: `?1 = 'x' AND ${guard.sql}`, binds: guard.binds }, ['x']),
@@ -208,45 +259,37 @@ describe('scopeSql', () => {
 });
 
 describe('recordScopeSql', () => {
-  const VALUES: Array<[string, string | null, string | null]> = [
-    ['a-x', 'svc_a', 'cpr_x'],
-    ['b-x', 'svc_b', 'cpr_x'],
-    ['a-y', 'svc_a', 'cpr_y'],
-    ['none-x', null, 'cpr_x'],
-    ['a-none', 'svc_a', null],
-    ['none-none', null, null],
+  const VALUES: Array<[string, string | null]> = [
+    ['a', 'svc_a'],
+    ['b', 'svc_b'],
+    ['c', 'svc_c'],
+    ['none', null],
   ];
-  const COLS = {
-    service: 'service_id',
-    consumer: 'credential_access_rule_id',
-    empty: 'NULL',
-  } as const;
+  const COLS = { service: 'service_id', empty: 'NULL' } as const;
 
   it('renders no clause for a global viewer', () => {
     expect(recordScopeSql(GLOBAL, COLS)).toBeNull();
+    expect(recordScopeSql(GLOBAL_RULES, COLS)).toBeNull();
   });
 
   it('applies the record rule to request_log rows (NULL is unset)', async () => {
     const guard = recordScopeSql(RESTRICTED, COLS);
-    expect(guard?.binds).toEqual(['["cpr_x"]', '["svc_a"]']);
-    expect(await kept(VALUES, guard!)).toEqual(['a-x', 'none-x']);
+    expect(guard?.binds).toEqual(['["svc_a","svc_c"]']);
+    expect(await kept(VALUES, guard!)).toEqual(['a', 'c']);
   });
 
   it("applies the record rule to rollup rows ('' is unset)", async () => {
-    const rollups = VALUES.map(([id, s, c]) => [id, s ?? '', c ?? ''] as [string, string, string]);
+    const rollups = VALUES.map(([id, s]) => [id, s ?? ''] as [string, string]);
     const guard = recordScopeSql(RESTRICTED, { ...COLS, empty: "''" });
-    expect(guard?.sql).toContain("credential_access_rule_id <> ''");
-    expect(await kept(rollups, guard!)).toEqual(['a-x', 'none-x']);
+    expect(guard?.sql).toContain("service_id <> ''");
+    expect(await kept(rollups, guard!)).toEqual(['a', 'c']);
   });
 
-  it('renders `1` for a kind with all-scope, and numbers the binds with `at`', async () => {
-    const allConsumers = scopeOf({ tokens: kinds(0, { svc_a: 1 }), consumers: kinds(1) });
-    const guard = recordScopeSql(allConsumers, COLS, { at: 3 });
-    expect(guard?.binds).toEqual(['["svc_a"]']);
+  it('keeps nothing for a user who sees no credential, and numbers the bind with `at`', async () => {
+    expect(await kept(VALUES, recordScopeSql(scopeOf({}), COLS)!)).toEqual([]);
+    const guard = recordScopeSql(RESTRICTED, COLS, { at: 3 });
     expect(guard?.sql).toContain('json_each(?3)');
-    expect(await kept(VALUES, guard!, ['p1', 'p2'])).toEqual(['a-x', 'a-y', 'none-x']);
-    const both = recordScopeSql(RESTRICTED, COLS, { at: 4 });
-    expect(both?.sql).toMatch(/json_each\(\?4\).*json_each\(\?5\)/s);
+    expect(await kept(VALUES, guard!, ['p1', 'p2'])).toEqual(['a', 'c']);
   });
 });
 
@@ -267,34 +310,28 @@ describe('auditScopeSql', () => {
       .prepare(`SELECT id FROM audit_log${guard ? ` WHERE ${guard.sql}` : ''} ORDER BY id`)
       .bind(...(guard?.binds ?? []))
       .all<{ id: string }>();
-    return results.map((row) => row.id);
+    return results.map((r) => r.id);
   }
 
   it('hides a row with any hidden, unknown or malformed resource', async () => {
     await db.batch([
+      // A global access rule row: global rules are not written to resources (D20).
       insert('aud_01_empty', '[]'),
-      insert('aud_02_token', '["svc_a"]'),
-      insert('aud_03_both', '["svc_a","cpr_x"]'),
-      insert('aud_04_hidden_token', '["svc_b"]'),
-      insert('aud_05_mixed', '["svc_a","cpr_y"]'),
-      insert('aud_06_grant', '["grt_1"]'),
-      insert('aud_07_sentinel', '["*"]'),
-      insert('aud_08_null', '[null]'),
-      insert('aud_09_number', '[5]'),
-      insert('aud_10_nested', '[["svc_a"]]'),
+      insert('aud_02_credential', '["svc_a"]'),
+      insert('aud_03_both', '["svc_a","svc_c"]'),
+      insert('aud_04_hidden', '["svc_b"]'),
+      insert('aud_05_mixed', '["svc_a","svc_b"]'),
+      insert('aud_06_rule', '["acr_1"]'),
+      insert('aud_07_global_rule', '["gar_1"]'),
+      insert('aud_08_sentinel', '["*"]'),
+      insert('aud_09_null', '[null]'),
+      insert('aud_10_number', '[5]'),
+      insert('aud_11_nested', '[["svc_a"]]'),
     ]);
-    expect(await visible(RESTRICTED)).toEqual(['aud_01_empty', 'aud_02_token', 'aud_03_both']);
+    expect(await visible(RESTRICTED)).toEqual(['aud_01_empty', 'aud_02_credential', 'aud_03_both']);
+    expect(await visible(scopeOf({}))).toEqual(['aud_01_empty']);
     expect(auditScopeSql(GLOBAL)).toBeNull();
-    expect(await visible(GLOBAL)).toHaveLength(10);
-    // All tokens but some consumers: every token id passes, consumers still filter.
-    const allTokens = scopeOf({ tokens: kinds(1), consumers: kinds(0, { cpr_x: 1 }) });
-    expect(auditScopeSql(allTokens)?.binds).toEqual(['["cpr_x"]']);
-    expect(await visible(allTokens)).toEqual([
-      'aud_01_empty',
-      'aud_02_token',
-      'aud_03_both',
-      'aud_04_hidden_token',
-    ]);
+    expect(await visible(GLOBAL)).toHaveLength(11);
   });
 
   it('takes a table alias', () => {
@@ -304,56 +341,82 @@ describe('auditScopeSql', () => {
 
 describe('dominatesTeam', () => {
   const actor = scopeOf({
-    permissions: ['tokens:create', 'users:write'],
-    tokens: kinds(1, { svc_a: { level: 2, reveal: true } }),
-    consumers: kinds(0, { cpr_x: 3 }),
+    permissions: ['credentials:create', 'users:write'],
+    credentials: credentials(0, {
+      svc_a: { level: 2, reveal: true },
+      svc_c: { level: 1, accessRules: true },
+    }),
   });
 
-  it('needs every permission, all-scope and explicit row of the team', () => {
-    expect(dominatesTeam(actor, team({ permissions: new Set(['tokens:create']) }), false)).toBe(
-      true,
-    );
+  it('needs every permission, the all-scope and every explicit row of the team', () => {
+    const dominates = (input: Partial<TeamPowers>) => dominatesTeam(actor, team(input), false);
+    expect(dominates({ permissions: new Set(['credentials:create']) })).toBe(true);
     // Amendment A1: users:write is a permission like any other.
-    expect(dominatesTeam(actor, team({ permissions: new Set(['users:write']) }), false)).toBe(true);
-    expect(dominatesTeam(actor, team({ permissions: new Set(['config:export']) }), false)).toBe(
+    expect(dominates({ permissions: new Set(['users:write']) })).toBe(true);
+    expect(dominates({ permissions: new Set(['config:export']) })).toBe(false);
+    expect(dominates({ credentialsAll: 1 })).toBe(false);
+    expect(dominates({ credentials: rows({ svc_a: { level: 2, reveal: true } }) })).toBe(true);
+    expect(dominates({ credentials: rows({ svc_a: 3 }) })).toBe(false);
+    expect(dominates({ credentials: rows({ svc_a: { level: 1, accessRules: true } }) })).toBe(
       false,
     );
-    expect(dominatesTeam(actor, team({ tokensAll: 1 }), false)).toBe(true);
-    expect(dominatesTeam(actor, team({ tokensAll: 2 }), false)).toBe(false);
-    expect(dominatesTeam(actor, team({ tokensAll: 1, tokensAllReveal: true }), false)).toBe(false);
-    expect(dominatesTeam(actor, team({ consumersAll: 1 }), false)).toBe(false);
-    const rows = (tokens: [string, { level: Level; reveal: boolean }][]) =>
-      team({ tokens: new Map(tokens) });
-    expect(dominatesTeam(actor, rows([['svc_a', { level: 2, reveal: true }]]), false)).toBe(true);
-    expect(dominatesTeam(actor, rows([['svc_b', { level: 1, reveal: false }]]), false)).toBe(true);
-    expect(dominatesTeam(actor, rows([['svc_b', { level: 2, reveal: false }]]), false)).toBe(false);
-    expect(dominatesTeam(actor, rows([['svc_b', { level: 1, reveal: true }]]), false)).toBe(false);
+    expect(dominates({ credentials: rows({ svc_c: { level: 1, accessRules: true } }) })).toBe(true);
+    expect(dominates({ credentials: rows({ svc_c: { level: 1, reveal: true } }) })).toBe(false);
+    // A row on a credential the actor cannot see is never dominated.
+    expect(dominates({ credentials: rows({ svc_b: 1 }) })).toBe(false);
+  });
+
+  it('compares the all-scope level and each all-scope flag', () => {
+    const all = scopeOf({ credentials: credentials(2, {}, { accessRules: true }) });
+    const dominates = (input: Partial<TeamPowers>) => dominatesTeam(all, team(input), false);
+    expect(dominates({ credentialsAll: 2, allAccessRules: true })).toBe(true);
+    expect(dominates({ credentialsAll: 3 })).toBe(false);
+    expect(dominates({ credentialsAll: 1, allReveal: true })).toBe(false);
+    expect(dominates({ credentials: rows({ svc_any: { level: 2, accessRules: true } }) })).toBe(
+      true,
+    );
+    expect(dominates({ permissions: new Set(['access_rules:global']), credentialsAll: 1 })).toBe(
+      false,
+    );
+  });
+
+  it('counts the access_rules flag implied by access_rules:global', () => {
+    const globalTeam = team({ permissions: new Set(['access_rules:global']), credentialsAll: 1 });
     expect(
-      dominatesTeam(actor, team({ consumers: new Map([['cpr_x', { level: 3 as Level }]]) }), false),
+      dominatesTeam(GLOBAL_RULES, team({ credentialsAll: 1, allAccessRules: true }), false),
     ).toBe(true);
     expect(
-      dominatesTeam(actor, team({ consumers: new Map([['cpr_y', { level: 1 as Level }]]) }), false),
-    ).toBe(false);
+      dominatesTeam(
+        GLOBAL_RULES,
+        team({ credentials: rows({ svc_a: { level: 1, accessRules: true } }) }),
+        false,
+      ),
+    ).toBe(true);
+    expect(dominatesTeam(GLOBAL_RULES, globalTeam, false)).toBe(true);
+    // The flag alone does not dominate a team that holds the permission.
+    const flagged = scopeOf({ credentials: credentials(3, {}, { accessRules: true }) });
+    expect(dominatesTeam(flagged, globalTeam, false)).toBe(false);
   });
 
   it('lets only an Owners member dominate the Owners team', () => {
     const shadow = scopeOf({
       permissions: [
-        'tokens:create',
-        'consumers:create',
+        'credentials:create',
         'config:export',
         'users:write',
         'settings:write',
         'keyring:rewrap',
+        'access_rules:global',
       ],
-      tokens: kinds(3, {}, true),
-      consumers: kinds(3),
+      credentials: credentials(3, {}, { reveal: true, accessRules: true }),
     });
     expect(dominatesTeam(shadow, BUILTIN_TEAMS.owner, false)).toBe(false);
     expect(dominatesTeam(shadow, BUILTIN_TEAMS.owner, true)).toBe(true);
     expect(dominatesTeam(shadow, BUILTIN_TEAMS.admin, false)).toBe(true);
     expect(dominatesTeam(GLOBAL, BUILTIN_TEAMS.viewer, false)).toBe(true);
     expect(dominatesTeam(GLOBAL, BUILTIN_TEAMS.token_manager, false)).toBe(false);
+    expect(dominatesTeam(GLOBAL, BUILTIN_TEAMS.access_manager, false)).toBe(false);
+    expect(dominatesTeam(GLOBAL_RULES, BUILTIN_TEAMS.access_manager, false)).toBe(true);
   });
 });
 
@@ -361,73 +424,83 @@ describe('isJoinSafe, raises and isElevated', () => {
   it('isJoinSafe refuses Owners, owner-grade permissions and reveal', () => {
     expect(isJoinSafe(BUILTIN_TEAMS.viewer)).toBe(true);
     expect(isJoinSafe(BUILTIN_TEAMS.admin)).toBe(true);
+    expect(isJoinSafe(BUILTIN_TEAMS.access_manager)).toBe(true);
     expect(isJoinSafe(BUILTIN_TEAMS.owner)).toBe(false);
     for (const permission of ['users:write', 'settings:write', 'keyring:rewrap'] as const) {
       expect(isJoinSafe(team({ permissions: new Set([permission]) })), permission).toBe(false);
     }
-    expect(isJoinSafe(team({ tokensAll: 1, tokensAllReveal: true }))).toBe(false);
-    expect(isJoinSafe(team({ tokens: new Map([['svc_a', { level: 1, reveal: true }]]) }))).toBe(
+    expect(isJoinSafe(team({ credentialsAll: 1, allReveal: true }))).toBe(false);
+    expect(isJoinSafe(team({ credentials: rows({ svc_a: { level: 1, reveal: true } }) }))).toBe(
       false,
     );
-    expect(isJoinSafe(team({ tokens: new Map([['svc_a', { level: 3, reveal: false }]]) }))).toBe(
-      true,
-    );
+    expect(
+      isJoinSafe(team({ credentials: rows({ svc_a: { level: 3, accessRules: true } }) })),
+    ).toBe(true);
+    expect(
+      isJoinSafe(team({ permissions: new Set(['access_rules:global']), credentialsAll: 1 })),
+    ).toBe(true);
   });
 
   it('raises: a power added or raised, never a power lowered', () => {
     const before = team({
-      permissions: new Set(['tokens:create']),
-      tokens: new Map([['svc_a', { level: 2, reveal: false }]]),
-      consumersAll: 2,
+      permissions: new Set(['credentials:create']),
+      credentials: rows({ svc_a: 2 }),
     });
     const change = (patch: Partial<TeamPowers>) => team({ ...before, ...patch });
     expect(raises(before, before)).toBe(false);
     expect(raises(before, change({ permissions: new Set() }))).toBe(false);
-    expect(raises(before, change({ consumersAll: 1 }))).toBe(false);
-    expect(raises(before, change({ tokens: new Map() }))).toBe(false);
+    expect(raises(before, change({ credentials: new Map() }))).toBe(false);
+    expect(raises(before, change({ credentials: rows({ svc_a: 1 }) }))).toBe(false);
+    for (const permission of ['config:export', 'access_rules:global'] as const) {
+      expect(
+        raises(before, change({ permissions: new Set(['credentials:create', permission]) })),
+        permission,
+      ).toBe(true);
+    }
+    expect(raises(before, change({ credentials: rows({ svc_a: 3 }) }))).toBe(true);
     expect(
-      raises(before, change({ tokens: new Map([['svc_a', { level: 1, reveal: false }]]) })),
-    ).toBe(false);
-    expect(
-      raises(before, change({ permissions: new Set(['tokens:create', 'config:export']) })),
-    ).toBe(true);
-    expect(raises(before, change({ consumersAll: 3 }))).toBe(true);
-    expect(
-      raises(before, change({ tokens: new Map([['svc_a', { level: 3, reveal: false }]]) })),
-    ).toBe(true);
-    expect(
-      raises(before, change({ tokens: new Map([['svc_a', { level: 2, reveal: true }]]) })),
+      raises(before, change({ credentials: rows({ svc_a: { level: 2, reveal: true } }) })),
     ).toBe(true);
     expect(
-      raises(
-        before,
-        change({
-          tokens: new Map([
-            ['svc_a', { level: 2, reveal: false }],
-            ['svc_b', { level: 1, reveal: false }],
-          ]),
-        }),
-      ),
+      raises(before, change({ credentials: rows({ svc_a: { level: 2, accessRules: true } }) })),
     ).toBe(true);
-    // List → all is a raise, even at a lower level: it covers resources the list did not.
-    expect(raises(before, change({ tokens: new Map(), tokensAll: 1 }))).toBe(true);
-    expect(raises(change({ tokensAll: 1 }), change({ tokensAll: 1, tokensAllReveal: true }))).toBe(
-      true,
-    );
-    expect(raises(before, change({ consumers: new Map([['cpr_x', { level: 1 }]]) }))).toBe(true);
+    expect(raises(before, change({ credentials: rows({ svc_a: 2, svc_b: 1 }) }))).toBe(true);
+    // Removing a flag is a lowering.
+    const flagged = change({ credentials: rows({ svc_a: { level: 2, accessRules: true } }) });
+    expect(raises(flagged, before)).toBe(false);
+    // List → all is a raise, even at a lower level: it covers credentials the list did not.
+    expect(raises(before, change({ credentials: new Map(), credentialsAll: 1 }))).toBe(true);
+    const all = change({ credentials: new Map(), credentialsAll: 1 });
+    expect(raises(all, team({ ...all, allReveal: true }))).toBe(true);
+    expect(raises(all, team({ ...all, allAccessRules: true }))).toBe(true);
+    expect(raises(team({ ...all, allAccessRules: true }), all)).toBe(false);
+    expect(raises(all, team({ ...all, credentialsAll: 2 }))).toBe(true);
   });
 
-  it('isElevated: a create permission, export, a level above view, or not join-safe', () => {
+  it('isElevated (D6): create, export, global rules, a level above view, an access_rules flag', () => {
     expect(isElevated(BUILTIN_TEAMS.viewer)).toBe(false);
-    expect(isElevated(team({ tokensAll: 1, consumersAll: 1 }))).toBe(false);
-    expect(isElevated(BUILTIN_TEAMS.token_manager)).toBe(true);
-    expect(isElevated(BUILTIN_TEAMS.access_manager)).toBe(true);
-    expect(isElevated(team({ permissions: new Set(['config:export']) }))).toBe(true);
-    expect(isElevated(team({ consumers: new Map([['cpr_x', { level: 2 }]]) }))).toBe(true);
-    expect(isElevated(team({ tokens: new Map([['svc_a', { level: 1, reveal: false }]]) }))).toBe(
-      false,
-    );
+    expect(isElevated(team({ credentialsAll: 1 }))).toBe(false);
+    expect(isElevated(team({ credentials: rows({ svc_a: 1 }) }))).toBe(false);
+    for (const key of ['owner', 'admin', 'token_manager', 'access_manager'] as const) {
+      expect(isElevated(BUILTIN_TEAMS[key]), key).toBe(true);
+    }
+    for (const permission of ['credentials:create', 'config:export'] as const) {
+      expect(isElevated(team({ permissions: new Set([permission]) })), permission).toBe(true);
+    }
+    expect(
+      isElevated(team({ permissions: new Set(['access_rules:global']), credentialsAll: 1 })),
+    ).toBe(true);
+    expect(isElevated(team({ credentialsAll: 2 }))).toBe(true);
+    expect(isElevated(team({ credentialsAll: 1, allAccessRules: true }))).toBe(true);
+    expect(isElevated(team({ credentials: rows({ svc_a: 2 }) }))).toBe(true);
+    expect(
+      isElevated(team({ credentials: rows({ svc_a: { level: 1, accessRules: true } }) })),
+    ).toBe(true);
+    // Not join-safe counts too.
     expect(isElevated(team({ permissions: new Set(['users:write']) }))).toBe(true);
+    expect(isElevated(team({ credentials: rows({ svc_a: { level: 1, reveal: true } }) }))).toBe(
+      true,
+    );
   });
 });
 
@@ -445,38 +518,38 @@ describe('highestBuiltin', () => {
 describe('loadScope', () => {
   beforeEach(resetControlPlane);
 
+  const insertCredential = (id: string) =>
+    db
+      .prepare(
+        `INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
+         VALUES (?, ?, ?, 'https://api.example.com', '{"kind":"bearer"}', ?, ?)`,
+      )
+      .bind(id, id.replace('_', '-'), id, T, T);
+
   it('unions the teams of an active user, built-ins first', async () => {
-    await db.batch([
-      db
-        .prepare(
-          `INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
-           VALUES ('svc_a', 'a', 'A', 'https://api.example.com', '{"kind":"bearer"}', ?, ?)`,
-        )
-        .bind(T, T),
-      db
-        .prepare(
-          `INSERT INTO credential_access_rules (id, credential_id, name, profile, issuer, jwks_uri, audience, allowed_algs,
-             max_token_age_seconds, created_at, updated_at)
-           VALUES ('cpr_x', (SELECT id FROM credentials ORDER BY id LIMIT 1), 'X', 'generic', 'https://x.example.com', 'https://x.example.com/jwks',
-             'tokengate:0123456789abcdef', '["RS256"]', 900, ?, ?)`,
-        )
-        .bind(T, T),
-    ]);
+    await db.batch([insertCredential('svc_a'), insertCredential('svc_b')]);
     const user = await createUser({ email: 'u@example.com', role: 'viewer' });
     await createTeam({
       name: 'Payments',
-      permissions: ['tokens:create'],
-      tokens: { svc_a: { level: 2, reveal: true } },
-      consumers: { cpr_x: { level: 3 } },
+      permissions: ['credentials:create'],
+      credentials: { svc_a: { level: 2, reveal: true }, svc_b: { level: 1 } },
       members: [user],
     });
-    await createTeam({ name: 'Audit', tokens: { svc_a: { level: 1 } }, members: [user] });
+    await createTeam({
+      name: 'Audit',
+      credentials: { svc_a: { level: 1, accessRules: true } },
+      members: [user],
+    });
     await addMember('tea_viewer', user.id);
     const scope = await loadScope(db, user.id);
     expect(scope.teams.map((t) => t.name)).toEqual(['Viewers', 'Audit', 'Payments']);
-    expect([...scope.permissions]).toEqual(['tokens:create']);
-    expect(scope.tokens).toEqual(kinds(1, { svc_a: { level: 2, reveal: true } }));
-    expect(scope.consumers).toEqual(kinds(1, { cpr_x: { level: 3, reveal: false } }));
+    expect([...scope.permissions]).toEqual(['credentials:create']);
+    expect(scope.credentials).toEqual(
+      credentials(1, {
+        svc_a: { level: 2, reveal: true, accessRules: true },
+        svc_b: 1,
+      }),
+    );
     expect(highestBuiltin(scope)).toBe('viewer');
   });
 
@@ -486,16 +559,20 @@ describe('loadScope', () => {
     const scope = await loadScope(db, user.id);
     expect(scope.teams).toEqual([]);
     expect(scope.permissions.size).toBe(0);
-    expect(scope.tokens).toEqual(kinds(0));
+    expect(scope.credentials).toEqual(credentials(0));
   });
 
-  it('reads the owner powers from the seed', async () => {
-    const user = await createUser({ email: 'o@example.com', role: 'viewer' });
-    await addMember('tea_owner', user.id);
-    const scope = await loadScope(db, user.id);
+  it('reads the built-in powers from the seed', async () => {
+    const owner = await createUser({ email: 'o@example.com', role: 'viewer' });
+    await addMember('tea_owner', owner.id);
+    const scope = await loadScope(db, owner.id);
     expect(scope.permissions).toEqual(BUILTIN_TEAMS.owner.permissions);
-    expect(scope.tokens).toEqual(kinds(3, {}, true));
-    expect(scope.consumers).toEqual(kinds(3));
+    expect(scope.credentials).toEqual(credentials(3, {}, { reveal: true, accessRules: true }));
     expect(isGlobalViewer(scope)).toBe(true);
+    const admin = await createUser({ email: 'a@example.com', role: 'viewer' });
+    await addMember('tea_admin', admin.id);
+    const adminScope = await loadScope(db, admin.id);
+    expect(adminScope.credentials).toEqual(credentials(3, {}, { accessRules: true }));
+    expect(holds(adminScope, { id: 'svc_any', need: 'reveal' })).toBe(false);
   });
 });
