@@ -185,7 +185,7 @@ Comments are concise and say what the code guarantees and why. They are part of 
 
 ## Security-sensitive code
 
-[.github/CODEOWNERS](.github/CODEOWNERS) lists these paths explicitly. GitHub requests a review from the code owner (`@2fd`) on every PR that touches them:
+These paths are security-sensitive:
 
 | Path | Why |
 | --- | --- |
