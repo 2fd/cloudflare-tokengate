@@ -77,7 +77,7 @@ export function hostOf(url: string): string {
  * The ui tone of a rule status in rows, matrix cells and map wires: active ok, expiring and
  * risk warn, expired and blocked bad, inactive and disabled off (the word says which).
  */
-export function accessTone(status: StatusKey): Exclude<Tone, 'info'> {
+export function accessTone(status: StatusKey): Exclude<Tone, 'info' | 'pending'> {
   switch (status) {
     case 'active':
       return 'ok';
@@ -89,7 +89,7 @@ export function accessTone(status: StatusKey): Exclude<Tone, 'info'> {
       return 'off';
     default: {
       const tone = STATUS[status].tone;
-      return tone === 'muted' ? 'off' : tone;
+      return tone === 'muted' || tone === 'pending' ? 'off' : tone;
     }
   }
 }

@@ -50,15 +50,21 @@ export const GROUPS: ReadonlyArray<{
     id: 'accent',
     title: 'Accent',
     description:
-      'One violet accent: the primary button, the active tab, selection, links and focus.',
+      'One petrol accent, only on what you can act on: the primary button, links, the active tab, selection, the current step and focus. Labels, counts and highlights are neutral.',
     rows: [
       { token: 'accent', use: 'Primary button, active tab bar, selection' },
       { token: 'accent-hover', use: 'Primary button hover' },
       { token: 'on-accent', use: 'Text on the accent' },
-      { token: 'accent-text', use: 'Links' },
-      { token: 'accent-soft', use: 'Selected rows and cards, active filter chips, count pills' },
+      {
+        token: 'accent-text',
+        use: 'Links (underlined), ghost buttons; lighter than the fill in dark',
+      },
+      {
+        token: 'accent-soft',
+        use: 'Selected rows and cards, active filter chips, hover of actions',
+      },
       { token: 'accent-soft-text', use: 'Text on accent-soft' },
-      { token: 'focus', use: 'Focus ring (3px solid, 2px offset)' },
+      { token: 'focus', use: 'Focus ring (3px solid, 2px offset); same value as accent-text' },
     ],
   },
   {
@@ -75,9 +81,12 @@ export const GROUPS: ReadonlyArray<{
       { token: 'warn-dot', use: 'Warn dot, expiring wire' },
       { token: 'bad', use: 'Denied, expired, failed (text)' },
       { token: 'bad-bg', use: 'Bad badge and callout fill' },
-      { token: 'bad-dot', use: 'Bad dot, denied bars' },
-      { token: 'info', use: 'Notes (text, dot)' },
+      { token: 'bad-dot', use: 'Bad dot: what needs action' },
+      { token: 'bad-muted', use: 'Routine denials: the denied chart series' },
+      { token: 'info', use: 'Notes (neutral): text, dot, callout bar' },
       { token: 'info-bg', use: 'Info badge and callout fill' },
+      { token: 'pending', use: 'Waiting on someone: Pending approval, Invited (text, dot)' },
+      { token: 'pending-bg', use: 'Pending badge fill' },
       { token: 'danger', use: 'Solid danger: the confirm button inside a dialog only' },
       { token: 'on-danger', use: 'Text on danger' },
     ],
@@ -85,7 +94,8 @@ export const GROUPS: ReadonlyArray<{
   {
     id: 'nav',
     title: 'Navigation',
-    description: 'The sidebar is light in both schemes; its tokens are aliases of the ones above.',
+    description:
+      'The sidebar follows the scheme (light in light, dark in dark); its tokens are aliases of the ones above.',
     rows: [
       { token: 'nav-text', use: 'Sidebar items' },
       { token: 'nav-muted', use: 'Counts in the sidebar' },
@@ -102,7 +112,7 @@ export const GROUPS: ReadonlyArray<{
       'Bars, swatches and the connections map. Patterns, not only color, tell series apart.',
     rows: [
       { token: 'chart-allowed', use: 'Allowed bars and swatches' },
-      { token: 'chart-denied', use: 'Denied bars (with the hatch pattern)' },
+      { token: 'chart-denied', use: 'Denied bars, hatched; routine denials' },
       { token: 'chart-error', use: 'Upstream error bars (with the dots pattern)' },
       { token: 'wire', use: 'Active wire in the connections map' },
       { token: 'wire-warn', use: 'Expiring wire' },

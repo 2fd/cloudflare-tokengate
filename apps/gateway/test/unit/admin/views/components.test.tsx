@@ -730,7 +730,7 @@ describe('status, time, notices, navigation', () => {
     );
     for (const key of Object.keys(STATUS) as StatusKey[]) {
       const out = html(<StatusBadge status={key} detail="2" />);
-      expect(out, key).toMatch(/^<span class="badge(?: (?:ok|warn|bad|off))?">/);
+      expect(out, key).toMatch(/^<span class="badge(?: (?:ok|warn|bad|pending|off))?">/);
     }
   });
 

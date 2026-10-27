@@ -827,7 +827,8 @@ export const data: readonly ComponentDoc[] = [
             name: 'highlight',
             type: 'boolean',
             default: 'false',
-            description: 'Accent-soft row: the one just changed or arrived from.',
+            description:
+              'Neutral surface-3 row (not the accent: it is not a selection): the one just changed or arrived from.',
           },
           classProp('tr'),
           { name: 'children', type: 'Child', description: 'A RowHeader, then Cells.' },

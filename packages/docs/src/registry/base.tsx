@@ -39,7 +39,7 @@ const CLASS_PROP: PropDoc = {
 
 const BRANDS = Object.keys(LOGO_BRANDS) as LogoBrand[];
 const STATUSES = Object.keys(STATUS_VOCABULARY) as StatusKind[];
-const TONE_TYPE = "'ok' | 'warn' | 'bad' | 'info' | 'off'";
+const TONE_TYPE = "'ok' | 'warn' | 'bad' | 'info' | 'pending' | 'off'";
 const STATUS_TYPE = STATUSES.map((status) => `'${status}'`).join(' | ');
 
 export const base: readonly ComponentDoc[] = [
@@ -449,9 +449,10 @@ export const base: readonly ComponentDoc[] = [
             <Badge tone="bad" glyph="✕">
               Denied
             </Badge>
-            <Badge tone="info" glyph="◐">
+            <Badge tone="pending" glyph="◐">
               Invited
             </Badge>
+            <Badge tone="info">Note</Badge>
             <Badge tone="off" glyph="⏸">
               Paused
             </Badge>
@@ -460,12 +461,14 @@ export const base: readonly ComponentDoc[] = [
         code: `<Badge tone="ok" glyph="✓">Passed</Badge>
 <Badge tone="warn" glyph="⚠">Errors</Badge>
 <Badge tone="bad" glyph="✕">Denied</Badge>
-<Badge tone="info" glyph="◐">Invited</Badge>
+<Badge tone="pending" glyph="◐">Invited</Badge>
+<Badge tone="info">Note</Badge>
 <Badge tone="off" glyph="⏸">Paused</Badge>`,
       },
       {
         title: 'Labels',
-        description: 'Neutral (default), accent and outline badges carry facts, not status.',
+        description:
+          'Neutral (default), accent and outline badges carry facts, not status. The accent tone is a stronger neutral: a label is not an action, so it never takes the petrol accent.',
         render: () => (
           <>
             <Badge>Owner</Badge>
@@ -489,7 +492,7 @@ export const base: readonly ComponentDoc[] = [
           },
           {
             name: 'tone',
-            type: "'ok' | 'warn' | 'bad' | 'info' | 'off' | 'accent' | 'outline' | 'neutral'",
+            type: "'ok' | 'warn' | 'bad' | 'info' | 'pending' | 'off' | 'accent' | 'outline' | 'neutral'",
             default: "'neutral'",
             description: 'Color of the badge; overrides the status tone.',
           },
@@ -519,7 +522,7 @@ export const base: readonly ComponentDoc[] = [
       'Do not use a badge without a word, or a color without a word.',
       'Do not make a badge clickable.',
     ],
-    classes: ['badge', 'ok', 'warn', 'bad', 'info', 'off', 'accent', 'outline'],
+    classes: ['badge', 'ok', 'warn', 'bad', 'info', 'pending', 'off', 'accent', 'outline'],
   },
 
   // ----- Status ---------------------------------------------------------------------------------
@@ -555,6 +558,7 @@ export const base: readonly ComponentDoc[] = [
             <Status tone="warn">Expires in 9 days</Status>
             <Status tone="bad">Denied</Status>
             <Status tone="info">Note</Status>
+            <Status status="pending" />
             <Status status="disabled" />
           </>
         ),
@@ -562,6 +566,7 @@ export const base: readonly ComponentDoc[] = [
 <Status tone="warn">Expires in 9 days</Status>
 <Status tone="bad">Denied</Status>
 <Status tone="info">Note</Status>
+<Status status="pending" />
 <Status status="disabled" />`,
       },
       {
@@ -577,12 +582,13 @@ export const base: readonly ComponentDoc[] = [
               <Dot tone="warn" />
               <Dot tone="bad" />
               <Dot tone="info" />
+              <Dot tone="pending" />
               <Dot tone="off" />
             </span>
           </>
         ),
         code: `<span><Dot tone="warn" />3 warnings to review</span>
-<Dot /> <Dot tone="warn" /> <Dot tone="bad" /> <Dot tone="info" /> <Dot tone="off" />`,
+<Dot /> <Dot tone="warn" /> <Dot tone="bad" /> <Dot tone="info" /> <Dot tone="pending" /> <Dot tone="off" />`,
       },
       {
         title: 'Risk tag',
@@ -632,7 +638,7 @@ export const base: readonly ComponentDoc[] = [
     ],
     do: ['Use the same word as the badge for the same status.'],
     dont: ['Do not use a dot alone to show status.', 'Do not mix badges and dots in one column.'],
-    classes: ['st', 'dot', 'ok', 'warn', 'bad', 'info', 'off', 'risktag'],
+    classes: ['st', 'dot', 'ok', 'warn', 'bad', 'info', 'pending', 'off', 'risktag'],
   },
 
   // ----- Chip -----------------------------------------------------------------------------------

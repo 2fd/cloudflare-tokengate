@@ -845,7 +845,7 @@ export function Chip(props: ChipProps) {
     <UiChip
       href={props.href}
       glyph={info?.glyph || undefined}
-      glyphTone={tone === 'off' ? undefined : tone}
+      glyphTone={tone === 'off' || tone === 'pending' ? undefined : tone}
     >
       <span aria-hidden="true">
         {props.text}

@@ -110,6 +110,38 @@ describe('Pipeline', () => {
     );
   });
 
+  it('does not tint a drop or a total whose count is 0', () => {
+    const zero = render(
+      <Pipeline
+        stages={[
+          {
+            label: 'Received',
+            value: 5,
+            totals: [
+              { label: 'Denied', count: 0, href: '/d' },
+              { label: 'Errors', count: '0', href: '/e', kind: 'error' },
+            ],
+          },
+          {
+            label: 'Caller verified',
+            value: 5,
+            drop: { count: 0, unit: 'not recognized', why: 'None.' },
+          },
+          {
+            label: 'Upstream OK',
+            value: 5,
+            drop: { count: '0', unit: 'upstream errors', why: 'None.', kind: 'error' },
+          },
+        ]}
+      />,
+    );
+    expect(zero).toContain('<a class="zero" href="/d">');
+    expect(zero).toContain('<a class="err zero" href="/e">');
+    expect(zero).toContain('<div class="drop zero">');
+    expect(zero).toContain('<div class="drop err zero">');
+    expect(html).not.toContain('zero');
+  });
+
   it('a single stage is in, not out; labels are escaped', () => {
     const one = render(<Pipeline stages={[{ label: '<i>', value: '1' }]} />);
     expect(one).toBe(

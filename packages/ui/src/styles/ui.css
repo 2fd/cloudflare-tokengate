@@ -2,8 +2,9 @@
    @tokengate/ui · design system D
    Information architecture: Segment-style (connections-first: sidebar order,
    pipeline, needs attention, connections map, one-page give-access flow).
-   Visual language: WorkOS/Clerk-style developer console (tray cards, violet
-   accent, 400/500 weights, 4px badges, dense rows, mono IDs, right rail).
+   Visual language: WorkOS/Clerk-style developer console (tray cards, mist
+   neutrals, one petrol accent on interactive elements only, 400/500 weights,
+   4px badges, dense rows, mono IDs, right rail).
    No JS. No external resources. System fonts. WCAG 2.2 AA light + dark.
    Served as one file (apps serve it at /static/ui.<hash>.css, see src/css.ts);
    works with CSP `style-src 'self'`: no imports, no url() to other origins.
@@ -47,51 +48,53 @@
   --gutter: 2rem;
   --logo-xs: 1.125rem; --logo-sm: 1.5rem; --logo-md: 2rem; --logo-lg: 2.5rem;
 
-  /* neutrals */
-  --bg:        light-dark(#f6f7f9, #0f1115);
-  --surface:   light-dark(#ffffff, #16191f);
-  --surface-2: light-dark(#eef0f4, #1c2027);
-  --surface-3: light-dark(#e6e9ef, #252a33);
-  --text:      light-dark(#16181d, #e8eaef);
-  --text-2:    light-dark(#4a5060, #b4bac6);
-  --text-3:    light-dark(#5c6271, #9aa1ae);
-  --line:        light-dark(#e2e5eb, #2a2f38);   /* decorative dividers */
-  --line-strong: light-dark(#cfd3db, #363c47);   /* card borders, decorative */
-  --control-border: light-dark(#767d8c, #6f7787);/* inputs, secondary buttons: >= 3:1 */
-  /* accent (violet) */
-  --accent:          light-dark(#5746d6, #a99fff);
-  --accent-hover:    light-dark(#4a3abf, #bdb5ff);
-  --on-accent:       light-dark(#ffffff, #140f33);
-  --accent-text:     light-dark(#5746d6, #a99fff);
-  --accent-soft:     light-dark(#efedff, #25214d);
-  --accent-soft-text:light-dark(#4334b8, #cfc9ff);
-  --focus:           light-dark(#5746d6, #a99fff);
-  /* status */
-  --ok:   light-dark(#166534, #6fdc9c); --ok-bg:   light-dark(#e7f5ec, #10291b); --ok-dot:   light-dark(#1f8a4c, #3fc77a);
-  --warn: light-dark(#874300, #f3c46a); --warn-bg: light-dark(#fdf2d8, #2e2309); --warn-dot: light-dark(#b86e00, #e0a43a);
-  --bad:  light-dark(#b0211a, #ff9a8f); --bad-bg:  light-dark(#fde7e5, #3a1614); --bad-dot:  light-dark(#d92d20, #ff6b5e);
-  --info: light-dark(#1e4bb8, #9cbcff); --info-bg: light-dark(#e7eefc, #14223f);
-  --danger: light-dark(#b0211a, #ff8a7e); --on-danger: light-dark(#ffffff, #2a0907);
-  --chart-allowed: light-dark(#858c9c, #69728a); --chart-denied: var(--bad-dot); --chart-error: var(--warn-dot);
+  /* neutrals (mist: blue-green grey, H≈210, low chroma) */
+  --bg:        light-dark(#f3f6f7, #101314);
+  --surface:   light-dark(#ffffff, #161a1b);
+  --surface-2: light-dark(#ebf0f1, #1c2223);
+  --surface-3: light-dark(#e1e8e9, #252b2d);
+  --text:      light-dark(#171d1f, #e6eaeb);
+  --text-2:    light-dark(#4c5456, #bfc7c9);
+  --text-3:    light-dark(#5e6668, #a9b1b3);
+  --line:        light-dark(#e2e6e7, #292f30);   /* decorative dividers */
+  --line-strong: light-dark(#ced4d5, #343b3c);   /* card borders, decorative */
+  --control-border: light-dark(#757d7f, #757d7f);/* inputs, secondary buttons: >= 3:1 */
+  /* accent (petrol): interactive elements only (buttons, links, selection, current step, focus) */
+  --accent:          light-dark(#055f73, #79b8c7);   /* fill: dimmer in dark so a full-width button does not glare */
+  --accent-hover:    light-dark(#004d5e, #88c4d2);
+  --on-accent:       light-dark(#ffffff, #000c0f);
+  --accent-text:     light-dark(#055f73, #83cbdb);   /* links: lighter than the fill in dark */
+  --accent-soft:     light-dark(#e3f3f8, #123037);   /* selected and selection states only */
+  --accent-soft-text:light-dark(#014b5b, #ade0ec);
+  --focus:           light-dark(#055f73, #83cbdb);
+  /* status. Light dots step by lightness (bad darkest, ok, warn lightest) so they part without hue */
+  --ok:   light-dark(#256b3a, #99ebaa); --ok-bg:   light-dark(#e4f8e7, #132819); --ok-dot:   light-dark(#258343, #66d592);
+  --warn: light-dark(#844b17, #f7ca75); --warn-bg: light-dark(#fef2d9, #2c2111); --warn-dot: light-dark(#c17d13, #e5a243);
+  --bad:  light-dark(#aa2d18, #fa9d8a); --bad-bg:  light-dark(#feeeeb, #321c19); --bad-dot:  light-dark(#921d04, #e0593b);
+  --bad-muted: light-dark(#8d5951, #d48c80);   /* routine denials (chart denied series); bad-dot stays for actionable states */
+  --info: light-dark(#3a4546, #c9d3d5); --info-bg: light-dark(#eaf2f3, #212829);   /* notes: neutral, not a hue */
+  --pending: light-dark(#1540a2, #97baff); --pending-bg: light-dark(#e9f0ff, #14223d);   /* waiting on someone: Pending approval, Invited */
+  --danger: light-dark(#aa2d18, #f47d67); --on-danger: light-dark(#ffffff, #250e0b);
+  --chart-allowed: light-dark(#7b8587, #6e7a7c); --chart-denied: var(--bad-muted); --chart-error: var(--warn-dot);
 
   /* surface model: page -> tray shell -> panel (tray cards) */
-  --page-bg:  light-dark(#ffffff, #0f1115);      /* main column */
-  --tray-bg:  light-dark(#f6f7f9, #16191f);      /* outer tray shell, 4px padding */
-  --panel-bg: light-dark(#ffffff, #1c2027);      /* inner panel */
-  --panel-sub:light-dark(#eef0f4, #16191f);      /* table header, group rows inside a panel */
-  --input-bg: light-dark(#ffffff, #0f1115);
-  --btn-bg:   light-dark(#ffffff, #252a33);      /* secondary button fill */
-  --row-hover:light-dark(#f6f7f9, #22262e);
+  --page-bg:  light-dark(#ffffff, #101314);      /* main column */
+  --tray-bg:  light-dark(#f3f6f7, #161a1b);      /* outer tray shell, 4px padding */
+  --panel-bg: light-dark(#ffffff, #1c2223);      /* inner panel */
+  --panel-sub:light-dark(#ebf0f1, #161a1b);      /* table header, group rows inside a panel */
+  --input-bg: light-dark(#ffffff, #101314);
+  --btn-bg:   light-dark(#ffffff, #252b2d);      /* secondary button fill */
+  --row-hover:light-dark(#f3f6f7, #212627);
   --tray-ring:  0 0 0 1px var(--line);
-  --panel-ring: 0 0 0 1px light-dark(rgb(16 24 40 / .08), rgb(255 255 255 / .07)), 0 1px 2px light-dark(rgb(16 24 40 / .05), transparent);
-  --shadow-raised: 0 1px 2px light-dark(rgb(16 24 40 / .08), transparent), 0 0 0 1px light-dark(rgb(16 24 40 / .04), rgb(255 255 255 / .06));
-  --shadow-dialog: 0 24px 48px -12px light-dark(rgb(16 24 40 / .28), rgb(0 0 0 / .6)), 0 0 0 1px light-dark(rgb(16 24 40 / .08), rgb(255 255 255 / .08));
-  --primary-shadow: inset 0 1px 0 rgb(255 255 255 / .16), 0 1px 2px light-dark(rgb(40 24 120 / .25), transparent);
+  --panel-ring: 0 0 0 1px light-dark(rgb(14 30 36 / .08), rgb(255 255 255 / .07)), 0 1px 2px light-dark(rgb(14 30 36 / .05), transparent);
+  --shadow-raised: 0 1px 2px light-dark(rgb(14 30 36 / .08), transparent), 0 0 0 1px light-dark(rgb(14 30 36 / .04), rgb(255 255 255 / .06));
+  --shadow-dialog: 0 24px 48px -12px light-dark(rgb(14 30 36 / .28), rgb(0 0 0 / .6)), 0 0 0 1px light-dark(rgb(14 30 36 / .08), rgb(255 255 255 / .08));
+  --primary-shadow: inset 0 1px 0 rgb(255 255 255 / .14), 0 1px 2px light-dark(rgb(10 48 62 / .25), transparent);
   --logo-ring: inset 0 0 0 1px light-dark(rgb(0 0 0 / .06), rgb(255 255 255 / .18));
   --backdrop: rgb(10 12 16 / .5);
   --focus-ring: 3px solid var(--focus);
-  /* nav (light sidebar, both themes) */
-  --nav-bg:          light-dark(#f6f7f9, #13161b);
+  /* nav (follows the scheme) */
+  --nav-bg:          light-dark(#f3f6f7, #131717);
   --nav-text:        var(--text-2);
   --nav-muted:       var(--text-3);
   --nav-hover-bg:    var(--surface-2);
@@ -336,8 +339,8 @@ h1,.h1{font-size:var(--fs-3xl);line-height:var(--lh-3xl);font-weight:var(--fw-me
 .btn[disabled],.btn[aria-disabled="true"]{opacity:.55;cursor:not-allowed;transform:none}
 .btn .plus{font-size:1.125rem;line-height:1;margin-top:-2px}
 .btn svg.ic{width:15px;height:15px}
-.linkish{color:var(--accent-text);font-weight:var(--fw-medium);text-decoration:none;white-space:nowrap}
-.linkish:hover{text-decoration:underline}
+.linkish{color:var(--accent-text);font-weight:var(--fw-medium);text-decoration:underline;text-underline-offset:2px;text-decoration-thickness:1px;white-space:nowrap}   /* underlined at rest: color alone does not mark a link (WCAG 1.4.1) */
+.linkish:hover{text-decoration-thickness:2px}
 .btn-row{display:flex;flex-wrap:wrap;gap:var(--sp-2);align-items:center}
 .btn-row form{display:contents}
 
@@ -347,7 +350,8 @@ h1,.h1{font-size:var(--fs-3xl);line-height:var(--lh-3xl);font-weight:var(--fw-me
 .badge.warn{background:var(--warn-bg);color:var(--warn);box-shadow:none}
 .badge.bad{background:var(--bad-bg);color:var(--bad);box-shadow:none}
 .badge.info{background:var(--info-bg);color:var(--info);box-shadow:none}
-.badge.accent{background:var(--accent-soft);color:var(--accent-soft-text);box-shadow:none}
+.badge.pending{background:var(--pending-bg);color:var(--pending);box-shadow:none}
+.badge.accent{background:var(--surface-3);color:var(--text);box-shadow:none}   /* emphasized label ("Most used"): a fact, not an action, so neutral */
 .badge.outline{background:transparent;box-shadow:inset 0 0 0 1px var(--line-strong)}
 .badge.off{background:transparent;box-shadow:inset 0 0 0 1px var(--control-border);color:var(--text-2)}
 /* dot + text (dense rows). The dot never stands alone. */
@@ -356,6 +360,7 @@ h1,.h1{font-size:var(--fs-3xl);line-height:var(--lh-3xl);font-weight:var(--fw-me
 .st.warn::before,.dot.warn{background:var(--warn-dot)}
 .st.bad::before,.dot.bad{background:var(--bad-dot)}
 .st.info::before,.dot.info{background:var(--info)}
+.st.pending::before,.dot.pending{background:var(--pending)}
 .st.off::before,.dot.off{background:transparent;box-shadow:inset 0 0 0 1.5px var(--control-border)}
 /* risk tag (on radio cards, rows) */
 .risktag{display:inline-flex;align-items:center;gap:3px;height:1.25rem;padding:0 6px;border-radius:var(--r-1);background:var(--warn-bg);color:var(--warn);font-size:var(--fs-xs);font-weight:var(--fw-medium);white-space:nowrap}
@@ -434,7 +439,7 @@ details.disc>.disc-b>.diff{margin-top:0}
 .tbl tr>:first-child{padding-left:var(--sp-4)}
 .tbl tr>:last-child{padding-right:var(--sp-4)}
 .tbl tbody tr:hover>*{background:var(--row-hover)}
-.tbl tbody tr.hl>*{background:var(--accent-soft)}
+.tbl tbody tr.hl>*{background:var(--surface-3)}   /* row just changed or arrived from: not a selection, so neutral */
 .tbl .num,.tbl .r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .tbl .act{width:1%;text-align:right;white-space:nowrap}
 .tbl .act form{display:inline}
@@ -658,7 +663,7 @@ details.more>.more-b{margin-top:var(--sp-2);display:grid;gap:var(--sp-4)}
 .fstep::before{content:"";position:absolute;left:calc(.75rem - 1px);top:2rem;bottom:var(--sp-2);width:2px;border-radius:2px;background:var(--line)}
 .fstep:last-child{padding-bottom:0}
 .fstep:last-child::before{display:none}
-.fstep-n{display:grid;place-items:center;width:1.5rem;height:1.5rem;margin-top:1px;border-radius:50%;background:var(--accent-soft);font-size:var(--fs-xs);font-weight:600;color:var(--accent-soft-text);font-variant-numeric:tabular-nums}
+.fstep-n{display:grid;place-items:center;width:1.5rem;height:1.5rem;margin-top:1px;border-radius:50%;background:var(--surface-3);font-size:var(--fs-xs);font-weight:600;color:var(--text);font-variant-numeric:tabular-nums}   /* decorative number: neutral; only the current step takes the accent */
 .fstep.is-current .fstep-n{background:var(--accent);box-shadow:none;color:var(--on-accent)}
 .fstep.is-done .fstep-n{background:var(--ok-bg);box-shadow:none;color:var(--ok)}
 .fstep.is-failed .fstep-n{background:var(--bad-bg);box-shadow:none;color:var(--bad)}
@@ -702,7 +707,7 @@ details.type-card[open]>summary>.sel{display:inline}
 /* code / snippet */
 pre.code{margin:0;padding:var(--sp-4);overflow:auto;border-radius:var(--r-3);background:var(--panel-sub);box-shadow:inset 0 0 0 1px var(--line);color:var(--text);font:var(--fs-sm)/1.6 var(--font-mono);white-space:pre;tab-size:2;user-select:all;-webkit-user-select:all}
 pre.code .c{color:var(--text-3)}
-pre.code .k{color:var(--accent-text)}
+pre.code .k{color:var(--text-2)}
 .code-cap{margin-bottom:6px;font-size:var(--fs-xs);color:var(--text-2)}
 
 /* ===== 10. Live form (:has) — generic, no per-page CSS ====================
@@ -950,7 +955,7 @@ a.stage:hover .stage-go{text-decoration:underline}
 .stage .big{margin-top:var(--sp-1);font-size:var(--fs-4xl);line-height:var(--lh-4xl);font-weight:var(--fw-medium);letter-spacing:var(--tracking-tight);font-variant-numeric:tabular-nums}
 .stage .meta{display:flex;flex-wrap:wrap;gap:2px var(--sp-1);align-items:center}   /* facts between " · " wrap whole (Pipeline) */
 .stage-go{margin-top:auto;padding-top:var(--sp-2);font-size:var(--fs-sm);font-weight:var(--fw-medium);color:var(--accent-text)}
-.stage.in{box-shadow:inset 0 2px 0 var(--accent),var(--panel-ring)}
+.stage.in{box-shadow:inset 0 2px 0 var(--text-3),var(--panel-ring)}
 .stage.out{box-shadow:inset 0 2px 0 var(--ok-dot),var(--panel-ring)}
 /* arrow to the next stage, centered on the stage */
 .pipe-step:not(:last-child)>.stage::after{content:"";position:absolute;left:100%;top:50%;width:calc(var(--pipe-gap) - 6px);margin-left:3px;border-top:1.5px solid var(--text-3)}
@@ -960,6 +965,10 @@ a.stage:hover .stage-go{text-decoration:underline}
 .drop::before{content:"";position:absolute;left:var(--sp-5);top:calc(-1 * var(--pipe-row));height:var(--pipe-row);border-left:2px solid var(--bad-dot)}
 .drop.err{background:var(--warn-bg);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--warn-dot) 40%,transparent);color:var(--warn)}
 .drop.err::before{border-color:var(--warn-dot)}
+/* nothing lost at this stage: no alarm color (ISA-101), the tint shows only when the count is above 0 */
+.drop.zero{background:transparent;box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--text-2)}
+.drop.zero::before{border-color:var(--line-strong)}
+.drop.zero .drop-why{color:var(--text-2)}
 .drop-n{font-size:var(--fs-xl);line-height:var(--lh-xl);font-weight:var(--fw-medium);font-variant-numeric:tabular-nums}
 .drop-n small{font-size:var(--fs-md);color:inherit}
 .drop-why{font-size:var(--fs-sm);line-height:var(--lh-sm);color:var(--text)}
@@ -969,6 +978,7 @@ a.drop:hover .drop-go{text-decoration-thickness:2px}
 .pipe-tot a{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--sp-2);color:var(--text-2);text-decoration:none}
 .pipe-tot a b{font-size:var(--fs-lg);font-weight:var(--fw-medium);color:var(--bad);font-variant-numeric:tabular-nums}
 .pipe-tot a.err b{color:var(--warn)}
+.pipe-tot a.zero b{color:var(--text-2)}
 .pipe-tot a:hover .tl{text-decoration:underline}
 
 /* --- Needs attention: one card per item, inline fix */
@@ -1023,7 +1033,7 @@ a.drop:hover .drop-go{text-decoration-thickness:2px}
 mark{padding:0 3px;border-radius:3px;background:var(--bad-bg);color:var(--bad);font-weight:var(--fw-medium)}
 mark.ok{background:var(--ok-bg);color:var(--ok)}
 /* next-step box ("Give access from this request") */
-.todo{display:grid;gap:var(--sp-3);padding:var(--sp-4);border-radius:var(--r-3);background:var(--accent-soft);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 35%,transparent)}
+.todo{display:grid;gap:var(--sp-3);padding:var(--sp-4);border-radius:var(--r-3);background:var(--panel-sub);box-shadow:inset 0 0 0 1px var(--line-strong)}   /* neutral box: its primary button carries the accent */
 .prefill{display:flex;flex-wrap:wrap;gap:var(--sp-1) var(--sp-2);align-items:center;font-size:var(--fs-sm);color:var(--text-2)}
 
 
@@ -1046,7 +1056,7 @@ a.arrow:hover .ent-n{color:var(--accent-text);text-decoration:underline}
 .cmap-h{display:flex;align-items:center;gap:var(--sp-2);height:2.25rem;margin-bottom:var(--sp-3);border-bottom:1px solid var(--line);font-size:var(--fs-xs);font-weight:var(--fw-medium);color:var(--text-2);white-space:nowrap}
 .cmap-h .n{color:var(--text-3);font-weight:var(--fw-regular)}
 .cmap-mid .cmap-h{justify-content:center}
-.hub{display:inline-flex;align-items:center;gap:6px;height:1.5rem;padding:0 var(--sp-2) 0 3px;border-radius:var(--r-1);background:var(--accent-soft);color:var(--accent-soft-text);font-size:var(--fs-xs);font-weight:var(--fw-medium)}
+.hub{display:inline-flex;align-items:center;gap:6px;height:1.5rem;padding:0 var(--sp-2) 0 3px;border-radius:var(--r-1);background:var(--surface-3);color:var(--text);font-size:var(--fs-xs);font-weight:var(--fw-medium)}
 .hub .mark{grid-row:auto;width:1.125rem;height:1.125rem;border-radius:3px;box-shadow:none}
 .hub .mark img{display:block;width:100%;height:100%;object-fit:contain;border-radius:inherit}
 .mark svg{width:11px;height:11px}
@@ -1078,7 +1088,7 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 .node.dim .logo{opacity:.45;filter:grayscale(1)}
 .node.dim .cnt{background:var(--surface-2);color:var(--text-2)}
 /* access count pill sits on the wire side */
-.cnt{display:inline-grid;place-items:center;flex:none;min-width:1.5rem;height:1.375rem;padding:0 6px;border-radius:var(--r-1);background:var(--accent-soft);color:var(--accent-soft-text);font-size:var(--fs-xs);font-weight:600;font-variant-numeric:tabular-nums}
+.cnt{display:inline-grid;place-items:center;flex:none;min-width:1.5rem;height:1.375rem;padding:0 6px;border-radius:var(--r-1);background:var(--surface-3);color:var(--text);font-size:var(--fs-xs);font-weight:600;font-variant-numeric:tabular-nums}   /* a count, not an action: neutral */
 .cnode .cnt{position:absolute;right:-.75rem;top:50%;transform:translateY(-50%);box-shadow:0 0 0 3px var(--tray-bg)}
 .tnode{display:grid;grid-template-columns:auto minmax(0,1fr) 3.5rem 3rem 3rem 4.75rem;gap:var(--sp-2);padding-left:0}  /* tight number columns: the token name and its status get the room in a 56rem column */
 .tnode .cnt{margin-left:-.75rem;box-shadow:0 0 0 3px var(--tray-bg)}
@@ -1162,7 +1172,7 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 .wst{display:flex;flex-direction:column;align-items:flex-end;gap:2px}
 .whub{position:relative;display:flex;align-items:center}
 .whub::before{content:"";position:absolute;left:0;top:calc(var(--h-node) / 2);bottom:calc(var(--h-node) / 2);border-left:1.5px solid var(--wire)}
-.whub>.node{flex-direction:column;justify-content:center;gap:var(--sp-1);width:100%;height:auto;margin-left:var(--sp-5);padding:var(--sp-4);text-align:center}
+.whub>.node{flex-direction:column;justify-content:center;gap:var(--sp-1);width:100%;height:auto;margin-left:var(--sp-5);padding:var(--sp-4);text-align:center;background:var(--surface-2)}   /* the credential at the center: static, so a neutral fill, never the accent */
 .whub>.node::before{content:"";position:absolute;right:100%;top:50%;width:var(--sp-5);border-top:1.5px solid var(--wire)}
 .whub>.node::after{content:"";position:absolute;left:-8px;top:50%;transform:translateY(-50%);border:4.5px solid transparent;border-left:6px solid var(--wire)}
 .whub .nm{font-size:var(--fs-lg);line-height:var(--lh-lg);font-weight:var(--fw-medium)}
@@ -1207,7 +1217,7 @@ a.node:hover{box-shadow:inset 0 0 0 1px var(--accent),var(--panel-ring)}
 .quick .q:hover{border-color:var(--control-border)}
 .progress{display:flex;gap:4px;width:8rem}
 .progress i{flex:1;height:6px;border-radius:3px;background:var(--surface-3);box-shadow:inset 0 0 0 1px var(--line-strong)}
-.progress i.on{background:var(--accent);box-shadow:none}
+.progress i.on{background:var(--ok-dot);box-shadow:none}   /* done steps, as the checklist's ok numbers */
 
 /* ===== 17. Responsive ===================================================== */
 @media (max-width:80rem){

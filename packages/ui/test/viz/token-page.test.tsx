@@ -89,7 +89,7 @@ describe('WhoCanUse', () => {
     );
     expect(html).toContain('<li class="wg rest"><a class="node group" href="/matrix">');
     expect(html).toContain(
-      '<div class="whub" aria-hidden="true"><div class="node is-on"><span class="logo lg-slack" aria-hidden="true">S</span><span class="nm">Slack</span><span class="meta">/proxy/slack</span></div></div>',
+      '<div class="whub" aria-hidden="true"><div class="node"><span class="logo lg-slack" aria-hidden="true">S</span><span class="nm">Slack</span><span class="meta">/proxy/slack</span></div></div>',
     );
     expect(html).toContain(
       '<div class="wfoot"><span>Buildkite has no access.</span><a class="btn sm ghost" href="/new">Give access</a></div>',

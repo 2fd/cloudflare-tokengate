@@ -1227,7 +1227,7 @@ const pageHeader: ComponentDoc = {
               logoSlot={<Avatar name="Sam Ito" size="lg" variant="pending" />}
               title="Sam Ito"
               status={
-                <Badge tone="info" glyph="◐">
+                <Badge tone="pending" glyph="◐">
                   Pending approval
                 </Badge>
               }
@@ -1249,7 +1249,7 @@ const pageHeader: ComponentDoc = {
     <Identity
       logoSlot={<Avatar name="Sam Ito" size="lg" variant="pending" />}
       title="Sam Ito"
-      status={<Badge tone="info" glyph="◐">Pending approval</Badge>}
+      status={<Badge tone="pending" glyph="◐">Pending approval</Badge>}
       type="sam@acme.dev"
       entityId={{ value: 'usr_01JB9C4R7T2V5X8Z1B3D6F9H2K', kind: 'User' }}
       facts={['Asked 2 h ago']}

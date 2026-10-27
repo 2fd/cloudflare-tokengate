@@ -25,7 +25,7 @@ export interface NextStepProps {
 
 /**
  * Next step box (`.todo`): after a denied request, offers the fix with the values it will
- * prefill. Accent-soft background; one primary button.
+ * prefill. Neutral background; its one primary button carries the accent.
  */
 export function NextStep(props: NextStepProps) {
   return (

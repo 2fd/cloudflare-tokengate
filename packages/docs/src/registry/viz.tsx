@@ -721,6 +721,70 @@ export const viz: readonly ComponentDoc[] = [
   ]} />
 </Panel>`,
       },
+      {
+        title: 'Nothing lost',
+        description:
+          'A drop or total with a count of 0 gets .zero: an outline and secondary text, no red or warn. Color appears only when calls were lost.',
+        layout: 'stack',
+        render: () => (
+          <Panel>
+            <Pipeline
+              label="Where calls went, last hour"
+              stages={[
+                {
+                  label: 'Received',
+                  value: 96,
+                  href: '#',
+                  totals: [
+                    { label: 'Denied', count: 0, share: '0 %', href: '#' },
+                    { label: 'Errors', count: 0, share: '0 %', href: '#', kind: 'error' },
+                  ],
+                },
+                {
+                  label: 'Caller verified',
+                  value: 96,
+                  href: '#',
+                  drop: { count: 0, unit: 'not recognized', why: 'Every caller was recognized.' },
+                },
+                {
+                  label: 'Access matched',
+                  value: 94,
+                  href: '#',
+                  drop: {
+                    count: 2,
+                    unit: 'no access',
+                    why: 'Verified callers that no issuer access rules allows.',
+                    href: '#',
+                  },
+                },
+                {
+                  label: 'Upstream OK · allowed',
+                  value: 94,
+                  href: '#',
+                  drop: {
+                    count: 0,
+                    unit: 'upstream errors',
+                    kind: 'error',
+                    why: 'Every upstream answered.',
+                  },
+                },
+              ]}
+            />
+          </Panel>
+        ),
+        code: `<Pipeline label="Where calls went, last hour" stages={[
+  { label: 'Received', value: 96, href: '…', totals: [
+    { label: 'Denied', count: 0, share: '0 %', href: '…' },              // .zero: neutral
+    { label: 'Errors', count: 0, share: '0 %', href: '…', kind: 'error' },
+  ] },
+  { label: 'Caller verified', value: 96, href: '…',
+    drop: { count: 0, unit: 'not recognized', why: 'Every caller was recognized.' } },   // .drop.zero
+  { label: 'Access matched', value: 94, href: '…',
+    drop: { count: 2, unit: 'no access', why: '…', href: '…' } },                         // red: calls lost
+  { label: 'Upstream OK · allowed', value: 94, href: '…',
+    drop: { count: 0, unit: 'upstream errors', kind: 'error', why: 'Every upstream answered.' } },
+]} />`,
+      },
     ],
     props: [
       {
@@ -745,7 +809,8 @@ export const viz: readonly ComponentDoc[] = [
               <>
                 <code>count</code>, <code>unit</code>, <code>why</code>, <code>href?</code>,{' '}
                 <code>go?</code> (default "See N requests"), <code>kind?</code> (
-                <code>'denied'</code> red, <code>'error'</code> warn).
+                <code>'denied'</code> red, <code>'error'</code> warn). A <code>count</code> of 0 is
+                neutral (<code>.zero</code>).
               </>
             ),
           },
@@ -781,7 +846,7 @@ export const viz: readonly ComponentDoc[] = [
     ],
     dont: [
       'Do not show more than four stages.',
-      'Do not color a stage: only drops carry red or warn.',
+      'Do not color a stage: only drops with a count above 0 carry red or warn.',
     ],
     classes: [
       'pipe',
@@ -794,6 +859,7 @@ export const viz: readonly ComponentDoc[] = [
       'stage-go',
       'drop',
       'err',
+      'zero',
       'drop-n',
       'drop-why',
       'drop-go',

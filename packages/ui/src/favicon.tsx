@@ -8,7 +8,7 @@ import { contentHash } from './lib/hash';
 export const FAVICON_CONTENT_TYPE = 'image/svg+xml; charset=utf-8';
 
 /** The light-scheme `--accent` and `--on-accent` of ui.css: the tile reads on light and dark tabs. */
-const ACCENT = '#5746d6';
+const ACCENT = '#055f73';
 const ON_ACCENT = '#ffffff';
 
 /** The favicon SVG; `image` is a raster data URL (PNG, JPEG or WebP), or none for the shield. */

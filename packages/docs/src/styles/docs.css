@@ -79,7 +79,7 @@ ol.dx-list>li::marker{font-variant-numeric:tabular-nums}
 .dx-steps{counter-reset:dx-step;margin:0;padding:0;list-style:none}
 .dx-steps>li{display:grid;grid-template-columns:1.75rem minmax(0,1fr);gap:var(--sp-1) var(--sp-3);counter-increment:dx-step}
 .dx-steps>li+li{margin-top:var(--sp-6)}
-.dx-steps>li::before{content:counter(dx-step);grid-row:span 3;display:grid;place-items:center;width:1.75rem;height:1.75rem;border-radius:50%;background:var(--accent-soft);color:var(--accent-soft-text);font-size:var(--fs-xs);font-weight:var(--fw-medium)}
+.dx-steps>li::before{content:counter(dx-step);grid-row:span 3;display:grid;place-items:center;width:1.75rem;height:1.75rem;border-radius:50%;background:var(--surface-3);color:var(--text-2);font-size:var(--fs-xs);font-weight:var(--fw-medium)}
 .dx-steps h3{font-size:var(--fs-md);line-height:1.75rem;font-weight:var(--fw-medium)}
 .dx-steps>li>p{color:var(--text-2);max-width:72ch}
 .dx-steps>li>pre,.dx-steps>li>.code-cap{grid-column:2;min-width:0}
@@ -121,8 +121,11 @@ ol.dx-list>li::marker{font-variant-numeric:tabular-nums}
 .dx-sw[data-token="bad"]{background:var(--bad)}
 .dx-sw[data-token="bad-bg"]{background:var(--bad-bg)}
 .dx-sw[data-token="bad-dot"]{background:var(--bad-dot)}
+.dx-sw[data-token="bad-muted"]{background:var(--bad-muted)}
 .dx-sw[data-token="info"]{background:var(--info)}
 .dx-sw[data-token="info-bg"]{background:var(--info-bg)}
+.dx-sw[data-token="pending"]{background:var(--pending)}
+.dx-sw[data-token="pending-bg"]{background:var(--pending-bg)}
 .dx-sw[data-token="danger"]{background:var(--danger)}
 .dx-sw[data-token="on-danger"]{background:var(--on-danger)}
 .dx-sw[data-token="chart-allowed"]{background:var(--chart-allowed)}

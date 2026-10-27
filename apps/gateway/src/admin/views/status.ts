@@ -2,7 +2,7 @@
 // the same on every page. The label always carries the meaning; the tone (colour) and the glyph
 // (hidden from assistive technology) only repeat it (WCAG 1.4.1).
 
-export type Tone = 'ok' | 'warn' | 'bad' | 'muted';
+export type Tone = 'ok' | 'warn' | 'bad' | 'pending' | 'muted';
 
 export type StatusKey =
   | 'active'
@@ -77,9 +77,9 @@ export const STATUS: Readonly<Record<StatusKey, StatusInfo>> = {
   },
   risk_accepted: { tone: 'warn', glyph: '⚠', label: fixed('Risk accepted') },
   not_confirmed: { tone: 'bad', glyph: '', label: fixed('not confirmed') },
-  pending: { tone: 'warn', glyph: '◐', label: fixed('Pending approval') },
+  pending: { tone: 'pending', glyph: '◐', label: fixed('Pending approval') },
   invited: {
-    tone: 'muted',
+    tone: 'pending',
     glyph: '◐',
     label: (detail) => (detail ? `Invited, expires in ${days(detail)}` : 'Invited'),
   },
@@ -97,6 +97,6 @@ export function statusLabel(status: StatusKey, detail?: string): string {
 }
 
 /** The ui tone of an admin tone (`@tokengate/ui` has no `muted`: its gray tone is `off`). */
-export function uiTone(tone: Tone): 'ok' | 'warn' | 'bad' | 'off' {
+export function uiTone(tone: Tone): 'ok' | 'warn' | 'bad' | 'pending' | 'off' {
   return tone === 'muted' ? 'off' : tone;
 }

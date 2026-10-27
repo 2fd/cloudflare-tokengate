@@ -117,7 +117,7 @@ describe('the shell on every page', () => {
     expect(shield.headers.get('content-type')).toBe('image/svg+xml; charset=utf-8');
     expect(shield.headers.get('cache-control')).toContain('immutable');
     const shieldSvg = await shield.text();
-    expect(shieldSvg).toContain('fill="#5746d6"');
+    expect(shieldSvg).toContain('fill="#055f73"');
     expect(shieldSvg).not.toContain('<image');
 
     await env.DB.batch([

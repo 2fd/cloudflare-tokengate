@@ -28,7 +28,7 @@ const PRINCIPLES: ReadonlyArray<{ key: string; title: string; body: string; href
   {
     key: 'density',
     title: 'Dense, calm surfaces',
-    body: 'Page → tray → panel. 44px rows, 40px controls, two weights, one violet accent, mono IDs. Facts go in a meta line, not in extra columns.',
+    body: 'Page → tray → panel. 44px rows, 40px controls, two weights, one petrol accent on interactive elements only, mono IDs. Facts go in a meta line, not in extra columns.',
     href: '/docs/foundations/spacing',
   },
   {
@@ -88,7 +88,8 @@ export function OverviewPage() {
           <p class="dx-lead">
             A connections-first admin console: the sidebar, the pipeline, needs attention, the
             connections map and a one-page give-access flow, drawn as a calm developer console with
-            tray cards, a violet accent, dense rows, mono IDs and a right rail.
+            tray cards on mist neutrals, a petrol accent kept for what you can act on, dense rows,
+            mono IDs and a right rail.
           </p>
           <div class="dx-prose">
             <p>

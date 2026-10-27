@@ -134,6 +134,7 @@ describe('forms color pairs (light and dark)', () => {
   const TEXT: Array<[string, string, string]> = [
     ['text-2', 'surface-2', 'hints in a SubBox, Inherit'],
     ['text', 'surface-2', 'fields in a SubBox, read-only input'],
+    ['text', 'surface-3', 'step number'],
     ['text-3', 'input-bg', 'placeholder'],
     ['bad', 'panel-bg', 'inline error'],
     ['bad', 'bad-bg', 'ErrorSummary links'],
@@ -148,6 +149,7 @@ describe('forms color pairs (light and dark)', () => {
   const NON_TEXT: Array<[string, string, string]> = [
     ['accent', 'panel-bg', 'checked card border'],
     ['accent', 'page-bg', 'open type card ring'],
+    ['accent', 'tray-bg', 'current step number'],
     ['warn-dot', 'panel-bg', 'checked risky card border'],
     ['bad', 'input-bg', 'invalid input border'],
   ];

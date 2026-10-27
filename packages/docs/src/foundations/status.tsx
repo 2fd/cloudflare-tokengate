@@ -67,12 +67,12 @@ export const status: Foundation = {
                 <tr>
                   <th scope="row">Pending approval</th>
                   <td data-label="Badge">
-                    <Badge tone="info" glyph="◐">
+                    <Badge tone="pending" glyph="◐">
                       Pending approval
                     </Badge>
                   </td>
                   <td data-label="Dense row">
-                    <span class="st info">Pending approval</span>
+                    <span class="st pending">Pending approval</span>
                   </td>
                 </tr>
                 <tr>
@@ -109,7 +109,10 @@ export const status: Foundation = {
             <Badge tone="outline">You</Badge> <span class="risktag">⚠ Risk</span>
           </p>
           <ul class="dx-list">
-            <li>Labels are facts about an item, not a status: “Most used”, “Owner”, “You”.</li>
+            <li>
+              Labels are facts about an item, not a status: “Most used”, “Owner”, “You”. They are
+              neutral: the accent is only for what you can act on.
+            </li>
             <li>The risk tag marks an option that needs an explicit acceptance before submit.</li>
           </ul>
         </Panel>
@@ -131,6 +134,16 @@ export const status: Foundation = {
             <li>
               Only the worst KPI takes a tone. Inactive things are dashed (<code>.off</code>), not
               just gray.
+            </li>
+            <li>
+              Notes (<code>info</code>) are a neutral gray, not a hue. Waiting on someone (
+              <code>pending</code>: Pending approval, Invited) is the only blue, so it does not read
+              as Disabled.
+            </li>
+            <li>
+              Color marks a loss, not a zero: a denied or error count of 0 stays neutral (ISA-101).
+              Routine denials in charts use <code>--bad-muted</code>; <code>--bad-dot</code> is for
+              what needs action.
             </li>
             <li>Use these exact words. Do not invent synonyms (“Live”, “Revoked”, “Error”).</li>
           </ul>

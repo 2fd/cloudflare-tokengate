@@ -105,15 +105,15 @@ export function signInMailto(
   return `mailto:${to}?subject=${encodeURIComponent('Your tokengate sign-in')}&body=${encodeURIComponent(body)}`;
 }
 
-type StatusTone = 'ok' | 'info' | 'warn' | 'off';
+type StatusTone = 'ok' | 'pending' | 'warn' | 'off';
 
 /** Tone, glyph and word of each person status (README "Status words"). */
 const LOOK: Readonly<
   Record<'active' | 'pending' | 'invited' | 'invite_expired' | 'suspended', Look>
 > = {
   active: { tone: 'ok', glyph: '✓', word: 'Active' },
-  pending: { tone: 'info', glyph: '◐', word: 'Pending approval' },
-  invited: { tone: 'info', glyph: '◐', word: 'Invited' },
+  pending: { tone: 'pending', glyph: '◐', word: 'Pending approval' },
+  invited: { tone: 'pending', glyph: '◐', word: 'Invited' },
   invite_expired: { tone: 'warn', glyph: '✕', word: 'Invitation expired' },
   suspended: { tone: 'off', glyph: '⏸', word: 'Suspended' },
 };

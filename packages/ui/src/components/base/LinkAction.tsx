@@ -13,7 +13,7 @@ export interface LinkActionProps {
   children: Child;
 }
 
-/** A text link that reads as an action (`.linkish`): medium weight, accent, no underline at rest. */
+/** A text link that reads as an action (`.linkish`): medium weight, accent, underlined (WCAG 1.4.1). */
 export function LinkAction({ href, arrow, srSuffix, class: className, children }: LinkActionProps) {
   return (
     <a class={cx('linkish', className)} href={href}>

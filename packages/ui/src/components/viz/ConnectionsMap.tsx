@@ -172,7 +172,7 @@ function layout<T>(
   });
 }
 
-const RANK: Record<Tone, number> = { off: 0, ok: 1, info: 1, warn: 2, bad: 2 };
+const RANK: Record<Tone, number> = { off: 0, ok: 1, info: 1, pending: 1, warn: 2, bad: 2 };
 
 /** A token number with its hidden words, as a link when the page gives one (`MapToken.hrefs`). */
 function Num(props: { href: string | undefined; children: Child }) {

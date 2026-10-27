@@ -78,7 +78,7 @@ export function WhoCanUse(props: WhoCanUseProps) {
   const emptyLevel = useHeadingLevel(props.headingLevel ?? 3);
   const hub = (
     <div class="whub" aria-hidden="true">
-      <div class="node is-on">
+      <div class="node">
         <LogoTile logo={props.token.logo} />
         <span class="nm">{props.token.name}</span>
         <span class="meta">{props.token.path}</span>

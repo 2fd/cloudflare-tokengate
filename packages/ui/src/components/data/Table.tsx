@@ -93,7 +93,7 @@ export function Table(props: TableProps) {
 export interface RowProps {
   /** Id of the `tr`: the fragment target of a redirect back to this row (`#user-usr_1`). Unique on the page. */
   id?: string;
-  /** Highlighted row (`tr.hl`, accent-soft): the row just changed or arrived from. Decorative: say why in the row too. */
+  /** Highlighted row (`tr.hl`, neutral surface-3): the row just changed or arrived from. Decorative: say why in the row too. */
   highlight?: boolean;
   class?: string;
   /** One `RowHeader`, then `Cell`s. */

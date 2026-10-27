@@ -17,7 +17,7 @@ describe('Badge', () => {
     ).toBe('<span class="badge ok x"><span aria-hidden="true">✓</span>Active</span>');
   });
 
-  it.each(['ok', 'warn', 'bad', 'info', 'off', 'accent', 'outline'] as const)(
+  it.each(['ok', 'warn', 'bad', 'info', 'pending', 'off', 'accent', 'outline'] as const)(
     'renders the %s tone class',
     (tone) => {
       expect(render(<Badge tone={tone}>x</Badge>)).toBe(`<span class="badge ${tone}">x</span>`);
@@ -33,6 +33,12 @@ describe('Badge', () => {
       );
     },
   );
+
+  it('shows Pending approval in the pending tone, apart from neutral info notes', () => {
+    expect(render(<Badge status="pending" />)).toBe(
+      '<span class="badge pending"><span aria-hidden="true">◐</span>Pending approval</span>',
+    );
+  });
 
   it('lets the word, tone and glyph override a status preset', () => {
     expect(render(<Badge status="expiring">Expires in 6 days</Badge>)).toBe(

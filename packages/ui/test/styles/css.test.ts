@@ -98,12 +98,16 @@ describe('token contrast (light and dark)', () => {
     ['text-3', 'tray-bg'],
     ['accent-text', 'page-bg'],
     ['accent-text', 'panel-bg'],
+    ['accent-text', 'tray-bg'],
     ['on-accent', 'accent'],
+    ['on-accent', 'accent-hover'],
     ['accent-soft-text', 'accent-soft'],
     ['ok', 'ok-bg'],
     ['warn', 'warn-bg'],
     ['bad', 'bad-bg'],
     ['info', 'info-bg'],
+    ['pending', 'pending-bg'],
+    ['text', 'surface-3'],
     ['on-danger', 'danger'],
   ];
   const NON_TEXT: Array<[string, string]> = [
@@ -112,10 +116,24 @@ describe('token contrast (light and dark)', () => {
     ['control-border', 'input-bg'],
     ['focus', 'page-bg'],
     ['focus', 'panel-bg'],
+    ['focus', 'tray-bg'],
+    ['focus', 'nav-bg'],
+    // status dots and the denied series sit on panels
+    ['ok-dot', 'panel-bg'],
+    ['warn-dot', 'panel-bg'],
+    ['bad-dot', 'panel-bg'],
+    ['bad-muted', 'panel-bg'],
+    ['bad-muted', 'tray-bg'],
+    ['info', 'panel-bg'],
+    ['pending', 'panel-bg'],
     // chart bars and map wires are the main graphic (WCAG 1.4.11)
     ['chart-allowed', 'panel-bg'],
     ['chart-allowed', 'tray-bg'],
   ];
+
+  it('draws routine denials in the muted red, not the actionable dot', () => {
+    expect(uiCss.text).toContain('--chart-denied: var(--bad-muted)');
+  });
 
   for (const [scheme, index] of [
     ['light', 0],

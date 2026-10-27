@@ -13,7 +13,7 @@ export const STATUS_VOCABULARY = {
   expiring: { tone: 'warn', glyph: '⌛', word: 'Expires soon' },
   expired: { tone: 'bad', glyph: '✕', word: 'Expired' },
   'risk-accepted': { tone: 'warn', glyph: '⚠', word: 'Risk accepted' },
-  pending: { tone: 'info', glyph: '◐', word: 'Pending approval' },
+  pending: { tone: 'pending', glyph: '◐', word: 'Pending approval' },
   disabled: { tone: 'off', glyph: '⏸', word: 'Disabled' },
   'no-secret': { tone: 'bad', glyph: '–', word: 'No secret' },
 } as const satisfies Record<string, StatusWord>;

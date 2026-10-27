@@ -7,5 +7,8 @@ export interface BaseProps {
   children?: Child;
 }
 
-/** The status tones of the system (README "Status words"). */
-export type Tone = 'ok' | 'warn' | 'bad' | 'info' | 'off';
+/**
+ * The status tones of the system (README "Status words"). `info` is a neutral note; `pending` is
+ * waiting on someone (Pending approval, Invited).
+ */
+export type Tone = 'ok' | 'warn' | 'bad' | 'info' | 'pending' | 'off';

@@ -14,7 +14,10 @@ export interface PipelineDrop {
   href?: string;
   /** Link line; defaults to "See {count} requests". */
   go?: Child;
-  /** `error` (warn colors) for upstream errors; `denied` (red, default) for refusals. */
+  /**
+   * `error` (warn colors) for upstream errors; `denied` (red, default) for refusals. A count of 0
+   * is not tinted (`.zero`): only a loss carries color.
+   */
   kind?: 'denied' | 'error';
 }
 
@@ -27,7 +30,7 @@ export interface PipelineTotal {
   /** Change against the previous period. */
   delta?: Omit<DeltaProps, 'class'>;
   href: string;
-  /** `error` shows the count in warn color; `denied` (default) in red. */
+  /** `error` shows the count in warn color; `denied` (default) in red; a count of 0 is neutral. */
   kind?: 'denied' | 'error';
 }
 
@@ -57,6 +60,11 @@ export interface PipelineProps {
   /** Accessible name of the list, when the tray title does not already say it. */
   label?: string;
   class?: string;
+}
+
+/** A count of 0 (`0` or `"0"`): its drop or total gets `.zero` and no alarm color (ISA-101). */
+function isZero(count: number | string): boolean {
+  return typeof count === 'number' ? count === 0 : count.trim() === '0';
 }
 
 function Go(props: { children: Child }) {
@@ -110,7 +118,7 @@ function Stage(props: { stage: PipelineStage; position: 'in' | 'out' | undefined
 
 function Drop(props: { drop: PipelineDrop }) {
   const { drop } = props;
-  const cls = cx('drop', drop.kind === 'error' && 'err');
+  const cls = cx('drop', drop.kind === 'error' && 'err', isZero(drop.count) && 'zero');
   const body = (
     <>
       <span class="drop-n">
@@ -151,7 +159,10 @@ export function Pipeline(props: PipelineProps) {
           {stage.totals && stage.totals.length > 0 ? (
             <div class="pipe-tot">
               {stage.totals.map((total) => (
-                <a class={cx(total.kind === 'error' && 'err')} href={total.href}>
+                <a
+                  class={cx(total.kind === 'error' && 'err', isZero(total.count) && 'zero')}
+                  href={total.href}
+                >
                   <span class="tl">{total.label}</span>
                   <b>{fmt(total.count)}</b>
                   {total.share ? <span>{total.share}</span> : null}

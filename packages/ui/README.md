@@ -68,7 +68,7 @@ Two overlaps are deliberate: `Disclosure variant="more"` (layout) and `More` (fo
 
 ## Status words
 
-Tones are `Tone` (`ok`, `warn`, `bad`, `info`, `off`). Status always has a word: `Badge` and `Status` take a `status` from the vocabulary (`src/components/base/vocabulary.ts`: active, expiring, expired, risk-accepted, pending, disabled, no-secret), whose word is the default, or the word as children; their types require one of the two. Color and glyph only add to the word.
+Tones are `Tone` (`ok`, `warn`, `bad`, `info`, `pending`, `off`): `info` is a neutral note, `pending` is waiting on someone (Pending approval, Invited). Status always has a word: `Badge` and `Status` take a `status` from the vocabulary (`src/components/base/vocabulary.ts`: active, expiring, expired, risk-accepted, pending, disabled, no-secret), whose word is the default, or the word as children; their types require one of the two. Color and glyph only add to the word.
 
 ## Page-local patterns
 

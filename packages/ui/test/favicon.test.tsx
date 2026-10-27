@@ -8,7 +8,7 @@ describe('favicon', () => {
   it('draws the gate shield on the accent tile by default', () => {
     const svg = faviconSvg();
     expect(svg).toMatch(/^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg" viewBox="0 0 32 32">/);
-    expect(svg).toContain('<rect width="32" height="32" rx="6" fill="#5746d6"></rect>');
+    expect(svg).toContain('<rect width="32" height="32" rx="6" fill="#055f73"></rect>');
     expect(svg).toContain('stroke="#ffffff"');
     expect(svg).toContain('d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"');
     expect(svg).not.toContain('<image');
