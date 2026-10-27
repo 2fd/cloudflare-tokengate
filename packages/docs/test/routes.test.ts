@@ -54,26 +54,38 @@ describe('docs pages', () => {
     expect(ids.filter((id, i) => ids.indexOf(id) !== i)).toEqual([]);
   });
 
-  it('the sidebar links every foundation and group page', async () => {
+  it('the sidebar is the admin one: labeled groups with every page visible', async () => {
     const html = await (await get('/docs')).text();
-    expect(html).toContain('href="/docs/foundations/');
-    for (const group of GROUPS) expect(html).toContain(`href="/docs/components/${group.key}"`);
-  });
-
-  it.each(GROUPS)('the open $label section lists every component of the group', async (group) => {
-    const html = await (await get(`/docs/components/${group.key}`)).text();
     const nav = html.slice(html.indexOf('<nav'), html.indexOf('<main'));
-    for (const doc of REGISTRY[group.key]) {
-      expect(nav, doc.name).toContain(`href="${componentHref(group.key, doc.slug)}"`);
-      expect(nav, doc.name).toContain(`>${doc.name}<`);
+    expect(nav).not.toContain('nav-sub');
+    const labels = [...nav.matchAll(/<div class="nav-label">([^<]+)<\/div>/g)].map((m) => m[1]);
+    expect(labels).toEqual(['Introduction', 'Foundations', ...GROUPS.map((group) => group.label)]);
+    for (const topic of FOUNDATIONS)
+      expect(nav).toContain(`href="/docs/foundations/${topic.slug}"`);
+    for (const group of GROUPS) {
+      expect(nav).toContain(`href="/docs/components/${group.key}"`);
+      for (const doc of REGISTRY[group.key]) {
+        expect(nav, doc.name).toContain(`href="${componentHref(group.key, doc.slug)}"`);
+        expect(nav, doc.name).toContain(`>${doc.name}<`);
+      }
     }
   });
 
-  it.each(FOUNDATIONS)('the open Foundations section lists $title', async (topic) => {
+  it.each(GROUPS)('the $label index is the current "All components" item', async (group) => {
+    const html = await (await get(`/docs/components/${group.key}`)).text();
+    expect(html).toMatch(
+      new RegExp(
+        `href="/docs/components/${group.key}"[^>]*aria-current="page"[^>]*>(?:(?!</a>).)*All components`,
+        's',
+      ),
+    );
+  });
+
+  it.each(FOUNDATIONS)('$title is the current Foundations item', async (topic) => {
     const html = await (await get(`/docs/foundations/${topic.slug}`)).text();
-    const nav = html.slice(html.indexOf('<nav'), html.indexOf('<main'));
-    for (const other of FOUNDATIONS)
-      expect(nav).toContain(`href="/docs/foundations/${other.slug}"`);
+    expect(html).toMatch(
+      new RegExp(`href="/docs/foundations/${topic.slug}"[^>]*aria-current="page"`),
+    );
   });
 
   it.each(
