@@ -217,6 +217,14 @@ kbd{display:inline-block;padding:0 var(--sp-1);border:1px solid var(--line-stron
 .menu-item.two .k{font-size:var(--fs-xs);color:var(--text-2);white-space:nowrap}
 .menu-item.two .s{grid-column:1/-1;font-size:var(--fs-sm);line-height:var(--lh-sm);color:var(--text-2)}
 .menu-item.bad b,.menu-item.bad:not(.two){color:var(--bad)}
+/* popover menu spacing (account): roomier than the row menu inside a table */
+[popover].menu{min-width:16rem;padding:var(--sp-2)}
+[popover].menu>.menu-h{padding:var(--sp-2) var(--sp-3) var(--sp-3)}
+[popover].menu .menu-choice{gap:var(--sp-5);min-height:2.75rem;padding-block:var(--sp-2)}
+[popover].menu hr{margin:var(--sp-2) 0}
+[popover].menu .menu-item{min-height:2.5rem}
+[popover].menu .menu-item.two{min-height:0;gap:var(--sp-1) var(--sp-3);padding:var(--sp-3)}
+[popover].menu form+form,[popover].menu .menu-item+.menu-item,[popover].menu form+.menu-item,[popover].menu .menu-item+form{margin-top:var(--sp-1)}
 @media (min-width:48.01rem){ .tbl td.act>form+.rowmenu{margin-left:var(--sp-2)} }
 @media (max-width:48rem){
   .rowmenu{display:block}
