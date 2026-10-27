@@ -2,6 +2,7 @@
 // registry entry through it: header, when to use, live examples with their JSX, props tables,
 // accessibility notes, do and don't, and the CSS classes.
 import { CodeBlock, HeadingOffset, PageHeader, Panel, Tray } from '@tokengate/ui';
+import { highlightJsx } from '../highlight';
 import { htmlOf } from '../html';
 import { DocsLayout } from '../layout';
 import type { ComponentDoc, ComponentExample, GroupInfo, PropsTable } from '../registry';
@@ -40,7 +41,7 @@ function Example(props: { example: ComponentExample; index: number }) {
           <HeadingOffset by={headingOffset(example)}>{example.render()}</HeadingOffset>
         </div>
         <CodeBlock label={`${example.title}: JSX`} class="dx-code">
-          {example.code.trim()}
+          {highlightJsx(example.code.trim())}
         </CodeBlock>
       </div>
     </div>
