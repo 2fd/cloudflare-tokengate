@@ -50,7 +50,7 @@ export function mapModel(
     const hours = own.map((e) => e.lastUsedHour).filter((h): h is number => h !== null);
     const requests = stats?.requests ?? 0;
     const idle = !token.enabled || (requests === 0 && hours.length === 0);
-    const tag = idle && !idleTagged ? '1 idle token' : undefined;
+    const tag = idle && !idleTagged ? '1 idle credential' : undefined;
     if (tag) idleTagged = true;
     return {
       id: token.id,

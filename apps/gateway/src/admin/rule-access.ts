@@ -558,7 +558,10 @@ export function parseJobs(form: JobsForm, ctx: JobsContext): ParsedJobs {
 
   const context = contextsFor(profile).find((value) => value === form.context);
   if (!context) {
-    out.errors.push({ field: field('context'), message: 'Choose which jobs get the token.' });
+    out.errors.push({
+      field: field('context'),
+      message: 'Choose which jobs can use the credential.',
+    });
     return out;
   }
   const inputName = CONTEXT_INPUT[context];

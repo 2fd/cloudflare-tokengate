@@ -550,7 +550,7 @@ function IssuerStep(props: { model: RuleFormModel; n: number }) {
       kind="group"
       id="ga-issuer"
       title="Issuer and tenant"
-      description="Where the jobs run and which organizations, groups or team they belong to. The token of every job carries both."
+      description="Where the workloads run and which organizations, groups or team they belong to. The token of every workload carries both."
     >
       <IssuerFields
         prefix="new."
@@ -575,7 +575,7 @@ function JobsStep(props: { model: RuleFormModel; n: number }) {
       kind="group"
       id="ga-jobs"
       title="Which jobs"
-      description="Only jobs that match every condition get the credential. Each rule pins the repository or another anchor claim exactly (I-AUTHZ-2)."
+      description="Only jobs that match every condition can use the credential. Each rule pins the repository or another anchor claim exactly."
     >
       {ISSUER_TYPES.map((type) => {
         const branch = model.issuer.jobs[type];
@@ -593,8 +593,19 @@ function JobsStep(props: { model: RuleFormModel; n: number }) {
 // ---------------------------------------------------------------------------------------------
 // Step: name, description and expiry
 
+/** The name of the chosen credential, or null while none is chosen. */
+function chosenTokenName(choice: TokenChoice): string | null {
+  const branch = selectedTokenBranch(choice);
+  if (branch) return branch.token.name;
+  if (choice.kind === 'select') {
+    return choice.options.find((option) => option.id === choice.selected)?.name ?? null;
+  }
+  return null;
+}
+
 function DetailsStep(props: { model: RuleFormModel; n: number }) {
   const { model } = props;
+  const tokenName = chosenTokenName(model.token) ?? 'Example API';
   return (
     <FormStep n={props.n} kind="group" id="ga-details" title="Name and expiry">
       <Field
@@ -602,10 +613,10 @@ function DetailsStep(props: { model: RuleFormModel; n: number }) {
         label="Name"
         optional={model.mode === 'create'}
         value={model.details.name}
-        example="Slack for acme/api (environment production)"
+        example={`${tokenName} for acme/api (environment production)`}
         hint={
           model.mode === 'create'
-            ? 'Empty: derived from the credential and the jobs. Names are unique per credential.'
+            ? 'Empty: derived from the credential and the workloads. Names are unique per credential.'
             : 'Names are unique per credential.'
         }
         maxlength={100}
@@ -667,8 +678,8 @@ function TokenSettings(props: { model: RuleFormModel }) {
             example="tokengate:6qx4bd7mkt3pzw2hylf5c8ran9"
             hint={
               create
-                ? 'The aud claim jobs request. Empty: the audience of the other rules of this credential and issuer, else a new one.'
-                : 'The aud claim jobs request. Changing it breaks jobs that use the old one.'
+                ? 'The aud claim workloads request. Empty: the audience of the other rules of this credential and issuer, else a new one.'
+                : 'The aud claim workloads request. Changing it breaks workloads that use the old one.'
             }
             error={err('audience')}
             autocomplete="off"
@@ -741,7 +752,7 @@ const CONTEXT_TEXT: Readonly<
   any: {
     title: 'Any branch, tag or environment',
     description: 'Every job of the repository.',
-    risk: 'anyone with write access to the repository gets the token.',
+    risk: 'anyone with write access to the repository can use the credential.',
   },
 };
 
@@ -898,8 +909,8 @@ export function JobsFields(props: {
             suggestions={suggestions(branch.suggestions.workflowRefs)}
             hint={
               gitlab
-                ? 'Only jobs from this pipeline configuration at this ref get the token. With an empty project, every project of the group that uses it gets it.'
-                : 'Only jobs from this workflow file at this ref get the token. With an empty repository, every repository of the organization that calls this reusable workflow gets it.'
+                ? 'Only jobs from this pipeline configuration at this ref can use the credential. With an empty project, every project of the group that uses it can use the credential.'
+                : 'Only jobs from this workflow file at this ref can use the credential. With an empty repository, every repository of the organization that calls this reusable workflow can use the credential.'
             }
             error={err('workflow_ref')}
             autocomplete="off"
@@ -1017,7 +1028,7 @@ function RepositoryFields(props: {
       <FieldSet
         id={pickId}
         legend={label}
-        hint={`${project ? 'Projects' : 'Repositories'} this credential access rule used before, most used first. The ID keeps working after a rename.`}
+        hint={`${project ? 'Projects' : 'Repositories'} that this credential's access rules already name, most used first. The ID keeps working after a rename.`}
         {...slot(live, 3)}
       >
         <RowPicker name={`${prefix}repository`} value={checked} options={options} />
@@ -1264,7 +1275,7 @@ function RefProtection(props: { branch: JobsBranch; live: Live }) {
     <FieldSet
       id={id}
       legend="Which refs may use it?"
-      hint={`Applies to Environment, Branch, Tag and Release. ${gitlab ? 'Protect a branch or tag in Settings › Repository.' : 'Protect it with required reviewers or branch protection in GitHub.'} Risk of unprotected refs: anyone who can push a branch gets the token.`}
+      hint={`Applies to Environment, Branch, Tag and Release. ${gitlab ? 'Protect a branch or tag in Settings › Repository.' : 'Protect it with required reviewers or branch protection in GitHub.'} Risk of unprotected refs: anyone who can push a branch can use the credential.`}
       class={live === 'scoped' ? 'ga-f6 ga-prot' : 'ga-prot'}
       live={live === 'global' ? 6 : undefined}
     >
@@ -1491,7 +1502,7 @@ function OpsStep(props: { model: RuleFormModel; n: number; jobs: JobsBranch | nu
           value: token.id,
           label: `${token.name} (/proxy/${token.slug})`,
         }))}
-        hint="After choosing, use Show fields for the chosen credential access rule and credential below the form."
+        hint="After choosing, use Show fields for the chosen credential below the form."
         error={err('token_id')}
       />
       {choice.branch ? (
@@ -1819,7 +1830,7 @@ function FormRail(props: { model: RuleFormModel }) {
             meta={`${request.method} ${request.path}`}
             mono
           />
-          <SummaryFoot>After saving, the same call from these jobs is allowed.</SummaryFoot>
+          <SummaryFoot>After saving, the same call from these workloads is allowed.</SummaryFoot>
         </>
       ) : (
         <>

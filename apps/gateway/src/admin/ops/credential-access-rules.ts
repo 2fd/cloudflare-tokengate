@@ -642,7 +642,7 @@ const FIELD_TEXT: Readonly<Record<string, string>> = {
   max_token_age_seconds: 'maximum token age',
   tenant_pin: 'tenants',
   anchor_claims: 'anchor claims',
-  conditions: 'jobs',
+  conditions: 'identity conditions',
   rules: 'operations',
   enabled: 'state',
   expires_at: 'expiry',
@@ -729,7 +729,7 @@ export async function removeTenantValue(
   if (used) {
     const word = tenantWord(existing.profile);
     return opFailure('invalid', [
-      `Remove the jobs that use ${word} ${input.label ?? input.value} first.`,
+      `Remove the workload conditions that use ${word} ${input.label ?? input.value} first.`,
     ]);
   }
   const values = current.filter((value) => value !== input.value);

@@ -15,6 +15,7 @@ import {
 } from '../../db/users';
 import type { Deps } from '../../deps';
 import { newId } from '../../lib/ids';
+import { roleLabel } from '../views/roles';
 import type { RequestMeta } from './identity';
 
 export type LoginProviderId = 'access' | 'dev';
@@ -147,7 +148,7 @@ export async function resolveLogin(
       action: 'user.join',
       targetType: 'user',
       targetId: userId,
-      summary: `Joined as ${defaults.status} ${defaults.role} on the first sign-in`,
+      summary: `Joined as ${defaults.status} ${roleLabel(defaults.role)} on the first sign-in`,
       diff: {
         login_provider: input.loginProvider,
         subject: input.subject,

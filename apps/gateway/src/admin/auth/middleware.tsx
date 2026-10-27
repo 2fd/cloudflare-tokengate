@@ -438,7 +438,7 @@ const MOVED_PAGES: ReadonlyArray<{
       <>
         Issuer access rules are now part of{' '}
         <a href={paths.accessRules()}>Credential access rules</a>. Each credential access rule now
-        holds its issuer, its jobs and its operations.
+        holds its issuer, its identity conditions and its operations.
       </>
     ),
   },

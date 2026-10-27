@@ -65,6 +65,11 @@ describe('forms classes', () => {
     expect(css).toContain(selector);
   });
 
+  it('an open type card shows only its own Selected marker, not those of nested radio cards', () => {
+    expect(css).toContain('details.type-card[open]>summary>.sel{display:inline}');
+    expect(css).not.toContain('details.type-card[open] .sel');
+  });
+
   it('link cards without a logo use two columns', () => {
     expect(css).toContain('.tcard:not(:has(>.logo)){grid-template-columns:minmax(0,1fr) auto}');
   });

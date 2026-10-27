@@ -118,7 +118,7 @@ export function TokenTypeCards(props: {
       <TypeCatalog
         id="types"
         title="Choose an application and access type"
-        description="Start with an API credential, then limit each consumer’s access in tokengate. Webhooks already have a narrow scope."
+        description="Start with an API credential, then limit each workload’s access in tokengate. Webhooks already have a narrow scope."
       >
         {['Slack', 'GitHub', 'OpenAI', 'Anthropic', 'Discord'].map((app) => (
           <>
@@ -144,7 +144,7 @@ export function TokenTypeCards(props: {
       </TypeCatalog>
       {data.allowlist !== null && data.allowlist.length > 0 ? (
         <p class="hint">
-          Tokens may point only at:{' '}
+          Credentials may point only at:{' '}
           {data.allowlist.map((host, index) => (
             <>
               {index > 0 ? ', ' : null}
@@ -156,7 +156,7 @@ export function TokenTypeCards(props: {
         </p>
       ) : (
         <p class="hint">
-          Tokens may point at any public https host.{' '}
+          Credentials may point at any public https host.{' '}
           {ctx.can('settings:write') ? <a href={paths.tokenHosts()}>Limit allowed hosts</a> : null}
         </p>
       )}
@@ -240,7 +240,7 @@ function TemplateCard(props: {
             value={host}
             required
             checked={values.allow_host === host}
-            label={`Also allow ${host} in Allowed hosts (applies to every token)`}
+            label={`Also allow ${host} in Allowed hosts (applies to every credential)`}
             hint="Required: this type's host is not allowed yet."
             error={ids.error('allow_host')}
           />
@@ -293,8 +293,8 @@ function AlsoUploads(props: {
   const uploads = getServiceTemplate('github-uploads');
   if (!uploads) return null;
   const host = templateHost(uploads);
-  const label = `Also add release asset uploads (${host}) with the same token`;
-  const hint = `Creates a second token for ${host} with the same secret.`;
+  const label = `Also add release asset uploads (${host}) with the same secret`;
+  const hint = `Creates a second credential for ${host} with the same secret.`;
   const error = ids.error('also_uploads');
   if (upstreamHostAllowed(host, data.allowlist)) {
     return (
@@ -312,8 +312,8 @@ function AlsoUploads(props: {
     return (
       <div class="stack-sm">
         <p class="hint">
-          {host} is not an allowed host, so the release asset uploads token cannot be added with
-          this one.
+          {host} is not an allowed host, so the release asset uploads credential cannot be added
+          with this one.
         </p>
         <AskSomeone permission="settings:write" ctx={ctx} verb={`allow ${host}`} />
       </div>
@@ -324,8 +324,8 @@ function AlsoUploads(props: {
       name="allow_host"
       id={ids.id('also_uploads')}
       value={host}
-      label={`${label}, and allow ${host} in Allowed hosts (applies to every token)`}
-      hint={`${hint} ${host} is not an allowed host yet; ticking this also allows it, for every token.`}
+      label={`${label}, and allow ${host} in Allowed hosts (applies to every credential)`}
+      hint={`${hint} ${host} is not an allowed host yet; ticking this also allows it, for every credential.`}
       checked={values.also_uploads}
       error={error}
     />
@@ -368,7 +368,7 @@ function CustomCard(props: {
         label="Base URL"
         hint={
           <>
-            https only, no query string. Consumers can only reach paths under it.
+            https only, no query string. Workloads can only reach paths under it.
             {listed ? <> Allowed hosts: {allowlist.join(', ')}.</> : null}
           </>
         }
@@ -417,7 +417,11 @@ function CustomCard(props: {
         }}
       />
       <AdvancedFields ids={ids} values={values} tokens={data.tokens} />
-      <SecretSubmits label="Save custom token" failedCheck={verify !== null} id="custom-actions" />
+      <SecretSubmits
+        label="Save custom credential"
+        failedCheck={verify !== null}
+        id="custom-actions"
+      />
     </TypeCard>
   );
 }

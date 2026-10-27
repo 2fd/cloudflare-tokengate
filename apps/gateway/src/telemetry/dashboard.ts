@@ -478,7 +478,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
         ...tokenLinks(outside, () => paths.tokens({ status: 'outside_hosts' })),
         {
           href: paths.tokens({ status: 'outside_hosts' }),
-          label: 'Tokens outside the allowed hosts',
+          label: 'Credentials outside the allowed hosts',
         },
       ],
       fix: {

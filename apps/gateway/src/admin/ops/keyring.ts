@@ -57,7 +57,7 @@ const OPEN_ERROR_TEXT: Readonly<Record<OpenCredentialError, string>> = {
   sealed_malformed: 'is damaged',
   keyring_missing_key: 'was encrypted with a key that is not in the keyring',
   credential_binding_mismatch:
-    "does not match the service's current base URL or injection (it may have been tampered with)",
+    "does not match the credential's current base URL or injection (it may have been tampered with)",
 };
 
 const NOTHING_WRITTEN = 'Nothing was re-encrypted.';
@@ -259,13 +259,13 @@ export async function rewrapCredentials(
     const kid = sealedKid(row.credential_sealed);
     if (kid === null) {
       problems.push(
-        `The stored credential of service ${row.slug} ${OPEN_ERROR_TEXT.sealed_malformed}. Set it again on the service page.`,
+        `The stored secret of credential ${row.slug} ${OPEN_ERROR_TEXT.sealed_malformed}. Set it again on the credential page.`,
       );
       continue;
     }
     if (!keyring.key(kid)) {
       problems.push(
-        `The credential of service ${row.slug} was encrypted with key "${kid}", which is not in the keyring. Add the key back, or set the credential again.`,
+        `The secret of credential ${row.slug} was encrypted with key "${kid}", which is not in the keyring. Add the key back, or set the secret again.`,
       );
       continue;
     }
@@ -274,8 +274,8 @@ export async function rewrapCredentials(
     if (!opened.ok) {
       problems.push(
         changedKids.includes(kid)
-          ? `The stored credential of service ${row.slug} was encrypted with an earlier key "${kid}". Restore that key, or set the credential again on the service page.`
-          : `The stored credential of service ${row.slug} cannot be opened: it ${OPEN_ERROR_TEXT[opened.error]}. Set it again on the service page.`,
+          ? `The stored secret of credential ${row.slug} was encrypted with an earlier key "${kid}". Restore that key, or set the secret again on the credential page.`
+          : `The stored secret of credential ${row.slug} cannot be opened: it ${OPEN_ERROR_TEXT[opened.error]}. Set it again on the credential page.`,
       );
       continue;
     }

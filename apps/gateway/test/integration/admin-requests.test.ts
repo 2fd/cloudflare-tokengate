@@ -390,7 +390,7 @@ describe('request log pages without proxy traffic', () => {
     // error follows the menus in the filter bar.
     expect(html).toContain('<details class="fadd" id="f-token" open="">');
     expect(html).toContain('<p class="field-error" id="f-token-error">');
-    expect(html).toContain('<a href="#f-token">Choose a token from the list.</a>');
+    expect(html).toContain('<a href="#f-token">Choose a credential from the list.</a>');
   });
 
   it('never turns filter text into page text (no spoofed option labels)', async () => {

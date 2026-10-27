@@ -275,7 +275,7 @@ export function pipelineStages(
       drop: {
         count: c.refused,
         unit: 'not recognized',
-        why: 'Refused before a token was chosen: no or bad caller token, unknown issuer, or unknown token slug.',
+        why: 'Refused before a credential was chosen: no or bad caller token, unknown issuer, or unknown credential slug.',
         ...(c.refused > 0 ? { href: paths.requests({ range, token: 'none' }) } : {}),
         go: seeRequests(c.refused),
       },
@@ -287,7 +287,7 @@ export function pipelineStages(
       drop: {
         count: c.deniedAfter,
         unit: 'no access',
-        why: 'Verified callers that no access rule allows, or a token problem.',
+        why: 'Verified callers that no access rule allows, or a credential problem.',
         go: seeRequests(c.deniedAfter),
         ...(c.deniedAfter > 0 ? { href: paths.requests({ range, outcome: 'denied' }) } : {}),
       },
@@ -409,7 +409,7 @@ export function TopDenied(props: {
                   {rule?.name ??
                     (g.service_id
                       ? 'no credential access rule'
-                      : `refused before a token was chosen${g.service_slug ? ` for /proxy/${g.service_slug}` : ''}`)}
+                      : `refused before a credential was chosen${g.service_slug ? ` for /proxy/${g.service_slug}` : ''}`)}
                 </span>
               </span>
             </RowHeader>

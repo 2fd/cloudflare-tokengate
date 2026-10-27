@@ -255,7 +255,7 @@ describe('credentialRuleDecision: anchor rules at request time', () => {
       {
         rule_id: 'acr_email',
         result: 'invalid_rule',
-        detail: 'the access rule does not satisfy the anchor rules of its issuer type (I-AUTHZ-2)',
+        detail: 'the access rule does not satisfy the anchor rules of its issuer type',
       },
     ]);
   });

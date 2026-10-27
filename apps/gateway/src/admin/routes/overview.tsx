@@ -178,7 +178,7 @@ export function registerOverviewRoutes(app: App): void {
               description={
                 <>
                   Since <UiTime datetime={new Date(overview.window.from)} format="datetime" /> UTC:
-                  what needs you, where calls went, and who uses which token.
+                  what needs you, where calls went, and who uses which credential.
                 </>
               }
               actions={
@@ -484,7 +484,7 @@ function TrafficTray(props: { data: OverviewData }) {
         <Panel variant="pad">
           <ZeroState>
             No requests in the selected range. Requests appear once a caller calls{' '}
-            <code>/proxy/&lt;token slug&gt;/…</code>.
+            <code>/proxy/&lt;credential slug&gt;/…</code>.
           </ZeroState>
         </Panel>
       </Tray>
@@ -603,7 +603,7 @@ function FreshOverview(props: PageData) {
             <Panel variant="pad">
               <p class="muted">
                 No requests yet. They appear here once a caller calls{' '}
-                <code>/proxy/&lt;token slug&gt;/…</code>.
+                <code>/proxy/&lt;credential slug&gt;/…</code>.
               </p>
               <Chips label="Where calls went, all zero">
                 <Chip tone="off">
@@ -710,7 +710,7 @@ function GetStarted(props: {
       why: (
         <>
           Add the tokengate step to a workflow. The job gets a short-lived token and calls the API
-          through <code>/proxy/&lt;token slug&gt;/…</code>; the call shows up here.
+          through <code>/proxy/&lt;credential slug&gt;/…</code>; the call shows up here.
         </>
       ),
       action: newest
@@ -736,7 +736,7 @@ function GetStarted(props: {
   uses: 2fd/cloudflare-tokengate/actions/get-token@main
   with:
     url: https://${ctx.host}
-- run: curl "\${{ steps.tokengate.outputs.proxy-base }}/<token slug>/…" \\
+- run: curl "\${{ steps.tokengate.outputs.proxy-base }}/<credential slug>/…" \\
     -H "x-tokengate-token: \${{ steps.tokengate.outputs.token }}"`}
         </CodeBlock>
       ),
@@ -949,7 +949,7 @@ function healthChecks(data: AlertData, env: AppEnv): Check[] {
       'rate-limiter',
       'PROXY_RATE_LIMITER',
       env.PROXY_RATE_LIMITER !== undefined,
-      'no per-access request cap',
+      'no request cap per access rule',
       'proxy_rate_limiter',
     ),
     {
@@ -1076,7 +1076,7 @@ function TokensInUse(props: PageData) {
           statusLabel(row.status, row.detail)
         ) : accesses.length === 0 ? (
           <>
-            No access rule yet<span class="vh">: no job can use this credential yet.</span>
+            No access rule yet<span class="vh">: no workload can use this credential yet.</span>
           </>
         ) : (
           `${issuerCount} ${issuerCount === 1 ? 'issuer' : 'issuers'}`
@@ -1084,7 +1084,7 @@ function TokensInUse(props: PageData) {
       ...(row.status !== 'active' && (tone === 'warn' || tone === 'bad') ? { lineTone: tone } : {}),
       idle: idle || !token.enabled,
       ...(idle && idleRows[0] === row
-        ? { tag: `${idleRows.length} idle ${idleRows.length === 1 ? 'token' : 'tokens'}` }
+        ? { tag: `${idleRows.length} idle ${idleRows.length === 1 ? 'credential' : 'credentials'}` }
         : {}),
     };
   });
@@ -1113,9 +1113,9 @@ function TokensInUse(props: PageData) {
   if (refused > 0) {
     footer.push(
       <>
-        Refused before a token was chosen: <b class="t-bad">{formatCount(refused)}</b> ·{' '}
+        Refused before a credential was chosen: <b class="t-bad">{formatCount(refused)}</b> ·{' '}
         <a href={paths.requests({ token: 'none', range })}>
-          See them<span class="vh"> (requests refused before a token was chosen)</span>
+          See them<span class="vh"> (requests refused before a credential was chosen)</span>
         </a>
       </>,
     );
@@ -1134,7 +1134,7 @@ function TokensInUse(props: PageData) {
   return (
     <Tray
       id="tokens"
-      title="Tokens in use"
+      title="Credentials in use"
       description={`Who calls which credential through tokengate, with the traffic in the last ${RANGE_LABEL[range]}. Each line is a credential access rule.`}
       actions={
         <>
@@ -1161,7 +1161,7 @@ function TokensInUse(props: PageData) {
           <EmptyState
             title="No credentials yet"
             icon="token"
-            description="A credential holds one upstream API key. Credential access rules let jobs use it."
+            description="A credential holds one upstream API key. Credential access rules let workloads use it."
             actions={
               ctx.can('tokens:write') ? (
                 <Button variant="primary" plus href={paths.tokenNew()}>

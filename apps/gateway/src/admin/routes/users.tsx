@@ -1008,7 +1008,7 @@ const CATEGORY_CHIPS: ReadonlyArray<{
   one: string;
   many: string;
 }> = [
-  { category: 'tokens', one: 'token', many: 'tokens' },
+  { category: 'tokens', one: 'credential', many: 'credentials' },
   { category: 'access_rules', one: 'access rule', many: 'access rules' },
   { category: 'global_rules', one: 'global access rule', many: 'global access rules' },
   { category: 'users', one: 'person', many: 'people' },

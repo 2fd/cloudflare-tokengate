@@ -329,7 +329,7 @@ function parseForm(
     if (conditions.length === 0 && !errors.some((e) => e.field?.startsWith('cond.'))) {
       errors.push({
         field: 'cond.0.claim',
-        message: 'Enter at least one condition, or untick Limit jobs.',
+        message: 'Enter at least one condition, or untick Limit workloads.',
       });
     }
   }

@@ -501,7 +501,7 @@ export function riskWarnings(conditions: Condition[], profile: IssuerProfile): W
       if (c.match === 'glob') {
         warn(
           'event_glob',
-          `${eventClaim} uses a glob; globs never allow untrusted events, list events with exact match (I-AUTHZ-3)`,
+          `${eventClaim} uses a glob; globs never allow untrusted events, list events with exact match`,
         );
         continue;
       }
@@ -520,7 +520,7 @@ export function riskWarnings(conditions: Condition[], profile: IssuerProfile): W
         ) {
           warn(
             'inherited_trust_event',
-            `${eventClaim} "${event}" pipelines can be started by merge request pipelines, including fork merge requests; add "ref_protected exact true" to keep them out (I-AUTHZ-3)`,
+            `${eventClaim} "${event}" pipelines can be started by merge request pipelines, including fork merge requests; add "ref_protected exact true" to keep them out`,
           );
         } else {
           // pull_request is the one untrusted GitHub event the structured form offers (A7.7).

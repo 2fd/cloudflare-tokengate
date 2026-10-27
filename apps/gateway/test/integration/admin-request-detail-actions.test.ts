@@ -98,12 +98,12 @@ describe('NEXT_ACTIONS', () => {
 });
 
 describe('Request detail actions', () => {
-  it('gates "Set the secret again" by tokens:write and always offers "Open token"', async () => {
+  it('gates "Set the secret again" by tokens:write and always offers "Open credential"', async () => {
     const r = record({ reason: 'sealed_malformed' });
     await env.TELEMETRY_DB.batch(insertRequestRecordsStatements(env.TELEMETRY_DB, [r]));
     for (const role of ['viewer', 'token_manager', 'access_manager', 'admin', 'owner'] as const) {
       const box = whatToDo(await detail(r, role));
-      expect(box, role).toContain(`href="/admin/credentials/${SVC}">Open token</a>`);
+      expect(box, role).toContain(`href="/admin/credentials/${SVC}">Open credential</a>`);
       const fix = `href="/admin/credentials/${SVC}?open=destination#destination">Set the secret again</a>`;
       if (role === 'token_manager' || role === 'admin' || role === 'owner') {
         expect(box, role).toContain(fix);

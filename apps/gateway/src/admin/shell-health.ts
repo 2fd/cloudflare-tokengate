@@ -53,7 +53,7 @@ export function stripProblems(data: StripInput): HealthProblem[] {
   if (data.keyring.error) {
     problems.push({
       title: 'Encryption keys are not loaded.',
-      detail: `Token requests fail with 503 and secrets cannot change (${data.keyring.error}).`,
+      detail: `Requests through credentials fail with 503 and secrets cannot change (${data.keyring.error}).`,
       fix: { href: paths.tokenKeys(), label: 'Open rotate encryption' },
     });
   }

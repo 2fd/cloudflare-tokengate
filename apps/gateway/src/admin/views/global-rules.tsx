@@ -586,7 +586,7 @@ function limitItems(model: GlobalPageModel): KeyValueItem[] {
       ))}
     </ul>
   ));
-  add(rule.conditions !== null, 'Jobs', () => (
+  add(rule.conditions !== null, 'Workloads', () => (
     <CodeBlock label="Conditions">{formatConditions(rule.conditions ?? [])}</CodeBlock>
   ));
   add(rule.rules !== null, 'Operations', () => (

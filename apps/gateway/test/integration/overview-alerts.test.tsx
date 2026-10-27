@@ -289,7 +289,7 @@ describe('the alert catalogue', () => {
       'Token3',
       'Token4',
       '+2 more',
-      'Tokens outside the allowed hosts',
+      'Credentials outside the allowed hosts',
     ]);
     const all = catalogue().flatMap(overviewAlerts);
     const items = toAttentionItems(all, view('owner'));

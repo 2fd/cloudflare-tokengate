@@ -224,9 +224,9 @@ const TOKEN_NOTICES: NoticeTable<NoticeContext & TokenNoticeData> = {
   destination_changed: (ctx) => ({
     text: `Destination saved with the new secret.${ctx.also === 'host_added' ? hostsAddedText(ctx) : ''}`,
   }),
-  enabled: () => ({ text: 'Token enabled. Consumers with access can use it again.' }),
+  enabled: () => ({ text: 'Credential enabled. Workloads with access can use it again.' }),
   disabled: (ctx) => ({
-    text: 'Token disabled. Requests through it are refused from now on.',
+    text: 'Credential disabled. Requests through it are refused from now on.',
     ...(ctx.service && !ctx.service.enabled && ctx.view.can('tokens:write')
       ? {
           undo: {
@@ -242,7 +242,7 @@ const TOKEN_NOTICES: NoticeTable<NoticeContext & TokenNoticeData> = {
 /** A rotate whose sibling replacement failed: the main token was replaced, a sibling was not. */
 function siblingText(ctx: TokenNoticeData): string {
   return ctx.also === 'sibling_failed'
-    ? ' It was not replaced in every other token that held the same secret: replace it there too.'
+    ? ' It was not replaced in every other credential that held the same secret: replace it there too.'
     : '';
 }
 
@@ -258,10 +258,10 @@ function giveAccessNext(ctx: NoticeContext & TokenNoticeData) {
 }
 
 const LIST_NOTICES: NoticeTable = {
-  deleted: () => ({ text: 'Token deleted.' }),
+  deleted: () => ({ text: 'Credential deleted.' }),
   deleted_with_rules: () => ({ text: 'Credential and its credential access rules deleted.' }),
   enabled: () => ({ text: 'Credential enabled. Its credential access rules allow calls again.' }),
-  disabled: () => ({ text: 'Token disabled. Requests through it are refused from now on.' }),
+  disabled: () => ({ text: 'Credential disabled. Requests through it are refused from now on.' }),
 };
 
 const ALSO_KEYS: ReadonlySet<string> = new Set<TokenAlso>([
@@ -303,14 +303,14 @@ const notFound = (c: AdminContext) =>
   renderPage(
     c,
     {
-      title: 'Token not found',
+      title: 'Credential not found',
       section: 'credentials',
       subsection: 'tokens',
       status: 404,
       header: (
         <PageHeader
           crumbs={[{ href: paths.tokens(), label: 'Credentials' }, { label: 'Not found' }]}
-          title="Token not found"
+          title="Credential not found"
           description={notFoundText('token')}
         />
       ),
@@ -634,7 +634,7 @@ async function listPage(c: AdminContext) {
       return (
         <>
           {!empty && !canWrite ? (
-            <AskSomeone permission="tokens:write" ctx={ctx} verb="add a token" />
+            <AskSomeone permission="tokens:write" ctx={ctx} verb="add a credential" />
           ) : null}
           {cards.keyringError !== null ? <KeyringGate error={cards.keyringError} /> : null}
           <ListAlerts ctx={ctx} tokens={tokens} facts={facts} keyringError={cards.keyringError} />
@@ -646,7 +646,7 @@ async function listPage(c: AdminContext) {
               empty ? undefined : (
                 <>
                   <QuickLinks
-                    label="Filter tokens by status"
+                    label="Filter credentials by status"
                     links={[
                       {
                         href: paths.tokens(keepers),
@@ -672,7 +672,7 @@ async function listPage(c: AdminContext) {
                     ]}
                   />
                   <Filters
-                    label="Find a token"
+                    label="Find a credential"
                     action={paths.tokens()}
                     hidden={{
                       ...(status ? { status } : {}),
@@ -681,7 +681,7 @@ async function listPage(c: AdminContext) {
                   >
                     <FilterSearch
                       id="tok-q"
-                      label="Find a token by name or slug"
+                      label="Find a credential by name or slug"
                       value={query}
                       maxlength={QUERY_MAX}
                       placeholder="Name or slug, e.g. slack"
@@ -787,10 +787,10 @@ async function listPage(c: AdminContext) {
                 </Table>
                 {rows.length === 0 ? (
                   <UiEmptyState
-                    title="No token matches these filters."
+                    title="No credential matches these filters."
                     actions={
                       <Button size="sm" href={paths.tokens()}>
-                        Show all tokens
+                        Show all credentials
                       </Button>
                     }
                   />
@@ -1016,7 +1016,7 @@ function ListAlerts(props: {
   if (unparsed.length > 0) {
     problems.push({
       tone: 'bad',
-      title: `${unparsed.length === 1 ? '1 token has a base URL' : `${unparsed.length} tokens have base URLs`} that cannot be read, so requests through ${unparsed.length === 1 ? 'it' : 'them'} are refused.`,
+      title: `${unparsed.length === 1 ? '1 credential has a base URL' : `${unparsed.length} credentials have base URLs`} that cannot be read, so requests through ${unparsed.length === 1 ? 'it' : 'them'} are refused.`,
       more: 'Set the destination again under Change destination.',
       objects: unparsed.map(link('destination')),
     });
@@ -1026,7 +1026,7 @@ function ListAlerts(props: {
   if (missing.length > 0) {
     problems.push({
       tone: 'warn',
-      title: `${missing.length === 1 ? '1 token has' : `${missing.length} tokens have`} no secret.`,
+      title: `${missing.length === 1 ? '1 credential has' : `${missing.length} credentials have`} no secret.`,
       more: 'Set it under Destination; you will be asked to confirm the host.',
       objects: missing.map(link('destination')),
     });
@@ -1037,7 +1037,7 @@ function ListAlerts(props: {
   if (outside.length > 0) {
     problems.push({
       tone: 'warn',
-      title: `${outside.length === 1 ? '1 token points' : `${outside.length} tokens point`} at a host that is not allowed, so requests through ${outside.length === 1 ? 'it' : 'them'} are refused.`,
+      title: `${outside.length === 1 ? '1 credential points' : `${outside.length} credentials point`} at a host that is not allowed, so requests through ${outside.length === 1 ? 'it' : 'them'} are refused.`,
       objects: outside.map((token) => ({ href: paths.token(token.id), label: token.name })),
       fix: { href: paths.tokenHosts(), label: 'Open allowed hosts', permission: 'settings:write' },
     });
@@ -1116,7 +1116,7 @@ async function renderNew(
         <PageHeader
           crumbs={[{ href: paths.tokens(), label: 'Credentials' }, { label: 'Add credential' }]}
           title="Add a credential"
-          description="Store an application credential, then give each consumer access with its own limits. Consumers use the credential through tokengate without receiving its secret."
+          description="Store an application credential, then give each workload access with its own limits. Workloads use the credential through tokengate without receiving its secret."
         />
       ),
       errors: o.errors,
@@ -1124,7 +1124,7 @@ async function renderNew(
       errorSummary:
         verify && !verify.passed
           ? {
-              title: `${who} rejected the secret${verify.error ? `: ${verify.error}` : ''}. The token was not saved.`,
+              title: `${who} rejected the secret${verify.error ? `: ${verify.error}` : ''}. The credential was not saved.`,
               description: o.failed?.state.draft
                 ? 'Your secret is kept for 15 minutes, so you do not need to paste it again: check again, or save without a passing check.'
                 : undefined,
@@ -1146,7 +1146,7 @@ async function create(c: AdminContext) {
     return renderNew(c, {
       open: null,
       failed: null,
-      errors: [fieldError(null, 'Choose which API the token unlocks')],
+      errors: [fieldError(null, 'Choose which API the credential unlocks')],
       status: 400,
     });
   }
@@ -1219,7 +1219,7 @@ async function create(c: AdminContext) {
     hostErrors.push(
       fieldError(
         'also_uploads',
-        `${uploadsHost} is not an allowed host, so the uploads token cannot be added. ${
+        `${uploadsHost} is not an allowed host, so the uploads credential cannot be added. ${
           canAllow
             ? 'Tick the uploads box again: it now also allows the host'
             : 'Untick the box, or ask an owner to allow it'
@@ -1308,7 +1308,7 @@ async function create(c: AdminContext) {
         ? [
             fieldError(
               null,
-              `${added.join(' and ')} ${added.length === 1 ? 'was' : 'were'} added to Allowed hosts; the token was not saved:`,
+              `${added.join(' and ')} ${added.length === 1 ? 'was' : 'were'} added to Allowed hosts; the credential was not saved:`,
             ),
             ...failure,
           ]
@@ -1571,7 +1571,7 @@ async function rotate(c: AdminContext) {
         errors: [
           fieldError(
             null,
-            `The destination of this token changed since the page was loaded: it now sends the secret to ${upstreamHost(service.base_url)}. Nothing was sent or saved. Check the destination below, then enter the secret again`,
+            `The destination of this credential changed since the page was loaded: it now sends the secret to ${upstreamHost(service.base_url)}. Nothing was sent or saved. Check the destination below, then enter the secret again`,
           ),
         ],
         draft: null,
@@ -1808,7 +1808,7 @@ async function toggle(c: AdminContext) {
   const requested = text(form, 'enabled');
   if (requested !== '1' && requested !== '0') {
     return renderToken(c, service, {
-      errors: [fieldError(null, 'Choose whether to enable or disable the token')],
+      errors: [fieldError(null, 'Choose whether to enable or disable the credential')],
       status: 400,
     });
   }

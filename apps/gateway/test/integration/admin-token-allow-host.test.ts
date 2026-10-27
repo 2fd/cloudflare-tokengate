@@ -161,7 +161,7 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
     });
     expect(res.status).toBe(422);
     expect(await res.text()).toContain(
-      'api.example.com was added to Allowed hosts; the token was not saved:',
+      'api.example.com was added to Allowed hosts; the credential was not saved:',
     );
     expect(await getAllowedUpstreamHosts(env.DB)).toEqual(['api.github.com', 'api.example.com']);
     expect(await actions()).toEqual(['settings.upstream_hosts']);
@@ -256,7 +256,7 @@ describe('I-SSRF-1: the GitHub uploads token when uploads.github.com is not allo
     ]);
     const page = await (await adminGet(app, owner, res.headers.get('location') ?? '')).text();
     expect(page).toContain('uploads.github.com was added to Allowed hosts.');
-    expect(page).not.toContain('uploads token was not created');
+    expect(page).not.toContain('uploads credential was not created');
   });
 
   it.each(['token_manager', 'admin'] as const)(
@@ -300,7 +300,7 @@ describe('I-SSRF-1: the GitHub uploads token when uploads.github.com is not allo
     ] as const) {
       const page = await (await adminGet(app, owner, `${path}?also=${code}`)).text();
       expect(page, code).toContain(
-        `The GitHub release asset uploads token was not created: ${reason}.`,
+        `The GitHub release asset uploads credential was not created: ${reason}.`,
       );
     }
   });
@@ -393,7 +393,7 @@ describe('A7.4: create reports every check that sends nothing in one re-render',
     const order = [
       'Enter a base URL that starts with https://',
       'Enter the header name in lower case, like x-api-key',
-      'Another token already uses foo; leave empty to use foo-2',
+      'Another credential already uses foo; leave empty to use foo-2',
       'foo.example.com is not an allowed host. Ask an owner to allow it',
     ].map((text) => html.indexOf(text));
     expect(order.every((index) => index > -1)).toBe(true);

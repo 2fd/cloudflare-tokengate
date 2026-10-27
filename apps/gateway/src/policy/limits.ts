@@ -79,7 +79,7 @@ export type LimitResult = { ok: true } | { ok: false; detail: string };
 
 const OK: LimitResult = Object.freeze({ ok: true });
 const NO_REVEAL: ReadonlySet<string> = new Set();
-const EMPTY_LIMIT = 'the limit is empty or malformed and matches nothing (I-AUTHZ-5)';
+const EMPTY_LIMIT = 'the limit is empty or malformed and matches nothing';
 
 function fail(detail: string): LimitResult {
   return { ok: false, detail };

@@ -64,13 +64,13 @@ export function upstreamHostEntryError(
     return `${entry} is not a public host; enter a host name like api.example.com`;
   }
   if (host === 'workers.dev' || host.endsWith('.workers.dev')) {
-    return `${entry} is a workers.dev Worker, which tokens may not call`;
+    return `${entry} is a workers.dev Worker, which a credential may not point at`;
   }
   if (!isUpstreamHostEntry(entry)) {
     return `${entry} is not a host name; enter one like api.example.com, or *.example.com for every host below example.com`;
   }
   if (!entry.startsWith('*.') && hostListed(entry, gatewayHosts)) {
-    return `${entry} is this gateway; tokens may not call it`;
+    return `${entry} is this gateway; credentials may not point at it`;
   }
   return null;
 }
@@ -158,7 +158,7 @@ async function writeUpstreamHosts(
       targetId: null,
       summary:
         hosts === null
-          ? 'Services may use any public https host'
+          ? 'Credentials may point at any public https host'
           : `Upstream host allowlist set (${hosts.length} entries)`,
       diff: { before, after: hosts },
     },

@@ -106,7 +106,7 @@ const LIMIT_TEXT: Readonly<Record<LimitColumn, { box: string; hint: string }>> =
     hint: 'Every token must carry one of these tenants (an exact pin, ANDed with each rule’s own).',
   },
   conditions: {
-    box: 'Limit jobs',
+    box: 'Limit workloads',
     hint: 'Every condition must hold on the token: repositories, branches, environments, events.',
   },
   rules: {

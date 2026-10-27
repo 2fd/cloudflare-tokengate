@@ -345,7 +345,7 @@ export function CredentialRulePage(props: { model: CredentialRulePageModel; ctx:
             <WhoSection model={model} ctx={ctx} />
             <Tray
               id="jobs"
-              title="Jobs"
+              title="Workloads"
               description="Every condition must match, or the call is denied."
             >
               <Panel variant="pad">
@@ -371,7 +371,7 @@ export function CredentialRulePage(props: { model: CredentialRulePageModel; ctx:
             <Tray
               id="operations"
               title="Operations"
-              description={`What the jobs may call on ${token.name}.`}
+              description={`What the workloads may call on ${token.name}.`}
             >
               <Panel variant="pad">
                 {f.presetNames.length > 0 ? <p>{f.presetNames.join(', ')}</p> : null}
@@ -501,7 +501,8 @@ function WhoSection(props: { model: CredentialRulePageModel; ctx: ViewContext })
                 value:
                   pin.length === 0 ? (
                     <span class="t-warn">
-                      None: every token this issuer signs for this audience reaches the jobs below.
+                      None: every token this issuer signs for this audience can match the workload
+                      conditions below.
                     </span>
                   ) : (
                     <ul class="con-pins">
@@ -566,7 +567,7 @@ function WhoSection(props: { model: CredentialRulePageModel; ctx: ViewContext })
                   <Mono>{shown}</Mono>
                   {blocked ? (
                     <p class="hint" id={whyId}>
-                      The jobs of this rule use it. Change the jobs first.
+                      The workload conditions of this rule use it. Change them first.
                     </p>
                   ) : last ? (
                     <p class="hint" id={whyId}>
@@ -830,8 +831,8 @@ function CopyDialog(props: { model: CredentialRulePageModel; ctx: ViewContext })
       }
     >
       <p>
-        The copy keeps the issuer, the tenants, the jobs, the operations and the token settings. It
-        starts enabled.
+        The copy keeps the issuer, the tenants, the workloads, the operations and the token
+        settings. It starts enabled.
       </p>
       <Select
         name="credential_id"

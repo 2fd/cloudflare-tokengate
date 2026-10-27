@@ -25,9 +25,9 @@ export const POLICY_HINTS: Readonly<Record<JoinPolicy, string>> = {
   'active:viewer': 'Anyone your Cloudflare Access policy admits can read every page right away.',
   'active:token_manager': 'Anyone Access admits can add, replace and delete credentials.',
   'active:access_manager':
-    'Anyone Access admits can let a credential access rule use any credential.',
+    'Anyone Access admits can decide which workloads may use which credential.',
   'active:admin':
-    'Anyone Access admits can add, replace and delete credentials, can let a credential access rule use any credential, and can download the configuration export.',
+    'Anyone Access admits can add, replace and delete credentials, can decide which workloads may use which credential, and can download the configuration export.',
   closed:
     'Anyone else is recorded as suspended and refused. Their rows appear under Members with the status Suspended, and you can reactivate them.',
 };

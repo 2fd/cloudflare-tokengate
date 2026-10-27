@@ -188,9 +188,9 @@ interface RuleNoticeData {
 
 const NOTICES: NoticeTable<NoticeContext & RuleNoticeData> = {
   created: () => ({
-    text: 'Access rule created. Add the snippet below to the job; it can use the credential from the next request on.',
+    text: 'Access rule created. Add the snippet below to the workload; it can use the credential from the next request on.',
   }),
-  copied: () => ({ text: 'Copy created and enabled. Add the snippet below to the job.' }),
+  copied: () => ({ text: 'Copy created and enabled. Add the snippet below to the workload.' }),
   updated: () => ({ text: 'Access rule saved.' }),
   label_changed: () => ({
     text: 'Access rule saved. A display name of an ID changed everywhere it is shown.',
@@ -211,8 +211,10 @@ const NOTICES: NoticeTable<NoticeContext & RuleNoticeData> = {
       : {}),
   }),
   deleted: () => ({ text: 'Access rule deleted.' }),
-  tenant_added: () => ({ text: 'Added. Jobs of it can match from the next request on.' }),
-  tenant_removed: () => ({ text: 'Removed. Its jobs no longer match from the next request on.' }),
+  tenant_added: () => ({ text: 'Added. Its workloads can match from the next request on.' }),
+  tenant_removed: () => ({
+    text: 'Removed. Its workloads no longer match from the next request on.',
+  }),
   copy_review: () => ({
     text: 'The copy has risks the source does not have on that credential: review them, then save.',
   }),
@@ -277,8 +279,8 @@ async function listPage(c: AdminContext) {
           count={anyFilter ? `${filtered.length} of ${total}` : total}
           description={
             <>
-              Which jobs may use which credential, and for what. The global access rules of each
-              issuer cap them.
+              Which workloads may use which credential, and for what. The global access rules of
+              each issuer cap them.
               {credential ? (
                 <>
                   {' '}
@@ -379,7 +381,7 @@ function ListBody(props: {
       <UiEmptyState
         headingLevel={2}
         title="A credential manager must add a credential first."
-        description="A credential access rule lets the jobs of an issuer use a credential."
+        description="A credential access rule lets the workloads of an issuer use a credential."
         actions={
           ctx.can('tokens:write') ? (
             <Button variant="primary" plus href={paths.tokenNew()}>
@@ -416,7 +418,7 @@ function ListBody(props: {
     { label: 'Rule' },
     { label: 'Credential' },
     { label: 'Issuer' },
-    { label: 'Jobs' },
+    { label: 'Workloads' },
     { label: 'Operations' },
     { label: 'Global' },
     { label: 'Status' },
@@ -553,7 +555,7 @@ function RuleListRow(props: { edge: RuleEdge; connections: Connections; ctx: Vie
           meta={<span class="mono">{tenantsText(rule, labels)}</span>}
         />
       </Cell>
-      <Cell label="Jobs">
+      <Cell label="Workloads">
         <span class="mono">
           <PathName text={edge.subject} />
         </span>
@@ -1087,7 +1089,7 @@ async function renderForm(
         { label: 'Add credential access rule' },
       ]}
       title="Add credential access rule"
-      description="Choose the issuer, the jobs, and what they may call on which credential. Everything is preset; change only what differs."
+      description="Choose the issuer, the workloads, and what they may call on which credential. Everything is preset; change only what differs."
     />
   );
   if (data.tokens.length === 0) {
@@ -1104,7 +1106,7 @@ async function renderForm(
         <UiEmptyState
           headingLevel={2}
           title="A credential manager must add a credential first."
-          description="A credential access rule lets the jobs of an issuer use a credential."
+          description="A credential access rule lets the workloads of an issuer use a credential."
           actions={
             ctx.can('tokens:write') ? (
               <Button variant="primary" plus href={paths.tokenNew()}>
@@ -1146,7 +1148,7 @@ async function renderForm(
           { label: 'Add credential access rule' },
         ]}
         title={`Add credential access rule to ${fixedToken.name}`}
-        description={`Choose which jobs can call ${fixedToken.name} and what they may do. Everything is preset; change only what differs.`}
+        description={`Choose which workloads can call ${fixedToken.name} and what they may do. Everything is preset; change only what differs.`}
       />
     );
     entry = { cancelHref: paths.token(fixedToken.id), cancelLabel: 'Cancel' };
@@ -1903,9 +1905,14 @@ function ruleErrorField(
   return null;
 }
 
+/** A trailing internal requirement ID such as " (I-TEN-1)": never shown to the admin. */
+const REQUIREMENT_ID = /\s*\(I-[A-Z]+-\d+\)/g;
+
 function ruleErrorMessage(message: string): string {
-  if (message.includes('I-AUTHZ-2')) {
-    return `Each access rule needs exact, non-negated conditions on its anchor claims: ${message.replace(/^the access rule must have /, '')}`;
+  // The anchor error of validate-rules (I-AUTHZ-2): "… conditions on <options> (I-AUTHZ-2)".
+  const anchor = /exact, non-negated conditions on (.+?) \(I-AUTHZ-2\)/.exec(message);
+  if (anchor) {
+    return `Each access rule needs exact, non-negated conditions on its anchor claims: ${anchor[1]}.`;
   }
   if (message.includes('outside the tenant pin of this access rule')) {
     return `${message.replace('are outside the tenant pin of this access rule', 'are not organizations or groups of this rule')}. Add them under Issuer and tenant first.`;
@@ -1913,7 +1920,7 @@ function ruleErrorMessage(message: string): string {
   if (message.startsWith('JWKS discovery failed')) {
     return `The gateway could not read the issuer's OpenID configuration (${message.slice(23)}). Check the issuer and save again.`;
   }
-  return message;
+  return message.replace(REQUIREMENT_ID, '');
 }
 
 /**

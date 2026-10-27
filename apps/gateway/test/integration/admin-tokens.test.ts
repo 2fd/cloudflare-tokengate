@@ -204,7 +204,7 @@ describe('token list', () => {
     expect(html).toContain('No credential access rule');
     expect(html).not.toContain('Add credential');
     expect(html).not.toContain('type="password"');
-    expect(html).toContain('Only credential managers can add a token');
+    expect(html).toContain('Only credential managers can add a credential');
     expect(html).not.toContain(SECRET);
   });
 
@@ -228,13 +228,13 @@ describe('token list', () => {
     const missing = await (
       await adminGet(app, admin, '/admin/credentials?status=no_credential')
     ).text();
-    expect(missing).toContain('No token matches these filters.');
+    expect(missing).toContain('No credential matches these filters.');
     // The filter in use stays a current quick link, also with no match.
     expect(missing).toMatch(
       /<a class="ql bad" href="\/admin\/credentials\?status=no_credential" aria-current="true">[\s\S]*?No secret/,
     );
     expect(missing).toContain(
-      '<a class="btn sm secondary" href="/admin/credentials">Show all tokens</a>',
+      '<a class="btn sm secondary" href="/admin/credentials">Show all credentials</a>',
     );
     const kid = await kekKid();
     const byKey = await (await adminGet(app, admin, `/admin/credentials?key=${kid}`)).text();
@@ -269,7 +269,7 @@ describe('token list', () => {
     const markup = await (
       await adminGet(app, admin, `/admin/credentials?q=${encodeURIComponent('<b>x</b>')}`)
     ).text();
-    expect(markup).toContain('No token matches these filters.');
+    expect(markup).toContain('No credential matches these filters.');
     expect(markup).not.toContain('<b>x</b>');
   });
 
@@ -311,7 +311,7 @@ describe('token list', () => {
     const list = await adminGet(app, owner, '/admin/credentials');
     expect(list.status).toBe(200);
     const listHtml = await list.text();
-    expect(listHtml).toContain('1 token has a base URL that cannot be read');
+    expect(listHtml).toContain('1 credential has a base URL that cannot be read');
     expect(listHtml).toContain(`href="/admin/credentials/${id}?open=destination#destination"`);
     expect((await adminGet(app, owner, '/admin/credentials/hosts')).status).toBe(200);
     const page = await adminGet(app, owner, `/admin/credentials/${id}`);
@@ -481,7 +481,7 @@ describe('create', () => {
     });
     expect(res.status).toBe(409);
     const html = await res.text();
-    expect(html).toContain('Another token already uses openai; leave empty to use openai-2');
+    expect(html).toContain('Another credential already uses openai; leave empty to use openai-2');
     expect(html).toContain('href="#f-custom-slug"');
     expect(upstream.calls.length).toBe(calls);
   });
@@ -656,7 +656,7 @@ describe('token page', () => {
       .run();
     const html = await (await adminGet(app, manager, `/admin/credentials/${id}`)).text();
     expect(html).toContain(
-      `Jobs of <a href="/admin/credential-access-rules?credential=${id}">1 issuer</a> can use OpenAI through <a href="/admin/credential-access-rules?credential=${id}">1 credential access rule</a>.`,
+      `Workloads of <a href="/admin/credential-access-rules?credential=${id}">1 issuer</a> can use OpenAI through <a href="/admin/credential-access-rules?credential=${id}">1 credential access rule</a>.`,
     );
     expect(html).toContain(
       `<a class="ent-n" href="/admin/credential-access-rules/${RULE_ID}">deploy</a> <span class="ctx">· acme/api · environment production</span>`,
@@ -995,7 +995,9 @@ describe('rotate (POST /admin/credentials/:id/secret)', () => {
       `/admin/credentials/${api}?notice=secret_verified&also=sibling_failed#secret`,
     );
     const html = await (await adminGet(app, admin, res.headers.get('location') ?? '')).text();
-    expect(html).toContain('It was not replaced in every other token that held the same secret');
+    expect(html).toContain(
+      'It was not replaced in every other credential that held the same secret',
+    );
   });
 });
 

@@ -138,7 +138,7 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
     operation_presets: [preset('send', 'Send messages', true, ['POST', '/'])],
     docs_url: 'https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/',
     notes:
-      'There is no read-only check for webhooks. Consumers POST to <gateway>/proxy/slack-webhook.',
+      'There is no read-only check for webhooks. Workloads POST to <gateway>/proxy/slack-webhook.',
   },
   {
     id: 'discord-webhook',
@@ -257,7 +257,7 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
     app: 'GitHub',
     access_label: 'Release asset uploads',
     label: 'GitHub release asset uploads',
-    card_summary: 'uploads.github.com · the same token as GitHub REST API',
+    card_summary: 'uploads.github.com · the same secret as GitHub REST API',
     secret: GITHUB_SECRET,
     family: 'github',
     slug: 'github-uploads',
@@ -274,7 +274,8 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
       ]),
     ],
     docs_url: 'https://docs.github.com/en/rest/releases/assets#upload-a-release-asset',
-    notes: 'Release asset uploads use a separate host. Store the same token as the GitHub service.',
+    notes:
+      'Release asset uploads use a separate host. Store the same secret that the GitHub credential holds.',
   },
 ] satisfies ServiceTemplate[]);
 

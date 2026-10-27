@@ -238,7 +238,7 @@ export function parseIssuerForm(
   if (!type)
     return {
       ok: false,
-      errors: [{ field: field('type'), message: 'Choose where the jobs run.' }],
+      errors: [{ field: field('type'), message: 'Choose where the workloads run.' }],
     };
   if (type === 'github-actions') {
     const orgs = parseOwnerList(form.github_org, { id: type });
@@ -409,7 +409,7 @@ export function IssuerType(props: {
   return (
     <UiField
       id={typeId}
-      label={props.legend ?? 'Where do the jobs run?'}
+      label={props.legend ?? 'Where do the workloads run?'}
       live={scoped ? undefined : 1}
       class={scoped ? 'ga-tf' : undefined}
       error={props.error}

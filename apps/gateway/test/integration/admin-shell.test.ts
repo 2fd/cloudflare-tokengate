@@ -219,11 +219,11 @@ describe('the shell on every page', () => {
     expect(html.indexOf('<div class="acct">')).toBeLessThan(html.indexOf('<main'));
   });
 
-  it('shows Access Rules under Credentials, current on credential and global rule pages', async () => {
+  it('shows Access rules under Credentials, current on credential and global rule pages', async () => {
     const list = sideNav(await page(owner, '/admin/global-access-rules'));
     const section = list.slice(list.indexOf('aria-label="Credentials"'));
     expect([...section.matchAll(/class="nav-text">([^<]+)/g)].map((m) => m[1]).slice(0, 2)).toEqual(
-      ['Credentials', 'Access Rules'],
+      ['Credentials', 'Access rules'],
     );
     expect(list).not.toContain('href="/admin/global-access-rules"');
     expect(navLink(list, '/admin/credential-access-rules')).toContain('aria-current="true"');
@@ -284,7 +284,7 @@ describe('the shell on every page', () => {
   it('counts credentials and credential access rules, and shows none for an empty list', async () => {
     const nav = sideNav(await page(owner, '/admin/requests'));
     expect(nav).toContain('Credentials</span><span class="nav-count">1</span>');
-    expect(nav).toContain('Access Rules</span><span class="nav-count">1</span>');
+    expect(nav).toContain('Access rules</span><span class="nav-count">1</span>');
     expect(nav).not.toMatch(/(Overview|Members)<\/span><span class="nav-count">/);
   });
 
@@ -332,7 +332,7 @@ describe('health strip', () => {
     expect(strip).toContain('<span aria-hidden="true">✕</span> <span class="vh">Error: </span>');
     // A short bold title, then the detail in plain text.
     expect(strip).toContain(
-      '<span class="vh">Error: </span>Encryption keys are not loaded.</b> Token requests fail with 503 and secrets cannot change (keyring_absent).',
+      '<span class="vh">Error: </span>Encryption keys are not loaded.</b> Requests through credentials fail with 503 and secrets cannot change (keyring_absent).',
     );
     expect(strip).toContain('<a href="/admin/credentials/keys">Open rotate encryption</a>');
     expect(strip).toContain('<a href="/admin#health">Show all problems</a>');
@@ -457,7 +457,7 @@ describe('404 page for unlisted admin URLs', () => {
     ],
     [
       '/admin/issuer-access-rules/new?view=list',
-      'Issuer access rules are now part of <a href="/admin/credential-access-rules">Credential access rules</a>. Each credential access rule now holds its issuer, its jobs and its operations.',
+      'Issuer access rules are now part of <a href="/admin/credential-access-rules">Credential access rules</a>. Each credential access rule now holds its issuer, its identity conditions and its operations.',
     ],
   ])('GET %s says where the page moved: %s', async (path, hint) => {
     const res = await adminGet(world.app, owner, path);

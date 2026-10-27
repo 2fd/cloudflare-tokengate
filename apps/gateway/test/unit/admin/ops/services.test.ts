@@ -149,7 +149,7 @@ describe('createService', () => {
     if (result.ok) return;
     // Pre-checked before the keyring and the credential check (A7.4), with the free slug.
     expect(result.errors).toEqual([
-      'another token already uses github; leave empty to use github-2',
+      'another credential already uses github; leave empty to use github-2',
     ]);
     expect(result.fieldErrors?.[0]?.field).toBe('slug');
     expect(await auditCount()).toBe(before);
@@ -536,7 +536,7 @@ describe('deleteService', () => {
     const audit = (await auditRows(id)).at(-1);
     expect(audit).toMatchObject({
       action: 'service.delete',
-      summary: 'Deleted service github and its 2 credential access rules',
+      summary: 'Deleted credential github and its 2 access rules',
     });
     expect(audit?.diff?.before).toMatchObject({
       access_rules: [

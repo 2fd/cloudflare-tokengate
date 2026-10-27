@@ -437,7 +437,7 @@ describe('global access rule form (§A7.4)', () => {
     expect(res.status).toBe(422);
     const page = await res.text();
     expect(page).toContain('The global access rule was not saved');
-    expect(page).toContain('Enter at least one condition, or untick Limit jobs.');
+    expect(page).toContain('Enter at least one condition, or untick Limit workloads.');
     expect(page).toContain('Tick at least one method.');
     expect(page).toContain('Enter the maximum token age in whole seconds, like 300.');
     expect(page).toContain('Use a date like 2027-01-31.');

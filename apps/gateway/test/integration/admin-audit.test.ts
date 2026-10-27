@@ -61,7 +61,7 @@ describe('GET /admin/audit', () => {
       action: 'service.create',
       targetType: 'service',
       targetId: SVC_A,
-      summary: 'Created service slack',
+      summary: 'Created credential slack',
       diff: { after: { slug: 'slack', credential_sealed: 'sealed-bytes' } },
     });
     const updated = await audit(actorFor(owner), {
@@ -133,7 +133,7 @@ describe('GET /admin/audit', () => {
     expect(html).toContain('aria-label="Filter audit log"');
     expect(html).toContain(`<a href="/admin/credentials/${SVC_A}">Slack bot</a>`);
     expect(html).toContain(
-      `<a href="/admin/audit?range=24h&amp;target=${SVC_A}">Slack bot <span class="slug">token</span></a>`,
+      `<a href="/admin/audit?range=24h&amp;target=${SVC_A}">Slack bot <span class="slug">credential</span></a>`,
     );
   });
 

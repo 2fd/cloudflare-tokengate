@@ -180,6 +180,9 @@ describe('credential access rules: add', () => {
     expect(page).toContain('<option value="gitlab-ci" selected="" data-o="2">');
     expect(page).not.toContain('name="new.type" value=');
     expect(page).toContain('name="name"');
+    // The name example names the chosen credential, not a hardcoded one.
+    expect(page).toContain('placeholder="GitHub for acme/api (environment production)"');
+    expect(page).not.toContain('placeholder="Slack for acme/api');
     expect(page).toContain('name="audience"');
     expect(page).toContain('name="jwks_uri"');
     // Token settings is a closed disclosure while nothing in it has an error.
@@ -458,7 +461,7 @@ describe('credential access rules: list and filters', () => {
       'Rule',
       'Credential',
       'Issuer',
-      'Jobs',
+      'Workloads',
       'Operations',
       'Global',
       'Status',
@@ -835,7 +838,10 @@ describe('credential access rules: the jobs editors', () => {
     });
     expect(unanchored.status).toBe(422);
     const body = await unanchored.text();
-    expect(body).toContain('I-AUTHZ-2');
+    expect(body).toContain(
+      'Each access rule needs exact, non-negated conditions on its anchor claims: ',
+    );
+    expect(body).not.toContain('I-AUTHZ-2');
     expect(body).toContain('href="#f-new-github-actions-cond-0-values"');
     const fields = {
       ...base,

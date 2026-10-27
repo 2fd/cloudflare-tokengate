@@ -499,7 +499,7 @@ const FIELD_TEXT: Readonly<Record<string, string>> = {
   max_token_age_seconds: 'maximum token age',
   tenant_pin: 'tenants',
   anchor_claims: 'anchor claims',
-  conditions: 'jobs',
+  conditions: 'identity conditions',
   rules: 'operations',
   enabled: 'state',
   expires_at: 'expiry',

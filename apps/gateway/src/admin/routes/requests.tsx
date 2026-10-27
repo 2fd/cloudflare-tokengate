@@ -172,7 +172,7 @@ export function parseRequestParams(query: (name: string) => string | undefined):
   const token = raw('token');
   if (token) {
     if (token === 'none' || SERVICE_ID.test(token)) params.token = token;
-    else errors.push({ field: 'token', message: 'Choose a token from the list.' });
+    else errors.push({ field: 'token', message: 'Choose a credential from the list.' });
   }
   const rule = raw('rule');
   if (rule) {
@@ -197,7 +197,10 @@ export function parseRequestParams(query: (name: string) => string | undefined):
   if (slug) {
     if (SLUG.test(slug)) params.slug = slug;
     else
-      errors.push({ field: null, message: 'That token slug filter is not valid; it was removed.' });
+      errors.push({
+        field: null,
+        message: 'That credential slug filter is not valid; it was removed.',
+      });
   }
   for (const cursor of ['before', 'after'] as const) {
     const value = raw(cursor);
@@ -513,7 +516,7 @@ async function requestsPage(
   const titleParts = [
     params.outcome ? OUTCOME_LABEL[params.outcome].toLowerCase() : null,
     params.range ? `last ${RANGE_LABEL[params.range]}` : null,
-    params.token ? `token ${tokenName(params.token, names.tokens)}` : null,
+    params.token ? `credential ${tokenName(params.token, names.tokens)}` : null,
     params.rule ? `rule ${ruleName(params.rule, names.rules)}` : null,
     params.repo ? params.repo : null,
     params.reason ? reasonLabel(params.reason) : null,
@@ -670,8 +673,8 @@ async function requestsPage(
                   title="No requests recorded yet."
                   description={
                     <>
-                      Requests appear once a credential access rule calls{' '}
-                      <code>/proxy/&lt;token slug&gt;/…</code>
+                      Requests appear once a workload calls{' '}
+                      <code>/proxy/&lt;credential slug&gt;/…</code>
                     </>
                   }
                   actions={
@@ -720,7 +723,7 @@ function listSentence(params: RequestParams, names: Names): { title: string; res
     : 'Requests';
   const to = params.token
     ? params.token === 'none'
-      ? ' refused before a token was chosen'
+      ? ' refused before a credential was chosen'
       : ` to ${tokenName(params.token, names.tokens)}`
     : params.slug
       ? ` to the slug ${params.slug}`
@@ -832,10 +835,10 @@ function filterChips(params: RequestParams, names: Names) {
       chip(
         'token',
         params.token === 'none'
-          ? 'Token: refused before a token was chosen'
+          ? 'Credential: refused before a credential was chosen'
           : names.tokens.has(params.token)
-            ? `Token: ${tokenName(params.token, names.tokens)}`
-            : `Token: Deleted credential ${params.token}`,
+            ? `Credential: ${tokenName(params.token, names.tokens)}`
+            : `Credential: Deleted credential ${params.token}`,
       ),
     );
   }
@@ -919,7 +922,10 @@ function RequestFilters(props: {
             slug: s.slug,
           }))}
         extra={[
-          { href: listLink(params, { token: 'none' }), label: 'Refused before a token was chosen' },
+          {
+            href: listLink(params, { token: 'none' }),
+            label: 'Refused before a credential was chosen',
+          },
         ]}
       />
       <AddFilter
@@ -1007,7 +1013,7 @@ function RequestTable(props: {
           name: r.service_id
             ? filterLink(
                 { token: r.service_id },
-                'token',
+                'credential',
                 token?.slug ?? r.service_slug ?? r.service_id,
                 true,
               )
@@ -1125,7 +1131,7 @@ interface ActionContext {
 }
 
 const openToken = ({ record }: ActionContext): NextAction[] =>
-  record.service_id ? [{ href: paths.token(record.service_id), label: 'Open token' }] : [];
+  record.service_id ? [{ href: paths.token(record.service_id), label: 'Open credential' }] : [];
 
 const setSecretAgain = (ctx: ActionContext): NextAction[] => {
   const id = ctx.record.service_id;
@@ -1250,7 +1256,7 @@ export const NEXT_ACTIONS: Readonly<
     actions: openRule,
   },
   profile_unknown: {
-    text: 'The credential access rule uses a credential access rule type this version does not know. Check the credential access rule, or upgrade the gateway.',
+    text: 'The credential access rule uses an issuer type this version does not know. Check the credential access rule, or upgrade the gateway.',
     actions: openRule,
   },
   no_matching_rule: {
@@ -1272,7 +1278,7 @@ export const NEXT_ACTIONS: Readonly<
     actions: giveAccess,
   },
   service_not_found: {
-    text: 'Check the token slug in the URL.',
+    text: 'Check the credential slug in the URL.',
     actions: ({ record }) => [
       ...(record.service_slug && SLUG.test(record.service_slug)
         ? [{ href: paths.requests({ slug: record.service_slug }), label: 'Requests to this slug' }]
@@ -1286,7 +1292,7 @@ export const NEXT_ACTIONS: Readonly<
     ],
   },
   service_disabled: {
-    text: 'Enable the token if callers should use it again.',
+    text: 'Enable the credential if callers should use it again.',
     actions: openToken,
   },
   path_invalid: {
@@ -1302,11 +1308,11 @@ export const NEXT_ACTIONS: Readonly<
     actions: callerDocs('method_not_allowed'),
   },
   base_url_invalid: {
-    text: "Check the token's base URL on the token page.",
+    text: "Check the credential's base URL on the credential page.",
     actions: setSecretAgain,
   },
   injection_invalid: {
-    text: 'Re-enter the secret and injection on the token page.',
+    text: 'Re-enter the secret and injection on the credential page.',
     actions: setSecretAgain,
   },
   keyring_absent: {
@@ -1339,16 +1345,19 @@ export const NEXT_ACTIONS: Readonly<
     actions: openKeys,
   },
   credential_missing: {
-    text: 'Set the secret on the token page. If the token had one, check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the secret again: the row may have been edited in D1.',
+    text: 'Set the secret on the credential page. If the credential had one, check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the secret again: the row may have been edited in D1.',
     actions: setSecretAgain,
   },
   credential_binding_mismatch: {
-    text: 'If Settings › Rotate encryption shows a replaced key, restore it. Otherwise the token row was probably edited in D1: check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the secret again.',
+    text: 'If Settings › Rotate encryption shows a replaced key, restore it. Otherwise the credential row was probably edited in D1: check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the secret again.',
     actions: setSecretAgain,
   },
-  credential_invalid: { text: 'Re-enter the secret on the token page.', actions: setSecretAgain },
+  credential_invalid: {
+    text: 'Re-enter the secret on the credential page.',
+    actions: setSecretAgain,
+  },
   credential_unavailable: {
-    text: "The token's secret could not be opened. Check Settings › Rotate encryption; if the keys are fine, check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the secret again.",
+    text: "The credential's secret could not be opened. Check Settings › Rotate encryption; if the keys are fine, check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the secret again.",
     actions: setSecretAgain,
   },
   keyring_missing_key: {
@@ -1360,7 +1369,7 @@ export const NEXT_ACTIONS: Readonly<
     actions: setSecretAgain,
   },
   upstream_timeout: {
-    text: "The upstream API did not answer in time. Check its status, or raise the token's timeout.",
+    text: "The upstream API did not answer in time. Check its status, or raise the credential's timeout.",
     actions: openToken,
   },
   upstream_unreachable: {
@@ -1467,8 +1476,8 @@ function WhatToDo(props: {
               ⚠
             </span>{' '}
             <span class="vh">Risk: </span>The branch is not protected, so anyone who can push a
-            branch to {record.caller_repository ?? 'the repository'} would get the{' '}
-            {props.service?.name ?? 'upstream'} token.
+            branch to {record.caller_repository ?? 'the repository'} could use the{' '}
+            {props.service?.name ?? 'upstream'} credential.
           </p>
         ) : null}
       </Panel>
@@ -1530,7 +1539,7 @@ function traceSteps(
     group === 'Upstream' || (r.upstream_status !== null && r.upstream_status >= 500);
   let stop: number | null;
   if (group === 'Caller token' || group === 'Credential access rule') stop = 1;
-  else if (group === 'Token configuration' || group === 'Encryption keys') stop = 2;
+  else if (group === 'Credential configuration' || group === 'Encryption keys') stop = 2;
   else if (group === 'Access rules') stop = 3;
   else if (upstreamFailed) stop = 4;
   else if (r.outcome === 'allowed') stop = null;
@@ -1544,7 +1553,7 @@ function traceSteps(
       fail: why,
     },
     {
-      title: 'Token found',
+      title: 'Credential found',
       pass: ctx.service
         ? `/proxy/${ctx.service.slug} → ${ctx.service.name}`
         : `/proxy/${r.service_slug ?? '…'}`,
@@ -1584,9 +1593,9 @@ function happenedSentence(
   service: Service | null,
 ): Child {
   const why = reasonText(r.reason);
-  const token = service?.name ?? r.service_slug ?? 'the token';
+  const token = service?.name ?? r.service_slug ?? 'the credential';
   if (r.claims_verified !== 1) {
-    return `The caller token was not verified${why ? `: ${why}` : ''}, so tokengate stopped the call before choosing a token.`;
+    return `The caller token was not verified${why ? `: ${why}` : ''}, so tokengate stopped the call before choosing a credential.`;
   }
   const who = provider ? `${provider.name} verified the caller` : 'The caller was verified';
   const caller = r.caller_repository ?? r.caller_subject ?? 'the caller';
@@ -1605,14 +1614,14 @@ function happenedSentence(
   if (accessFixable(r.reason)) {
     return (
       <>
-        {who}, but no access lets {callerText} use {token}.
+        {who}, but no access rule lets {callerText} use {token}.
       </>
     );
   }
   if (r.outcome === 'allowed' && r.reason === null) {
     return (
       <>
-        {who}, and an access let {callerText} use {token}
+        {who}, and an access rule let {callerText} use {token}
         {r.upstream_status !== null ? `; the upstream answered HTTP ${r.upstream_status}` : ''}.
       </>
     );
@@ -1681,7 +1690,9 @@ function RequestDetail(props: {
         ) : r.service_slug ? (
           <>
             <code>{r.service_slug}</code>{' '}
-            <span class="muted">{r.service_id ? '(deleted)' : '(no such token when called)'}</span>
+            <span class="muted">
+              {r.service_id ? '(deleted)' : '(no such credential when called)'}
+            </span>
           </>
         ) : (
           '—'
@@ -1883,7 +1894,7 @@ function RequestDetail(props: {
                   items={[
                     { label: 'Request ID', value: r.id, mono: true, copyable: true },
                     { label: 'Time', value: formatTime(r.ts) },
-                    { label: 'Credential ID (jti)', value: r.jti ?? '—', mono: r.jti !== null },
+                    { label: 'Caller token ID (jti)', value: r.jti ?? '—', mono: r.jti !== null },
                     {
                       label: 'Caller subject (sub)',
                       value: r.caller_subject ?? '—',
@@ -1931,7 +1942,7 @@ function RequestDetail(props: {
               {r.service_id ? (
                 <li>
                   <a href={paths.requests({ token: r.service_id })}>
-                    Requests to {tokenLabel ?? 'this token'}
+                    Requests to {tokenLabel ?? 'this credential'}
                   </a>
                 </li>
               ) : r.service_slug && SLUG.test(r.service_slug) ? (
@@ -2118,7 +2129,7 @@ function storedTrace(record: RequestRecord): TraceItem[] {
 
 const TRACE_RESULT_TEXT: Record<TraceEntry['result'], string> = {
   matched: 'matched',
-  invalid_rule: 'the rule no longer meets the anchor rule of its issuer type (I-AUTHZ-2)',
+  invalid_rule: 'the rule no longer meets the anchor rule of its issuer type',
   condition_failed: 'a constraint did not match',
   event_not_trusted: 'event not opted in',
   no_rule: 'no operation allows this method and path',

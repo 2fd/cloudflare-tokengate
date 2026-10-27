@@ -183,7 +183,7 @@ async function planCreate(
     ? [
         fieldError(
           'slug',
-          `another token already uses ${input.slug}; leave empty to use ${await freeSlug(db, input.slug)}`,
+          `another credential already uses ${input.slug}; leave empty to use ${await freeSlug(db, input.slug)}`,
         ),
       ]
     : [];
@@ -273,7 +273,7 @@ export async function createService(
       action: 'service.create',
       targetType: 'service',
       targetId: id,
-      summary: `Created service ${row.slug}${sealed ? ' with a credential' : ''}`,
+      summary: `Created credential ${row.slug}${sealed ? ' with a secret' : ''}`,
       diff: { after, ...(sealed?.verify ? { verify: verifyAuditView(sealed.verify) } : {}) },
     },
     null,
@@ -410,14 +410,14 @@ export async function updateServiceFields(
   const rejected = Object.keys(input).filter((key) => !INPUT_KEYS.includes(key));
   if (rejected.length > 0) {
     return opFailure('invalid', [
-      `${rejected.join(', ')} cannot be changed here; the destination and injection change only together with the credential (I-CRED-2)`,
+      `${rejected.join(', ')} cannot be changed here; the destination and injection change only together with the secret`,
     ]);
   }
   const flagErrors = booleanErrors('enabled', input.enabled);
   if (flagErrors.length > 0) return opFailure('invalid', flagErrors);
   const existing = await getService(deps.env.DB, serviceId);
-  if (!existing) return opFailure('not_found', ['service not found']);
-  const stale = staleEdit('the service', input.expected_updated_at, existing.updated_at);
+  if (!existing) return opFailure('not_found', ['credential not found']);
+  const stale = staleEdit('the credential', input.expected_updated_at, existing.updated_at);
   if (stale) return stale;
   const given = (UPDATABLE_FIELDS as readonly string[]).filter(
     (key) => input[key as keyof ServiceFieldsInput] !== undefined,
@@ -477,8 +477,8 @@ export async function updateServiceFields(
       targetType: 'service',
       targetId: existing.id,
       summary: onlyEnabled
-        ? `${next.enabled ? 'Enabled' : 'Disabled'} service ${existing.slug}`
-        : `Updated service ${existing.slug}${changed.length ? ` (${changed.join(', ')})` : ''}`,
+        ? `${next.enabled ? 'Enabled' : 'Disabled'} credential ${existing.slug}`
+        : `Updated credential ${existing.slug}${changed.length ? ` (${changed.join(', ')})` : ''}`,
       diff: {
         before: pick(existing, changed),
         after: pick(next, changed),
@@ -488,7 +488,7 @@ export async function updateServiceFields(
     [updateServiceFieldsStatement(deps.env.DB, existing.id, next, now, guard)],
   );
   if (!outcome.ok) return outcome;
-  if (!outcome.committed) return concurrentChange('the service');
+  if (!outcome.committed) return concurrentChange('the credential');
   return {
     ok: true,
     service: serviceView({
@@ -519,14 +519,14 @@ async function disableService(
       action: 'service.disable',
       targetType: 'service',
       targetId: existing.id,
-      summary: `Disabled service ${existing.slug}`,
+      summary: `Disabled credential ${existing.slug}`,
       diff: { before: { enabled: existing.enabled }, after: { enabled: false } },
     },
     guard,
     [setServiceEnabledStatement(deps.env.DB, existing.id, false, now, guard)],
   );
   if (!outcome.ok) return outcome;
-  if (!outcome.committed) return concurrentChange('the service');
+  if (!outcome.committed) return concurrentChange('the credential');
   const service = {
     ...existing,
     enabled: false,
@@ -586,7 +586,7 @@ async function planCredential(
   options: { hostAllowed?: boolean; withoutSecret?: boolean },
 ): Promise<{ ok: true; plan: CredentialPlan } | OpFailure> {
   const existing = await getService(deps.env.DB, serviceId);
-  if (!existing) return opFailure('not_found', ['service not found']);
+  if (!existing) return opFailure('not_found', ['credential not found']);
   const moved = await destinationMoved(existing, input.expected_destination);
   if (moved) return moved;
 
@@ -650,7 +650,7 @@ async function planCredential(
     const why =
       unattested === 'no_credential'
         ? 'no credential is stored, so nothing attests the stored base URL and injection'
-        : `the stored credential does not open under this service's stored base URL and injection (${unattested}); they may have been changed outside the admin UI`;
+        : `the stored secret does not open under this credential's stored base URL and injection (${unattested}); they may have been changed outside the admin UI`;
     return opFailure(
       'confirmation_required',
       [
@@ -752,7 +752,7 @@ export async function setServiceCredential(
       action: 'service.credential.set',
       targetType: 'service',
       targetId: existing.id,
-      summary: `${existing.credential_sealed ? 'Replaced' : 'Set'} credential of service ${existing.slug}${
+      summary: `${existing.credential_sealed ? 'Replaced' : 'Set'} secret of credential ${existing.slug}${
         // An unattested stored row is no trustworthy "before": name the confirmed destination.
         unattested === 'no_credential'
           ? ` and set its destination to ${values.base_url} (confirmed)`
@@ -784,7 +784,7 @@ export async function setServiceCredential(
     ],
   );
   if (!outcome.ok) return outcome;
-  if (!outcome.committed) return concurrentChange('the service credential');
+  if (!outcome.committed) return concurrentChange('the credential');
   const service = serviceView({
     ...existing,
     ...values,
@@ -828,7 +828,7 @@ export async function rotateServiceSecret(
   context: OpContext,
 ): Promise<RotateResult> {
   const existing = await getService(deps.env.DB, serviceId);
-  if (!existing) return opFailure('not_found', ['service not found']);
+  if (!existing) return opFailure('not_found', ['credential not found']);
   // The destination the admin saw, before the keyring and before anything is sent.
   const moved = await destinationMoved(existing, input.expected_destination);
   if (moved) return moved;
@@ -985,10 +985,11 @@ export async function testServiceCredential(
   context: OpContext,
 ): Promise<{ ok: true; verify: VerifyOutcome; nameSaved: boolean } | OpFailure> {
   const service = await getService(deps.env.DB, serviceId);
-  if (!service) return opFailure('not_found', ['service not found']);
+  if (!service) return opFailure('not_found', ['credential not found']);
   const check = service.verify;
-  if (!check) return opFailure('invalid', ['this service has no verify check configured']);
-  if (!service.credential_sealed) return opFailure('invalid', ['this service has no credential']);
+  if (!check) return opFailure('invalid', ['this credential has no verify check configured']);
+  if (!service.credential_sealed)
+    return opFailure('invalid', ['this credential has no secret stored']);
 
   // Same use-time checks as the proxy: the stored row is not trusted (I-SSRF-1, I-CRED-2).
   const base = validateBaseUrl(service.base_url, {
@@ -1016,7 +1017,7 @@ export async function testServiceCredential(
       action: 'service.credential.test',
       targetType: 'service',
       targetId: service.id,
-      summary: `Tested credential of service ${service.slug} with ${check.method} ${check.path}`,
+      summary: `Tested credential ${service.slug} with ${check.method} ${check.path}`,
       diff: { base_url: service.base_url, verify: check },
     },
     null,
@@ -1081,7 +1082,7 @@ export async function deleteService(
 ): Promise<{ ok: true; deletedRules: number } | (OpFailure & { rules?: CredentialAccessRule[] })> {
   const db = deps.env.DB;
   const existing = await getService(db, serviceId);
-  if (!existing) return opFailure('not_found', ['service not found']);
+  if (!existing) return opFailure('not_found', ['credential not found']);
   const rules = await listCredentialAccessRules(db, { credential_id: serviceId });
   if (rules.length > 0 && options.withRules !== true) return referencedBy(rules);
   if (rules.length > 0 && !actorMayDeleteRules(actor)) {
@@ -1111,8 +1112,8 @@ export async function deleteService(
       targetId: serviceId,
       summary:
         rules.length > 0
-          ? `Deleted service ${existing.slug} and its ${rules.length} credential access rule${rules.length === 1 ? '' : 's'}`
-          : `Deleted service ${existing.slug}`,
+          ? `Deleted credential ${existing.slug} and its ${rules.length} access rule${rules.length === 1 ? '' : 's'}`
+          : `Deleted credential ${existing.slug}`,
       diff: {
         before:
           rules.length > 0
@@ -1137,7 +1138,7 @@ export async function deleteService(
     if (rules.length > 0 || current.length > 0) {
       return options.withRules === true ? ruleSetChanged(current) : referencedBy(current);
     }
-    return concurrentChange('the service');
+    return concurrentChange('the credential');
   }
   return { ok: true, deletedRules: rules.length };
 }
@@ -1154,7 +1155,7 @@ function referencedBy(
   const names = rules.map((rule) => JSON.stringify(rule.name)).join(', ');
   return {
     ...opFailure('conflict', [
-      `the service has ${rules.length} credential access rule${rules.length === 1 ? '' : 's'}: ${names}; delete them first`,
+      `the credential has ${rules.length} access rule${rules.length === 1 ? '' : 's'}: ${names}; delete them first`,
     ]),
     rules,
   };
@@ -1237,7 +1238,7 @@ async function destinationMoved(
   return opFailure('conflict', [
     fieldError(
       null,
-      `The destination of this token changed since the page was loaded: it now sends the secret to ${hostLabel(existing.base_url)}. Nothing was sent or saved. Check the destination below, then enter the secret again`,
+      `The destination of this credential changed since the page was loaded: it now sends the secret to ${hostLabel(existing.base_url)}. Nothing was sent or saved. Check the destination below, then enter the secret again`,
     ),
   ]);
 }

@@ -74,8 +74,10 @@ describe('keyring_kcv after the KEK is replaced under kid k1', () => {
 
     expect(result).toMatchObject({ ok: false, reason: 'unavailable' });
     if (result.ok) return;
-    expect(result.errors.join(' ')).toMatch(/service one was encrypted with an earlier key "k1"/);
-    expect(result.errors.join(' ')).not.toMatch(/service two/);
+    expect(result.errors.join(' ')).toMatch(
+      /credential one was encrypted with an earlier key "k1"/,
+    );
+    expect(result.errors.join(' ')).not.toMatch(/credential two/);
     expect((await auditRows()).length).toBe(audits);
     expect((await keyringHealth(keyB())).changedKids).toEqual(['k1']);
   });

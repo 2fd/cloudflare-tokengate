@@ -15,17 +15,17 @@ const REASON_TEXT: Readonly<Record<string, string>> = {
   outside_global_rules:
     "a credential access rule allowed this call, but no global access rule of the caller's issuer did",
   event_not_trusted: 'the triggering event needs an explicit opt-in in the credential access rule',
-  service_not_found: 'unknown or disabled token slug',
-  credential_unavailable: "the token's secret is not available",
-  service_disabled: 'the token exists but is disabled',
-  credential_missing: 'the token has no secret yet',
+  service_not_found: 'unknown or disabled credential slug',
+  credential_unavailable: "the credential's secret is not available",
+  service_disabled: 'the credential exists but is disabled',
+  credential_missing: 'the credential has no secret yet',
   credential_binding_mismatch:
-    "the stored secret does not belong to this token's current destination or injection",
+    "the stored secret does not belong to this credential's current destination or injection",
   credential_invalid: 'the stored secret cannot be attached to the upstream request',
   keyring_missing_key: 'the secret was encrypted with a key that is no longer in the keyring',
   sealed_malformed: 'the stored secret is damaged',
-  base_url_invalid: "the token's base URL is no longer allowed",
-  injection_invalid: "the token's injection settings are invalid",
+  base_url_invalid: "the credential's base URL is no longer allowed",
+  injection_invalid: "the credential's injection settings are invalid",
   query_invalid: 'the query string is not allowed',
   upstream_invalid_status:
     'the upstream API answered with an HTTP status outside 200-599; it may have processed the request',
@@ -88,7 +88,7 @@ export const REASON_GROUPS: ReadonlyArray<{ group: string; codes: readonly strin
     codes: ['no_matching_rule', 'outside_global_rules', 'event_not_trusted', 'rate_limited'],
   },
   {
-    group: 'Token configuration',
+    group: 'Credential configuration',
     codes: [
       'service_not_found',
       'service_disabled',

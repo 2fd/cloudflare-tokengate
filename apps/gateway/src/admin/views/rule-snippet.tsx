@@ -44,7 +44,7 @@ export function snippetText(
   call?: { method: string; path: string } | null,
 ): string {
   const [first, ...others] = slugs;
-  const slug = first ?? '<token-slug>';
+  const slug = first ?? '<credential-slug>';
   const path = call ? call.path : '/<path>';
   const base = `${origin}/proxy/${slug}`;
   const method = call && call.method !== 'GET' ? ` -X ${call.method}` : '';
@@ -105,7 +105,11 @@ export function RuleSnippet(props: {
       <p class="hint">
         Audience <code>{props.rule.audience}</code>. Gateway <code>{props.origin}</code>.
         {props.slugs.length === 0 ? (
-          <> Replace &lt;token-slug&gt; once this credential access rule can use a token.</>
+          <>
+            {' '}
+            Replace &lt;credential-slug&gt; with the slug of the credential this access rule
+            targets.
+          </>
         ) : null}
       </p>
     </>

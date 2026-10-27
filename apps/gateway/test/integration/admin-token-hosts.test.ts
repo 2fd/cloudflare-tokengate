@@ -97,7 +97,7 @@ describe('I-SSRF-1: upstream host allowlist at /admin/credentials/hosts', () => 
     // Covered by a wildcard: not checked, so a save never adds it silently.
     expect(hostBox(html, 'hooks.slack.com')).not.toContain('checked');
     expect(html).toContain('Already allowed by *.slack.com.');
-    expect(html).toContain('Unchecking stops this token.');
+    expect(html).toContain('Unchecking stops this credential.');
     expect(html).toMatch(
       /<textarea[^>]*name="other_hosts"[^>]*>\*\.slack\.com\nunused\.example\.org<\/textarea>/,
     );
@@ -170,7 +170,7 @@ describe('I-SSRF-1: upstream host allowlist at /admin/credentials/hosts', () => 
     const id = await seedService(opsDeps(), { slug: 'gh', secret: 'ghp_0123456789abcdefghij' });
     await setUpstreamHosts(['only.example.com']);
     const html = await (await adminGet(app, owner, '/admin/credentials/hosts')).text();
-    expect(html).toContain('<caption class="vh">Tokens outside the allowed hosts</caption>');
+    expect(html).toContain('<caption class="vh">Credentials outside the allowed hosts</caption>');
     expect(html).toContain(`<a class="ent-n" href="/admin/credentials/${id}">GitHub</a>`);
     expect(html).toContain('Used by GitHub, which is refused now. Check to allow.');
   });

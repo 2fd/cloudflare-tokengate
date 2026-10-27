@@ -55,7 +55,7 @@ const PAGE = paths.tokenHosts();
 
 const NOTICES: NoticeTable = {
   hosts_saved: () => ({
-    text: 'Allowed hosts saved. They apply to token saves and to every proxied request.',
+    text: 'Allowed hosts saved. They apply to credential saves and to every proxied request.',
   }),
   hosts_unchanged: () => ({ text: 'Nothing changed: these are the current allowed hosts.' }),
 };
@@ -167,7 +167,7 @@ async function hostsPage(
       header: (
         <PageHeader
           title="Allowed hosts"
-          description="Credentials can only send secrets to these hosts. Checked when a token is saved and on every request."
+          description="Credentials can only send secrets to these hosts. Checked when a credential is saved and on every request."
         />
       ),
       errors,
@@ -184,7 +184,7 @@ async function hostsPage(
         ) : null}
         <Tray
           id="allowlist"
-          title="Which hosts tokens may call"
+          title="Which hosts credentials may point at"
           description="IP addresses, localhost and this gateway are always refused."
           actions={
             ctx.can('settings:write') ? (
@@ -222,7 +222,7 @@ async function hostsPage(
                 ...(inUse.length > 0
                   ? [
                       {
-                        label: 'Used by tokens',
+                        label: 'Used by credentials',
                         line: true,
                         value: inUse.map((item) => (
                           <Chip>
@@ -246,16 +246,16 @@ async function hostsPage(
         {outside.length > 0 ? (
           <Tray
             id="outside"
-            title="Tokens outside the allowed hosts"
+            title="Credentials outside the allowed hosts"
             count={outside.length}
-            description="Requests through these tokens are refused until their host is allowed."
+            description="Requests through these credentials are refused until their host is allowed."
             tone="warn"
           >
             <Panel variant="flush">
               <Table
                 id="outside-table"
                 labelledBy="outside-h"
-                caption="Tokens outside the allowed hosts"
+                caption="Credentials outside the allowed hosts"
                 columns={[{ label: 'Credential' }, { label: 'Host' }]}
               >
                 {outside.map((token) => (
@@ -285,7 +285,7 @@ async function hostsPage(
             class="lform"
             open={errors.length > 0 || o.submitted !== undefined}
             title="Change allowed hosts"
-            description="A token's base URL must match; requests to any other host are refused."
+            description="A credential's base URL must match; requests to any other host are refused."
             action={PAGE}
             hidden={ctx.hidden()}
             footer={
@@ -301,7 +301,7 @@ async function hostsPage(
             <Reveal field={1} option={2}>
               <CheckboxGroup
                 name="host"
-                legend="Hosts used by tokens and credential types"
+                legend="Hosts used by credentials and credential types"
                 conditional
                 error={errorOf('host')}
                 options={list.map((item) => ({
@@ -349,7 +349,7 @@ const MODES = [
 function ModeChoice(props: { mode: 'any' | 'list' }) {
   useContext(FocusTargets)?.set('f-mode', firstChoiceId('f-mode', MODES));
   return (
-    <FieldSet id="f-mode" legend="Which hosts may tokens call?" live={1}>
+    <FieldSet id="f-mode" legend="Which hosts may credentials point at?" live={1}>
       <RadioCards name="mode" columns={1} value={props.mode} options={MODES} />
     </FieldSet>
   );
@@ -367,7 +367,7 @@ function candidateHint(item: Candidate, allowlist: string[] | null, literal: Set
       return `Used by ${names}, which ${item.tokens.length === 1 ? 'is' : 'are'} refused now. Check to allow.`;
     }
     return allowlist !== null
-      ? `Used by: ${names}. Unchecking stops ${item.tokens.length === 1 ? 'this token' : 'these tokens'}.`
+      ? `Used by: ${names}. Unchecking stops ${item.tokens.length === 1 ? 'this credential' : 'these credentials'}.`
       : `Used by: ${names}.`;
   }
   return `Template: ${item.templates.join(', ')}`;

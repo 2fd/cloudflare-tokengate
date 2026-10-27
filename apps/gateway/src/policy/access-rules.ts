@@ -45,7 +45,7 @@ export function credentialRuleDecision(
   if (!satisfiesAnchorRule(c.conditions, anchorRules)) {
     return {
       result: 'invalid_rule',
-      detail: 'the access rule does not satisfy the anchor rules of its issuer type (I-AUTHZ-2)',
+      detail: 'the access rule does not satisfy the anchor rules of its issuer type',
     };
   }
 

@@ -172,7 +172,7 @@ const CONSTRAINT_FAILURES: ReadonlyArray<[RegExp, OpFailureReason, string]> = [
   [
     /UNIQUE constraint failed: credentials\.slug/,
     'conflict',
-    'another service already uses this slug; choose a different slug',
+    'another credential already uses this slug; choose a different slug',
   ],
   [/UNIQUE constraint failed: index 'access_rules_name'/, 'conflict', 'This name is taken.'],
   [/too_many_credential_rules/, 'invalid', 'A credential can have at most 100 access rules.'],

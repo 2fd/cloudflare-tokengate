@@ -111,39 +111,41 @@ describe('Tokens in use', () => {
       await (await adminGet(fixture.app, await loginAs(fixture.app, viewer), '/admin')).text(),
     );
     expect(listItems(html)).toHaveLength(5);
-    expect(html).toContain('<summary>Show the map as a list (5 accesses)</summary>');
+    expect(html).toContain('<summary>Show the map as a list (5 access rules)</summary>');
   });
 
   it('tags the tokens without traffic or problems as idle', async () => {
     const html = section(
       await (await adminGet(fixture.app, await loginAs(fixture.app, viewer), '/admin')).text(),
     );
-    expect(html).toContain('<li class="node tnode idle"><span class="tag">1 idle token</span>');
+    expect(html).toContain(
+      '<li class="node tnode idle"><span class="tag">1 idle credential</span>',
+    );
   });
 
   it('offers "Add credential access rule" on a credential with none, only to access:write holders', async () => {
     await fixture.addService({ slug: 'lonely' });
     const a = fixture.app;
     const own = section(await (await adminGet(a, await loginAs(a, owner), '/admin')).text());
-    expect(own).toContain('no job can use this credential yet.');
+    expect(own).toContain('no workload can use this credential yet.');
     expect(own).toMatch(
       /href="\/admin\/credential-access-rules\/new\?credential=svc_[0-9A-Z]{26}">Add credential access rule/,
     );
     const tokenManager = await createUser({ email: 'tm@example.com', role: 'token_manager' });
     const tm = section(await (await adminGet(a, await loginAs(a, tokenManager), '/admin')).text());
-    expect(tm).toContain('no job can use this credential yet.');
+    expect(tm).toContain('no workload can use this credential yet.');
     expect(tm).not.toContain('/admin/credential-access-rules/new');
     const view = section(await (await adminGet(a, await loginAs(a, viewer), '/admin')).text());
     expect(view).not.toContain('/admin/credential-access-rules/new');
   });
 
-  it('counts requests refused before a token was chosen, with a link to them', async () => {
+  it('counts requests refused before a credential was chosen, with a link to them', async () => {
     expect((await fixture.call('/x', { slug: 'nope' })).status).toBe(404);
     await fixture.app.settle();
     const html = section(
       await (await adminGet(fixture.app, await loginAs(fixture.app, viewer), '/admin')).text(),
     );
-    expect(html).toContain('Refused before a token was chosen: <b class="t-bad">1</b>');
+    expect(html).toContain('Refused before a credential was chosen: <b class="t-bad">1</b>');
     expect(html).toContain('href="/admin/requests?token=none&amp;range=24h"');
   });
 

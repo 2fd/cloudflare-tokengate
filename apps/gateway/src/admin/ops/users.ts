@@ -732,7 +732,8 @@ function changedMeanwhile(user: User): OpFailure {
 
 function describeChanges(existing: User, changes: { role?: Role; status?: UserStatus }): string {
   const parts: string[] = [];
-  if (changes.role) parts.push(`role ${existing.role} → ${changes.role}`);
+  if (changes.role)
+    parts.push(`role ${ROLE_INFO[existing.role].label} → ${ROLE_INFO[changes.role].label}`);
   if (changes.status) parts.push(`status ${existing.status} → ${changes.status}`);
   return parts.join(' and ');
 }

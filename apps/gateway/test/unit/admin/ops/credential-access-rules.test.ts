@@ -688,7 +688,10 @@ describe('addTenantValue, removeTenantValue', () => {
         value: OWNER_ID,
         label: 'acme',
       }),
-    ).toMatchObject({ ok: false, errors: ['Remove the jobs that use organization acme first.'] });
+    ).toMatchObject({
+      ok: false,
+      errors: ['Remove the workload conditions that use organization acme first.'],
+    });
     expect(
       await removeTenantValue(deps, ACTOR, rule.id, { claim: 'repository_owner_id', value: '5' }),
     ).toMatchObject({ ok: true });

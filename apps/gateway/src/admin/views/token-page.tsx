@@ -126,7 +126,7 @@ export type TokenAlso =
 const PAIR_FAILURE_REASONS: Partial<Record<TokenAlso, string>> = {
   pair_failed: 'its settings were refused',
   pair_failed_hosts: 'uploads.github.com is not an allowed host',
-  pair_failed_conflict: 'another change to the tokens happened at the same time',
+  pair_failed_conflict: 'another change to the credentials happened at the same time',
   pair_failed_check: 'its secret check failed',
 };
 
@@ -340,7 +340,7 @@ function Relation(props: { ctx: ViewContext; data: TokenPageData }) {
   }
   return (
     <>
-      Jobs of <a href={listHref}>{plural(issuers, 'issuer')}</a> can use {service.name} through{' '}
+      Workloads of <a href={listHref}>{plural(issuers, 'issuer')}</a> can use {service.name} through{' '}
       <a href={listHref}>{plural(usable.length, 'credential access rule')}</a>.{reasonText}
       {requests > 0
         ? ` ${formatCount(requests)} allowed ${requests === 1 ? 'request' : 'requests'} in the last 30 days.`
@@ -459,8 +459,8 @@ function Problems(props: { ctx: ViewContext; data: TokenPageData }) {
   if (pairReason !== undefined) {
     problems.push({
       tone: 'warn',
-      title: `The GitHub release asset uploads token was not created: ${pairReason}.`,
-      more: 'This token was saved; add the uploads token on its own.',
+      title: `The GitHub release asset uploads credential was not created: ${pairReason}.`,
+      more: 'This credential was saved; add the uploads credential on its own.',
       fix: {
         href: paths.tokenNew({ template: 'github-uploads' }),
         label: 'Add GitHub release asset uploads',
@@ -661,7 +661,7 @@ function RulesTray(props: { ctx: ViewContext; data: TokenPageData }) {
       count={data.rules.length}
       description={
         <>
-          Each line is one credential access rule, grouped by issuer. Jobs call{' '}
+          Each line is one credential access rule, grouped by issuer. Workloads call{' '}
           <code>{`/proxy/${service.slug}`}</code>; they never see the secret.
         </>
       }
@@ -698,7 +698,7 @@ function RulesTray(props: { ctx: ViewContext; data: TokenPageData }) {
           children: canGive ? (
             <>
               <p>
-                Add a credential access rule so that jobs can call{' '}
+                Add a credential access rule so that workloads can call{' '}
                 <code>{`/proxy/${service.slug}`}</code>.
               </p>
               <div>
@@ -964,7 +964,7 @@ function UseTray(props: { data: TokenPageData }) {
           <div>
             <CodeBlock
               label="Example call"
-              caption="Example call from a job that has access (select to copy)"
+              caption="Example call from a workload that has access (select to copy)"
             >
               {example}
             </CodeBlock>
@@ -1271,7 +1271,7 @@ function Danger(props: { ctx: ViewContext; data: TokenPageData }) {
       {service.enabled ? (
         <DangerRow
           title="Disable credential"
-          description={`The jobs of ${plural(workloads, 'issuer')} lose access until you enable it again. Nothing is deleted.`}
+          description={`The workloads of ${plural(workloads, 'issuer')} lose access until you enable it again. Nothing is deleted.`}
           action={
             <ActionButton
               action={toggle}
@@ -1355,8 +1355,8 @@ function DeleteDialog(props: { ctx: ViewContext; data: TokenPageData }) {
         description={
           cascade ? (
             <>
-              This cannot be undone. The secret is destroyed, and from the next request these jobs
-              get <code>404</code> from <code>{`/proxy/${service.slug}`}</code>:
+              This cannot be undone. The secret is destroyed, and from the next request these
+              workloads get <code>404</code> from <code>{`/proxy/${service.slug}`}</code>:
             </>
           ) : (
             'The credential and its stored secret are deleted. The audit log keeps its configuration, never the secret.'
@@ -1428,7 +1428,7 @@ function DeleteDialog(props: { ctx: ViewContext; data: TokenPageData }) {
 // ---------------------------------------------------------------------------------------------
 // Rail
 
-/** "Created service openai with a credential" after the actor: "created service openai …". */
+/** "Created credential openai with a secret" after the actor: "created credential openai …". */
 function sentence(summary: string): string {
   return `${summary.charAt(0).toLowerCase()}${summary.slice(1)}`;
 }

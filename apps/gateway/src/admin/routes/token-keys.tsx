@@ -178,14 +178,14 @@ async function keysPage(c: AdminContext, o: { errors?: FieldError[]; status?: 40
   if (status.error === null) {
     for (const kid of status.missingKids) {
       blocking.push({
-        text: `Key ${kid} is used by ${plural(status.credentialsByKid[kid] ?? 0, 'secret', 'secrets')} but neither TOKENGATE_KEK nor TOKENGATE_KEYRING holds it. Those tokens answer 503 until the key is set again.`,
+        text: `Key ${kid} is used by ${plural(status.credentialsByKid[kid] ?? 0, 'secret', 'secrets')} but neither TOKENGATE_KEK nor TOKENGATE_KEYRING holds it. Requests through those credentials get 503 until the key is set again.`,
         tokens: tokensOf(kid),
       });
     }
   }
   if (status.unreadableCredentials > 0) {
     blocking.push({
-      text: `${plural(status.unreadableCredentials, 'stored secret is', 'stored secrets are')} damaged. Set them again under Change destination on each token page.`,
+      text: `${plural(status.unreadableCredentials, 'stored secret is', 'stored secrets are')} damaged. Set them again under Change destination on each credential page.`,
       tokens: tokensOf(null),
     });
   }
@@ -298,7 +298,7 @@ async function keysPage(c: AdminContext, o: { errors?: FieldError[]; status?: 40
                       {row.secrets > 0 && row.listKid ? (
                         <CountLink
                           href={paths.tokens({ key: row.listKid })}
-                          srSuffix={`tokens with key ${row.listKid}`}
+                          srSuffix={`credentials with key ${row.listKid}`}
                         >
                           {row.secrets}
                         </CountLink>
@@ -536,7 +536,7 @@ function StepBody(props: RotationStepsProps) {
           ) : null}
           <p>
             {step.pending > 0
-              ? `${plural(step.pending, 'secret is', 'secrets are')} still encrypted with the previous key. Re-encrypting opens each one and seals it again with the new key. Tokens keep working meanwhile.`
+              ? `${plural(step.pending, 'secret is', 'secrets are')} still encrypted with the previous key. Re-encrypting opens each one and seals it again with the new key. Credentials keep working meanwhile.`
               : null}
             {props.accept
               ? ' Re-encrypting also opens every secret under the changed key; when all of them open, its new check value is accepted.'
@@ -629,7 +629,7 @@ function RewrapDialog(props: { ctx: ViewContext; pending: number; accept: boolea
       description={
         props.accept
           ? 'Every stored secret is opened and sealed again with the active key. Confirming also accepts the new check value of the changed key, if every secret under it opens. Nothing changes otherwise.'
-          : 'Every stored secret is opened and sealed again with the new key. Tokens keep working.'
+          : 'Every stored secret is opened and sealed again with the new key. Credentials keep working.'
       }
       action="/admin/credentials/keys/rewrap"
       hidden={props.ctx.hidden({ _return: 'detail', confirm: '1' })}

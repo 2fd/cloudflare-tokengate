@@ -90,7 +90,8 @@ describe('stripProblems', () => {
     expect(problems).toEqual([
       {
         title: 'Encryption keys are not loaded.',
-        detail: 'Token requests fail with 503 and secrets cannot change (keyring_absent).',
+        detail:
+          'Requests through credentials fail with 503 and secrets cannot change (keyring_absent).',
         fix: { href: '/admin/credentials/keys', label: 'Open rotate encryption' },
       },
       {

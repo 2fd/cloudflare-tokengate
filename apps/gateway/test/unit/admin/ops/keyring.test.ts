@@ -234,7 +234,7 @@ describe('rewrapCredentials', () => {
     expect(result).toMatchObject({ ok: false, reason: 'unavailable' });
     if (result.ok) return;
     expect(result.errors).toEqual([
-      `The credential of service b was encrypted with key "${otherKid}", which is not in the keyring. Add the key back, or set the credential again.`,
+      `The secret of credential b was encrypted with key "${otherKid}", which is not in the keyring. Add the key back, or set the secret again.`,
       'Nothing was re-encrypted.',
     ]);
     expect(await kidOf(id)).toBe(otherKid);
@@ -253,7 +253,7 @@ describe('rewrapCredentials', () => {
     expect(result).toMatchObject({ ok: false, reason: 'unavailable' });
     if (result.ok) return;
     expect(result.errors.join()).toMatch(
-      /The stored credential of service a cannot be opened: it does not match the service's current base URL or injection/,
+      /The stored secret of credential a cannot be opened: it does not match the credential's current base URL or injection/,
     );
     expect(result.errors.join()).not.toMatch(/credential_binding_mismatch/);
   });

@@ -269,7 +269,7 @@ export function registerAuditRoutes(app: App): void {
         options: tokens.results.map((t) => ({
           href: link({ ...params, target: t.id }, {}),
           label: t.name,
-          slug: 'token',
+          slug: 'credential',
         })),
       },
       {

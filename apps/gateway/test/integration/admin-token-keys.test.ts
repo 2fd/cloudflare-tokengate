@@ -321,7 +321,7 @@ describe('POST /admin/credentials/keys/rewrap', () => {
     // "one" still needs the old key: nothing changes and it is named.
     const refused = await adminPost(replaced, session, '/admin/credentials/keys/rewrap');
     expect(refused.status).toBe(409);
-    expect(await refused.text()).toContain('service one was encrypted with an earlier key');
+    expect(await refused.text()).toContain('credential one was encrypted with an earlier key');
 
     const reset = await setServiceCredential(
       opsDeps({ env: { TOKENGATE_KEK: KEK_2 } }),

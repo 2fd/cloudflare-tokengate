@@ -676,7 +676,7 @@ details.type-card[open]{box-shadow:0 0 0 2px var(--accent)}
 details.type-card[open]>summary{border-bottom:1px solid var(--line);border-radius:var(--r-3) var(--r-3) 0 0;background:var(--accent-soft)}
 details.type-card[open]>summary small{color:var(--accent-soft-text)}
 details.type-card[open]>summary .chev{transform:rotate(90deg);color:var(--accent-text)}
-details.type-card[open] .sel{display:inline}
+details.type-card[open]>summary>.sel{display:inline}
 .type-body{padding:var(--sp-5)}
 /* link cards (pick a type -> form page) */
 .tcards{display:grid;gap:var(--sp-3);grid-template-columns:repeat(auto-fit,minmax(15rem,1fr))}

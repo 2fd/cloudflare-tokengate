@@ -23,7 +23,7 @@ export function SetupInstructions(props: { host: string }) {
             </li>
             <li>
               In Zero Trust, create a self-hosted Access application for that hostname that covers
-              only the <code>/admin</code> path. CI jobs call <code>/proxy</code> and must not be
+              only the <code>/admin</code> path. Workloads call <code>/proxy</code> and must not be
               behind Access.
             </li>
             <li>

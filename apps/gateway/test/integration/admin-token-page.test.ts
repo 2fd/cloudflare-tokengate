@@ -327,10 +327,12 @@ describe('problems and history', () => {
     expect(rail).toContain('<dt>Credential ID</dt><dd class="mono copyable">' + id);
     expect(rail).toContain('<small>by admin@example.com</small>');
     expect(rail).toMatch(
-      /<ol class="feed compact">[\s\S]*?<b>admin@example\.com<\/b> created service openai with a credential/,
+      /<ol class="feed compact">[\s\S]*?<b>admin@example\.com<\/b> created credential openai with a secret/,
     );
-    expect(rail.indexOf('updated service openai')).toBeGreaterThan(-1);
-    expect(rail.indexOf('updated service openai')).toBeLessThan(rail.indexOf('created service'));
+    expect(rail.indexOf('updated credential openai')).toBeGreaterThan(-1);
+    expect(rail.indexOf('updated credential openai')).toBeLessThan(
+      rail.indexOf('created credential'),
+    );
     expect(rail).toContain(`href="/admin/audit?target=${id}"`);
   });
 });

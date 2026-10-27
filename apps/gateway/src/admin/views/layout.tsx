@@ -85,7 +85,7 @@ export const SECTIONS: Readonly<Record<SectionKey, SectionInfo>> = {
       {
         key: 'access-rules',
         href: paths.accessRules(),
-        label: 'Access Rules',
+        label: 'Access rules',
         help: 'concepts.md#credential-access-rule',
         under: [paths.globalRules()],
       },

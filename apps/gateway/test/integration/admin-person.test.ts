@@ -115,7 +115,7 @@ describe('GET /admin/users/:id', () => {
     await adminPost(app, session, `/admin/users/${other.id}`, { role: 'viewer' });
     const html = await page(`/admin/users/${owner.id}`);
     const changes = html.slice(html.indexOf('id="changes-h"'), html.indexOf('id="accounts-h"'));
-    expect(changes).toContain('Changed role admin → viewer of b@example.com');
+    expect(changes).toContain('Changed role Admin → Viewer of b@example.com');
     expect(changes).toContain('<p class="meta">Changed a person</p>');
     // The person's own sign-in (bootstrap/link) is not a change.
     expect(changes).not.toContain('user.link');
@@ -138,7 +138,7 @@ describe('GET /admin/users/:id', () => {
     const history = html.slice(html.indexOf('id="history-h"'));
     // The actor starts the sentence: "owner@example.com changed role …".
     expect(history).toContain(
-      'owner@example.com</a></b> changed role admin → viewer of b@example.com',
+      'owner@example.com</a></b> changed role Admin → Viewer of b@example.com',
     );
     expect(history).toContain(`href="/admin/audit?target=${other.id}"`);
     expect(html).toContain('No changes in the last 30 days.');

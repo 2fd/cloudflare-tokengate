@@ -338,7 +338,7 @@ export function OptionalFields(props: {
           {props.derived
             ? `Slug: ${props.derived.slug} Name: ${props.derived.name}`
             : 'Leave empty to use the suggestions shown.'}{' '}
-          Consumers call <code>{`/proxy/${props.slugPlaceholder}`}</code>; the slug cannot be
+          Workloads call <code>{`/proxy/${props.slugPlaceholder}`}</code>; the slug cannot be
           changed later.
         </>
       }
@@ -399,7 +399,7 @@ export const QUERY_WARNING =
   'Query parameter injection puts the secret in the URL. Upstreams may echo URLs in error messages or logs; prefer header injection when the API supports it.';
 
 export const PATH_WARNING =
-  'With URL path injection the secret is part of the webhook URL. Some webhook APIs return it in the response body: Discord GET and PATCH on the webhook URL return the webhook token. Response bodies are not redacted, so give consumers only POST / on these tokens.';
+  'With URL path injection the secret is part of the webhook URL. Some webhook APIs return it in the response body: Discord GET and PATCH on the webhook URL return the webhook token. Response bodies are not redacted, so give workloads only POST / on these credentials.';
 
 const HEADER_NAME_DEFAULTS = ['x-api-key', 'api-key', 'x-auth-token', 'x-api-token'];
 const QUERY_PARAM_DEFAULTS = ['api_key', 'key', 'token', 'access_token'];
@@ -604,13 +604,13 @@ export function AdvancedFields(props: {
     <More summary="Advanced (optional)" meta="extra headers, timeout, secret check" open={open}>
       <Field
         id={ids.id('forward_headers')}
-        label="Extra headers consumers may send"
+        label="Extra headers workloads may send"
         optional
         hint={
           <>
             Comma separated. Common headers such as content-type and accept are always passed
             through; all others are dropped.
-            {inUse.length > 0 ? <> In use by other tokens: {inUse.join(', ')}.</> : null}
+            {inUse.length > 0 ? <> In use by other credentials: {inUse.join(', ')}.</> : null}
           </>
         }
         error={ids.error('forward_headers') ?? undefined}
@@ -744,7 +744,7 @@ export function CheckResult(props: {
 }
 
 export const SAVE_ANYWAY_HINT =
-  'Saving without a passing check stores the secret as it is. The token page shows the failed check until a test passes, and consumers get the upstream’s error.';
+  'Saving without a passing check stores the secret as it is. The credential page shows the failed check until a test passes, and workloads get the upstream’s error.';
 
 /**
  * The submits of a form that sends the secret (a SubmitRow): the primary first in tree order;
