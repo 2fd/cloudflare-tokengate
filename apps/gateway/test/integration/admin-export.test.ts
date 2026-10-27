@@ -87,7 +87,7 @@ describe('POST /admin/export', () => {
       global_access_rules: unknown[];
       users: Array<{ email: string }>;
     }>();
-    expect(body.schema_version).toBe(5);
+    expect(body.schema_version).toBe(6);
     expect(body.credential_access_rules).toEqual([]);
     expect(body.global_access_rules).toEqual([]);
     // Schema 4 keeps the claim labels inside each credential access rule.

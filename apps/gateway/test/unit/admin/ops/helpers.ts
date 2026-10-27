@@ -129,10 +129,12 @@ export async function dumpControlPlane(): Promise<string> {
 }
 
 export function serviceInput(overrides: Partial<ServiceCreateInput> = {}): ServiceCreateInput {
+  const slug = overrides.slug ?? 'github';
   return {
-    slug: 'github',
+    slug,
     name: 'GitHub',
-    base_url: 'https://api.github.com',
+    // One destination per credential type (ADR 0031): another slug defaults to another host.
+    base_url: slug === 'github' ? 'https://api.github.com' : `https://${slug}.example.com`,
     injection: { kind: 'bearer' },
     forward_headers: ['x-github-api-version'],
     verify: null,

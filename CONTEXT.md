@@ -8,6 +8,10 @@ tokengate lets workloads use credentials without receiving their secrets.
 A secret together with the destination and authentication settings for using it.
 _Avoid_: Service token, service
 
+**Credential type**:
+The destination that a group of credentials calls: one base URL and one injection, named by a slug. Callers name a type in `/proxy/<slug>/`, never one credential; the most specific credential access rule that matches picks the credential. A template card (Slack, OpenAI, …) picks a type.
+_Avoid_: Service, credential slug
+
 **Issuer**:
 The issuer of a workload's signed identity token, identified by its issuer URL. It is a value in each credential and global access rule, not an independently managed resource or the provider used to sign in to the app.
 _Avoid_: Service consumer, consumer, identity provider

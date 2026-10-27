@@ -11,19 +11,33 @@ form) and `apps/gateway/src/admin/grant-text.ts` (the text format of the "Exact 
 
 Every proxied request goes through these checks, in this order (`apps/gateway/src/proxy/handler.ts`):
 
-1. The token's `iss` selects an enabled credential access rule. The token is not trusted yet.
-2. The token is verified: signature, issuer, audience, algorithm, age and required claims
+1. The slug in `/proxy/<slug>/` names a **credential type**: every enabled credential with that
+   destination is a candidate ([ADR 0031](adr/0031-credential-types-and-rule-specificity.md)).
+2. The token's `iss` selects the enabled credential access rules of those credentials that trust it,
+   most specific first (see below). The token is not trusted yet. Steps 3 to 7 run per candidate.
+3. The token is verified: signature, issuer, audience, algorithm, age and required claims
    ([I-JWT-1](threat-model.md#i-jwt-1)).
-3. The credential access rule's tenant pin must hold ([I-TEN-1](threat-model.md#i-ten-1)). Until it holds, nothing
-   about the caller is stored, and the caller cannot learn whether the service exists.
-4. The service must exist and be enabled.
-5. The path is canonicalized ([I-PATH-1](threat-model.md#i-path-1)).
-6. The service's issuer_access_rules for this credential access rule are evaluated in creation order. The first grant that
-   matches allows the request. If none matches, the request is denied ([I-AUTHZ-1](threat-model.md#i-authz-1)).
+4. The credential access rule's tenant pin must hold ([I-TEN-1](threat-model.md#i-ten-1)). Until it holds, nothing
+   about the caller is stored, and the caller cannot learn whether the type exists.
+5. The type must have an enabled credential.
+6. The path is canonicalized ([I-PATH-1](threat-model.md#i-path-1)).
+7. The credential access rule's own policy and the global access rules of its issuer are evaluated. The first
+   candidate that passes allows the request, and the gateway injects the secret of its credential. If none
+   passes, the request is denied ([I-AUTHZ-1](threat-model.md#i-authz-1)).
 
-Issuer access rules are allow-only. There is no deny rule, so the order of issuer_access_rules changes only which grant the
-request log names. Nothing is cached: enabling, disabling, editing, deleting or expiring a grant,
-service or credential access rule takes effect on the next request.
+### Which credential a request uses
+
+The candidates are ordered by specificity (`bySpecificity` in `apps/gateway/src/policy/access-rules.ts`):
+
+1. More identity conditions first: the rule's conditions plus its tenant pin.
+2. At the same count, more conditions that are `exact` and not negated first.
+3. At the same specificity, the oldest rule first.
+
+Operations do not count. Several rules of several credentials can match one request; the first one in
+this order decides, and its credential is used. To send a group of workloads to one bot, give that bot's
+rule one more identity condition (for example `environment exact production`). The request log names the
+credential and the rule that were used. There is no deny rule. Nothing is cached: enabling, disabling,
+editing, deleting or expiring a credential or an access rule takes effect on the next request.
 
 A grant matches when all of these hold:
 

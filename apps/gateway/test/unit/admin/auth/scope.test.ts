@@ -518,13 +518,15 @@ describe('highestBuiltin', () => {
 describe('loadScope', () => {
   beforeEach(resetControlPlane);
 
-  const insertCredential = (id: string) =>
-    db
+  const insertCredential = (id: string) => {
+    const slug = id.replace('_', '-');
+    return db
       .prepare(
         `INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
-         VALUES (?, ?, ?, 'https://api.example.com', '{"kind":"bearer"}', ?, ?)`,
+         VALUES (?, ?, ?, ?, '{"kind":"bearer"}', ?, ?)`,
       )
-      .bind(id, id.replace('_', '-'), id, T, T);
+      .bind(id, slug, id, `https://${slug}.example.com`, T, T);
+  };
 
   it('unions the teams of an active user, built-ins first', async () => {
     await db.batch([insertCredential('svc_a'), insertCredential('svc_b')]);

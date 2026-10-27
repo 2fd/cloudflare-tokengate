@@ -13,6 +13,8 @@ import {
   setServiceCredential,
   slugBaseFor,
   testServiceCredential,
+  typeConflict,
+  typeSlugAmong,
   updateServiceFields,
 } from '../../../../src/admin/ops/credentials';
 import { credentialAad, openCredential, sealedKid } from '../../../../src/crypto/envelope';
@@ -140,16 +142,21 @@ describe('createService', () => {
     expect(result.errors.join()).toMatch(/not in the upstream host allowlist/);
   });
 
-  it('maps a duplicate slug to a conflict without an audit row', async () => {
+  it('maps a slug of another destination to a conflict without an audit row', async () => {
     const deps = opsDeps();
     await seedService(deps);
     const before = await auditCount();
-    const result = await createService(deps, ACTOR, serviceInput(), CONTEXT);
+    const result = await createService(
+      deps,
+      ACTOR,
+      serviceInput({ base_url: 'https://api.example.com' }),
+      CONTEXT,
+    );
     expect(result).toMatchObject({ ok: false, reason: 'conflict' });
     if (result.ok) return;
     // Pre-checked before the keyring and the credential check (A7.4), with the free slug.
     expect(result.errors).toEqual([
-      'another credential already uses github; leave empty to use github-2',
+      'credentials of type github call https://api.github.com; leave empty to use github-2',
     ]);
     expect(result.fieldErrors?.[0]?.field).toBe('slug');
     expect(await auditCount()).toBe(before);
@@ -829,5 +836,67 @@ describe('Slack bot name from the check', () => {
       name: 'Release Bot',
       name_from_check: true,
     });
+  });
+});
+
+describe('ADR 0031: credential types', () => {
+  const github = { base_url: 'https://api.github.com', injection_json: '{"kind":"bearer"}' };
+  const example = { base_url: 'https://api.example.com', injection_json: '{"kind":"bearer"}' };
+  const stored = [{ slug: 'github', ...github }];
+
+  it('typeConflict: one destination per slug, one slug per destination, at most 8 per type', () => {
+    expect(typeConflict('github', stored, github)).toBeNull();
+    expect(typeConflict('github', stored, example)).toBe(
+      'credentials of type github call https://api.github.com',
+    );
+    expect(typeConflict('github', stored, { ...github, injection_json: '{"kind":"basic"}' })).toBe(
+      'credentials of type github send the secret another way',
+    );
+    expect(typeConflict('gh', stored, github)).toBe(
+      'credentials that call https://api.github.com have the type github',
+    );
+    const full = Array.from({ length: 8 }, () => stored[0] as (typeof stored)[number]);
+    expect(typeConflict('github', full, github)).toBe('the type github already has 8 credentials');
+  });
+
+  it('typeSlugAmong: the slug of the destination type, else the first unused one', () => {
+    expect(typeSlugAmong('gh', stored, github)).toBe('github');
+    expect(typeSlugAmong('github', stored, example)).toBe('github-2');
+    expect(typeSlugAmong('github', stored, null)).toBe('github-2');
+    expect(typeSlugAmong('example', stored, example)).toBe('example');
+  });
+
+  it('a second credential of a destination joins its type', async () => {
+    const deps = opsDeps();
+    const first = await seedService(deps);
+    const second = await seedService(deps, { name: 'GitHub 2' });
+    expect((await getService(env.DB, second))?.slug).toBe((await getService(env.DB, first))?.slug);
+  });
+
+  it('a credential that shares its type cannot change its destination', async () => {
+    const deps = opsDeps();
+    const id = await seedService(deps, { slug: 'custom', base_url: 'https://api.example.com' });
+    await seedService(deps, {
+      slug: 'custom',
+      name: 'custom 2',
+      base_url: 'https://api.example.com',
+    });
+    const result = await setServiceCredential(
+      deps,
+      ACTOR,
+      id,
+      {
+        base_url: 'https://uploads.example.com',
+        injection: { kind: 'bearer' },
+        secret: 'second-secret-value-123456',
+      },
+      CONTEXT,
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'invalid' });
+    if (result.ok) return;
+    expect(result.errors).toEqual([
+      'base URL: credentials of type custom call https://api.example.com; add a new credential instead',
+    ]);
+    expect((await getService(env.DB, id))?.base_url).toBe('https://api.example.com');
   });
 });

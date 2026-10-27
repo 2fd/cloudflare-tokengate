@@ -52,23 +52,28 @@ async function seed() {
   await env.DB.prepare(
     "INSERT OR IGNORE INTO users (id, email, role, status, created_at, updated_at) VALUES ('usr_b', 'B@example.com', 'admin', 'active', 1, 1), ('usr_a', 'a@example.com', 'owner', 'active', 1, 1), ('usr_c', 'c@example.com', 'token_manager', 'active', 1, 1), ('usr_d', 'd@example.com', 'access_manager', 'pending', 1, 1)",
   ).run();
-  return { deps, rules: { zeta, beta, alpha }, global };
+  return { deps, credentials: { github, slack }, rules: { zeta, beta, alpha }, global };
 }
 
 describe('buildExport', () => {
-  it('exports schema 4: credentials by slug, both kinds of access rule with their ids and labels', async () => {
-    const { rules, global } = await seed();
+  it('exports schema 6: credentials and both kinds of access rule with their ids and labels', async () => {
+    const { credentials, rules, global } = await seed();
     const document = await buildExport(env.DB);
     expect(document.schema_version).toBe(EXPORT_SCHEMA_VERSION);
-    expect(EXPORT_SCHEMA_VERSION).toBe(5);
+    expect(EXPORT_SCHEMA_VERSION).toBe(6);
+    expect(document.credentials.map((credential) => [credential.slug, credential.id])).toEqual([
+      ['github', credentials.github],
+      ['slack', credentials.slack],
+    ]);
+    // A slug names a credential type (ADR 0031), so a rule points at its credential's id.
     expect(document.credential_access_rules.map((rule) => [rule.credential, rule.name])).toEqual([
-      ['github', 'alpha'],
-      ['github', 'beta'],
-      ['slack', 'zeta'],
+      [credentials.github, 'alpha'],
+      [credentials.github, 'beta'],
+      [credentials.slack, 'zeta'],
     ]);
     expect(document.credential_access_rules[0]).toEqual({
       id: rules.alpha.id,
-      credential: 'github',
+      credential: credentials.github,
       name: 'alpha',
       description: '',
       profile: 'github-actions',
@@ -133,8 +138,8 @@ describe('buildExport', () => {
 
     const json = exportJson(document);
     expect(json).not.toContain(SECRET);
-    // Rules carry their ids; credentials and users do not.
-    expect(json).not.toMatch(/credential_sealed|issuer_key|"(svc|usr)_/);
+    // Credentials and rules carry their ids (ADR 0031); users do not.
+    expect(json).not.toMatch(/credential_sealed|issuer_key|"usr_/);
     expect(json).not.toMatch(/"(credential_id|created_at|created_by|updated_by)":/);
   });
 

@@ -16,11 +16,6 @@ export async function getService(db: D1Database, id: string): Promise<Service | 
   return row ? serviceFromRow(row) : null;
 }
 
-export async function getServiceBySlug(db: D1Database, slug: string): Promise<Service | null> {
-  const row = await db.prepare('SELECT * FROM credentials WHERE slug = ?').bind(slug).first<Row>();
-  return row ? serviceFromRow(row) : null;
-}
-
 export async function listServices(db: D1Database): Promise<Service[]> {
   const { results } = await db.prepare('SELECT * FROM credentials ORDER BY slug').all<Row>();
   return results.map(serviceFromRow);

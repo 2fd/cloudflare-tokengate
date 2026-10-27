@@ -90,7 +90,11 @@ describe('I-SSRF-1: upstream host allowlist at /admin/credentials/hosts', () => 
       injection: { kind: 'path' },
       forward_headers: [],
     });
-    await seedService(opsDeps(), { slug: 'gh', secret: 'ghp_0123456789abcdefghij' });
+    await seedService(opsDeps(), {
+      slug: 'gh',
+      base_url: 'https://api.github.com',
+      secret: 'ghp_0123456789abcdefghij',
+    });
     const html = await (await adminGet(app, owner, '/admin/credentials/hosts')).text();
     expect(html).toMatch(/name="mode" value="list" checked=""/);
     expect(hostBox(html, 'api.github.com')).toContain('checked');
@@ -167,7 +171,11 @@ describe('I-SSRF-1: upstream host allowlist at /admin/credentials/hosts', () => 
 
   it('lists tokens outside the list, with links to them', async () => {
     const owner = await sessionFor('owner');
-    const id = await seedService(opsDeps(), { slug: 'gh', secret: 'ghp_0123456789abcdefghij' });
+    const id = await seedService(opsDeps(), {
+      slug: 'gh',
+      base_url: 'https://api.github.com',
+      secret: 'ghp_0123456789abcdefghij',
+    });
     await setUpstreamHosts(['only.example.com']);
     const html = await (await adminGet(app, owner, '/admin/credentials/hosts')).text();
     expect(html).toContain('<caption class="vh">Credentials outside the allowed hosts</caption>');

@@ -170,10 +170,11 @@ export function actorNotAuthorized(): OpFailure {
 /** Known D1 constraint errors: unique clashes with another row are conflicts (HTTP 409). */
 const CONSTRAINT_FAILURES: ReadonlyArray<[RegExp, OpFailureReason, string]> = [
   [
-    /UNIQUE constraint failed: credentials\.slug/,
+    /credential_type_mismatch/,
     'conflict',
-    'another credential already uses this slug; choose a different slug',
+    'every credential of one type reaches the same base URL with the same injection; choose a different slug',
   ],
+  [/too_many_type_credentials/, 'invalid', 'A credential type can have at most 8 credentials.'],
   [/UNIQUE constraint failed: index 'access_rules_name'/, 'conflict', 'This name is taken.'],
   [/too_many_credential_rules/, 'invalid', 'A credential can have at most 100 access rules.'],
   [/too_many_global_rules/, 'invalid', 'An issuer can have at most 20 global access rules.'],

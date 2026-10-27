@@ -37,13 +37,15 @@ const insertTeam = (id: string, name: string, columns: Record<string, unknown> =
     .bind(id, name, T, T, ...Object.values(columns));
 };
 
-const insertCredential = (id: string) =>
-  db
+const insertCredential = (id: string) => {
+  const slug = id.toLowerCase().replace('_', '-');
+  return db
     .prepare(
       `INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
-       VALUES (?, ?, ?, 'https://api.example.com', '{"kind":"bearer"}', ?, ?)`,
+       VALUES (?, ?, ?, ?, '{"kind":"bearer"}', ?, ?)`,
     )
-    .bind(id, id.toLowerCase().replace('_', '-'), id, T, T);
+    .bind(id, slug, id, `https://${slug}.example.com`, T, T);
+};
 
 /** team_credentials (team_id, credential_id, level, reveal, access_rules). */
 const insertRow = (team: string, credential: string, level: unknown, reveal = 0, accessRules = 0) =>

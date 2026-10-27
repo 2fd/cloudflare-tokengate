@@ -108,9 +108,11 @@ The "Export configuration" item of the account menu, at the bottom of the sideba
 (admins and owners, permission `config:export`),
 downloads `tokengate-export-<date>.json`. Each download writes a `config.export` audit event.
 
-The file is deterministic JSON (`schema_version` 2) with every credential access rule, service (with its
-`template_id`), grant, claim display label and user (email, role, status), keyed by name or slug.
-It holds no credentials, no row ids and no secrets ([I-CRED-1](../threat-model.md#i-cred-1)); for
+The file is deterministic JSON (`schema_version` 6) with every credential (with its id, slug and
+`template_id`), credential and global access rule (with its id and claim display labels) and user (email,
+role, status). A credential access rule names its credential by id, because a slug names a credential
+type that several credentials can share ([ADR 0031](../adr/0031-credential-types-and-rule-specificity.md)).
+It holds no sealed values and no secrets ([I-CRED-1](../threat-model.md#i-cred-1)); for
 each credential it has only the hint and timestamps.
 Runtime settings are not included.
 

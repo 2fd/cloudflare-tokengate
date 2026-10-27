@@ -100,9 +100,9 @@ async function insertRequest(
 async function insertService(id: string, slug: string, sealed: string | null) {
   await env.DB.prepare(
     `INSERT INTO credentials (id, slug, name, base_url, injection, credential_sealed, created_at, updated_at)
-     VALUES (?, ?, ?, 'https://api.example.com', '{"kind":"bearer"}', ?, 0, 0)`,
+     VALUES (?, ?, ?, ?, '{"kind":"bearer"}', ?, 0, 0)`,
   )
-    .bind(id, slug, `${slug} API`, sealed)
+    .bind(id, slug, `${slug} API`, `https://${slug}.example.com`, sealed)
     .run();
 }
 

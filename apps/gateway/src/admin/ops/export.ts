@@ -1,6 +1,6 @@
 // Configuration export (POST /admin/export): credentials, credential and global access rules (with the display
-// labels of each rule) and users as deterministic JSON. Credentials are keyed by slug; access rules carry their
-// ids, so a request record or an audit row can be traced to them. No sealed values and no secrets
+// labels of each rule) and users as deterministic JSON. Credentials and access rules carry their ids (a slug names a
+// credential type, ADR 0031), so a request record or an audit row can be traced to them. No sealed values and no secrets
 // (I-CRED-1): credentials appear only as hint and timestamps. Downloading an export is audited (I-AUDIT-1).
 import { credentialRules, globalRules } from '../../db/access-rules';
 import { accessRuleFromRow, serviceFromRow } from '../../db/rows';
@@ -11,8 +11,9 @@ import { canonicalJson } from '../../lib/json';
 import type { Condition, Injection, Rule, VerifyCheck } from '../../policy/types';
 import { commitOrConstraintFailure, type OpFailure } from './shared';
 
-/** 4: credential and global access rules in one shape (ADR 0026); labels per rule. 5: credentials have no expiry. */
-export const EXPORT_SCHEMA_VERSION = 5;
+/** 4: credential and global access rules in one shape (ADR 0026); labels per rule. 5: credentials have no expiry.
+ * 6: the slug names a credential type (ADR 0031), so credentials carry their id and rules point at it. */
+export const EXPORT_SCHEMA_VERSION = 6;
 
 interface ExportedLabel {
   claim: LabelledClaim;
@@ -43,6 +44,7 @@ interface ExportedRule {
 export interface ExportDocument {
   schema_version: typeof EXPORT_SCHEMA_VERSION;
   credentials: Array<{
+    id: string;
     slug: string;
     name: string;
     base_url: string;
@@ -58,7 +60,7 @@ export interface ExportDocument {
       updated_at: number | null;
     } | null;
   }>;
-  /** `credential` is the credential's slug. */
+  /** `credential` is the credential's id. */
   credential_access_rules: Array<ExportedRule & { credential: string }>;
   global_access_rules: ExportedRule[];
   users: Array<{ email: string; role: Role; status: UserStatus }>;
@@ -80,7 +82,6 @@ export async function buildExport(db: D1Database): Promise<ExportDocument> {
     role: row.role as Role,
     status: row.status as UserStatus,
   }));
-  const serviceSlugs = new Map(credentials.map((s) => [s.id, s.slug]));
   const labels = new Map<string, ExportedLabel[]>();
   for (const row of labelRows?.results ?? []) {
     const id = String(row.access_rule_id);
@@ -120,6 +121,7 @@ export async function buildExport(db: D1Database): Promise<ExportDocument> {
     schema_version: EXPORT_SCHEMA_VERSION,
     credentials: credentials
       .map((s) => ({
+        id: s.id,
         slug: s.slug,
         name: s.name,
         base_url: s.base_url,
@@ -137,11 +139,11 @@ export async function buildExport(db: D1Database): Promise<ExportDocument> {
                 updated_at: s.credential_updated_at,
               },
       }))
-      .sort((a, b) => compare(a.slug, b.slug)),
+      .sort((a, b) => compare(a.slug, b.slug) || compare(a.id, b.id)),
     credential_access_rules: credentialRules(rows)
       .sort(byOrder)
       .map((rule) => ({
-        credential: serviceSlugs.get(rule.credential_id) ?? '',
+        credential: rule.credential_id,
         ...exported(rule),
       }))
       // Credential, then name; the sort is stable, so ties keep evaluation order.

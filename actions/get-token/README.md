@@ -32,7 +32,7 @@ steps:
 |---|---|
 | `token` | OIDC token (masked). GitHub issues tokens valid for about 5 minutes. |
 | `url` | Gateway URL without trailing slash. |
-| `proxy-base` | `<url>/proxy`; append `/<service-slug>/<path>`. The path is relative to the service base URL: for the Slack template (`https://slack.com/api`), `/slack/chat.postMessage` reaches `https://slack.com/api/chat.postMessage`. |
+| `proxy-base` | `<url>/proxy`; append `/<type-slug>/<path>`. The slug names a credential type, never one credential; the access rules pick the credential. The path is relative to the base URL of the type: for the Slack template (`https://slack.com/api`), `/slack/chat.postMessage` reaches `https://slack.com/api/chat.postMessage`. |
 
 The action also exports `TOKENGATE_URL` and `TOKENGATE_AUDIENCE` to later steps and puts a
 `tokengate-token` command on `PATH`. Call it whenever you need a fresh token, for example in

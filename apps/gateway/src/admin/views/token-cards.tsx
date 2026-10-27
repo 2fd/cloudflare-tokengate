@@ -18,7 +18,7 @@ import {
 import { upstreamHostAllowed } from '../../config';
 import type { KeyringError } from '../../crypto/keyring';
 import type { Service } from '../../db/types';
-import { freeSlugAmong, slugBaseFor } from '../ops/credentials';
+import { slugBaseFor, typeDestinationOf, typeSlugAmong } from '../ops/credentials';
 import { KEYRING_ERROR_TEXT } from '../ops/keyring';
 import { paths } from '../paths';
 import type { ViewContext } from '../render';
@@ -34,6 +34,7 @@ import {
   FormIds,
   type FormState,
   InjectionFields,
+  injectionFromValues,
   OptionalFields,
   SecretField,
   SecretSubmits,
@@ -345,9 +346,12 @@ function CustomCard(props: {
   const allowlist = data.allowlist;
   const listed = allowlist !== null && allowlist.length > 0;
   const slugBase = values.base_url.trim() === '' ? 'example' : slugBaseFor(values.base_url);
-  const slug = freeSlugAmong(
+  const slug = typeSlugAmong(
     slugBase,
-    data.tokens.map((token) => token.slug),
+    data.tokens,
+    values.base_url.trim() === ''
+      ? null
+      : typeDestinationOf({ base_url: values.base_url, injection: injectionFromValues(values) }),
   );
   const verify = failed?.state.verify ?? null;
   const baseError = ids.error('base_url');

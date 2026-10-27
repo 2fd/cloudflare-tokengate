@@ -52,7 +52,7 @@ CREATE INDEX user_identities_user ON user_identities (user_id);
 -- Upstream APIs. The credential is sealed with AAD bound to (id, base_url, injection) (I-CRED-2).
 CREATE TABLE credentials (
   id TEXT PRIMARY KEY,
-  slug TEXT NOT NULL UNIQUE,
+  slug TEXT NOT NULL,                  -- the credential type (ADR 0031), not unique
   name TEXT NOT NULL,
   base_url TEXT NOT NULL,
   injection TEXT NOT NULL,             -- canonical JSON Injection, see src/policy/validate.ts
@@ -69,6 +69,26 @@ CREATE TABLE credentials (
   updated_at INTEGER NOT NULL,
   template_id TEXT                     -- service template: display and presets only, never in the AAD (ADR 0004)
 );
+
+-- Credential types (ADR 0031). A type is one destination (base URL and injection) and the slug names it:
+-- callers use /proxy/<slug>/, never one credential. Every credential of a slug has the destination of
+-- the type and every credential of a destination has its slug, so a secret only reaches the API of
+-- its type, and the caller-token fallback and the redirect rewrite mean the same for each of them.
+-- The slug never changes; at most 8 credentials share one, which bounds the proxy's candidate read.
+CREATE INDEX credentials_slug ON credentials (slug, created_at, id);
+CREATE TRIGGER credentials_slug_fixed BEFORE UPDATE OF slug ON credentials
+WHEN OLD.slug IS NOT NEW.slug BEGIN SELECT RAISE(ABORT, 'immutable_row'); END;
+CREATE TRIGGER credentials_type_insert BEFORE INSERT ON credentials
+WHEN EXISTS (SELECT 1 FROM credentials
+             WHERE (slug = NEW.slug) <> (base_url = NEW.base_url AND injection = NEW.injection))
+BEGIN SELECT RAISE(ABORT, 'credential_type_mismatch'); END;
+CREATE TRIGGER credentials_type_update BEFORE UPDATE OF base_url, injection ON credentials
+WHEN EXISTS (SELECT 1 FROM credentials WHERE id <> NEW.id
+             AND (slug = NEW.slug) <> (base_url = NEW.base_url AND injection = NEW.injection))
+BEGIN SELECT RAISE(ABORT, 'credential_type_mismatch'); END;
+CREATE TRIGGER credentials_type_cap BEFORE INSERT ON credentials
+WHEN (SELECT count(*) FROM credentials WHERE slug = NEW.slug) >= 8
+BEGIN SELECT RAISE(ABORT, 'too_many_type_credentials'); END;
 
 -- Access rules (ADR 0026). One table, two kinds, fixed at insert:
 -- * Credential access rule (credential_id set, id acr_<ULID>): lets workloads whose tokens `issuer`

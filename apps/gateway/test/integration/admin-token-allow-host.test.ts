@@ -377,23 +377,23 @@ describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
 });
 
 describe('A7.4: create reports every check that sends nothing in one re-render', () => {
-  it('format, then slug, then allowlist errors come back together; nothing is sent', async () => {
+  it('format, then type, then allowlist errors come back together; nothing is sent', async () => {
     const admin = await session('admin');
-    await seedService(app.deps, { slug: 'foo' });
+    await seedService(app.deps, { slug: 'foo', base_url: 'https://api.github.com' });
     const audited = (await actions()).length;
     const res = await adminPost(app, admin, '/admin/credentials', {
       template: 'custom',
-      base_url: 'http://foo.example.com',
-      injection_kind: 'header',
+      base_url: 'https://foo.example.com',
+      injection_kind: 'bearer',
+      forward_headers: 'bad header',
       credential: 'custom-secret-0123456789abcdefghij',
       slug: 'foo',
     });
     expect(res.status).toBe(400);
     const html = await res.text();
     const order = [
-      'Enter a base URL that starts with https://',
-      'Enter the header name in lower case, like x-api-key',
-      'Another credential already uses foo; leave empty to use foo-2',
+      'Extra header &quot;bad header&quot; must be a lower-case HTTP token',
+      'Credentials of type foo call https://api.github.com; leave empty to use foo-2',
       'foo.example.com is not an allowed host. Ask an owner to allow it',
     ].map((text) => html.indexOf(text));
     expect(order.every((index) => index > -1)).toBe(true);

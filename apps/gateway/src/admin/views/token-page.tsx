@@ -662,7 +662,8 @@ function RulesTray(props: { ctx: ViewContext; data: TokenPageData }) {
       description={
         <>
           Each line is one credential access rule, grouped by issuer. Workloads call{' '}
-          <code>{`/proxy/${service.slug}`}</code>; they never see the secret.
+          <code>{`/proxy/${service.slug}`}</code>, the type of this credential, and never see the
+          secret.
         </>
       }
       actions={
@@ -1356,7 +1357,7 @@ function DeleteDialog(props: { ctx: ViewContext; data: TokenPageData }) {
           cascade ? (
             <>
               This cannot be undone. The secret is destroyed, and from the next request these
-              workloads get <code>404</code> from <code>{`/proxy/${service.slug}`}</code>:
+              workloads can no longer use it through <code>{`/proxy/${service.slug}`}</code>:
             </>
           ) : (
             'The credential and its stored secret are deleted. The audit log keeps its configuration, never the secret.'

@@ -1,6 +1,7 @@
 // Everything the proxy needs from the control plane, read in one D1 batch of 5 statements per request
 // (no caching, so disabling an access rule, a global access rule or a credential takes effect on the next
 // request; I-AUTHZ-1). Every statement is indexed and bounded (docs/architecture.md, "Query budget").
+// The slug names a credential type (ADR 0031): every credential with it is a candidate.
 import { credentialRules, globalRules } from './access-rules';
 import { accessRuleFromRow, serviceFromRow } from './rows';
 import {
@@ -12,21 +13,24 @@ import {
 } from './settings';
 import type { CredentialAccessRule, GlobalAccessRule, Service } from './types';
 
-/** Credential access rules of other credentials read for an unknown or disabled slug (AR-11). */
+/** Credential access rules of other credentials read for an unknown or disabled type (AR-11). */
 export const OTHER_CANDIDATES_MAX = 64;
 
 export interface ProxyContext {
-  /** The service with this slug, or null when it does not exist or is disabled. */
-  service: Service | null;
-  /** The slug exists but the service is disabled. Only used for the request record reason. */
-  serviceDisabled: boolean;
-  /** The id of the disabled credential with this slug, or null. Its own rules are tried first. */
-  disabledServiceId: string | null;
   /**
-   * Enabled, unexpired credential access rules: every rule of the enabled credential (any issuer),
-   * or, for an unknown or disabled slug, the rules that trust the token's issuer (the disabled
-   * credential's own rules, then at most OTHER_CANDIDATES_MAX of other credentials). The handler
-   * filters by issuer and orders them.
+   * The enabled credentials of the type, oldest first (at most 8, the credentials_type_cap
+   * trigger). Empty when the type does not exist or every credential of it is disabled.
+   */
+  services: Service[];
+  /** The type exists but every credential of it is disabled. Only used for the request record reason. */
+  typeDisabled: boolean;
+  /** The ids of the credentials of a disabled type. Their own rules are tried first. */
+  disabledServiceIds: ReadonlySet<string>;
+  /**
+   * Enabled, unexpired credential access rules: every rule of the enabled credentials of the type
+   * (any issuer), or, for an unknown or disabled type, the rules that trust the token's issuer (the
+   * disabled credentials' own rules, then at most OTHER_CANDIDATES_MAX of other credentials). The
+   * handler filters by issuer and orders them.
    */
   candidateRules: CredentialAccessRule[];
   /**
@@ -44,22 +48,25 @@ type Row = Record<string, unknown>;
 /**
  * Binds: ?1 slug, ?2 now, ?3 the unverified issuer of a standard-header token (or null), ?4 1 when the
  * standard headers carried a token. The standard-header token always wins over the injection header,
- * so (3b) runs only when the token can come from the injection header.
+ * so (3b) runs only when the token can come from the injection header. (a) reads at most 8 x 100 rows;
+ * (b) starts from the credentials of the type (CROSS JOIN fixes the order), never from every rule of
+ * the issuer.
  */
 export const CANDIDATE_RULES_SQL = `SELECT r.* FROM access_rules r JOIN credentials s ON s.id = r.credential_id
  WHERE s.slug = ?1 AND s.enabled = 1 AND r.enabled = 1
    AND (r.expires_at IS NULL OR r.expires_at > ?2)
 UNION ALL
-SELECT r.* FROM access_rules r JOIN credentials s ON s.id = r.credential_id
- WHERE ?3 IS NOT NULL AND s.slug = ?1 AND s.enabled = 0 AND r.enabled = 1 AND r.issuer = ?3
+SELECT r.* FROM credentials s CROSS JOIN access_rules r ON r.credential_id = s.id
+ WHERE ?3 IS NOT NULL AND s.slug = ?1 AND s.enabled = 0 AND r.enabled = 1 AND +r.issuer = ?3
    AND (r.expires_at IS NULL OR r.expires_at > ?2)
+   AND NOT EXISTS (SELECT 1 FROM credentials WHERE slug = ?1 AND enabled = 1)
 UNION ALL
 SELECT * FROM (
   SELECT r.* FROM access_rules r
    WHERE ?3 IS NOT NULL AND r.issuer = ?3 AND r.enabled = 1 AND r.credential_id IS NOT NULL
      AND (r.expires_at IS NULL OR r.expires_at > ?2)
      AND NOT EXISTS (SELECT 1 FROM credentials WHERE slug = ?1 AND enabled = 1)
-     AND r.credential_id IS NOT (SELECT id FROM credentials WHERE slug = ?1)
+     AND r.credential_id NOT IN (SELECT id FROM credentials WHERE slug = ?1)
    ORDER BY r.created_at, r.id LIMIT ${OTHER_CANDIDATES_MAX})`;
 
 /**
@@ -82,7 +89,7 @@ export async function loadProxyContext(
 ): Promise<ProxyContext> {
   const binds = [slug, now, token.preIss, token.standard ? 1 : 0];
   const [credentials, candidates, globals, settings, upstreamHosts] = await db.batch<Row>([
-    db.prepare('SELECT * FROM credentials WHERE slug = ?1').bind(slug),
+    db.prepare('SELECT * FROM credentials WHERE slug = ?1 ORDER BY created_at, id').bind(slug),
     // A statement takes exactly as many binds as its highest parameter number.
     db.prepare(CANDIDATE_RULES_SQL).bind(...binds.slice(0, 3)),
     db.prepare(GLOBAL_RULES_SQL).bind(...binds),
@@ -90,14 +97,15 @@ export async function loadProxyContext(
     upstreamHostsStatement(db),
   ]);
 
-  const serviceRow = credentials?.results[0];
-  const service = serviceRow ? serviceFromRow(serviceRow) : null;
+  const all = (credentials?.results ?? []).map(serviceFromRow);
+  const services = all.filter((service) => service.enabled);
+  const typeDisabled = all.length > 0 && services.length === 0;
   const byOrder = <T extends { created_at: number; id: string }>(a: T, b: T) =>
     a.created_at - b.created_at || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   return {
-    service: service?.enabled ? service : null,
-    serviceDisabled: service !== null && !service.enabled,
-    disabledServiceId: service !== null && !service.enabled ? service.id : null,
+    services,
+    typeDisabled,
+    disabledServiceIds: new Set(typeDisabled ? all.map((service) => service.id) : []),
     candidateRules: credentialRules((candidates?.results ?? []).map(accessRuleFromRow)).filter(
       (rule) => rule.enabled,
     ),

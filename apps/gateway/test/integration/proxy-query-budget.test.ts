@@ -176,7 +176,8 @@ describe('I-AUTHZ-1: one batch of 5 bounded statements per request', () => {
     await fx.records();
     const batch = onlyBatch(log);
     expect(batch.rows[1]).toBe(64);
-    expect(batch.rowsRead[1]).toBeLessThanOrEqual(64 + 10);
+    // 64 rules, each probed once against the credentials of the type (ADR 0031).
+    expect(batch.rowsRead[1]).toBeLessThanOrEqual(2 * 64 + 10);
   });
 });
 

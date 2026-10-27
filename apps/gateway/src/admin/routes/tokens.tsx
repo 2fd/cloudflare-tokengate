@@ -51,7 +51,6 @@ import {
   deleteService,
   destinationFingerprint,
   freeName,
-  freeSlug,
   lastSecretChange,
   opContextFor,
   rotateServiceSecret,
@@ -62,6 +61,8 @@ import {
   slugBaseFor,
   storedBinding,
   testServiceCredential,
+  typeDestinationOf,
+  typeSlug,
   updateServiceFields,
 } from '../ops/credentials';
 import { type FieldError, fieldError, type OpFailure, type OpFailureReason } from '../ops/shared';
@@ -1259,7 +1260,8 @@ async function create(c: AdminContext) {
   const slugText = template ? '' : values.slug.trim();
   const nameText = template ? '' : values.name.trim();
   const slugBase = template ? template.slug : slugBaseFor(destination.base_url);
-  const slug = slugText === '' ? await freeSlug(db, slugBase) : slugText;
+  const slug =
+    slugText === '' ? await typeSlug(db, slugBase, typeDestinationOf(destination)) : slugText;
   const name = nameText === '' ? await freeName(db, template ? template.name : slug) : nameText;
   const input: ServiceCreateInput = {
     slug,
@@ -1324,7 +1326,7 @@ async function create(c: AdminContext) {
       deps,
       actor,
       {
-        slug: await freeSlug(db, uploads.slug),
+        slug: await typeSlug(db, uploads.slug, typeDestinationOf(uploads)),
         name: await freeName(db, uploads.name),
         base_url: uploads.base_url,
         injection: uploads.injection,

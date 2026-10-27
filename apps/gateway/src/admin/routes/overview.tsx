@@ -484,7 +484,7 @@ function TrafficTray(props: { data: OverviewData }) {
         <Panel variant="pad">
           <ZeroState>
             No requests in the selected range. Requests appear once a caller calls{' '}
-            <code>/proxy/&lt;credential slug&gt;/…</code>.
+            <code>/proxy/&lt;credential type&gt;/…</code>.
           </ZeroState>
         </Panel>
       </Tray>
@@ -603,7 +603,7 @@ function FreshOverview(props: PageData) {
             <Panel variant="pad">
               <p class="muted">
                 No requests yet. They appear here once a caller calls{' '}
-                <code>/proxy/&lt;credential slug&gt;/…</code>.
+                <code>/proxy/&lt;credential type&gt;/…</code>.
               </p>
               <Chips label="Where calls went, all zero">
                 <Chip tone="off">
@@ -710,7 +710,7 @@ function GetStarted(props: {
       why: (
         <>
           Add the tokengate step to a workflow. The job gets a short-lived token and calls the API
-          through <code>/proxy/&lt;credential slug&gt;/…</code>; the call shows up here.
+          through <code>/proxy/&lt;credential type&gt;/…</code>; the call shows up here.
         </>
       ),
       action: newest

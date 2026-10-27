@@ -18,7 +18,6 @@ import {
 import {
   deleteServiceStatement,
   getService,
-  getServiceBySlug,
   insertServiceStatement,
   listServices,
   type ServiceFields,
@@ -121,8 +120,8 @@ interface CreatePlan {
 
 /**
  * Every check of a create that sends nothing and writes nothing, in the order of A7.4: field
- * formats and the secret format, then the slug (a SELECT before anything is sent; the UNIQUE
- * constraint stays the race backstop), then the allowlist. `hostAllowed` skips only the allowlist
+ * formats and the secret format, then the credential type (a SELECT before anything is sent; the
+ * credentials_type_* triggers stay the race backstop), then the allowlist. `hostAllowed` skips only the allowlist
  * check, for a route that allows the host itself first (allow_host).
  */
 export async function checkServiceCreate(
@@ -175,18 +174,27 @@ async function planCreate(
       ? normalizeCredential(secretText, injection.injection)
       : null;
   if (credential && !credential.ok) errors.push(credential.error);
-  // The slug pre-check is a SELECT that sends nothing, so a taken slug is reported together with
-  // the format errors (one re-render), after them.
+  // The type pre-check is a SELECT that sends nothing, so a type conflict is reported together with
+  // the format errors (one re-render), after them. A slug of the same destination is joined
+  // (ADR 0031).
   const slugFormatOk = !fields.errors.some((error) => error.startsWith('slug'));
-  const taken = slugFormatOk && (await getServiceBySlug(db, input.slug)) !== null;
-  const slugErrors = taken
-    ? [
-        fieldError(
-          'slug',
-          `another credential already uses ${input.slug}; leave empty to use ${await freeSlug(db, input.slug)}`,
-        ),
-      ]
-    : [];
+  const destination =
+    base.ok && injection.ok ? { base_url: base.normalized, injection_json: injection.json } : null;
+  const credentials = slugFormatOk && destination !== null ? await listServices(db) : [];
+  const conflict =
+    slugFormatOk && destination !== null
+      ? typeConflict(input.slug, credentials, destination)
+      : null;
+  const suggested = typeSlugAmong(input.slug, credentials, destination);
+  const slugErrors =
+    conflict === null
+      ? []
+      : [
+          fieldError(
+            'slug',
+            suggested === input.slug ? conflict : `${conflict}; leave empty to use ${suggested}`,
+          ),
+        ];
   if (errors.length > 0 || !base.ok || !injection.ok || (credential && !credential.ok)) {
     return opFailure('invalid', [...serviceFieldErrors(errors), ...slugErrors], fields.warnings);
   }
@@ -289,12 +297,94 @@ export async function createService(
 /** The highest suffixed slug or name tried before giving up (then the clash is a 409). */
 const FREE_SUFFIX_MAX = 99;
 
-/** `base` when no token uses it, else `base-2`, `base-3`, … (within the 63-character limit). */
-export async function freeSlug(db: D1Database, base: string): Promise<string> {
-  return freeSlugAmong(
-    base,
-    (await listServices(db)).map((service) => service.slug),
+/** Most credentials of one type; the credentials_type_cap trigger enforces the same number (ADR 0031). */
+export const TYPE_CREDENTIALS_MAX = 8;
+
+/** The destination that defines a credential type: normalized base URL and canonical injection. */
+export interface TypeDestination {
+  base_url: string;
+  injection_json: string;
+}
+
+type TypeMember = Pick<Service, 'slug' | 'base_url' | 'injection_json'>;
+
+function sameDestination(member: TypeMember, destination: TypeDestination): boolean {
+  return (
+    member.base_url === destination.base_url && member.injection_json === destination.injection_json
   );
+}
+
+/**
+ * Why a credential with this slug and destination cannot be stored next to `credentials`, or null
+ * (ADR 0031): the credentials of a slug share one destination, the credentials of a destination
+ * share one slug, and a type holds at most TYPE_CREDENTIALS_MAX credentials. The
+ * credentials_type_* triggers enforce the same rules.
+ */
+export function typeConflict(
+  slug: string,
+  credentials: readonly TypeMember[],
+  destination: TypeDestination,
+): string | null {
+  const members = credentials.filter((credential) => credential.slug === slug);
+  const first = members[0];
+  if (first && first.base_url !== destination.base_url) {
+    return `credentials of type ${slug} call ${first.base_url}`;
+  }
+  if (first && first.injection_json !== destination.injection_json) {
+    return `credentials of type ${slug} send the secret another way`;
+  }
+  const owner = credentials.find(
+    (credential) => credential.slug !== slug && sameDestination(credential, destination),
+  );
+  if (owner) return `credentials that call ${destination.base_url} have the type ${owner.slug}`;
+  if (members.length >= TYPE_CREDENTIALS_MAX) {
+    return `the type ${slug} already has ${TYPE_CREDENTIALS_MAX} credentials`;
+  }
+  return null;
+}
+
+/**
+ * The slug a new credential gets by default (ADR 0031): the slug of its destination's type when one
+ * exists, else `base`, `base-2`, `base-3`, … (the first one no credential uses, within 63
+ * characters). A null destination (not valid yet) only takes an unused slug.
+ */
+export function typeSlugAmong(
+  base: string,
+  credentials: readonly TypeMember[],
+  destination: TypeDestination | null,
+): string {
+  const owner =
+    destination === null
+      ? undefined
+      : credentials.find((credential) => sameDestination(credential, destination));
+  return (
+    owner?.slug ??
+    freeSlugAmong(
+      base,
+      credentials.map((credential) => credential.slug),
+    )
+  );
+}
+
+/** typeSlugAmong over the stored credentials. */
+export async function typeSlug(
+  db: D1Database,
+  base: string,
+  destination: TypeDestination | null,
+): Promise<string> {
+  return typeSlugAmong(base, await listServices(db), destination);
+}
+
+/** The normalized destination of form input, or null when it is not valid (the create reports why). */
+export function typeDestinationOf(input: {
+  base_url: string;
+  injection: unknown;
+}): TypeDestination | null {
+  const base = validateBaseUrl(input.base_url, { gatewayHosts: [], allowedUpstreamHosts: null });
+  const injection = normalizeInjection(input.injection);
+  return base.ok && injection.ok
+    ? { base_url: base.normalized, injection_json: injection.json }
+    : null;
 }
 
 /** `base` when no token has that name, else `base 2`, `base 3`, … */
@@ -606,6 +696,21 @@ async function planCredential(
     (base.normalized !== fixed.base_url || injection.json !== canonicalJson(fixed.injection))
   ) {
     errors.push(`base URL: a ${fixed.label} credential always calls ${fixed.base_url}`);
+  }
+  // A credential keeps the destination of its type (ADR 0031): only a credential alone in its type
+  // can move, and never into the destination of another type. The credentials_type_update trigger is
+  // the race backstop.
+  if (
+    base.ok &&
+    injection.ok &&
+    (base.normalized !== existing.base_url || injection.json !== existing.injection_json)
+  ) {
+    const conflict = typeConflict(
+      existing.slug,
+      (await listServices(deps.env.DB)).filter((other) => other.id !== existing.id),
+      { base_url: base.normalized, injection_json: injection.json },
+    );
+    if (conflict !== null) errors.push(`base URL: ${conflict}; add a new credential instead`);
   }
   const fields = validateServiceFields({
     slug: existing.slug,

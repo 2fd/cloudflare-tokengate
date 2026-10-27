@@ -474,7 +474,7 @@ describe('credential access rules: list and filters', () => {
   });
 
   it('filters by credential, issuer and status; chips follow the controls, which stay in place', async () => {
-    const other = await seedService(world.app.deps, { slug: 'other', name: 'Other' });
+    const other = await seedService(world.app.deps, { slug: 'github', name: 'Other' });
     const first = await create();
     const second = await create({ token_id: other, name: 'other rule' });
     const all = await html(RULES);
@@ -668,7 +668,7 @@ describe('credential access rules: the rule page', () => {
   });
 
   it('copies a rule to another credential or to the same one', async () => {
-    const other = await seedService(world.app.deps, { slug: 'other', name: 'Other' });
+    const other = await seedService(world.app.deps, { slug: 'github', name: 'Other' });
     const rule = await create();
     const page = await html(`${RULES}/${rule.id}`);
     expect(page).toContain('id="dlg-copy-rule"');

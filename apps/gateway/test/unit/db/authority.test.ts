@@ -39,13 +39,15 @@ async function actorFor(email: string, status: 'active' | 'suspended' = 'active'
   return { user, actor: { userId: user.id, loginProvider: PROVIDER, subject: `sub|${email}` } };
 }
 
-const insertCredential = (id: string) =>
-  db
+const insertCredential = (id: string) => {
+  const slug = id.toLowerCase().replace('_', '-');
+  return db
     .prepare(
       `INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
-       VALUES (?, ?, ?, 'https://api.example.com', '{"kind":"bearer"}', ?, ?)`,
+       VALUES (?, ?, ?, ?, '{"kind":"bearer"}', ?, ?)`,
     )
-    .bind(id, id.toLowerCase().replace('_', '-'), id, T, T);
+    .bind(id, slug, id, `https://${slug}.example.com`, T, T);
+};
 
 /** The two triggers that hold access_rules:global to all-scope view (D23). */
 const D23_TRIGGERS = ['team_permissions_global_rules_scope', 'teams_global_rules_scope'];

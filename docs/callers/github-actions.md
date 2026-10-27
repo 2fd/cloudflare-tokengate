@@ -407,5 +407,5 @@ A response without `x-tokengate-request-id` came from Cloudflare, not from the g
 | `token_expired` or `token_too_old` (401) | Token minted too early | Call `tokengate-token` right before the request. |
 | `event_not_trusted` (403) | The event is not trusted and the grant does not opt in | Ask an admin to add the event to an exact `event_name` condition, or trigger the job another way. |
 | `no_matching_rule` (403) | No grant matches the claims, method and path | Ask an access manager to use **Give this caller access** on the request. |
-| `service_not_found` (404) | Wrong slug, or the service is disabled | Check the slug after `/proxy/`. |
+| `service_not_found` (404) | Wrong slug, or every credential of the type is disabled | Check the slug after `/proxy/`. |
 | `path_invalid` (400) | `//`, `.` or `..` segments, forbidden escapes, or a method-override query parameter | Fix the URL. |

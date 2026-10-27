@@ -204,9 +204,9 @@ even though it has not expired.
 
 ## service_not_found
 
-**Status 404.** No enabled service has the slug in `/proxy/<slug>/...`.
+**Status 404.** No enabled credential has the type named by the slug in `/proxy/<slug>/...`.
 
-- **Causes:** a typo in the slug, or the service is disabled (reason `service_disabled`). This check runs
+- **Causes:** a typo in the slug, or every credential of the type is disabled (reason `service_disabled`). This check runs
   only after the token and tenant pin are verified, so outsiders cannot list credentials.
 - **Caller:** check the slug in the URL.
 - **Admin:** the record has reason `service_not_found` or `service_disabled`.
@@ -307,6 +307,9 @@ does not opt in to it ([I-AUTHZ-3](threat-model.md#i-authz-3)).
   - `dev_placeholder_key`: the keyring holds the public development key from `.dev.vars.example`,
     and the Worker is not in development mode (`AUTH_ACCESS_DEVELOPMENT` set, no Access variable).
     Set a key of your own ([configuration.md](configuration.md#development-key)).
+  - `credential_type_mismatch`: the credentials of the type have different base URLs or injections.
+    The admin operations and the schema triggers refuse this, so someone changed D1 directly. Fix
+    the rows with SQL, or delete and recreate the credentials ([ADR 0031](adr/0031-credential-types-and-rule-specificity.md)).
   - `base_url_invalid`: the service's base URL is no longer allowed, for example after a change to
     the upstream host allowlist (Settings › Allowed hosts) ([I-SSRF-1](threat-model.md#i-ssrf-1)).
   - `profile_unknown`: the credential access rule names a profile this version does not know. This check
@@ -364,8 +367,8 @@ The reason is the gateway error code, or a finer reason for some codes:
 | Reason | Error code | Meaning |
 |---|---|---|
 | `method_not_allowed`, `token_missing`, `token_ambiguous`, `token_malformed`, `issuer_unknown`, `audience_mismatch`, `token_expired`, `token_too_old`, `signature_invalid`, `claims_invalid`, `jwks_unavailable`, `tenant_mismatch` | Same | Pre-trust failures; see each code above |
-| `service_not_found` | `service_not_found` | No service has this slug |
-| `service_disabled` | `service_not_found` | The service exists but is disabled |
+| `service_not_found` | `service_not_found` | No credential has this type |
+| `service_disabled` | `service_not_found` | The type exists but every credential of it is disabled |
 | `path_invalid` | `path_invalid` | The path is not allowed |
 | `query_invalid` | `path_invalid` | The query string is not allowed |
 | `no_matching_rule` | `no_matching_rule` | No access rule allows this caller to perform this request |
@@ -385,6 +388,7 @@ The reason is the gateway error code, or a finer reason for some codes:
 | `key_not_random` | `not_configured` | Only `TOKENGATE_KEYRING` is set and it is not random |
 | `both_kek_and_keyring_set` | `not_configured` | Before ADR 0027 only: both secrets were set |
 | `dev_placeholder_key` | `not_configured` | The keyring holds the development key from `.dev.vars.example` |
+| `credential_type_mismatch` | `not_configured` | The credentials of the type have different destinations |
 | `base_url_invalid` | `not_configured` | The service's base URL is no longer allowed |
 | `profile_unknown` | `not_configured` | The credential access rule uses an unknown profile |
 | `internal_error` | `internal_error` | The gateway failed to process the request |

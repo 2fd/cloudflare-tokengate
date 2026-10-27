@@ -73,13 +73,18 @@ describe('I-SSRF-1: template fields cannot be overridden from the form', () => {
     const res = await adminPost(app, admin, '/admin/credentials', {
       template: 'slack',
       credential: 'xoxb-3333-4444-integritytest0000',
-      slug: 'slack',
+      slug: 'evil',
       name: 'Evil',
     });
     expect(res.status).toBe(303);
-    const derived = await row('slack-2');
-    expect(derived).toMatchObject({ template_id: 'slack' });
-    expect(derived?.name).not.toBe('Evil');
+    expect(await row('evil')).toBeNull();
+    // The second Slack credential joins the slack type (ADR 0031).
+    const { results } = await env.DB.prepare(
+      "SELECT name, template_id FROM credentials WHERE slug = 'slack' ORDER BY created_at, id",
+    ).all<{ name: string; template_id: string }>();
+    expect(results).toHaveLength(2);
+    expect(results[1]).toMatchObject({ template_id: 'slack' });
+    expect(results[1]?.name).not.toBe('Evil');
   });
 
   it('splits a whole webhook URL: the template base stays, only the path secret is sealed', async () => {

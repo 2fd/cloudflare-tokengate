@@ -1,5 +1,6 @@
 // Proxy pipeline (docs/architecture.md, "Proxy pipeline"): verify the caller token, authorize it against the
-// credential and global access rules, swap it for the service credential, stream the upstream response back.
+// credential and global access rules of the credential type, swap it for the credential of the most specific
+// rule that matches (ADR 0031), stream the upstream response back.
 // I-TOK-1/2, I-TEN-1, I-AUTHZ-1, I-AUTHZ-5,
 // I-PATH-1, I-INJ-1, I-CRED-2, I-SSRF-1, I-REDIR-1, I-RESP-1, I-LOG-1/2.
 import { credentialAad, openCredential } from '../crypto/envelope';
@@ -20,6 +21,7 @@ import type { CallerIdentity, IssuerProfile } from '../identity/types';
 import { type GatewayErrorCode, gatewayError } from '../lib/errors';
 import { newId } from '../lib/ids';
 import {
+  bySpecificity,
   credentialRuleDecision,
   globalDecision,
   verificationGroupKey,
@@ -37,7 +39,7 @@ import { injectCredentialHeaders } from './inject';
 import { buildUpstreamUrl, canonicalizePath } from './path';
 
 export interface ProxyParams {
-  /** Slug segment of `/proxy/<slug>/...`, as it appears in the URL. */
+  /** Credential type segment of `/proxy/<slug>/...`, as it appears in the URL (ADR 0031). */
   slug: string;
   /** Pathname after `/proxy/<slug>`, not decoded ("" when absent). */
   rawPath: string;
@@ -150,8 +152,19 @@ async function runPipeline(
     standard: extracted.ok,
   });
   progress.sampleRate = context.settings.allowed_sample_rate;
+  // Every credential of a type has the same base URL and injection (credentials_type_* triggers), so
+  // the token fallback and the redirect rewrite mean the same whichever credential is chosen. A type
+  // written around the triggers has no fallback and fails closed once the tenant gate held (I-TEN-1).
+  const first = context.services[0] ?? null;
+  const typeConsistent = context.services.every(
+    (service) =>
+      service.base_url === first?.base_url && service.injection_json === first.injection_json,
+  );
   if (!extracted.ok) {
-    extracted = extractCallerToken(request.headers, context.service?.injection ?? null);
+    extracted = extractCallerToken(
+      request.headers,
+      typeConsistent ? (first?.injection ?? null) : null,
+    );
     if (!extracted.ok) return fail(extracted.code);
   }
   const token = extracted.token;
@@ -161,21 +174,19 @@ async function runPipeline(
   // The batch read rows for preIss; any other issuer would make "no global row" mean nothing.
   if (preIss !== null && unverified.iss !== preIss) return fail('internal_error');
 
-  // An issuer is a value in each credential access rule. Several rules may trust the same issuer,
-  // with different settings and filters; never choose only the first one.
+  // An issuer is a value in each credential access rule. Several rules, of one or several credentials
+  // of the type, may trust the same issuer with different settings and filters; never choose only the
+  // first one. The most specific rule that matches decides the credential (ADR 0031).
   const iss = unverified.iss;
+  const services = new Map(context.services.map((service) => [service.id, service]));
   const candidates = context.candidateRules
     .filter(
-      (rule) =>
-        rule.issuer === iss &&
-        (context.service === null || rule.credential_id === context.service.id),
+      (rule) => rule.issuer === iss && (services.size === 0 || services.has(rule.credential_id)),
     )
     .sort(
       (a, b) =>
-        Number(b.credential_id === context.disabledServiceId) -
-          Number(a.credential_id === context.disabledServiceId) ||
-        a.created_at - b.created_at ||
-        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+        Number(context.disabledServiceIds.has(b.credential_id)) -
+          Number(context.disabledServiceIds.has(a.credential_id)) || bySpecificity(a, b),
     );
   if (candidates.length === 0)
     return fail('issuer_unknown', {
@@ -246,11 +257,13 @@ async function runPipeline(
       progress.rule = rule;
       progress.caller = { identity: buildCallerIdentity(rule, profile, claims), logClaims };
     }
-    if (context.service === null)
+    const service = services.get(rule.credential_id);
+    if (service === undefined)
       return fail('service_not_found', {
-        reason: context.serviceDisabled ? 'service_disabled' : 'service_not_found',
+        reason: context.typeDisabled ? 'service_disabled' : 'service_not_found',
       });
-    progress.service = context.service;
+    progress.service = service;
+    if (!typeConsistent) return fail('not_configured', { reason: 'credential_type_mismatch' });
     if (!canonical.ok) return fail('path_invalid');
     const facts: RequestFacts = {
       claims,
@@ -302,8 +315,8 @@ async function runPipeline(
     });
   }
   if (!canonical.ok) return fail('path_invalid');
-  const service = context.service;
-  if (service === null) return fail('service_not_found');
+  const service = services.get(selected.rule.credential_id);
+  if (service === undefined) return fail('service_not_found');
   progress.service = service;
   progress.rule = selected.rule;
   progress.globalRuleId = selected.global?.id ?? null;

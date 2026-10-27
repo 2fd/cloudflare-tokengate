@@ -105,6 +105,46 @@ export function verificationGroupKey(c: PolicyCredentialRule, profile: IssuerPro
 }
 
 /**
+ * Evaluation order of credential access rules (ADR 0031): the most specific rule first, so a
+ * request that several rules of a credential type admit uses the credential of the narrowest one.
+ * Specificity is the number of identity conditions (own conditions plus tenant pin), then the
+ * number of those that are `exact` and not negated. Operations do not count: the request already
+ * passed them. Ties go to the oldest rule (created_at, id). A malformed list counts as empty.
+ */
+export function bySpecificity<
+  R extends Pick<PolicyCredentialRule, 'id' | 'tenant_pin' | 'conditions'> & { created_at: number },
+>(a: R, b: R): number {
+  const sa = specificity(a);
+  const sb = specificity(b);
+  return (
+    sb.conditions - sa.conditions ||
+    sb.exact - sa.exact ||
+    a.created_at - b.created_at ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  );
+}
+
+function specificity(c: Pick<PolicyCredentialRule, 'tenant_pin' | 'conditions'>): {
+  conditions: number;
+  exact: number;
+} {
+  const all = [
+    ...(Array.isArray(c.tenant_pin) ? c.tenant_pin : []),
+    ...(Array.isArray(c.conditions) ? c.conditions : []),
+  ];
+  return {
+    conditions: all.length,
+    exact: all.filter(
+      (condition) =>
+        typeof condition === 'object' &&
+        condition !== null &&
+        condition.match === 'exact' &&
+        condition.negate !== true,
+    ).length,
+  };
+}
+
+/**
  * I-AUTHZ-3. Passes when the profile has no event claim, when the token's event is trusted,
  * or when C has a non-negated `exact` condition on the event claim listing that event.
  * A missing or non-scalar event claim fails. Only C's conditions count: a global access rule

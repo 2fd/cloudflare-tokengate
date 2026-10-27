@@ -338,8 +338,8 @@ export function OptionalFields(props: {
           {props.derived
             ? `Slug: ${props.derived.slug} Name: ${props.derived.name}`
             : 'Leave empty to use the suggestions shown.'}{' '}
-          Workloads call <code>{`/proxy/${props.slugPlaceholder}`}</code>; the slug cannot be
-          changed later.
+          Workloads call <code>{`/proxy/${props.slugPlaceholder}`}</code> for every credential of
+          this API, its type; the slug cannot be changed later.
         </>
       }
     >

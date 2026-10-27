@@ -674,7 +674,7 @@ async function requestsPage(
                   description={
                     <>
                       Requests appear once a workload calls{' '}
-                      <code>/proxy/&lt;credential slug&gt;/…</code>
+                      <code>/proxy/&lt;credential type&gt;/…</code>
                     </>
                   }
                   actions={

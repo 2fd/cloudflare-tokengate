@@ -191,7 +191,9 @@ export async function setupProxy(options: ProxyFixtureOptions = {}): Promise<Pro
   const addService = async (seed: ServiceSeed) => {
     const id = newId('svc', clock.now(), random);
     const slug = seed.slug ?? 'echo';
-    const baseUrl = seed.baseUrl ?? TEST_BASE_URL;
+    // One destination per credential type (ADR 0031): another slug defaults to another host.
+    const baseUrl =
+      seed.baseUrl ?? (slug === 'echo' ? TEST_BASE_URL : `https://${slug}.upstream.test/v1`);
     const injectionJson = canonicalJson(seed.injection ?? { kind: 'bearer' });
     const secret = seed.secret === undefined ? TEST_SECRET : seed.secret;
     const sealed =

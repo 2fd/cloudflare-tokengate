@@ -192,17 +192,17 @@ describe('I-CRED-2: a sealed draft never follows a repoint or another token', ()
   const draftOf = (html: string) => /name="credential_draft" value="([^"]+)"/.exec(html)?.[1] ?? '';
 
   /**
-   * Two attested tokens at the same destination (GitHub, or `custom`'s base URL); every upstream
-   * refuses, so a rotate re-renders.
+   * Two attested tokens of one type, so at the same destination (GitHub, or `custom`'s base URL;
+   * ADR 0031); every upstream refuses, so a rotate re-renders.
    */
   async function world(custom: { base_url: string; credential: string } | null = null) {
     const network = fakeNetwork(() =>
       Response.json({ message: 'Bad credentials' }, { status: 401 }),
     );
     const app = createTestApp({ fetch: network.fetch, env: { TOKENGATE_KEK: KEK_1 } });
-    const destination = custom ? { base_url: custom.base_url } : {};
-    const a = await seedService(app.deps, { slug: 'a', secret: SECRET, ...destination });
-    const b = await seedService(app.deps, { slug: 'b', secret: SECRET, ...destination });
+    const type = custom ? { slug: 'custom', base_url: custom.base_url } : { slug: 'github' };
+    const a = await seedService(app.deps, { name: 'A', secret: SECRET, ...type });
+    const b = await seedService(app.deps, { name: 'B', secret: SECRET, ...type });
     await env.DB.prepare('UPDATE credentials SET verify = ?').bind(JSON.stringify(VERIFY)).run();
     const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
     const first = await adminPost(app, session, `/admin/credentials/${a}/secret`, {
@@ -232,8 +232,10 @@ describe('I-CRED-2: a sealed draft never follows a repoint or another token', ()
   });
 
   it('a D1 repoint after the re-render makes the draft refuse: nothing goes to the new host', async () => {
-    const { network, app, session, a, draft } = await world();
+    const { network, app, session, a, b, draft } = await world();
     const loaded = await rotateFields(a);
+    // Only a credential alone in its type can move (ADR 0031), so the D1 writer removes the other one.
+    await env.DB.prepare('DELETE FROM credentials WHERE id = ?').bind(b).run();
     await env.DB.prepare('UPDATE credentials SET base_url = ? WHERE id = ?')
       .bind(ATTACKER, a)
       .run();

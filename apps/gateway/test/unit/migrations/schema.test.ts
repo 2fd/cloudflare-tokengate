@@ -44,7 +44,7 @@ beforeAll(async () => {
   await applyD1Migrations(db, env.TEST_MIGRATIONS);
   await db.batch([
     db.prepare(`INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
-      VALUES ('svc_schema', 'schema', 'Schema fixture', 'https://api.example.com', '{"kind":"bearer"}', 0, 0)`),
+      VALUES ('svc_schema', 'schema', 'Schema fixture', 'https://schema.example.com', '{"kind":"bearer"}', 0, 0)`),
     user('usr_owner1', 'owner'),
     user('usr_owner2', 'owner'),
     user('usr_viewer', 'viewer'),
@@ -184,7 +184,7 @@ describe('credentials.template_id', () => {
     await db
       .prepare(
         `INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at)
-         VALUES ('svc_1', 'one', 'One', 'https://api.example.com', '{"kind":"bearer"}', ?, ?)`,
+         VALUES ('svc_1', 'one', 'One', 'https://one.example.com', '{"kind":"bearer"}', ?, ?)`,
       )
       .bind(T, T)
       .run();
@@ -295,7 +295,7 @@ describe('access_rules: names', () => {
     );
     await db
       .prepare(
-        "INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at) VALUES ('svc_other', 'other', 'Other', 'https://api.example.com', '{\"kind\":\"bearer\"}', 0, 0)",
+        "INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at) VALUES ('svc_other', 'other', 'Other', 'https://other.example.com', '{\"kind\":\"bearer\"}', 0, 0)",
       )
       .run();
     await credentialRule({ id: 'acr_n2', name: 'Deploy', credential_id: 'svc_other' }).run();
@@ -387,7 +387,7 @@ describe('access_rules: cascades', () => {
   it('deleting a credential deletes its rules and their labels', async () => {
     await db
       .prepare(
-        "INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at) VALUES ('svc_gone', 'gone', 'Gone', 'https://api.example.com', '{\"kind\":\"bearer\"}', 0, 0)",
+        "INSERT INTO credentials (id, slug, name, base_url, injection, created_at, updated_at) VALUES ('svc_gone', 'gone', 'Gone', 'https://gone.example.com', '{\"kind\":\"bearer\"}', 0, 0)",
       )
       .run();
     await credentialRule({ id: 'acr_gone', credential_id: 'svc_gone' }).run();

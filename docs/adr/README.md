@@ -36,6 +36,7 @@ Each ADR uses the format from [0001](0001-record-architecture-decisions.md): Sta
 | [0028](0028-issuer-profiles-are-code.md) | Issuer profiles are code, not schema; the Vercel profile | Accepted |
 | [0029](0029-access-rules-are-the-only-permission-store.md) | Access rules are the only permission store | Accepted |
 | [0030](0030-no-admin-host-list.md) | No admin host list: Worker routes and the Access application decide where `/admin` answers | Accepted |
+| [0031](0031-credential-types-and-rule-specificity.md) | Callers name a credential type; the most specific access rule picks the credential | Accepted |
 
 ## Adding an ADR
 

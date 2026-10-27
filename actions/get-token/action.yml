@@ -25,7 +25,7 @@ outputs:
     description: Gateway base URL without trailing slash.
     value: ${{ steps.mint.outputs.url }}
   proxy-base:
-    description: "Proxy base URL: <url>/proxy. Append /<service-slug>/<path>."
+    description: "Proxy base URL: <url>/proxy. Append /<type-slug>/<path>."
     value: ${{ steps.mint.outputs.proxy-base }}
 
 runs:

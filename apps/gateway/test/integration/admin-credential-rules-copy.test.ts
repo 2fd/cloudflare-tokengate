@@ -55,7 +55,7 @@ const copies = async () =>
 
 describe('copy a credential access rule', () => {
   it('copies to a credential with the same operations in one submit: enabled, labelled, a free name', async () => {
-    const other = await seedService(world.app.deps, { slug: 'github-2', name: 'GitHub 2' });
+    const other = await seedService(world.app.deps, { slug: 'github', name: 'GitHub 2' });
     const res = await adminPost(world.app, session(), `${RULES}/${source.id}/copy`, {
       credential_id: other,
     });

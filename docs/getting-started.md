@@ -199,7 +199,7 @@ A credential is one upstream API plus the secret the gateway attaches. This exam
 1. In GitHub, create a fine-grained personal access token that can access only your test repository. The default read-only "Metadata" permission is enough for this example.
 2. In the admin UI, open **Credentials**. With no tokens yet, "Add your first token" is open.
 3. Open the **GitHub REST API** card.
-4. Paste the token in **Personal access token**. Leave name and slug empty: the token gets the name `GitHub` and the slug `github`. Consumers use the slug in the URL: `<gateway>/proxy/github/...`. It cannot be changed later.
+4. Paste the token in **Personal access token**. Leave name and slug empty: the token gets the name `GitHub` and the slug `github`. Consumers use the slug in the URL: `<gateway>/proxy/github/...`. The slug names the credential type: a second GitHub token joins `github`, and the access rules decide which token a workload uses. It cannot be changed later.
 5. Select **Check and save GitHub**.
 
 The template includes a secret check (`GET /rate_limit`). If it passes, the token page says "GitHub created (slug github); the secret check passed." If the check fails, the page keeps the secret for 15 minutes; fix the cause and select **Check again and save**, or **Save without a passing check**.

@@ -73,6 +73,8 @@ function echoingNetwork() {
 
 beforeEach(async () => {
   await resetControlPlane();
+  // addUpstreamHost leaves a list behind; each credential type has its own host (ADR 0031).
+  await env.DB.prepare("DELETE FROM settings WHERE key = 'allowed_upstream_hosts'").run();
   logLines = [];
   for (const level of ['info', 'warn', 'error'] as const) {
     vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
@@ -306,8 +308,9 @@ const failures: OpCase[] = [
     run: (d) => createService(d, ACTOR, serviceInput({ slug: '-' }), CONTEXT),
   },
   {
-    name: 'createService (duplicate slug)',
-    run: (d) => createService(d, ACTOR, serviceInput(), CONTEXT),
+    name: 'createService (slug of another destination)',
+    run: (d) =>
+      createService(d, ACTOR, serviceInput({ base_url: 'https://api.example.com' }), CONTEXT),
   },
   {
     name: 'updateServiceFields (binding field)',

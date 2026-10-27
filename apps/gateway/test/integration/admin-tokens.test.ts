@@ -88,6 +88,16 @@ async function serviceRow(slug: string) {
     .first<Record<string, unknown>>();
 }
 
+/** Names of the credentials of one type, oldest first (ADR 0031). */
+async function serviceNames(slug: string) {
+  const { results } = await env.DB.prepare(
+    'SELECT name FROM credentials WHERE slug = ? ORDER BY created_at, id',
+  )
+    .bind(slug)
+    .all<{ name: string }>();
+  return results.map((row) => row.name);
+}
+
 const CUSTOM_FORM = {
   template: 'custom',
   base_url: 'https://api.example.com/v1',
@@ -287,8 +297,8 @@ describe('token list', () => {
 
   it('keeps the key filter in the status links and the search', async () => {
     const admin = await sessionFor('admin');
-    await createCustom(admin, { slug: 'api-0' });
-    await createCustom(admin, { slug: 'api-1' });
+    await createCustom(admin, { slug: 'api-0', base_url: 'https://api-0.example.com/v1' });
+    await createCustom(admin, { slug: 'api-1', base_url: 'https://api-1.example.com/v1' });
     await env.DB.prepare("UPDATE credentials SET enabled = 0 WHERE slug = 'api-1'").run();
     const kid = await kekKid();
     const html = await (await adminGet(app, admin, `/admin/credentials?key=${kid}`)).text();
@@ -410,11 +420,11 @@ describe('create', () => {
     expect(page).not.toContain(SECRET);
   });
 
-  it('derives a free slug and name on a clash; a template card has no slug or name fields', async () => {
+  it('a second credential of a template joins its type; a template card has no slug or name fields', async () => {
     const admin = await sessionFor('admin');
     await createOpenAi(admin);
     await createOpenAi(admin);
-    expect(await serviceRow('openai-2')).toMatchObject({ name: 'OpenAI 2' });
+    expect(await serviceNames('openai')).toEqual(['OpenAI', 'OpenAI 2']);
     const form = await (
       await adminGet(app, admin, '/admin/credentials/new?template=openai')
     ).text();
@@ -422,8 +432,17 @@ describe('create', () => {
     expect(form).not.toContain('id="f-openai-name"');
 
     await createOpenAi(admin, { slug: 'typed', name: 'Typed' });
-    expect(await serviceRow('openai-3')).toMatchObject({ name: 'OpenAI 3' });
+    expect(await serviceNames('openai')).toEqual(['OpenAI', 'OpenAI 2', 'OpenAI 3']);
     expect(await serviceRow('typed')).toBeNull();
+  });
+
+  it('a credential of another destination never joins a type: its default slug moves on', async () => {
+    const admin = await sessionFor('admin');
+    await createCustom(admin, { base_url: 'https://api.example.com/v1' });
+    await createCustom(admin, { base_url: 'https://api.example.com/v1' });
+    await createCustom(admin, { base_url: 'https://api.example.com/v2' });
+    expect(await serviceNames('example')).toEqual(['example', 'example 2']);
+    expect(await serviceRow('example-2')).toMatchObject({ base_url: 'https://api.example.com/v2' });
   });
 
   it('a custom token maps the per-kind fields and derives its slug from the host', async () => {
@@ -470,7 +489,7 @@ describe('create', () => {
     expect(upstream.calls).toEqual([]);
   });
 
-  it('reports a taken slug before anything is sent', async () => {
+  it('reports a slug of another destination before anything is sent', async () => {
     const admin = await sessionFor('admin');
     await createOpenAi(admin);
     const calls = upstream.calls.length;
@@ -481,7 +500,9 @@ describe('create', () => {
     });
     expect(res.status).toBe(409);
     const html = await res.text();
-    expect(html).toContain('Another credential already uses openai; leave empty to use openai-2');
+    expect(html).toContain(
+      'Credentials of type openai call https://api.openai.com/v1; leave empty to use openai-2',
+    );
     expect(html).toContain('href="#f-custom-slug"');
     expect(upstream.calls.length).toBe(calls);
   });
