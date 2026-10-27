@@ -10,8 +10,6 @@ export type AlertCode =
   | 'key_changed'
   | 'credential_malformed'
   | 'key_not_active'
-  | 'credential_expired'
-  | 'credential_expiring'
   | 'credential_missing_used'
   | 'upstream_auth'
   | 'outside_hosts'

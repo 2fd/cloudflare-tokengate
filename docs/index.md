@@ -37,6 +37,7 @@ For workflow authors who call upstream APIs from CI.
 |---|---|
 | [callers/github-actions.md](callers/github-actions.md) | The `get-token` action, audiences, claims, branch/tag/release/PR/environment examples, long jobs |
 | [callers/gitlab-ci.md](callers/gitlab-ci.md) | `id_tokens`, claims, pipeline sources, examples |
+| [callers/vercel.md](callers/vercel.md) | `getVercelOidcToken`, team and global issuer modes, environments |
 | [callers/generic-oidc.md](callers/generic-oidc.md) | Any other OIDC issuer: anchor claims, tenant pin |
 | [upstreams/slack.md](upstreams/slack.md) | Slack Web API through the gateway |
 | [upstreams/openai.md](upstreams/openai.md) | OpenAI API and SDK base URLs |

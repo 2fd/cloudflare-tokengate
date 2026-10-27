@@ -37,6 +37,7 @@ import {
   renderPageFor,
   type ShellViewer,
 } from '../render';
+import { readTheme } from '../theme';
 import { AskSomeone, NotFound, type NotFoundLinks, notFoundText } from '../views/components';
 import {
   BareLayout,
@@ -99,7 +100,7 @@ export const adminMiddleware: MiddlewareHandler<AppContext> = async (c, next) =>
   const identity = verified.identity;
   const meta = requestMeta(c.req.raw.headers);
   const requestUrl = new URL(c.req.url);
-  const resolution = await resolveLogin(deps, { ...identity, meta, host: requestUrl.hostname });
+  const resolution = await resolveLogin(deps, { ...identity, meta });
   if (!resolution.ok) {
     console.warn(
       JSON.stringify({
@@ -240,11 +241,14 @@ async function errorPage(
 ) {
   // The sign-out link lets a pending, suspended or mismatched user switch accounts.
   const signOut = loginProvider ? signOutUrl(loginProvider) : null;
+  const host = new URL(c.req.url).hostname;
+  const brand = await adminBrand(c.get('deps').env.DB, host);
   return c.html(
     <BareLayout
-      title={documentTitle('Sign-in problem', null, false)}
-      brand={await adminBrand(c.get('deps').env.DB, new URL(c.req.url).hostname)}
-      host={new URL(c.req.url).hostname}
+      title={documentTitle('Sign-in problem', null, false, brand.name)}
+      brand={brand}
+      host={host}
+      theme={readTheme(c)}
     >
       <PageHeader
         title="Sign-in problem"
@@ -291,11 +295,13 @@ async function setupPage(c: AdminContext) {
         : `set, but it signs in only requests to localhost, 127.0.0.1 or [::1], not ${host}. In production, remove it and set the Access variables.`,
     });
   }
+  const brand = await adminBrand(env.DB, host);
   return c.html(
     <BareLayout
-      title={documentTitle('Set up sign-in', null, false)}
+      title={documentTitle('Set up sign-in', null, false, brand.name)}
       host={host}
-      brand={await adminBrand(c.get('deps').env.DB, host)}
+      brand={brand}
+      theme={readTheme(c)}
     >
       <PageHeader
         title="Set up sign-in"
@@ -338,9 +344,11 @@ async function setupPage(c: AdminContext) {
 function sectionOf(pathname: string): SectionKey | null {
   for (const key of SECTION_ORDER) {
     for (const tab of SECTIONS[key].tabs) {
-      // The Overview is /admin itself: every admin path starts with it.
-      const under = tab.href !== paths.overview() && pathname.startsWith(`${tab.href}/`);
-      if (pathname === tab.href || under) return key;
+      for (const root of [tab.href, ...(tab.under ?? [])]) {
+        // The Overview is /admin itself: every admin path starts with it.
+        const under = root !== paths.overview() && pathname.startsWith(`${root}/`);
+        if (pathname === root || under) return key;
+      }
     }
   }
   return null;
@@ -454,13 +462,13 @@ const MOVED_PAGES: ReadonlyArray<{
         },
         {
           href: paths.tokenKeys(),
-          title: 'Encryption keys',
+          title: 'Rotate encryption',
           description: 'Encryption keys and re-encryption',
         },
         {
-          href: paths.signIn(),
-          title: 'Sign-in',
-          description: 'Admin hosts and the login provider',
+          href: paths.users({ hash: 'login' }),
+          title: 'Members',
+          description: 'New people and the login provider',
         },
         {
           href: paths.overview({ hash: 'health' }),

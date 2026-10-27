@@ -6,6 +6,7 @@
 import type { Service } from '../db/types';
 import { canonicalJson } from '../lib/json';
 import type { Injection, ProxyMethod, Rule, VerifyCheck } from '../policy/types';
+import type { VerifyIdentity } from './ops/verify';
 
 /** Stands for the repository (`acme/api`) in an operation preset path. */
 export const REPO_PLACEHOLDER = '{repo}';
@@ -47,8 +48,8 @@ export interface ServiceTemplate {
   secret: TemplateSecret;
   /** Templates that take the same secret (rotate offers to replace it in the others too). */
   family?: 'github';
-  /** The upstream reports the secret's expiry on the check (GitHub): no expiry field is asked. */
-  expiry_from_check: boolean;
+  /** The check also reads who the secret belongs to; a credential created without a name takes it. */
+  identity?: VerifyIdentity;
   /** Suggested slug and display name. */
   slug: string;
   name: string;
@@ -71,7 +72,7 @@ const GITHUB_SECRET: TemplateSecret = {
   label: 'Personal access token',
   placeholder:
     'github_pat_00XXXXXXXXXXXXXXXXXXXX_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
-  hint: 'Fine-grained token limited to the needed repositories (classic ghp_… also works). Its expiry is read from GitHub.',
+  hint: 'Fine-grained token limited to the needed repositories (classic ghp_… also works).',
 };
 
 /** Deeply frozen: forms prefill from these shared objects and must copy before editing. */
@@ -87,7 +88,6 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
       placeholder: 'xoxb-0000000000-0000000000000-XXXXXXXXXXXXXXXXXXXXXXXX',
       hint: 'Bot User OAuth Token from api.slack.com/apps › OAuth & Permissions. Starts with xoxb-.',
     },
-    expiry_from_check: false,
     slug: 'slack',
     name: 'Slack',
     base_url: 'https://slack.com/api',
@@ -97,6 +97,7 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
     // auth.test returns HTTP 200 with {"ok": false} for a bad token.
     // https://docs.slack.dev/reference/methods/auth.test
     verify: { method: 'POST', path: '/auth.test', expect_status: 200, expect_ok_field: true },
+    identity: 'slack-bot',
     operation_presets: [
       preset('post-message', 'Post messages', true, ['POST', '/chat.postMessage']),
       // Files go to an upload URL on files.slack.com, which needs no token; these two calls do.
@@ -126,7 +127,6 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
       url_prefixes: ['https://hooks.slack.com/services/'],
       pattern: 'https://hooks\\.slack\\.com/services/[^\\/\\s]+(\\/[^\\/\\s]+)+',
     },
-    expiry_from_check: false,
     slug: 'slack-webhook',
     name: 'Slack webhook',
     base_url: 'https://hooks.slack.com/services',
@@ -154,7 +154,6 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
       url_prefixes: ['https://discord.com/api/webhooks/', 'https://discordapp.com/api/webhooks/'],
       pattern: 'https://(discord|discordapp)\\.com/api/webhooks/[0-9]+/[A-Za-z0-9_\\-]+',
     },
-    expiry_from_check: false,
     slug: 'discord-webhook',
     name: 'Discord webhook',
     base_url: 'https://discord.com/api/webhooks',
@@ -181,7 +180,6 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
       placeholder: 'sk-proj-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
       hint: 'Project API key from platform.openai.com › API keys.',
     },
-    expiry_from_check: false,
     slug: 'openai',
     name: 'OpenAI',
     base_url: 'https://api.openai.com/v1',
@@ -208,7 +206,6 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
       placeholder: 'sk-ant-api03-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
       hint: 'API key from console.anthropic.com › API keys.',
     },
-    expiry_from_check: false,
     slug: 'anthropic',
     name: 'Anthropic',
     // Without /v1: the Anthropic SDKs add /v1 to every path themselves.
@@ -239,15 +236,14 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
     card_summary: 'api.github.com · personal access token github_pat_… or ghp_…',
     secret: GITHUB_SECRET,
     family: 'github',
-    expiry_from_check: true,
     slug: 'github',
     name: 'GitHub',
     base_url: 'https://api.github.com',
     injection: { kind: 'bearer' },
     forward_headers: ['x-github-api-version'],
     timeout_ms: 60_000,
-    // /rate_limit needs no permissions, works with every credential type and returns the token expiry
-    // header. https://docs.github.com/en/rest/rate-limit/rate-limit
+    // /rate_limit needs no permissions and works with every credential type.
+    // https://docs.github.com/en/rest/rate-limit/rate-limit
     verify: { method: 'GET', path: '/rate_limit', expect_status: 200 },
     operation_presets: [
       preset('read-repo', 'Read repository contents', true, ['GET', '/repos/{repo}/**']),
@@ -264,7 +260,6 @@ export const SERVICE_TEMPLATES: readonly ServiceTemplate[] = deepFreeze([
     card_summary: 'uploads.github.com · the same token as GitHub REST API',
     secret: GITHUB_SECRET,
     family: 'github',
-    expiry_from_check: true,
     slug: 'github-uploads',
     name: 'GitHub uploads',
     base_url: 'https://uploads.github.com',
@@ -314,6 +309,12 @@ export function templateIdFor(baseUrl: string, injectionJson: string): string | 
         template.base_url === baseUrl && canonicalJson(template.injection) === injectionJson,
     )?.id ?? null
   );
+}
+
+/** The identity the check of this destination reads (templateIdFor), else null. */
+export function identityFor(baseUrl: string, injectionJson: string): VerifyIdentity | null {
+  const id = templateIdFor(baseUrl, injectionJson);
+  return (id === null ? null : getServiceTemplate(id)?.identity) ?? null;
 }
 
 /** True when two templates take the same secret (same id or same family). */

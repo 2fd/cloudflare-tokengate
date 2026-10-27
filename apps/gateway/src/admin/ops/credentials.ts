@@ -29,12 +29,7 @@ import {
   updateServiceCredentialStatement,
   updateServiceFieldsStatement,
 } from '../../db/credentials';
-import {
-  getAdminHosts,
-  getAllowedUpstreamHosts,
-  getState,
-  recordKeyCheckValueStatement,
-} from '../../db/settings';
+import { getAllowedUpstreamHosts, getState, recordKeyCheckValueStatement } from '../../db/settings';
 import type { Actor, CredentialAccessRule, Service } from '../../db/types';
 import type { Deps } from '../../deps';
 import { newId } from '../../lib/ids';
@@ -46,13 +41,17 @@ import {
   validateBaseUrl,
   validateServiceFields,
 } from '../../policy/validate';
-import { getServiceTemplate, templateIdFor } from '../service-templates';
+import {
+  getServiceTemplate,
+  identityFor,
+  templateForService,
+  templateIdFor,
+} from '../service-templates';
 import {
   allOf,
   booleanErrors,
   commitOrConstraintFailure,
   concurrentChange,
-  descriptionErrors,
   type FieldError,
   fieldError,
   nextVersion,
@@ -60,24 +59,18 @@ import {
   opFailure,
   pick,
   staleEdit,
-  timestampErrors,
   trimmed,
 } from './shared';
 import { runVerifyCheck, type VerifyOutcome } from './verify';
 
 /** Request-derived inputs of service validation. */
 export interface OpContext {
-  /** Hostname of the current request; base URLs may not point at it or at the admin hosts. */
+  /** Hostname of the current request; base URLs may not point at it (I-SSRF-1). */
   requestHost: string;
 }
 
 export function opContextFor(requestUrl: URL): OpContext {
   return { requestHost: requestUrl.hostname };
-}
-
-/** The admin hosts and the request host: base URLs may not point at this gateway (I-SSRF-1). */
-async function gatewayHosts(db: D1Database, context: OpContext): Promise<string[]> {
-  return [...((await getAdminHosts(db)) ?? []), context.requestHost];
 }
 
 export const DEFAULT_TIMEOUT_MS = 120_000;
@@ -102,14 +95,14 @@ export type CredentialOpResult =
 export interface ServiceCreateInput {
   slug: string;
   name: string;
-  description?: string;
   base_url: string;
   injection: unknown;
   forward_headers?: string[];
   timeout_ms?: number;
   verify?: VerifyCheck | null;
   enabled?: boolean;
-  credential_expires_at?: number | null;
+  /** The route made up `name`: the verify check's identity (the Slack bot name) replaces it. */
+  name_from_check?: boolean;
   /** Optional initial credential; empty means none. */
   secret?: string | null;
   /** Store the credential even if the verify check fails. */
@@ -158,7 +151,7 @@ async function planCreate(
   const db = deps.env.DB;
   const errors: string[] = [];
   const base = validateBaseUrl(input.base_url, {
-    gatewayHosts: await gatewayHosts(db, context),
+    gatewayHosts: [context.requestHost],
     allowedUpstreamHosts: options.hostAllowed ? null : await getAllowedUpstreamHosts(db),
   });
   if (!base.ok) errors.push(base.error);
@@ -174,9 +167,7 @@ async function planCreate(
     verify,
   });
   errors.push(...fields.errors);
-  errors.push(...descriptionErrors(input.description));
   errors.push(...booleanErrors('enabled', input.enabled));
-  errors.push(...timestampErrors('credential expiry', input.credential_expires_at));
 
   const secretText = typeof input.secret === 'string' ? input.secret : '';
   const credential =
@@ -240,6 +231,7 @@ export async function createService(
             injection: plan.injection,
             timeout_ms: input.timeout_ms ?? DEFAULT_TIMEOUT_MS,
             verify: plan.verify,
+            identity: identityFor(plan.base, plan.injectionJson),
           },
           credential.value,
         )
@@ -255,11 +247,12 @@ export async function createService(
     };
   }
 
+  const identity = input.name_from_check === true ? (sealed?.verify?.identity ?? null) : null;
   const row = {
     id,
     slug: input.slug,
-    name: input.name.trim(),
-    description: (input.description ?? '').trim(),
+    name: identity ?? input.name.trim(),
+    name_from_check: identity !== null,
     base_url: plan.base,
     injection_json: plan.injectionJson,
     forward_headers: input.forward_headers ?? [],
@@ -267,7 +260,6 @@ export async function createService(
     credential_sealed: sealed?.sealed ?? null,
     credential_hint: sealed?.hint ?? null,
     credential_updated_at: sealed ? now : null,
-    credential_expires_at: input.credential_expires_at ?? sealed?.verify?.expiresAt ?? null,
     verify: plan.verify,
     template_id: templateIdFor(plan.base, plan.injectionJson),
     enabled: input.enabled ?? true,
@@ -370,8 +362,6 @@ const FIELD_PREFIXES: ReadonlyArray<readonly [prefix: string, field: string]> = 
   ['base URL', 'base_url'],
   ['slug', 'slug'],
   ['name', 'name'],
-  ['description', 'description'],
-  ['credential expiry', 'credential_expires_at'],
   ['credential', 'credential'],
   ['timeout', 'timeout_ms'],
   ['verify method', 'verify_method'],
@@ -403,12 +393,11 @@ export type ServiceFieldsInput = Partial<ServiceFields> & {
 /** The only keys updateServiceFields accepts; anything else (base_url, injection, slug, …) is refused. */
 const UPDATABLE_FIELDS: ReadonlyArray<keyof ServiceFields> = [
   'name',
-  'description',
   'forward_headers',
   'timeout_ms',
   'verify',
   'enabled',
-  'credential_expires_at',
+  'name_from_check',
 ];
 const INPUT_KEYS: readonly string[] = [...UPDATABLE_FIELDS, 'expected_updated_at'];
 
@@ -437,16 +426,16 @@ export async function updateServiceFields(
 
   const next: ServiceFields = {
     name: input.name !== undefined ? trimmed(input.name) : existing.name,
-    description:
-      input.description !== undefined ? trimmed(input.description) : existing.description,
     forward_headers: input.forward_headers ?? existing.forward_headers,
     timeout_ms: input.timeout_ms ?? existing.timeout_ms,
     verify: input.verify !== undefined ? normalizeVerify(input.verify) : existing.verify,
     enabled: input.enabled ?? existing.enabled,
-    credential_expires_at:
-      input.credential_expires_at !== undefined
-        ? input.credential_expires_at
-        : existing.credential_expires_at,
+    // A name typed by hand stops following the check.
+    name_from_check:
+      input.name_from_check ??
+      (input.name !== undefined && trimmed(input.name) !== existing.name
+        ? false
+        : existing.name_from_check),
   };
   const validation = validateServiceFields({
     slug: existing.slug,
@@ -456,12 +445,8 @@ export async function updateServiceFields(
     injection: existing.injection,
     verify: next.verify,
   });
-  const errors = [
-    ...validation.errors,
-    ...descriptionErrors(next.description),
-    ...timestampErrors('credential expiry', next.credential_expires_at),
-  ];
-  if (errors.length > 0) return opFailure('invalid', errors, validation.warnings);
+  if (validation.errors.length > 0)
+    return opFailure('invalid', validation.errors, validation.warnings);
 
   const changed = (Object.keys(next) as Array<keyof ServiceFields>).filter(
     (key) => canonicalJson(next[key]) !== canonicalJson(existing[key]),
@@ -558,8 +543,6 @@ export interface ServiceCredentialInput {
   injection: unknown;
   secret: string;
   save_anyway?: boolean;
-  /** Overrides the expiry; default: GitHub's reported expiry, else none. */
-  credential_expires_at?: number | null;
   /**
    * Host of `base_url`, typed by the admin. Required when no credential is stored, or when the
    * stored credential does not open under the stored row: in both cases the stored destination
@@ -609,11 +592,21 @@ async function planCredential(
 
   const errors: string[] = [];
   const base = validateBaseUrl(input.base_url, {
-    gatewayHosts: await gatewayHosts(deps.env.DB, context),
+    gatewayHosts: [context.requestHost],
     allowedUpstreamHosts: options.hostAllowed ? null : await getAllowedUpstreamHosts(deps.env.DB),
   });
   if (!base.ok) errors.push(base.error);
   const injection = normalizeInjection(input.injection);
+  // A type's destination is fixed: its secret is only ever set for the type's own destination.
+  const fixed = templateForService(existing);
+  if (
+    fixed &&
+    base.ok &&
+    injection.ok &&
+    (base.normalized !== fixed.base_url || injection.json !== canonicalJson(fixed.injection))
+  ) {
+    errors.push(`base URL: a ${fixed.label} credential always calls ${fixed.base_url}`);
+  }
   const fields = validateServiceFields({
     slug: existing.slug,
     name: existing.name,
@@ -623,7 +616,6 @@ async function planCredential(
     verify: existing.verify,
   });
   errors.push(...fields.errors);
-  errors.push(...timestampErrors('credential expiry', input.credential_expires_at));
   const credential =
     injection.ok && options.withoutSecret !== true
       ? normalizeCredential(
@@ -729,6 +721,7 @@ export async function setServiceCredential(
           injection: plan.injection,
           timeout_ms: existing.timeout_ms,
           verify: existing.verify,
+          identity: identityFor(plan.base, plan.injectionJson),
         },
         credential.value,
       )
@@ -744,7 +737,6 @@ export async function setServiceCredential(
     injection_json: plan.injectionJson,
     credential_sealed: sealed,
     credential_hint: credential.hint,
-    credential_expires_at: input.credential_expires_at ?? verify?.expiresAt ?? null,
     template_id: templateIdFor(plan.base, plan.injectionJson),
   };
   const now = deps.now();
@@ -806,8 +798,6 @@ export async function setServiceCredential(
 export interface ServiceRotateInput {
   secret: string;
   save_anyway?: boolean;
-  /** Overrides the expiry; default: GitHub's reported expiry, else none. */
-  credential_expires_at?: number | null;
   /** Ids of tokens to replace the same secret in (rotationSiblings), each re-checked here. */
   siblings?: readonly string[];
   /**
@@ -870,13 +860,23 @@ export async function rotateServiceSecret(
       injection: existing.injection,
       secret: input.secret,
       save_anyway: input.save_anyway,
-      credential_expires_at: input.credential_expires_at,
       // Re-checked on the row setServiceCredential reads, whose binding its CAS guard pins.
       expected_destination: await destinationFingerprint(existing),
     },
     context,
   );
   if (!main.ok) return main;
+  // The new token may belong to another bot: a name read from the check follows it.
+  let service = main.service;
+  const identity = main.verify?.identity ?? null;
+  if (existing.name_from_check && identity !== null && identity !== existing.name) {
+    const renamed = await updateServiceFields(deps, actor, serviceId, {
+      name: identity,
+      name_from_check: true,
+      expected_updated_at: main.service.updated_at,
+    });
+    if (renamed.ok) service = renamed.service;
+  }
   const siblings: Array<{ id: string; slug: string; ok: boolean; error?: string }> = [];
   for (const siblingId of input.siblings ?? []) {
     if (siblingId === serviceId) continue;
@@ -908,8 +908,6 @@ export async function rotateServiceSecret(
         injection: sibling.injection,
         secret: input.secret,
         save_anyway: input.save_anyway,
-        // The same secret expires at the same time.
-        credential_expires_at: main.service.credential_expires_at,
       },
       context,
     );
@@ -919,7 +917,7 @@ export async function rotateServiceSecret(
         : { id: sibling.id, slug: sibling.slug, ok: false, error: result.errors.join('; ') },
     );
   }
-  return { ...main, siblings };
+  return { ...main, service, siblings };
 }
 
 /**
@@ -985,7 +983,7 @@ export async function testServiceCredential(
   actor: Actor,
   serviceId: string,
   context: OpContext,
-): Promise<{ ok: true; verify: VerifyOutcome; expirySaved: boolean } | OpFailure> {
+): Promise<{ ok: true; verify: VerifyOutcome; nameSaved: boolean } | OpFailure> {
   const service = await getService(deps.env.DB, serviceId);
   if (!service) return opFailure('not_found', ['service not found']);
   const check = service.verify;
@@ -994,7 +992,7 @@ export async function testServiceCredential(
 
   // Same use-time checks as the proxy: the stored row is not trusted (I-SSRF-1, I-CRED-2).
   const base = validateBaseUrl(service.base_url, {
-    gatewayHosts: await gatewayHosts(deps.env.DB, context),
+    gatewayHosts: [context.requestHost],
     allowedUpstreamHosts: await getAllowedUpstreamHosts(deps.env.DB),
   });
   if (!base.ok) return opFailure('unavailable', [`stored ${base.error}`]);
@@ -1033,6 +1031,7 @@ export async function testServiceCredential(
       injection: injection.injection,
       timeout_ms: service.timeout_ms,
       verify: check,
+      identity: identityFor(service.base_url, service.injection_json),
     },
     secret.plaintext,
   );
@@ -1044,17 +1043,18 @@ export async function testServiceCredential(
       ...verifyAuditView(verify),
     }),
   );
-  // The upstream reports the secret's expiry (GitHub): keep the stored one current, as its own
-  // audited change. A concurrent edit wins silently; the result still renders.
-  let expirySaved = false;
-  if (verify.expiresAt !== null && verify.expiresAt !== service.credential_expires_at) {
+  // A name read from the check (the Slack bot name) follows a rename upstream, as its own audited
+  // change; a name typed by hand is kept. A concurrent edit wins silently; the result still renders.
+  let nameSaved = false;
+  if (service.name_from_check && verify.identity !== null && verify.identity !== service.name) {
     const saved = await updateServiceFields(deps, actor, service.id, {
-      credential_expires_at: verify.expiresAt,
+      name: verify.identity,
+      name_from_check: true,
       expected_updated_at: service.updated_at,
     });
-    expirySaved = saved.ok && saved.changed === true;
+    nameSaved = saved.ok && saved.changed === true;
   }
-  return { ok: true, verify, expirySaved };
+  return { ok: true, verify, nameSaved };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1313,7 +1313,6 @@ function credentialAuditView(service: {
   credential_sealed: string | null;
   credential_hint: string | null;
   credential_updated_at: number | null;
-  credential_expires_at: number | null;
 }): Record<string, unknown> {
   return {
     base_url: service.base_url,
@@ -1321,7 +1320,6 @@ function credentialAuditView(service: {
     credential_hint: service.credential_hint,
     credential_kid: sealedKid(service.credential_sealed),
     credential_updated_at: service.credential_updated_at,
-    credential_expires_at: service.credential_expires_at,
   };
 }
 

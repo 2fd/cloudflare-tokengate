@@ -122,6 +122,23 @@ describe('FormStep', () => {
     expect(done).toContain('<span class="vh">Step 1, done: </span>');
   });
 
+  it('renders the failed and todo states of a tracked flow', () => {
+    const failed = render(
+      <FormStep n={2} title="T" state="failed">
+        x
+      </FormStep>,
+    );
+    expect(failed).toMatch(/^<li class="fstep is-failed" aria-current="step">/);
+    expect(failed).toContain('<span class="vh">Step 2, failed: </span>');
+    const todo = render(
+      <FormStep n={3} title="T" state="todo">
+        x
+      </FormStep>,
+    );
+    expect(todo).toMatch(/^<li class="fstep is-todo">/);
+    expect(todo).toContain('<span class="vh">Step 3: </span>');
+  });
+
   it('escapes the title', () => {
     expect(
       render(

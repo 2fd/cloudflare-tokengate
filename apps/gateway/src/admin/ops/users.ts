@@ -80,7 +80,7 @@ export type InviteResult =
   | { ok: true; user: User; again: boolean; auditId: string }
   | (OpFailure & { existingUserId?: string });
 
-/** "Active", "Invitation expired", …: the status as the People list shows it. */
+/** "Active", "Invitation expired", …: the status as the Members list shows it. */
 export function userStatusText(user: Pick<User, 'status' | 'invite_expires_at'>, now: number) {
   switch (user.status) {
     case 'active':

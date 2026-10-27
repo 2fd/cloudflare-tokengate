@@ -28,6 +28,8 @@ import {
 const SECRET = 'confirm-secret-0123456789abcdef';
 const VERIFY = { method: 'GET' as const, path: '/rate_limit', expect_status: 200 };
 const ATTACKER = 'https://attacker.example';
+/** A credential without a type: a typed one only ever takes its type's destination. */
+const CUSTOM = { slug: 'custom', base_url: 'https://api.example.com' };
 
 async function repoint(id: string): Promise<void> {
   await env.DB.prepare('UPDATE credentials SET base_url = ? WHERE id = ?').bind(ATTACKER, id).run();
@@ -42,11 +44,11 @@ describe('I-CRED-2: re-entering a credential after a D1 repoint needs a confirme
   it('refuses before the verify check when the stored credential no longer opens', async () => {
     const network = fakeNetwork();
     const deps = opsDeps({ fetch: network.fetch });
-    const id = await seedService(deps, { secret: SECRET, verify: VERIFY });
+    const id = await seedService(deps, { ...CUSTOM, secret: SECRET, verify: VERIFY });
     await repoint(id);
     const audits = (await auditRows(id)).length;
 
-    for (const confirm of [undefined, '', 'api.github.com']) {
+    for (const confirm of [undefined, '', 'api.example.com']) {
       const result = await setServiceCredential(
         deps,
         ACTOR,
@@ -70,7 +72,7 @@ describe('I-CRED-2: re-entering a credential after a D1 repoint needs a confirme
   it('saves once the typed host matches, and the audit row reports the destination', async () => {
     const network = fakeNetwork();
     const deps = opsDeps({ fetch: network.fetch });
-    const id = await seedService(deps, { secret: SECRET, verify: VERIFY });
+    const id = await seedService(deps, { ...CUSTOM, secret: SECRET, verify: VERIFY });
     await repoint(id);
 
     const result = await setServiceCredential(
@@ -78,10 +80,10 @@ describe('I-CRED-2: re-entering a credential after a D1 repoint needs a confirme
       ACTOR,
       id,
       {
-        base_url: 'https://api.github.com',
+        base_url: 'https://api.example.com',
         injection: { kind: 'bearer' },
         secret: SECRET,
-        confirm_destination: ' API.GitHub.com ',
+        confirm_destination: ' API.Example.com ',
       },
       CONTEXT,
     );
@@ -89,15 +91,15 @@ describe('I-CRED-2: re-entering a credential after a D1 repoint needs a confirme
     expect(sentTo(network.calls, ATTACKER)).toEqual([]);
     const audit = (await auditRows(id)).at(-1);
     expect(audit?.action).toBe('service.credential.set');
-    expect(audit?.summary).toContain('set its destination to https://api.github.com');
+    expect(audit?.summary).toContain('set its destination to https://api.example.com');
     expect(audit?.summary).toContain('credential_binding_mismatch');
     expect(audit?.diff).toMatchObject({
       before: { base_url: ATTACKER },
-      after: { base_url: 'https://api.github.com' },
+      after: { base_url: 'https://api.example.com' },
       stored_binding: {
         attested: false,
         error: 'credential_binding_mismatch',
-        confirmed_destination: 'api.github.com',
+        confirmed_destination: 'api.example.com',
       },
     });
   });
@@ -111,7 +113,7 @@ describe('I-CRED-2: re-entering a credential after a D1 repoint needs a confirme
   ])('also requires the confirmation for a %s stored credential', async (_, sql) => {
     const network = fakeNetwork();
     const deps = opsDeps({ fetch: network.fetch });
-    const id = await seedService(deps, { secret: SECRET, verify: VERIFY });
+    const id = await seedService(deps, { ...CUSTOM, secret: SECRET, verify: VERIFY });
     await env.DB.prepare(sql).bind(ATTACKER, id).run();
     const result = await setServiceCredential(
       deps,
@@ -127,7 +129,7 @@ describe('I-CRED-2: re-entering a credential after a D1 repoint needs a confirme
   it('also requires the confirmation when no credential is stored (a row inserted in D1)', async () => {
     const network = fakeNetwork();
     const deps = opsDeps({ fetch: network.fetch });
-    const id = await seedService(deps, { verify: VERIFY });
+    const id = await seedService(deps, { ...CUSTOM, verify: VERIFY });
     await repoint(id);
     const input = { base_url: ATTACKER, injection: { kind: 'bearer' }, secret: SECRET };
     const refused = await setServiceCredential(deps, ACTOR, id, input, CONTEXT);
@@ -137,7 +139,7 @@ describe('I-CRED-2: re-entering a credential after a D1 repoint needs a confirme
       deps,
       ACTOR,
       id,
-      { ...input, base_url: 'https://api.github.com', confirm_destination: 'api.github.com' },
+      { ...input, base_url: 'https://api.example.com', confirm_destination: 'api.example.com' },
       CONTEXT,
     );
     expect(saved.ok).toBe(true);
@@ -146,15 +148,58 @@ describe('I-CRED-2: re-entering a credential after a D1 repoint needs a confirme
 
   it('needs no confirmation while the stored credential opens', async () => {
     const deps = opsDeps();
-    const id = await seedService(deps, { secret: SECRET, verify: VERIFY });
+    const id = await seedService(deps, { ...CUSTOM, secret: SECRET, verify: VERIFY });
     const result = await setServiceCredential(
       deps,
       ACTOR,
       id,
-      { base_url: 'https://api.github.com', injection: { kind: 'bearer' }, secret: SECRET },
+      { base_url: 'https://api.example.com', injection: { kind: 'bearer' }, secret: SECRET },
       CONTEXT,
     );
     expect(result.ok).toBe(true);
+  });
+
+  it('a template credential repointed in D1 takes its secret only for its own destination', async () => {
+    const network = fakeNetwork();
+    const deps = opsDeps({ fetch: network.fetch });
+    const id = await seedService(deps, { secret: SECRET, verify: VERIFY });
+    expect((await getService(env.DB, id))?.template_id).toBe('github');
+    await repoint(id);
+    const input = { injection: { kind: 'bearer' }, secret: SECRET };
+    expect(
+      await setServiceCredential(
+        deps,
+        ACTOR,
+        id,
+        { ...input, base_url: ATTACKER, confirm_destination: 'attacker.example' },
+        CONTEXT,
+      ),
+    ).toMatchObject({
+      ok: false,
+      reason: 'invalid',
+      errors: expect.arrayContaining([
+        'base URL: a GitHub REST API credential always calls https://api.github.com',
+      ]),
+    });
+    expect(
+      await setServiceCredential(
+        deps,
+        ACTOR,
+        id,
+        { ...input, base_url: 'https://api.github.com' },
+        CONTEXT,
+      ),
+    ).toMatchObject({ ok: false, reason: 'confirmation_required' });
+    expect(sentTo(network.calls, ATTACKER)).toEqual([]);
+    const saved = await setServiceCredential(
+      deps,
+      ACTOR,
+      id,
+      { ...input, base_url: 'https://api.github.com', confirm_destination: 'api.github.com' },
+      CONTEXT,
+    );
+    expect(saved.ok).toBe(true);
+    expect((await getService(env.DB, id))?.base_url).toBe('https://api.github.com');
   });
 });
 
@@ -164,10 +209,11 @@ describe('I-CRED-2: the service page flags an unattested destination', () => {
   it('shows an error banner, does not prefill the tampered destination, and asks for the host', async () => {
     const network = fakeNetwork();
     const app = createAdminWorldApp(network.fetch);
-    const world = await seedAdminWorld(app);
+    await seedAdminWorld(app);
+    const id = await seedService(app.deps, { ...CUSTOM, secret: SECRET, verify: VERIFY });
     const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
-    await repoint(world.serviceId);
-    const path = `/admin/credentials/${world.serviceId}`;
+    await repoint(id);
+    const path = `/admin/credentials/${id}`;
 
     const page = await (await adminGet(app, session, path)).text();
     expect(page).toContain('was changed outside the admin UI');
@@ -187,7 +233,7 @@ describe('I-CRED-2: the service page flags an unattested destination', () => {
     // No rotate form: rotating keeps the stored destination, which nothing attests now.
     expect(page).not.toContain(`action="${path}/secret"`);
 
-    const fields = { base_url: ATTACKER, injection_kind: 'bearer', credential: WORLD_SECRET };
+    const fields = { base_url: ATTACKER, injection_kind: 'bearer', credential: SECRET };
     const refused = await adminPost(app, session, `${path}/destination`, fields);
     expect(refused.status).toBe(422);
     const refusedHtml = await refused.text();
@@ -195,24 +241,62 @@ describe('I-CRED-2: the service page flags an unattested destination', () => {
     // The typed host is never prefilled, not even on the re-render.
     expect(refusedHtml).toMatch(/name="confirm_destination"[^>]*value=""/);
     expect(sentTo(network.calls, ATTACKER)).toEqual([]);
-    const current = await getService(env.DB, world.serviceId);
+    const current = await getService(env.DB, id);
     if (!current) throw new Error('service missing');
     const secretAt = await adminPost(app, session, `${path}/secret`, {
       expected_destination: await destinationFingerprint(current),
-      credential: WORLD_SECRET,
+      credential: SECRET,
     });
     expect(secretAt.status).toBe(422);
     expect(sentTo(network.calls, ATTACKER)).toEqual([]);
 
     const saved = await adminPost(app, session, `${path}/destination`, {
       ...fields,
-      base_url: 'https://api.github.com',
-      confirm_destination: 'api.github.com',
+      base_url: 'https://api.example.com',
+      confirm_destination: 'api.example.com',
     });
     expect(saved.status).toBe(303);
     const after = await (await adminGet(app, session, path)).text();
     expect(after).not.toContain('was changed outside the admin UI');
     expect(after).not.toContain('name="confirm_destination"');
+  });
+
+  it('a template credential: asks for its own host only, and sets the secret for it', async () => {
+    const network = fakeNetwork();
+    const app = createAdminWorldApp(network.fetch);
+    const world = await seedAdminWorld(app);
+    const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
+    await repoint(world.serviceId);
+    const path = `/admin/credentials/${world.serviceId}`;
+
+    const page = await (await adminGet(app, session, path)).text();
+    expect(page).toContain('was changed outside the admin UI');
+    expect(page).toContain('Credential unreadable');
+    expect(page).toMatch(/<details[^>]*id="destination-edit"[^>]*open=""/);
+    const form =
+      new RegExp(`<form[^>]*action="${path}/destination"[\\s\\S]*?</form>`).exec(page)?.[0] ?? '';
+    expect(form).toContain('name="confirm_destination"');
+    expect(form).toContain('Type api.github.com, the host the secret is sent to.');
+    // The type's destination is fixed: no base URL or injection to type, none prefilled.
+    expect(form).not.toContain('name="base_url"');
+    expect(form).not.toContain('name="injection_kind"');
+    expect(page).not.toContain(`action="${path}/secret"`);
+
+    // A posted base URL is ignored: the host to confirm is the type's.
+    const fields = { base_url: ATTACKER, injection_kind: 'bearer', credential: WORLD_SECRET };
+    const refused = await adminPost(app, session, `${path}/destination`, {
+      ...fields,
+      confirm_destination: 'attacker.example',
+    });
+    expect(refused.status).toBe(422);
+    expect(sentTo(network.calls, ATTACKER)).toEqual([]);
+    const saved = await adminPost(app, session, `${path}/destination`, {
+      ...fields,
+      confirm_destination: 'api.github.com',
+    });
+    expect(saved.status).toBe(303);
+    expect((await getService(env.DB, world.serviceId))?.base_url).toBe('https://api.github.com');
+    expect(sentTo(network.calls, ATTACKER)).toEqual([]);
   });
 
   it('shows no banner for an intact service', async () => {
@@ -259,13 +343,15 @@ describe('I-CRED-2: a token without a stored secret confirms its destination fir
 describe('I-CRED-2: a sealed draft never stands in for the confirmation', () => {
   beforeEach(resetAdminWorld);
 
+  /** A custom credential (a typed one never takes a posted base URL), repointed in D1. */
   async function unattestedWorld() {
     const network = fakeNetwork();
     const app = createAdminWorldApp(network.fetch);
-    const world = await seedAdminWorld(app);
+    await seedAdminWorld(app);
+    const id = await seedService(app.deps, { ...CUSTOM, secret: SECRET, verify: VERIFY });
     const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
-    await repoint(world.serviceId);
-    return { network, app, session, path: `/admin/credentials/${world.serviceId}/destination` };
+    await repoint(id);
+    return { network, app, session, path: `/admin/credentials/${id}/destination` };
   }
 
   const draftOf = (html: string) => /name="credential_draft" value="([^"]+)"/.exec(html)?.[1] ?? '';
@@ -273,18 +359,18 @@ describe('I-CRED-2: a sealed draft never stands in for the confirmation', () => 
   it('a resubmit with only the draft is refused until the host is typed', async () => {
     const { network, app, session, path } = await unattestedWorld();
     const seeded = network.calls.length;
-    const github = { base_url: 'https://api.github.com', injection_kind: 'bearer' };
-    const first = await adminPost(app, session, path, { ...github, credential: WORLD_SECRET });
+    const custom = { base_url: 'https://api.example.com', injection_kind: 'bearer' };
+    const first = await adminPost(app, session, path, { ...custom, credential: SECRET });
     expect(first.status).toBe(422);
     const draft = draftOf(await first.text());
     expect(draft).toMatch(/^cd1\./);
-    const again = await adminPost(app, session, path, { ...github, credential_draft: draft });
+    const again = await adminPost(app, session, path, { ...custom, credential_draft: draft });
     expect(again.status).toBe(422);
     expect(network.calls.slice(seeded)).toEqual([]);
     const saved = await adminPost(app, session, path, {
-      ...github,
+      ...custom,
       credential_draft: draft,
-      confirm_destination: 'api.github.com',
+      confirm_destination: 'api.example.com',
     });
     expect(saved.status).toBe(303);
   });
@@ -292,9 +378,9 @@ describe('I-CRED-2: a sealed draft never stands in for the confirmation', () => 
   it('a draft sealed for one base URL is refused for another, and nothing is sent', async () => {
     const { network, app, session, path } = await unattestedWorld();
     const first = await adminPost(app, session, path, {
-      base_url: 'https://api.github.com',
+      base_url: 'https://api.example.com',
       injection_kind: 'bearer',
-      credential: WORLD_SECRET,
+      credential: SECRET,
     });
     const draft = draftOf(await first.text());
     const moved = await adminPost(app, session, path, {
@@ -307,11 +393,11 @@ describe('I-CRED-2: a sealed draft never stands in for the confirmation', () => 
     expect(await moved.text()).toContain('Enter the secret again: the destination changed');
     expect(sentTo(network.calls, ATTACKER)).toEqual([]);
     const injection = await adminPost(app, session, path, {
-      base_url: 'https://api.github.com',
+      base_url: 'https://api.example.com',
       injection_kind: 'query',
       injection_param: 'token',
       credential_draft: draft,
-      confirm_destination: 'api.github.com',
+      confirm_destination: 'api.example.com',
     });
     expect(injection.status).toBe(400);
     expect(await injection.text()).toContain('the destination changed');

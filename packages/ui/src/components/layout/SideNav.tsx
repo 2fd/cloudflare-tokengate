@@ -8,12 +8,19 @@ export interface SideNavItem {
   href: string;
   /** Decorative icon for a grouped navigation row. */
   icon?: Child;
+  /** Count on the item row of a grouped navigation (credentials 6). */
+  count?: number;
   /**
    * `true` or `'page'`: this item is the current page (`aria-current="page"`). `'true'`: it holds
    * the current page, a deeper page not in the nav (`aria-current="true"`): a token detail under
    * Tokens. Both are highlighted.
    */
   current?: boolean | 'page' | 'true';
+  /**
+   * The page has something to look at (a problem, a warning or a note it shows): a dot of that
+   * tone after the label; `srSuffix` says what for screen readers (": 1 warning").
+   */
+  attention?: { tone: 'bad' | 'warn' | 'info'; srSuffix: string };
 }
 
 export interface SideNavSection {
@@ -58,23 +65,26 @@ export function SideNav({ label, sections, grouped, class: className }: SideNavP
           <section class="nav-group" aria-label={section.label}>
             <div class="nav-label">{section.label}</div>
             <ul class="nav-pages">
-              {(section.items?.length ? section.items : [section]).map((item, index) => (
-                <li>
-                  <a class="nav-item" href={item.href} aria-current={ariaCurrent(item.current)}>
-                    {item.icon ?? section.icon}
-                    <span class="nav-text">{item.label}</span>
-                    {index === 0 && section.pill ? (
-                      <span class="nav-pill">
-                        {section.pill.label}
-                        <SrSuffix text={section.pill.srSuffix} />
-                      </span>
-                    ) : null}
-                    {index === 0 && section.count !== undefined ? (
-                      <span class="nav-count">{section.count}</span>
-                    ) : null}
-                  </a>
-                </li>
-              ))}
+              {(section.items?.length ? section.items : [section]).map((item, index) => {
+                // The section's count sits on its first item unless the items carry their own.
+                const count = item.count ?? (index === 0 ? section.count : undefined);
+                return (
+                  <li>
+                    <a class="nav-item" href={item.href} aria-current={ariaCurrent(item.current)}>
+                      {item.icon ?? section.icon}
+                      <span class="nav-text">{item.label}</span>
+                      {'attention' in item ? <AttentionDot attention={item.attention} /> : null}
+                      {index === 0 && section.pill ? (
+                        <span class="nav-pill">
+                          {section.pill.label}
+                          <SrSuffix text={section.pill.srSuffix} />
+                        </span>
+                      ) : null}
+                      {count !== undefined ? <span class="nav-count">{count}</span> : null}
+                    </a>
+                  </li>
+                );
+              })}
             </ul>
           </section>
         ))}
@@ -106,6 +116,7 @@ export function SideNav({ label, sections, grouped, class: className }: SideNavP
                 <li>
                   <a href={item.href} aria-current={ariaCurrent(item.current)}>
                     {item.label}
+                    <AttentionDot attention={item.attention} />
                   </a>
                 </li>
               ))}
@@ -114,5 +125,16 @@ export function SideNav({ label, sections, grouped, class: className }: SideNavP
         </>
       ))}
     </nav>
+  );
+}
+
+/** The attention dot of an item (decorative) and what it means for screen readers, or nothing. */
+function AttentionDot(props: { attention?: SideNavItem['attention'] }) {
+  if (!props.attention) return null;
+  return (
+    <>
+      <span class={cx('dot', 'nav-dot', props.attention.tone)} aria-hidden="true"></span>
+      <SrSuffix text={props.attention.srSuffix} />
+    </>
   );
 }

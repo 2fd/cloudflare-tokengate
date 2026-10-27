@@ -47,7 +47,7 @@ describe('GET /admin on a fresh deployment', () => {
     expect(html.match(/class="btn primary"/g) ?? []).toHaveLength(1);
     expect(html).toContain('<a class="btn primary" href="/admin/credentials/new">');
     expect(html).toContain('0 of 3 done');
-    expect(html).toContain('<section class="tray" id="plan" aria-labelledby="plan-h">');
+    expect(html).not.toContain('id="plan"');
     expect(html).toContain('No requests yet.');
     expect(html).toContain('aria-label="Where calls went, all zero"');
     expect(html).not.toContain('No denied requests in the selected range.');
@@ -82,14 +82,12 @@ describe('GET /admin on a fresh deployment', () => {
     const html = await (await adminGet(a, await loginAs(a, viewer), '/admin')).text();
     const attention =
       /<section class="tray" id="attention"[\s\S]*?<\/section>/.exec(html)?.[0] ?? '';
-    const notes = /<div class="notes" id="notes">[\s\S]*?<\/div>/.exec(html)?.[0] ?? '';
     // No TOKENGATE_KEK in the test env (an error); cron never ran and one active owner (notes).
     expect(attention).toContain('<ul class="att">');
     expect(attention).toContain('Encryption keys are not loaded (keyring_absent)');
-    expect(notes).toContain(
-      '<span class="vh">Note: </span>The hourly job has not run yet; it starts within the hour.',
-    );
-    expect(notes).toContain('Only one active owner.');
+    // Notes are not shown on the empty install.
+    expect(html).not.toContain('The hourly job has not run yet');
+    expect(html).not.toContain('Only one active owner.');
     // The empty install puts Get started first, the problems after it.
     expect(html.indexOf('id="get-started"')).toBeLessThan(html.indexOf('id="attention"'));
     expect(html).toContain('<section class="tray" id="health" aria-labelledby="health-h">');
@@ -318,32 +316,23 @@ describe('GET /admin health checks', () => {
     expect(html).toMatch(
       /<summary>All checks \(\d+ ok, \d+ problems?\) <span class="hint"><span class="badge (?:ok|bad)">/,
     );
-    for (const id of [
-      'schema',
-      'telemetry-schema',
-      'maintenance',
-      'keys',
-      'sign-in',
-      'admin-hosts',
-      'config',
-    ]) {
+    for (const id of ['schema', 'telemetry-schema', 'maintenance', 'keys', 'sign-in', 'config']) {
       expect(html).toContain(`id="check-${id}"`);
     }
     expect(html).toContain('Cloudflare Access.');
     expect(html).not.toContain('First owner');
   });
 
-  it('opens "All checks" for cron_never although its check passes, so #check-maintenance lands', async () => {
+  it('hides the health checks when every check passes, also before the first hourly job', async () => {
     // Keys loaded, so every check passes; the job has never run, which is not a problem.
     const fixture = await setupProxy({ rule: false });
     const html = await (
       await adminGet(fixture.app, await loginAs(fixture.app, viewer), '/admin')
     ).text();
     expect(html).toContain('The hourly job has not run yet; it starts within the hour.');
-    expect(html).toContain('href="/admin#check-maintenance"');
-    expect(html).toMatch(
-      /<details class="disc" id="checks" open=""><summary>All checks \(\d+ ok, 0 problems\)/,
-    );
+    expect(html).not.toContain('href="/admin#check-maintenance"');
+    expect(html).not.toContain('id="health"');
+    expect(html).toContain('health checks all OK');
   });
 
   it('escapes stored text such as the last cron error', async () => {

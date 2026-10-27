@@ -1,5 +1,6 @@
-// Key check value bookkeeping: a KEK replaced under the same kid stays reported until every
-// credential under that kid is known to open with the new key.
+// Key check value bookkeeping for credentials sealed before ADR 0027 under the legacy kid k1: a
+// TOKENGATE_KEK replaced under it stays reported until every credential under k1 is known to open
+// with the new key. New seals name their key by its check value, which cannot change.
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -24,6 +25,22 @@ import {
 const keyA = () => opsDeps();
 const keyB = () => opsDeps({ env: { TOKENGATE_KEK: KEK_2 } });
 
+/** A credential sealed before ADR 0027: kid k1, with k1's check value recorded. */
+async function seedLegacy(slug: string, secret: string): Promise<string> {
+  const id = await seedService(keyA(), { slug, secret });
+  const loaded = await loadKeyring(keyA().env);
+  if (!loaded.ok) throw new Error(loaded.error);
+  await env.DB.batch([
+    env.DB.prepare(
+      "UPDATE credentials SET credential_sealed = json_set(credential_sealed, '$.kid', 'k1') WHERE id = ?",
+    ).bind(id),
+    env.DB.prepare(
+      "INSERT INTO settings (key, value, updated_at) VALUES ('keyring_kcv', json_object('k1', ?), 0) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+    ).bind(loaded.keyring.activeKid),
+  ]);
+  return id;
+}
+
 async function opens(id: string): Promise<boolean> {
   const loaded = await loadKeyring(keyB().env);
   const service = await getService(env.DB, id);
@@ -38,7 +55,7 @@ beforeEach(async () => {
 
 describe('keyring_kcv after the KEK is replaced under kid k1', () => {
   it('a credential saved with the new key does not clear the alert for older ones', async () => {
-    const one = await seedService(keyA(), { slug: 'one', secret: 'secret-one-0123456789' });
+    const one = await seedLegacy('one', 'secret-one-0123456789');
     expect((await keyringHealth(keyB())).changedKids).toEqual(['k1']);
 
     await seedService(keyB(), { slug: 'two', secret: 'secret-two-0123456789' });
@@ -49,7 +66,7 @@ describe('keyring_kcv after the KEK is replaced under kid k1', () => {
   });
 
   it('rewrap names the credentials that need the old key and writes nothing', async () => {
-    await seedService(keyA(), { slug: 'one', secret: 'secret-one-0123456789' });
+    await seedLegacy('one', 'secret-one-0123456789');
     await seedService(keyB(), { slug: 'two', secret: 'secret-two-0123456789' });
     const audits = (await auditRows()).length;
 
@@ -63,8 +80,8 @@ describe('keyring_kcv after the KEK is replaced under kid k1', () => {
     expect((await keyringHealth(keyB())).changedKids).toEqual(['k1']);
   });
 
-  it('once every credential is set again, rewrap accepts the new key and clears the alert', async () => {
-    const one = await seedService(keyA(), { slug: 'one', secret: 'secret-one-0123456789' });
+  it('once every k1 credential is set again, the alert clears: new seals use the key check value', async () => {
+    const one = await seedLegacy('one', 'secret-one-0123456789');
     await seedService(keyB(), { slug: 'two', secret: 'secret-two-0123456789' });
     const reset = await setServiceCredential(
       keyB(),
@@ -80,21 +97,17 @@ describe('keyring_kcv after the KEK is replaced under kid k1', () => {
       CONTEXT,
     );
     expect(reset.ok).toBe(true);
-    // The recorded value is kept: from the counts alone, "two" could still need the old key.
-    expect((await keyringHealth(keyB())).changedKids).toEqual(['k1']);
-
-    const result = await rewrapCredentials(keyB(), ACTOR);
-
-    expect(result).toMatchObject({ ok: true, rewrapped: 0, confirmedKids: ['k1'] });
+    // No credential uses k1 any more, so nothing can need the old key.
     expect(await keyringHealth(keyB())).toMatchObject({ ok: true, changedKids: [] });
-    expect((await auditRows()).at(-1)).toMatchObject({
-      action: 'keyring.rewrap',
-      diff: { confirmed_kids: ['k1'] },
+    expect(await rewrapCredentials(keyB(), ACTOR)).toMatchObject({
+      ok: true,
+      queued: 0,
+      confirmedKids: [],
     });
   });
 
   it('records the new value when no other credential uses the kid', async () => {
-    const one = await seedService(keyA(), { slug: 'one', secret: 'secret-one-0123456789' });
+    const one = await seedLegacy('one', 'secret-one-0123456789');
     expect((await deleteService(keyA(), ACTOR, one)).ok).toBe(true);
     await seedService(keyB(), { slug: 'two', secret: 'secret-two-0123456789' });
     expect(await keyringHealth(keyB())).toMatchObject({ ok: true, changedKids: [] });

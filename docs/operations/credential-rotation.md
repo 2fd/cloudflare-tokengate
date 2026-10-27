@@ -9,12 +9,8 @@ secret, so no workflow changes.
 
 ## When to rotate
 
-- On a schedule, or before the expiry date. The gateway helps:
-  - The token page shows the secret status ("Expires in N days" within 14 days, "Expired").
-  - The Overview and Credentials › Tokens show a warning 14 days before expiry and an error after
-    it, each with a link to the token's **Secret** section.
-  - The hourly job writes one `credential.expiring` audit event per token when the secret crosses
-    14 days and 3 days before expiry ([observability](../observability.md#audit-log)).
+- On a schedule, or before the provider's expiry date. Credentials have no expiry in the gateway: to
+  limit how long workloads can use one, set an expiry on their access rules.
 - When the Overview shows "Upstream rejecting (401/403)" for a token: at least 5 and at least 50% of
   forwarded requests got 401/403 in the last 15 minutes. The secret was probably revoked or expired
   at the upstream.
@@ -29,29 +25,25 @@ You need the token manager, admin or owner role.
 
 1. At the upstream, create a new key or token with the same permissions as the current one. Keep the
    current one active.
-2. Open **Credentials** and select the token (or follow the expiry warning, which opens its
-   **Secret** section).
+2. Open **Credentials** and select the token.
 3. Note the stored hint under **Secret** (last 4 characters and length, for secrets of 20
    characters or more).
-4. Under **Replace secret**, paste the new value. The destination is not part of this form: the
+4. In the **Danger zone**, select **Replace secret…** and paste the new value in the dialog. The destination is not part of this form: the
    stored base URL and injection are kept (`POST /admin/credentials/:id/secret`). The hint names the
    host the secret is sent to. If someone changed the destination after you opened the page, the
    form is refused and nothing is sent: check the destination, then paste the secret again.
-5. **New secret expires on** is prefilled with the stored expiry when it is more than 14 days away.
-   Change it if the new secret expires on another date; leave it empty if it does not expire.
-   GitHub tokens have no expiry field: the check reads it from GitHub.
-6. For GitHub, **Also replace in github-uploads** is ticked when the other GitHub token holds the
+5. For GitHub, **Also replace in github-uploads** is ticked when the other GitHub token holds the
    same secret. Leave it ticked to replace both in one submit; each gets its own audit event.
-7. Select **Check and replace secret** (or **Replace secret** when the token has no check).
-8. If the token has a check, it runs with the new secret before anything is saved. If it fails,
+6. Select **Check and replace** (or **Replace secret** when the token has no check).
+7. If the token has a check, it runs with the new secret before anything is saved. If it fails,
    nothing is saved and the result is shown. The page keeps the secret for 15 minutes as a sealed
    draft, so you do not paste it again: fix the problem and select **Check again and save**, or
    select **Save without a passing check**.
-9. Check that **Set on** shows the current time and that the hint matches the new secret.
+8. Check that **Set on** shows the current time and that the hint matches the new secret.
 
-The rotate form is shown only while the stored secret opens under the stored destination. When it
-does not (or no secret is stored), the page sends you to **Change destination** instead, where you
-confirm the host ([I-CRED-2](../threat-model.md#i-cred-2)).
+Replace secret is offered only while the stored secret opens under the stored destination. When it
+does not (or no secret is stored), the page offers **Set the secret** (or **Change destination** for a
+custom credential) instead, where you confirm the host ([I-CRED-2](../threat-model.md#i-cred-2)).
 
 Saving writes one `service.credential.set` audit event per token
 ([I-AUDIT-1](../threat-model.md#i-audit-1)). The secret never appears in the audit diff, the UI or
@@ -62,8 +54,8 @@ the export ([I-CRED-1](../threat-model.md#i-cred-1)).
 1. If the token has a check, select **Test <name> secret** on the token page. It sends the check to
    the upstream now. It writes a `service.credential.test` audit event before it sends the stored
    secret; if your user or role no longer allows the test, nothing is sent. The result appears on
-   the page and in a `service.credential.test_result` log line. When GitHub reports another expiry,
-   the test saves it (a `service.update` audit event).
+   the page and in a `service.credential.test_result` log line. When the name came from the
+   check (a Slack bot), the test also follows a rename of the bot (a `service.update` audit event).
 2. On the token page select **Requests through this token**, and set Outcome to "Allowed".
 3. Check that new records have the expected upstream status. An upstream 401 or 403 in the Status
    column, with no gateway reason, means the upstream refused the new secret. If "Share of allowed
@@ -90,7 +82,7 @@ again in the same save. **Replace secret** never takes a destination.
   in code, and you type the destination host under **Confirm destination host**. Nothing is sent
   upstream until it matches. A kept draft never counts as the confirmation, and a draft made for
   one base URL or injection does not open for another.
-- The new base URL must pass Credentials › Allowed hosts when it is set
+- The new base URL must pass Settings › Allowed hosts when it is set
   ([I-SSRF-1](../threat-model.md#i-ssrf-1)). An owner can tick **Also allow <host>** in the same
   form.
 - The token's type label follows the destination: a token that no longer points where its template

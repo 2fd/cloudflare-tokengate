@@ -114,7 +114,9 @@ export function limitChips(rule: GlobalAccessRule): string[] {
         ? 'Groups'
         : rule.profile === 'github-actions'
           ? 'Organizations'
-          : 'Tenant pin',
+          : rule.profile === 'vercel'
+            ? 'Teams'
+            : 'Tenant pin',
     );
   }
   if (rule.conditions !== null) chips.push(`Conditions: ${rule.conditions.length}`);

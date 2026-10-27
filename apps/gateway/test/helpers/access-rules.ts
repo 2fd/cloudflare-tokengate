@@ -17,6 +17,9 @@ import { createTestApp, type TestApp } from './app';
 
 export const GITLAB_ISSUER = 'https://gitlab.com';
 export const BUILDKITE_ISSUER = 'https://agent.buildkite.com';
+/** Vercel's team issuer mode for the team `acme`; the global mode is `https://oidc.vercel.com`. */
+export const VERCEL_TEAM_ISSUER = 'https://oidc.vercel.com/acme';
+export const VERCEL_GLOBAL_ISSUER = 'https://oidc.vercel.com';
 
 export interface RulesWorld {
   app: TestApp;
@@ -38,6 +41,8 @@ export async function rulesWorld(
     [GITHUB_ISSUER]: GITHUB_JWKS,
     [GITLAB_ISSUER]: `${GITLAB_ISSUER}/oauth/discovery/keys`,
     [BUILDKITE_ISSUER]: `${BUILDKITE_ISSUER}/.well-known/jwks`,
+    [VERCEL_TEAM_ISSUER]: `${VERCEL_TEAM_ISSUER}/.well-known/jwks`,
+    [VERCEL_GLOBAL_ISSUER]: `${VERCEL_GLOBAL_ISSUER}/.well-known/jwks`,
     ...extraIssuers,
   };
   const net = fakeNetwork(undefined, issuers);
@@ -139,6 +144,14 @@ export function inputValue(html: string, name: string): string | null {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = new RegExp(`<input[^>]*name="${escaped}"[^>]*value="([^"]*)"`).exec(html);
   return match?.[1] ?? null;
+}
+
+/** The selected option value of the select named `name`, or null. */
+export function selectedValue(html: string, name: string): string | null {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const select = new RegExp(`<select[^>]*name="${escaped}"[^>]*>([\\s\\S]*?)</select>`).exec(html);
+  if (!select) return null;
+  return /<option value="([^"]*)" selected/.exec(select[1] ?? '')?.[1] ?? null;
 }
 
 /** The ids of the checked radios/checkboxes named `name`. */

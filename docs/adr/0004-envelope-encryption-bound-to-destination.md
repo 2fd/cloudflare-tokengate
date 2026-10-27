@@ -45,3 +45,11 @@ Credentials are sealed with envelope encryption and stored in `services.credenti
 ## Note (2026-10-17)
 
 [ADR 0024](0024-secret-reveal-over-ecdh.md) replaces `services.credential_hint` (the last 4 characters of the secret) with `credential_length`. D1, backups, audit diffs and logs hold only the length. A person with reveal on a token sees its first 4 and last 4 characters, which the page derives at render from the opened credential. That person can also copy the secret through the one reveal endpoint, which encrypts it to a key of the browser. The envelope format is unchanged.
+
+## Note (2026-10-19)
+
+[ADR 0027](0027-two-slot-key-rotation.md) replaces the keyring format. `TOKENGATE_KEYRING` is no longer JSON with several keys and an active kid: it holds one key, the next key during a rotation, and `TOKENGATE_KEK` holds the current key. Both can be set. A kid is the key check value of the key; `k1` stays the id of `TOKENGATE_KEK` for credentials sealed before. The admin UI guides the rotation, and the old key is not needed after it. The envelope format is unchanged.
+
+## Note (2026-10-20)
+
+A credential made from a type (`template_id` set) has a fixed destination: the admin UI has no Change destination for it, and the credential ops refuse any base URL or injection other than the type's. Setting a missing or unopenable secret uses the type's destination, and the admin still types its host. Only custom credentials can be repointed, as described above. The AAD and the envelope format are unchanged.

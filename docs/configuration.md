@@ -13,7 +13,7 @@ settings live in `apps/gateway/src/db/settings.ts`.
 | Operator variable (`AUTH_*`) | Cloudflare dashboard: Workers & Pages > tokengate > Settings > Variables and Secrets | Yes (`keep_vars: true`) |
 | Secret (`TOKENGATE_KEK`, `TOKENGATE_KEYRING`) | `pnpm wrangler secret put <NAME>` | Yes, always |
 | Binding (D1, queue, pipeline, rate limiter) | `apps/gateway/wrangler.jsonc` | Part of the deploy |
-| Runtime setting (retention, sampling, upstream host allowlist, admin hosts) | Admin UI: Settings | Stored in D1 |
+| Runtime setting (retention, sampling, upstream host allowlist) | Admin UI: Settings | Stored in D1 |
 
 `wrangler.jsonc` sets `"keep_vars": true` and declares no `vars`. So `pnpm run deploy` and Workers Builds
 keep the values you set in the dashboard. Set each variable in one place only.
@@ -24,7 +24,7 @@ commit `""` placeholders. An empty `AUTH_ACCESS_AUD` turns off admin sign-in
 ([I-DEPLOY-1](threat-model.md#i-deploy-1)). Whitespace-only values count as empty. `apps/gateway/scripts/check-config.sh` rejects them, in top-level `vars` and in `env.<name>.vars` blocks.
 
 Rolling back to an earlier Worker version (`pnpm wrangler rollback` or the dashboard) restores that
-version's variables. The upstream host allowlist and the admin hosts are stored in D1, so a rollback
+version's variables. The upstream host allowlist is stored in D1, so a rollback
 does not change them.
 
 For local development (`pnpm dev`), put all variables and secrets in `apps/gateway/.dev.vars`.
@@ -43,7 +43,7 @@ as an Access variable is set.
 
 ## Admin branding
 
-Owners can change the sidebar title and upload a logo in **Users > Appearance**. The title and
+Owners can change the sidebar title and upload a logo in **Settings › Appearance**. The title and
 image are stored together in the D1 `settings` table under `admin_branding`, as a JSON object
 with `title` and `image` (a data URL). No environment variables or new bindings are needed.
 The image supports PNG, JPEG and WebP up to 256 KiB. Saving with no new file keeps the current
@@ -66,8 +66,8 @@ entries are trimmed and empty entries are dropped.
 
 | Name | Kind | Required | Format |
 |---|---|---|---|
-| `TOKENGATE_KEK` | secret | One of `TOKENGATE_KEK` / `TOKENGATE_KEYRING` | Standard base64 of 32 bytes |
-| `TOKENGATE_KEYRING` | secret | One of `TOKENGATE_KEK` / `TOKENGATE_KEYRING` | JSON keyring |
+| `TOKENGATE_KEK` | secret | Yes | Standard base64 of 32 bytes (the current key) |
+| `TOKENGATE_KEYRING` | secret | Only during a key rotation | Standard base64 of 32 bytes (the next key) |
 | `AUTH_ACCESS_TEAM_DOMAIN` | var | For the admin UI | `<team>`, `<team>.cloudflareaccess.com` or `https://<team>.cloudflareaccess.com` |
 | `AUTH_ACCESS_AUD` | var | For the admin UI | Access application audience (AUD) tag |
 | `AUTH_ACCESS_DEVELOPMENT` | var | Local development only; never together with Access | Email address |
@@ -82,36 +82,43 @@ you add credentials, and do not change them after.
 
 There is no variable for it. While no owner exists, the first person to sign in becomes an active
 owner, once per deployment ([I-BOOT-1](threat-model.md#i-boot-1)). Keep the Access policy limited to
-your own email until you have signed in, then widen it. The hostname of that sign-in becomes the first
-[admin host](#admin-hosts). Everyone after joins with the join policy
-and is managed by owners in Users › People. The bootstrap is recorded in settings and does not run
+your own email until you have signed in, then widen it. Everyone after joins with the join policy
+and is managed by owners in Settings › Members. The bootstrap is recorded in settings and does not run
 again, even if every owner is later removed: recover with
 [operations/break-glass.md](operations/break-glass.md).
 
-### Keyring: `TOKENGATE_KEK` or `TOKENGATE_KEYRING`
+### Keyring: `TOKENGATE_KEK` and `TOKENGATE_KEYRING`
 
-The key-encryption key that seals stored upstream credentials ([I-CRED-2](threat-model.md#i-cred-2)). Set exactly
-one of the two. Each key is [bound to the login variables](#login-binding).
+The key-encryption key that seals stored upstream credentials ([I-CRED-2](threat-model.md#i-cred-2),
+[ADR 0027](adr/0027-two-slot-key-rotation.md)). Each key is [bound to the login variables](#login-binding).
 
-- `TOKENGATE_KEK`: standard base64 (padding optional) of exactly 32 bytes. Its key id is `k1`.
-- `TOKENGATE_KEYRING`: JSON with exactly the keys `active` and `keys`, for example
-  `{"active":"k2","keys":{"k1":"<base64>","k2":"<base64>"}}`. Key ids match
-  `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`. New credentials are sealed with the active key.
-- Generate and check keys outside Cloudflare, and keep a copy in your company vault. Losing the key
-  loses every stored credential. `vault-read` and `vault-write` stand for your vault's CLI, as in
-  [key rotation](operations/key-rotation.md#before-you-start). `pnpm keyring` needs Node.js 22.18 or later.
+- `TOKENGATE_KEK`: the current key. Standard base64 (padding optional) of exactly 32 bytes.
+- `TOKENGATE_KEYRING`: the next key, set only during a [key rotation](operations/key-rotation.md).
+  The same format as `TOKENGATE_KEK`. It is used only if it is not the public development key, is not
+  printable text and has at least 16 distinct byte values; otherwise it is ignored and Settings ›
+  Rotate encryption says why. While it is used, new credentials are sealed with it.
+- A key id is the key's check value (16 hex characters), so a key keeps its id when it moves from
+  `TOKENGATE_KEYRING` to `TOKENGATE_KEK`. Credentials sealed before ADR 0027 use the id `k1`, which
+  names `TOKENGATE_KEK`.
+- Generate keys outside Cloudflare. Cloudflare cannot return a secret's value: if the Worker's
+  secrets are lost, every stored credential is lost. `vault-read` and `vault-write` stand for your
+  vault's CLI, as in [key rotation](operations/key-rotation.md#before-you-start). `pnpm keyring`
+  needs Node.js 22.18 or later.
 
   ```sh
-  pnpm -s keyring generate | vault-write tokengate-kek-k1   # new key on stdout, its key check value on stderr
-  vault-read tokengate-kek-k1 | pnpm -s keyring check     # validates a KEK or keyring value like the Worker does
-  vault-read tokengate-kek-k1 | pnpm wrangler secret put TOKENGATE_KEK
+  pnpm -s keyring generate | vault-write tokengate-kek   # new key on stdout, its key id on stderr
+  vault-read tokengate-kek | pnpm -s keyring check       # checks one key like the Worker does and prints its key id
+  vault-read tokengate-kek | pnpm wrangler secret put TOKENGATE_KEK
   ```
 
-- **When absent or invalid:** admin sign-in still works. Proxied requests to a service with a credential
-  answer `503 not_configured` with reason `keyring_absent`, `keyring_malformed`, `active_kid_missing`,
-  `key_not_32_bytes`, `both_kek_and_keyring_set` or `dev_placeholder_key`. Credential changes are refused. The dashboard shows a
-  banner and `/readyz` reports `keyring: false`.
-- Rotation: [operations/key-rotation.md](operations/key-rotation.md).
+- **When absent or invalid:** admin sign-in still works. Proxied requests to a service with a
+  credential answer `503 not_configured` with reason `keyring_absent`, `keyring_malformed`,
+  `key_not_32_bytes`, `key_not_random` (only `TOKENGATE_KEYRING` is set and it is not random) or
+  `dev_placeholder_key`. Credential changes are refused. The dashboard shows a banner and `/readyz`
+  reports `keyring: false`. An invalid `TOKENGATE_KEYRING` next to a valid `TOKENGATE_KEK` is not an
+  error: it is ignored.
+- Rotation: [operations/key-rotation.md](operations/key-rotation.md), guided by Settings › Rotate
+  encryption.
 
 #### Login binding
 
@@ -124,31 +131,31 @@ AES-256-GCM key that seals credentials is HKDF-SHA256 of the secret key, with an
   exact values in your vault next to it.
 - **A change makes every stored credential impossible to decrypt.** This includes setting, removing
   or rewriting any of the three, for example `acme` to `acme.cloudflareaccess.com` or a change of
-  email case. Proxied requests then answer `503 credential_unavailable`, and Settings shows the key
-  check values as changed.
+  email case. Proxied requests then answer `503 credential_unavailable`, and Settings › Rotate
+  encryption lists the old key ids as missing (`k1` as changed).
 - **Recovery:** restore the earlier values, or enter every credential again.
-- **Key check values depend on the login variables.** To compare with Settings, run `pnpm keyring`
+- **Key ids depend on the login variables.** To compare with Settings, run `pnpm keyring`
   with the Worker's `AUTH_ACCESS_*` values in the environment. The secret still comes from stdin:
 
   ```sh
-  vault-read tokengate-kek-k1 | AUTH_ACCESS_TEAM_DOMAIN=acme AUTH_ACCESS_AUD=<aud> pnpm -s keyring check
+  vault-read tokengate-kek | AUTH_ACCESS_TEAM_DOMAIN=acme AUTH_ACCESS_AUD=<aud> pnpm -s keyring check
   ```
 
-- Rotation and rewrap work as before, under one set of login values. The sealed format stays v1.
+- Rotation and re-encryption work only under one set of login values. The sealed format stays v1.
 
 #### Development key
 
 `.dev.vars.example` sets `TOKENGATE_KEK=REVWLU9OTFktS0VZLU5PVC1GT1ItUFJPRFVDVElPTiE=`, the base64 of
 `DEV-ONLY-KEY-NOT-FOR-PRODUCTION!`. This key is public. The Worker accepts it only in development
-mode: `AUTH_ACCESS_DEVELOPMENT` set and neither Access variable set. In any other configuration, and in
-any key slot of `TOKENGATE_KEYRING`, the keyring fails with `dev_placeholder_key`: proxied requests
-answer `503 not_configured` and Settings shows the error. Replace it with a key of your own
+mode: `AUTH_ACCESS_DEVELOPMENT` set and neither Access variable set. In any other configuration it
+fails with `dev_placeholder_key`: proxied requests answer `503 not_configured` and Settings shows
+the error. It is never used as `TOKENGATE_KEYRING`. Replace it with a key of your own
 (`pnpm -s keyring generate`).
 
 ### Cloudflare Access login: `AUTH_ACCESS_*`
 
 1. Serve the gateway on a custom domain. `/admin` never answers on `workers.dev`
-   ([admin hosts](#admin-hosts)).
+   ([admin hostnames](#admin-hostnames)).
 2. In Zero Trust, create a self-hosted Access application for that hostname, limited to the `/admin`
    path. Do not put `/proxy` behind Access: CI jobs call it without an Access session. See
    [operations/cloudflare-zone-settings.md](operations/cloudflare-zone-settings.md).
@@ -166,7 +173,7 @@ answer `503 not_configured` and Settings shows the error. Replace it with a key 
 - Access decides who can authenticate and how long the Access session lasts. The Access policy is the
   list of people who can reach the admin UI: the first person becomes owner, and everyone else joins
   on their first request (audit action `user.join`) with the role and status for new users. These
-  join defaults are not variables: owners set them in Users › Sign-in › "When someone new signs in"
+  join defaults are not variables: owners set them in Settings › Members › "Default access…"
   (one click: "Ask an owner first", "Let them in as" Viewer, Token manager, Access manager or Admin,
   or "Only invited people"; by default "Let them in as Viewer"; never `owner`). With "Ask an owner
   first", nobody new gets in until an owner approves them with a role. Viewers see every page, but no page
@@ -193,57 +200,39 @@ is `dev` and the configuration feature is `login.dev`.
   `login.access` and `login.dev`, and `/admin` shows it on the setup page (`503`).
 - It is part of the [login binding](#login-binding): adding, removing or changing it, also only the case
   of the email, makes every stored credential impossible to decrypt.
-- The same rules apply: the first sign-in becomes owner, later ones join with the join defaults. The
-  first sign-in on `http://localhost:8787/admin` stores `localhost` as the admin host in the local D1.
+- The same rules apply: the first sign-in becomes owner, later ones join with the join defaults.
 - Errors: an invalid email.
 
-## Admin hosts
+## Admin hostnames
 
-The hostnames that `/admin` answers on ([I-DEPLOY-1](threat-model.md#i-deploy-1),
-[ADR 0016](adr/0016-admin-hosts-in-settings.md)). It is a setting in the admin UI, not a variable:
-Users › Sign-in › "Admin hosts". Only owners can change it (permission `settings:write`). Each change
-adds or removes one host and writes a `settings.admin_hosts` audit event.
+There is no setting for the hostnames that `/admin` answers on ([I-DEPLOY-1](threat-model.md#i-deploy-1),
+[ADR 0030](adr/0030-no-admin-host-list.md)). Your Worker routes and custom domains decide which
+hostnames reach the Worker. Your Cloudflare Access application decides who can sign in on them.
 
-- **Initial value:** the hostname of the first sign-in, which creates the first owner
-  ([I-BOOT-1](threat-model.md#i-boot-1)). The same D1 batch stores it, only if no list is set yet. The
-  `user.bootstrap` audit event records it as `host`. If that hostname is not a valid entry, nothing
-  is stored.
-- **Before the first sign-in:** `/admin` answers on every hostname except `workers.dev`. Access still
-  guards sign-in. While no list is set, Users › Sign-in offers one button, "Answer only on <host>",
-  that pins the console to the hostname in use.
-- **After:** `/admin` answers only on a listed hostname. Every other hostname gets `404 Not Found`.
-  A hostname other than a loopback host must use https; over http it gets 404. The port is ignored.
-- **Always:** `/admin` never answers on `workers.dev` or `*.workers.dev`. `/proxy/*`, `/healthz` and
-  `/readyz` are never pinned. They answer on every hostname.
-- **Entries:** the same format as the [upstream host allowlist](#upstream-host-allowlist): an exact
-  hostname (`tokengate.example.com`) or `*.<domain>`, which matches the hosts below the domain but not
-  the domain itself. `localhost`, `127.0.0.1` and `[::1]` are also valid. No scheme, port or path.
-  Entries on `workers.dev` are refused. A pasted URL is reduced to its hostname: the scheme, port,
-  path, query and a trailing dot are dropped (`https://Admin.Acme.com:8443/x` becomes `admin.acme.com`).
-- **Save rules:** the list cannot be empty, and it must still cover the hostname you use at that
-  moment (wildcards count). So an owner cannot lock themselves out: "Remove…" is offered only for
-  entries whose removal keeps it covered. A change that races another owner's change is refused
-  (`409`). Put every hostname you add behind your Cloudflare Access application first.
-- **Self-exclusion:** a service base URL can never point at an admin host (wildcards included) or at the
-  host the request arrived on ([I-SSRF-1](threat-model.md#i-ssrf-1)).
+- **Every routed hostname:** `/admin` answers on every hostname that routes to the Worker. Put each
+  route and custom domain behind your Access application. A hostname outside the application signs in
+  nobody: every `/admin` request needs a valid Access JWT for `AUTH_ACCESS_AUD`.
+- **Never:** `/admin` never answers on `workers.dev` or `*.workers.dev`. A hostname other than a
+  loopback host (`localhost`, `127.0.0.1`, `[::1]`) must use https; over http it gets `404 Not Found`.
+  The port is ignored.
+- **Not affected:** `/proxy/*`, `/healthz` and `/readyz` answer on every hostname.
+- **Self-exclusion:** a service base URL can never point at the host the request arrived on
+  ([I-SSRF-1](threat-model.md#i-ssrf-1)). Another hostname of this Worker is not refused
+  automatically: do not add one to the [upstream host allowlist](#upstream-host-allowlist).
 - **Request origin:** the admin UI has no fixed origin. The CSRF `Origin` check, invitation links and
-  the proxy URL snippets use the origin of the current request. Host pinning makes this safe.
-- **Stored value:** key `admin_hosts` in the `settings` table, a JSON array. A stored value that is not
-  a valid list denies every host (fail closed). To recover, see
-  [operations/break-glass.md](operations/break-glass.md#lost-admin-host).
-- Users › Sign-in shows the list ("· you are here" marks the entry that matches the hostname in use),
-  or "Not pinned" while none is set.
+  the proxy URL snippets use the origin of the current request.
+
 
 ## Upstream host allowlist
 
 The hosts that credential base URLs may use. It is a setting in the admin UI, not a variable:
-**Credentials › Allowed hosts** (`/admin/credentials/hosts`). Only owners can change it (permission
+**Settings › Allowed hosts** (`/admin/credentials/hosts`). Only owners can change it (permission
 `settings:write`). Admins and token managers cannot widen it. Each change writes a
 `settings.upstream_hosts` audit event.
 
 - **Any public HTTPS host (the default, no list):** you can load a secret for any upstream. IP
-  literals, `localhost`, `*.workers.dev` and the gateway's own hosts ([admin hosts](#admin-hosts)
-  and the request host) are always refused ([I-SSRF-1](threat-model.md#i-ssrf-1)).
+  literals, `localhost`, `*.workers.dev` and the host the request arrived on are always
+  refused ([I-SSRF-1](threat-model.md#i-ssrf-1)).
 - **Only the hosts below:** owners tick hosts from a list of the hosts that tokens and token types
   use, and type others under "Other hosts", one per line. Only hosts the stored list contains
   literally start ticked: a host that is refused now, or covered by a wildcard, starts unticked, so
@@ -417,12 +406,12 @@ The Worker configuration is `apps/gateway/wrangler.jsonc`.
 |---|---|---|
 | `compatibility_flags` | `nodejs_compat` | Node.js compatibility. On by default from compatibility date 2026-08-04 ([docs](https://developers.cloudflare.com/workers/runtime-apis/nodejs/)); listed for clarity |
 | `compatibility_flags` | `global_fetch_strictly_public` | A same-zone upstream is fetched through Cloudflare's front door (Access, WAF), not straight from the origin ([I-SSRF-1](threat-model.md#i-ssrf-1), [docs](https://developers.cloudflare.com/workers/configuration/compatibility-flags/)) |
-| `workers_dev` | `true` | Enables the `*.workers.dev` URL for the quick start. Only `/proxy` and the health endpoints answer there; `/admin` needs a custom domain ([admin hosts](#admin-hosts)) |
+| `workers_dev` | `true` | Enables the `*.workers.dev` URL for the quick start. Only `/proxy` and the health endpoints answer there; `/admin` needs a custom domain ([admin hostnames](#admin-hostnames)) |
 | `preview_urls` | `false` | Version preview URLs would run old code against production data and secrets ([I-DEPLOY-1](threat-model.md#i-deploy-1)) |
 | `observability.head_sampling_rate` | `1` | Audit events are `audit.event` log lines; sampling below 1 can drop them |
 | `rules` | `Text` for `**/*.css` | The admin stylesheets are bundled as strings and served by the Worker (`/static/<name>.<hash>.css`), so security headers apply to them too |
 | `d1_databases` | `DB`, `TELEMETRY_DB` | No database IDs are committed; see [getting-started.md](getting-started.md) to create the databases |
-| `triggers.crons` | `7 * * * *` | Hourly job: rollups, retention, credential expiry notices (`apps/gateway/src/telemetry/cron.ts`) |
+| `triggers.crons` | `7 * * * *` | Hourly job: rollups, retention, heartbeat (`apps/gateway/src/telemetry/cron.ts`) |
 | `keep_vars` | `true` | Deploys keep variables set in the dashboard |
 
 `apps/gateway/scripts/check-config.sh` (run by `pnpm test:scripts` and CI) fails if `preview_urls` is not `false`,
@@ -451,7 +440,7 @@ It uses two recent HTML features, each with a fallback:
   Firefox 144). Older browsers open the same dialog as a popover. Without either, the dialog content
   is shown inline on the page and its trigger is hidden. For these actions the server also requires
   the confirmation, so a crafted request without it is refused: delete, reset sign-in, suspend an
-  owner, invite a cancelled owner again, remove an admin host, and the join policies that let
+  owner, invite a cancelled owner again, and the join policies that let
   everyone Access admits change something. Owner role changes (invite, approve or make someone
   Owner, or demote an owner) are confirmed by their dialog only.
 - **One open row at a time** (`<details name>`, Chrome 120, Safari 17.2, Firefox 130). Older browsers

@@ -1,5 +1,5 @@
 // Proxy query budget (docs/architecture.md, "Query budget"; I-AUTHZ-1, AR-10, AR-11): one D1 batch of
-// 6 indexed, bounded statements per request, and at most MAX_JWKS_URIS JWKS lookups and
+// 5 indexed, bounded statements per request, and at most MAX_JWKS_URIS JWKS lookups and
 // MAX_VERIFY_GROUPS signature checks. The rows are written by SQL, around validation, to reach the
 // caps of the triggers.
 import { env } from 'cloudflare:workers';
@@ -50,12 +50,12 @@ function recordDb(fx: ProxyFixture): DbLog {
   return log;
 }
 
-/** The one batch of a request: exactly 6 statements, and nothing outside it. */
+/** The one batch of a request: exactly 5 statements, and nothing outside it. */
 function onlyBatch(log: DbLog) {
   expect(log.batches).toHaveLength(1);
-  expect(log.prepared).toBe(6);
+  expect(log.prepared).toBe(5);
   const [batch] = log.batches;
-  expect(batch?.statements).toBe(6);
+  expect(batch?.statements).toBe(5);
   return batch as DbLog['batches'][number];
 }
 
@@ -113,7 +113,7 @@ async function count(where: string): Promise<number> {
   return row?.n ?? 0;
 }
 
-describe('I-AUTHZ-1: one batch of 6 bounded statements per request', () => {
+describe('I-AUTHZ-1: one batch of 5 bounded statements per request', () => {
   it('100 credential access rules on the credential', async () => {
     const fx = await setupProxy();
     await copyRule(fx.ruleId as string, 99);

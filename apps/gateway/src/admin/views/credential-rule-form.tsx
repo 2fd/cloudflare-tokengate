@@ -346,7 +346,7 @@ export function RuleForm(props: { model: RuleFormModel }) {
 }
 
 /** "Branch feature/login-redesign": the context of structured jobs as the review card says it. */
-function contextWords(jobs: JobsForm): Child {
+function contextWords(jobs: JobsForm, profile: Pick<IssuerProfile, 'id'>): Child {
   const value = (text: string) => <span class="mono">{text}</span>;
   switch (jobs.context) {
     case 'environment':
@@ -362,7 +362,11 @@ function contextWords(jobs: JobsForm): Child {
     case 'protected':
       return <>Any protected branch or tag</>;
     default:
-      return <>Any branch, tag or environment</>;
+      return profile.id === 'vercel' ? (
+        <>Production and preview deployments</>
+      ) : (
+        <>Any branch, tag or environment</>
+      );
   }
 }
 
@@ -376,13 +380,15 @@ function ReviewCard(props: { jobs: JobsBranch; ops: TokenBranch; model: RuleForm
   const { jobs: branch, ops: tokenBranch, model } = props;
   const { jobs, rule } = branch;
   const token = tokenBranch.token;
-  const gitlab = branch.profile.id === 'gitlab-ci';
+  const project = branch.profile.id !== 'github-actions';
   const repo = repositoryLabelOf(branch) ?? '‹repository›';
   const presets = (tokenBranch.template?.operation_presets ?? []).filter((preset) =>
     tokenBranch.ops.op.includes(preset.id),
   );
   const sets = tokenBranch.ruleSets.filter((set) => tokenBranch.ops.op.includes(set.id));
-  const refScoped = ['environment', 'branch', 'tag', 'release'].includes(jobs.context);
+  const refScoped =
+    branch.profile.id !== 'vercel' &&
+    ['environment', 'branch', 'tag', 'release'].includes(jobs.context);
   const expiry = expiryOptions(model).find((option) => option.value === model.expiry.expires);
   const operations: Child[] = [
     ...presets.map((preset) => (
@@ -430,11 +436,11 @@ function ReviewCard(props: { jobs: JobsBranch; ops: TokenBranch; model: RuleForm
         <KeyValue
           items={[
             {
-              label: gitlab ? 'Project' : 'Repository',
+              label: project ? 'Project' : 'Repository',
               value: jobs.repository || 'Any of the organizations',
               mono: jobs.repository !== '',
             },
-            { label: 'When', value: contextWords(jobs) },
+            { label: 'When', value: contextWords(jobs, branch.profile) },
             ...(refScoped
               ? [
                   {
@@ -544,7 +550,7 @@ function IssuerStep(props: { model: RuleFormModel; n: number }) {
       kind="group"
       id="ga-issuer"
       title="Issuer and tenant"
-      description="Where the jobs run and which organizations or groups they belong to. The token of every job carries both."
+      description="Where the jobs run and which organizations, groups or team they belong to. The token of every job carries both."
     >
       <IssuerFields
         prefix="new."
@@ -745,6 +751,33 @@ const GITLAB_CONTEXT_TEXT: Partial<Record<AccessContext, { description: string }
   tag: { description: 'Pipelines of a tag' },
 };
 
+/** The built-in Vercel environments, offered after those of the other rules. */
+const VERCEL_ENVIRONMENTS: readonly string[] = ['production', 'preview', 'development'];
+
+/** The environments offered as picks: those of the other rules, then Vercel's built-in ones. */
+function environmentChoices(branch: JobsBranch): string[] {
+  const used = branch.suggestions.environments;
+  return branch.profile.id === 'vercel'
+    ? [...new Set([...used, ...VERCEL_ENVIRONMENTS])]
+    : [...used];
+}
+
+/** Vercel: one environment, or every trusted one (production and preview). */
+const VERCEL_CONTEXT_TEXT: Partial<
+  Record<AccessContext, { title: string; description: string; risk?: string }>
+> = {
+  environment: {
+    title: 'Environment',
+    description:
+      'Deployments of one environment: production, preview, development or a Custom Environment',
+  },
+  any: {
+    title: 'Production and preview',
+    description: 'Every production and preview deployment of the project.',
+    risk: 'preview deployments are built from any pushed branch.',
+  },
+};
+
 /** The contexts shown as cards first; the rest sit under "Tag, release, pull request or any". */
 const MAIN_CONTEXTS: ReadonlySet<AccessContext> = new Set(['environment', 'branch', 'protected']);
 
@@ -807,9 +840,12 @@ export function JobsFields(props: {
         }));
   const firstOwner = owners.find((owner) => owner.label)?.label;
   const gitlab = profile.id === 'gitlab-ci';
-  const exampleRepo = gitlab
-    ? `${firstOwner ?? 'acme-group'}/app (4567890)`
-    : `${firstOwner ?? 'acme'}/api (89012345)`;
+  const vercel = profile.id === 'vercel';
+  const exampleRepo = vercel
+    ? 'acme-web (prj_7Gw5ZMBpQA8h9GF832KGp7nwbuh3)'
+    : gitlab
+      ? `${firstOwner ?? 'acme-group'}/app (4567890)`
+      : `${firstOwner ?? 'acme'}/api (89012345)`;
   const moreOpen =
     jobs.workflow_ref !== '' ||
     jobs.require_github_hosted ||
@@ -841,59 +877,63 @@ export function JobsFields(props: {
         </p>
       ) : null}
       <ContextFields branch={branch} live={live} error={err('context')} errors={errors} />
-      <RefProtection branch={branch} live={live} />
-      <More
-        summary="More constraints"
-        meta={gitlab ? 'pipeline configuration pin' : 'workflow pin, GitHub-hosted runners only'}
-        open={moreOpen}
-      >
-        <Field
-          name={name('workflow_ref')}
-          label={gitlab ? 'Pipeline configuration pin' : 'Workflow pin'}
-          optional
-          mono
-          value={jobs.workflow_ref}
-          example={
-            gitlab
-              ? 'gitlab.com/acme-group/app//.gitlab-ci.yml@refs/heads/main'
-              : 'acme/api/.github/workflows/deploy.yml@refs/heads/main'
-          }
-          suggestions={suggestions(branch.suggestions.workflowRefs)}
-          hint={
-            gitlab
-              ? 'Only jobs from this pipeline configuration at this ref get the token. With an empty project, every project of the group that uses it gets it.'
-              : 'Only jobs from this workflow file at this ref get the token. With an empty repository, every repository of the organization that calls this reusable workflow gets it.'
-          }
-          error={err('workflow_ref')}
-          autocomplete="off"
-          conditional
-        />
-        {owners.length > 1 ? (
-          <Select
-            name={name('owner_id')}
-            label={
-              gitlab ? 'Group of the calling projects' : 'Organization of the calling repositories'
+      {vercel ? null : <RefProtection branch={branch} live={live} />}
+      {vercel ? null : (
+        <More
+          summary="More constraints"
+          meta={gitlab ? 'pipeline configuration pin' : 'workflow pin, GitHub-hosted runners only'}
+          open={moreOpen}
+        >
+          <Field
+            name={name('workflow_ref')}
+            label={gitlab ? 'Pipeline configuration pin' : 'Workflow pin'}
+            optional
+            mono
+            value={jobs.workflow_ref}
+            example={
+              gitlab
+                ? 'gitlab.com/acme-group/app//.gitlab-ci.yml@refs/heads/main'
+                : 'acme/api/.github/workflows/deploy.yml@refs/heads/main'
             }
-            value={jobs.owner_id}
-            placeholder="Only needed for a pin without a repository"
-            options={owners.map((owner) => ({
-              value: owner.value,
-              label: owner.label ? `${owner.label} (${owner.value})` : owner.value,
-            }))}
-            hint="Used only when the repository is empty."
-            error={err('owner_id')}
+            suggestions={suggestions(branch.suggestions.workflowRefs)}
+            hint={
+              gitlab
+                ? 'Only jobs from this pipeline configuration at this ref get the token. With an empty project, every project of the group that uses it gets it.'
+                : 'Only jobs from this workflow file at this ref get the token. With an empty repository, every repository of the organization that calls this reusable workflow gets it.'
+            }
+            error={err('workflow_ref')}
+            autocomplete="off"
             conditional
           />
-        ) : null}
-        {profile.id === 'github-actions' ? (
-          <Checkbox
-            name={name('require_github_hosted')}
-            label="GitHub-hosted runners only"
-            hint="Refuse self-hosted runners."
-            checked={jobs.require_github_hosted}
-          />
-        ) : null}
-      </More>
+          {owners.length > 1 ? (
+            <Select
+              name={name('owner_id')}
+              label={
+                gitlab
+                  ? 'Group of the calling projects'
+                  : 'Organization of the calling repositories'
+              }
+              value={jobs.owner_id}
+              placeholder="Only needed for a pin without a repository"
+              options={owners.map((owner) => ({
+                value: owner.value,
+                label: owner.label ? `${owner.label} (${owner.value})` : owner.value,
+              }))}
+              hint="Used only when the repository is empty."
+              error={err('owner_id')}
+              conditional
+            />
+          ) : null}
+          {profile.id === 'github-actions' ? (
+            <Checkbox
+              name={name('require_github_hosted')}
+              label="GitHub-hosted runners only"
+              hint="Refuse self-hosted runners."
+              checked={jobs.require_github_hosted}
+            />
+          ) : null}
+        </More>
+      )}
     </>
   );
 }
@@ -912,14 +952,20 @@ function RepositoryFields(props: {
 }) {
   const { branch, live } = props;
   const { prefix, jobs, profile } = branch;
-  const gitlab = profile.id === 'gitlab-ci';
-  const label = gitlab ? 'Project' : 'Repository';
+  const project = profile.id !== 'github-actions';
+  const label = project ? 'Project' : 'Repository';
+  const kind =
+    profile.id === 'vercel'
+      ? 'vercel_project'
+      : profile.id === 'gitlab-ci'
+        ? 'gitlab_project'
+        : 'github_repo';
   const inputId = fieldId(`${prefix}repository`);
   const all = branch.repositoryOptions;
   if (all.length === 0) {
     return (
       <IdWithLabelField
-        kind={gitlab ? 'gitlab_project' : 'github_repo'}
+        kind={kind}
         name={`${prefix}repository`}
         label={label}
         value={jobs.repository}
@@ -939,7 +985,7 @@ function RepositoryFields(props: {
   const another = shown.length + 1;
   const options = [
     ...shown.map((option, index) => {
-      const parsed = /^(.*) \((\d+)\)$/.exec(option.value);
+      const parsed = /^(.*) \(([A-Za-z0-9_]+)\)$/.exec(option.value);
       const count = branch.repositoryCounts?.[option.value] ?? 0;
       return {
         value: option.value,
@@ -956,7 +1002,7 @@ function RepositoryFields(props: {
     {
       value: '',
       o: another,
-      title: gitlab ? 'Another project' : 'Another repository',
+      title: project ? 'Another project' : 'Another repository',
     },
   ];
   const checked = matched ? matched.value : value !== '' ? '' : undefined;
@@ -971,14 +1017,14 @@ function RepositoryFields(props: {
       <FieldSet
         id={pickId}
         legend={label}
-        hint={`${gitlab ? 'Projects' : 'Repositories'} this credential access rule used before, most used first. The ID keeps working after a rename.`}
+        hint={`${project ? 'Projects' : 'Repositories'} this credential access rule used before, most used first. The ID keeps working after a rename.`}
         {...slot(live, 3)}
       >
         <RowPicker name={`${prefix}repository`} value={checked} options={options} />
       </FieldSet>
       <Branch live={live} n={3} o={another}>
         <IdWithLabelField
-          kind={gitlab ? 'gitlab_project' : 'github_repo'}
+          kind={kind}
           name={`${prefix}repository_other`}
           id={inputId}
           label={`${label} name (ID)`}
@@ -1006,7 +1052,8 @@ function ContextFields(props: {
   const gitlab = profile.id === 'gitlab-ci';
   const id = fieldId(`${prefix}context`);
   const all = contextsFor(profile).map((context, index) => {
-    const info = CONTEXT_TEXT[context];
+    const info =
+      (profile.id === 'vercel' ? VERCEL_CONTEXT_TEXT[context] : null) ?? CONTEXT_TEXT[context];
     const risky = info.risk !== undefined;
     const description = gitlab
       ? (GITLAB_CONTEXT_TEXT[context]?.description ?? info.description)
@@ -1037,20 +1084,17 @@ function ContextFields(props: {
       },
     };
   });
-  const main = all.filter((entry) => MAIN_CONTEXTS.has(entry.context)).map((e) => e.card);
-  const rest = all.filter((entry) => !MAIN_CONTEXTS.has(entry.context)).map((e) => e.card);
+  // Vercel has two contexts: both are cards.
+  const isMain = (context: AccessContext) => profile.id === 'vercel' || MAIN_CONTEXTS.has(context);
+  const main = all.filter((entry) => isMain(entry.context)).map((e) => e.card);
+  const rest = all.filter((entry) => !isMain(entry.context)).map((e) => e.card);
   useFocusTarget(`${prefix}context`, { id, options: [...main, ...rest] });
   const restChecked = rest.some((card) => card.value === jobs.context);
   // The context inputs sit after the fieldset: a live slot reads every [data-o] inside its
   // fieldset, so the environment picks inside it would count as context choices.
   return (
     <>
-      <FieldSet
-        id={id}
-        legend="When can its jobs use the credential?"
-        error={props.error}
-        {...slot(live, 4)}
-      >
+      <FieldSet id={id} legend="When does this rule apply?" error={props.error} {...slot(live, 4)}>
         <UiRadioCards
           name={`${prefix}context`}
           value={jobs.context}
@@ -1106,10 +1150,13 @@ function ContextInput(props: {
   };
   switch (props.context) {
     case 'environment': {
-      const known = branch.suggestions.environments;
-      const hint = gitlab
-        ? "Exact name from the job's environment: key. Protect it in GitLab."
-        : "Exact name from the job's environment: key. Add required reviewers to it in GitHub.";
+      const vercel = branch.profile.id === 'vercel';
+      const known = environmentChoices(branch);
+      const hint = vercel
+        ? 'production and preview are trusted. development tokens reach every team member through vercel env pull; it and Custom Environments are opt-ins that the save asks you to accept.'
+        : gitlab
+          ? "Exact name from the job's environment: key. Protect it in GitLab."
+          : "Exact name from the job's environment: key. Add required reviewers to it in GitHub.";
       if (known.length === 0) {
         return <Field {...common} label="Environment" example="production" hint={hint} />;
       }
@@ -1141,7 +1188,10 @@ function ContextInput(props: {
                   o: index + 1,
                   label: env,
                   mono: true,
-                  meta: index === 0 ? 'most used' : undefined,
+                  meta:
+                    index === 0 && branch.suggestions.environments.includes(env)
+                      ? 'most used'
+                      : undefined,
                 })),
                 { value: '', o: other, label: 'Other' },
               ]}
@@ -1844,6 +1894,7 @@ export function GlobalRail(props: {
 function JobsPhrase(props: { branch: JobsBranch }) {
   const { branch } = props;
   if (branch.jobs.editor === 'rows') return <>the conditions you write</>;
+  const noun = branch.profile.id === 'github-actions' ? 'repository' : 'project';
   const all = branch.repositoryOptions;
   const shown = all.slice(0, PICKS_SHOWN);
   const value = branch.jobs.repository.trim();
@@ -1851,24 +1902,27 @@ function JobsPhrase(props: { branch: JobsBranch }) {
   if (matched && !shown.includes(matched)) shown.push(matched);
   const repo =
     all.length === 0 ? (
-      <span class="v">{repositoryLabelOf(branch) ?? (value || 'the repository you enter')}</span>
+      <span class="v">{repositoryLabelOf(branch) ?? (value || `the ${noun} you enter`)}</span>
     ) : (
       <LivePhrase
         field={3}
         phrases={Object.fromEntries([
           ...shown.map((option, index) => [
             index + 1,
-            <span class="v">{/^(.*) \(\d+\)$/.exec(option.value)?.[1] ?? option.value}</span>,
+            <span class="v">
+              {/^(.*) \([A-Za-z0-9_]+\)$/.exec(option.value)?.[1] ?? option.value}
+            </span>,
           ]),
-          [shown.length + 1, 'the repository you enter'],
+          [shown.length + 1, `the ${noun} you enter`],
         ])}
-        empty="the repository you choose"
+        empty={`the ${noun} you choose`}
       />
     );
   const contexts = contextsFor(branch.profile);
   // The environment picks are live field 5 (ContextInput): the phrase names the picked one.
-  const environments = branch.suggestions.environments.slice(0, PICKS_SHOWN);
-  const known = branch.suggestions.environments.includes(branch.jobs.environment);
+  const choices = environmentChoices(branch);
+  const environments = choices.slice(0, PICKS_SHOWN);
+  const known = choices.includes(branch.jobs.environment);
   if (known && !environments.includes(branch.jobs.environment)) {
     environments.push(branch.jobs.environment);
   }
@@ -1896,7 +1950,13 @@ function JobsPhrase(props: { branch: JobsBranch }) {
         phrases={Object.fromEntries(
           contexts.map((context, index) => [
             index + 1,
-            context === 'environment' ? environmentPhrase : CONTEXT_PHRASE[context],
+            context === 'environment' ? (
+              environmentPhrase
+            ) : context === 'any' && branch.profile.id === 'vercel' ? (
+              <span class="t-warn"> · production and preview (risk)</span>
+            ) : (
+              CONTEXT_PHRASE[context]
+            ),
           ]),
         )}
       />

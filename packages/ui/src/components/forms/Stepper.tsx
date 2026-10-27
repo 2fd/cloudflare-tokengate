@@ -36,8 +36,11 @@ export interface FormStepProps {
   kind?: 'fieldset' | 'group';
   /** Level of a `group` step's title. Default 2: the steps sit under the page H1. */
   headingLevel?: HeadingLevel;
-  /** `current` (solid accent number, `aria-current="step"`) or `done` (ok number). */
-  state?: 'current' | 'done';
+  /**
+   * `current` (solid accent number, `aria-current="step"`), `done` (ok number), `failed` (bad
+   * number, the current step that did not pass) or `todo` (muted: a later step of a tracked flow).
+   */
+  state?: 'current' | 'done' | 'failed' | 'todo';
   /** Live-form field slot of a `fieldset` step (`.sfN`). */
   live?: LiveSlot;
   /** Counts the checked boxes inside, for a SelectedCount. */
@@ -59,7 +62,7 @@ export function FormStep(props: FormStepProps) {
   const prefix = (
     <span class="vh">
       Step {props.n}
-      {props.state === 'done' ? ', done' : null}:{' '}
+      {props.state === 'done' ? ', done' : props.state === 'failed' ? ', failed' : null}:{' '}
     </span>
   );
   const bodyClass = cx(
@@ -125,9 +128,11 @@ export function FormStep(props: FormStepProps) {
         'fstep',
         props.state === 'current' && 'is-current',
         props.state === 'done' && 'is-done',
+        props.state === 'failed' && 'is-failed',
+        props.state === 'todo' && 'is-todo',
         props.class,
       )}
-      aria-current={props.state === 'current' ? 'step' : undefined}
+      aria-current={props.state === 'current' || props.state === 'failed' ? 'step' : undefined}
     >
       <span class="fstep-n" aria-hidden="true">
         {props.n}

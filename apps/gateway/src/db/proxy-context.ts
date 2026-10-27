@@ -1,11 +1,9 @@
-// Everything the proxy needs from the control plane, read in one D1 batch of 6 statements per request
+// Everything the proxy needs from the control plane, read in one D1 batch of 5 statements per request
 // (no caching, so disabling an access rule, a global access rule or a credential takes effect on the next
 // request; I-AUTHZ-1). Every statement is indexed and bounded (docs/architecture.md, "Query budget").
 import { credentialRules, globalRules } from './access-rules';
 import { accessRuleFromRow, serviceFromRow } from './rows';
 import {
-  adminHostsFromValue,
-  adminHostsStatement,
   type Settings,
   settingsFromRows,
   settingsStatement,
@@ -39,8 +37,6 @@ export interface ProxyContext {
   settings: Settings;
   /** Upstream host allowlist (I-SSRF-1); null = any public https host. */
   allowedUpstreamHosts: string[] | null;
-  /** Admin host allowlist (I-DEPLOY-1); base URLs may not point at it (I-SSRF-1). */
-  adminHosts: string[] | null;
 }
 
 type Row = Record<string, unknown>;
@@ -85,16 +81,14 @@ export async function loadProxyContext(
   token: { preIss: string | null; standard: boolean },
 ): Promise<ProxyContext> {
   const binds = [slug, now, token.preIss, token.standard ? 1 : 0];
-  const [credentials, candidates, globals, settings, upstreamHosts, adminHosts] =
-    await db.batch<Row>([
-      db.prepare('SELECT * FROM credentials WHERE slug = ?1').bind(slug),
-      // A statement takes exactly as many binds as its highest parameter number.
-      db.prepare(CANDIDATE_RULES_SQL).bind(...binds.slice(0, 3)),
-      db.prepare(GLOBAL_RULES_SQL).bind(...binds),
-      settingsStatement(db),
-      upstreamHostsStatement(db),
-      adminHostsStatement(db),
-    ]);
+  const [credentials, candidates, globals, settings, upstreamHosts] = await db.batch<Row>([
+    db.prepare('SELECT * FROM credentials WHERE slug = ?1').bind(slug),
+    // A statement takes exactly as many binds as its highest parameter number.
+    db.prepare(CANDIDATE_RULES_SQL).bind(...binds.slice(0, 3)),
+    db.prepare(GLOBAL_RULES_SQL).bind(...binds),
+    settingsStatement(db),
+    upstreamHostsStatement(db),
+  ]);
 
   const serviceRow = credentials?.results[0];
   const service = serviceRow ? serviceFromRow(serviceRow) : null;
@@ -112,6 +106,5 @@ export async function loadProxyContext(
     allowedUpstreamHosts: upstreamHostsFromValue(
       upstreamHosts?.results[0]?.value as string | undefined,
     ),
-    adminHosts: adminHostsFromValue(adminHosts?.results[0]?.value as string | undefined),
   };
 }

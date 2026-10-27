@@ -11,9 +11,6 @@ import { lastUsedTime } from './format';
 import { issuerNodes } from './matrix';
 import { statusLabel } from './status';
 
-const DAY_MS = 86_400_000;
-const EXPIRY_WARNING_MS = 14 * DAY_MS;
-
 export interface MapModel {
   consumers: MapConsumer[];
   tokens: MapToken[];
@@ -73,7 +70,7 @@ export function mapModel(
       lastUsed: hours.length > 0 ? lastUsedTime(Math.max(...hours), now) : '—',
       idle,
       ...(tag ? { tag } : {}),
-      ...tokenLine(token, own, now),
+      ...tokenLine(token, own),
     };
   });
   return {
@@ -102,15 +99,9 @@ function mapAccess(edge: RuleEdge): MapAccess {
 function tokenLine(
   token: Connections['credentials'][number],
   own: readonly RuleEdge[],
-  now: number,
 ): { line: Child; lineTone?: 'warn' | 'bad' } {
   const issuers = new Set(own.map((edge) => edge.rule.issuer_key)).size;
   if (!token.enabled) return { line: '⏸ Disabled · its access rules are inactive' };
-  const expires = token.credential_expires_at;
-  if (expires !== null && expires > now && expires - now <= EXPIRY_WARNING_MS) {
-    const days = Math.max(1, Math.ceil((expires - now) / DAY_MS));
-    return { line: `⌛ Secret expires in ${plural(days, 'day', 'days')}`, lineTone: 'warn' };
-  }
   const expired = own.filter((edge) => edge.status === 'expired').length;
   if (expired > 0) {
     return {

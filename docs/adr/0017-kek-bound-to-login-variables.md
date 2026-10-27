@@ -35,3 +35,7 @@ Local development needed manual edits before the first `pnpm dev`: a generated k
 - The development login and Access never run together. A forgotten `AUTH_ACCESS_DEVELOPMENT` next to Access turns off admin sign-in at once, instead of staying hidden.
 - The Deploy button now prompts for `TOKENGATE_KEK` and `AUTH_ACCESS_DEVELOPMENT`. Cloudflare's documentation does not say whether it prefills example values. A deploy that keeps both defaults fails closed ([I-DEPLOY-1](../threat-model.md#i-deploy-1)): the development login signs in no request through Cloudflare's edge, so nobody can sign in, and the development key is refused as soon as an Access variable is set.
 - The development key is public. Credentials stored locally with it are not protected; use test credentials in local development.
+
+## Note (2026-10-19)
+
+[ADR 0027](0027-two-slot-key-rotation.md) changes the keyring to two secrets with one key each and makes each key id the key check value of the bound key. The login binding is unchanged. A change of the login variables now also changes every key id, so Settings › Rotate encryption lists the earlier key ids as missing (`k1`, the id of credentials sealed before, as changed). `pnpm keyring check` reads one bare key and prints its key id.

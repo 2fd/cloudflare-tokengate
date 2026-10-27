@@ -173,6 +173,8 @@ export interface AdminTestApp {
   app: App;
   deps: Deps;
   request(path: string, init?: RequestInit & { origin?: string }): Promise<Response>;
+  /** Resolves every promise handed to waitUntil so far (the background rewrap). */
+  settle(): Promise<void>;
 }
 
 export interface AdminTestAppOptions {
@@ -188,6 +190,7 @@ export interface AdminTestAppOptions {
  * plus a stub proxy route registered before the security middleware, as in src/app.ts.
  */
 export function createAdminTestApp(options: AdminTestAppOptions = {}): AdminTestApp {
+  const pending: Promise<unknown>[] = [];
   const testEnv = { ...env, ...TEST_ACCESS_ENV, ...options.env } as unknown as Env;
   const deps: Deps = {
     env: testEnv as unknown as AppEnv,
@@ -199,7 +202,9 @@ export function createAdminTestApp(options: AdminTestAppOptions = {}): AdminTest
     ),
     now: options.now ?? (() => Date.now()),
     random: (length) => crypto.getRandomValues(new Uint8Array(length)),
-    waitUntil: () => {},
+    waitUntil: (promise) => {
+      pending.push(promise);
+    },
   };
   const app: App = new Hono<AppContext>();
   app.use(async (c, next) => {
@@ -221,6 +226,9 @@ export function createAdminTestApp(options: AdminTestAppOptions = {}): AdminTest
     request: (path, init = {}) => {
       const { origin = TEST_ORIGIN, ...rest } = init;
       return Promise.resolve(app.fetch(new Request(new URL(path, origin), rest), testEnv, ctx));
+    },
+    settle: async () => {
+      while (pending.length > 0) await Promise.allSettled(pending.splice(0));
     },
   };
 }

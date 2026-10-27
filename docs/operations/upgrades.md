@@ -121,7 +121,7 @@ What a rollback does not undo:
 What a rollback does bring back:
 
 - **Variables.** A version includes its variables. A rollback restores the values that version had.
-  The upstream host allowlist and the admin hosts are in D1 and do not change ([configuration](../configuration.md#variables)).
+  The upstream host allowlist is in D1 and does not change ([configuration](../configuration.md#variables)).
   If the `AUTH_ACCESS_*` values differ, every stored credential fails with `503 credential_unavailable`
   ([I-CRED-3](../threat-model.md#i-cred-3)). Do not roll back across a change of the login variables.
 - **Secrets.** A version includes its secrets. If they changed since that version, wrangler lists them

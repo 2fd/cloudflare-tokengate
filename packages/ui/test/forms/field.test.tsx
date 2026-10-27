@@ -56,6 +56,16 @@ describe('Field', () => {
     ).toContain('<label for="b">Branch <span class="opt">(needed for Branch)</span></label>');
   });
 
+  it('makes a live field slot (.sfN) for a Select whose options carry data-o', () => {
+    expect(
+      render(
+        <Field id="t" label="Type" live={1}>
+          <Select options={[{ value: 'a', label: 'A', o: 1 }]} />
+        </Field>,
+      ),
+    ).toMatch(/^<div class="field sf1"><label for="t">Type<\/label><select class="select" id="t">/);
+  });
+
   it('wires Select and Textarea the same way', () => {
     const select = render(
       <Field id="region" label="Region" hint="Where the API runs.">

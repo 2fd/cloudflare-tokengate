@@ -175,33 +175,131 @@ describe('who can use a credential (A7.9)', () => {
   });
 });
 
-describe('problems and history', () => {
-  it('an expiring secret names the token and its date, with the fix for writers only', async () => {
+describe('replace secret and destination', () => {
+  const dangerZone = (html: string) =>
+    /<section class="tray danger-zone" id="danger"[\s\S]*?<\/section>/.exec(html)?.[0] ?? '';
+  const destinationTray = (html: string) =>
+    /<section class="tray" id="destination"[\s\S]*?<\/section>/.exec(html)?.[0] ?? '';
+  const replaceDialog = (html: string) =>
+    /<dialog[^>]*id="dlg-replace"[\s\S]*?<\/dialog>/.exec(html)?.[0] ?? '';
+
+  async function createCustom(session: AdminSession): Promise<string> {
+    const res = await adminPost(app, session, '/admin/credentials', {
+      template: 'custom',
+      slug: 'custom',
+      base_url: 'https://api.example.com/v1',
+      injection_kind: 'bearer',
+      verify_path: '',
+      credential: 'custom-secret-0123456789abcdefWXYZ',
+    });
+    const id = /svc_[0-9A-Z]{26}/.exec(res.headers.get('location') ?? '')?.[0];
+    if (!id) throw new Error(`unexpected ${res.status}`);
+    return id;
+  }
+
+  it('"Replace secret…" is a danger zone action that opens the dlg-replace dialog', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
-    const at = Date.now() + 3 * DAY + 3_600_000;
-    await env.DB.prepare('UPDATE credentials SET credential_expires_at = ? WHERE id = ?')
-      .bind(at, id)
-      .run();
     const page = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
-    expect(page).toMatch(
-      /<div class="callout warn">[\s\S]*?The secret of OpenAI expires on \d+ \w+ \d{4} \(in 4 days\)\./,
-    );
-    expect(page).toContain(`href="/admin/credentials/${id}#secret">Replace the secret</a>`);
-    expect(page).toContain('Expires in 4 days');
-    const list = await (await adminGet(app, admin, '/admin/credentials')).text();
-    expect(list).toContain('The secret of OpenAI expires on');
-    expect(list).toContain('Replace secret<span class="vh"> of OpenAI</span>');
-    expect(list).toMatch(
-      /<span class="meta t-warn"><span aria-hidden="true">⌛ <\/span>Expires in 4 days<\/span>/,
-    );
-    const viewer = await (
-      await adminGet(app, await sessionFor('viewer'), `/admin/credentials/${id}`)
-    ).text();
-    expect(viewer).not.toContain('>Replace the secret</a>');
-    expect(viewer).toContain('Only credential managers can replace the secret.');
+    const danger = dangerZone(page);
+    expect(danger).toContain('Replace secret</h3>');
+    expect(danger).toMatch(/<button[^>]*commandfor="dlg-replace"[^>]*>Replace secret…/);
+    const dialog = replaceDialog(page);
+    expect(dialog).toContain(`action="/admin/credentials/${id}/secret"`);
+    expect(dialog).toContain('name="credential"');
+    expect(dialog).toContain('name="expected_destination"');
+    // Closed until the button opens it.
+    expect(dialog).toMatch(/^<dialog[^>]*popover="auto"/);
+    expect(dialog).not.toMatch(/^<dialog[^>]*\bopen=""/);
+    // The Secret tray no longer holds the rotate form.
+    const secretTray = /<section class="tray" id="secret"[\s\S]*?<\/section>/.exec(page)?.[0] ?? '';
+    expect(secretTray).not.toContain(`action="/admin/credentials/${id}/secret"`);
+
+    for (const role of ['viewer', 'access_manager'] as const) {
+      const other = await (
+        await adminGet(app, await sessionFor(role), `/admin/credentials/${id}`)
+      ).text();
+      expect(other, role).not.toContain('id="dlg-replace"');
+      expect(other, role).not.toContain('Replace secret…');
+    }
   });
 
+  it('offers no Replace secret while the stored destination is not attested', async () => {
+    const admin = await sessionFor('admin');
+    const id = await createOpenAi(admin);
+    await env.DB.prepare(
+      "UPDATE credentials SET base_url = 'https://attacker.example' WHERE id = ?",
+    )
+      .bind(id)
+      .run();
+    const page = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
+    expect(page).not.toContain('Replace secret…');
+    expect(page).not.toContain('commandfor="dlg-replace"');
+  });
+
+  it('a template credential has a fixed destination: a Settings tray, no Change destination', async () => {
+    const admin = await sessionFor('admin');
+    const id = await createOpenAi(admin);
+    for (const path of [`/admin/credentials/${id}`, `/admin/credentials/${id}?open=destination`]) {
+      const page = await (await adminGet(app, admin, path)).text();
+      const tray = destinationTray(page);
+      expect(tray, path).toMatch(/id="destination-h">Settings</);
+      expect(tray, path).toContain('OpenAI API: the destination is fixed.');
+      expect(tray, path).not.toContain('Base URL');
+      expect(tray, path).not.toContain('Secret sent as');
+      expect(page, path).not.toContain('Change destination…');
+      expect(page, path).not.toContain('?open=destination#destination');
+      expect(page, path).not.toContain(`action="/admin/credentials/${id}/destination"`);
+      expect(tray, path).toContain(`href="/admin/credentials/${id}?open=details#details"`);
+    }
+  });
+
+  it('a template credential without a secret gets "Set the secret", with no destination fields', async () => {
+    const admin = await sessionFor('admin');
+    const id = await createOpenAi(admin);
+    await env.DB.prepare(
+      'UPDATE credentials SET credential_sealed = NULL, credential_hint = NULL WHERE id = ?',
+    )
+      .bind(id)
+      .run();
+    const page = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
+    expect(page).toMatch(/<details[^>]*id="destination-edit"[^>]*open=""/);
+    expect(page).toContain('Set the secret');
+    const form =
+      new RegExp(`<form[^>]*action="/admin/credentials/${id}/destination"[\\s\\S]*?</form>`).exec(
+        page,
+      )?.[0] ?? '';
+    expect(form).toContain('name="credential"');
+    expect(form).toContain('name="confirm_destination"');
+    expect(form).not.toContain('name="base_url"');
+    expect(form).not.toContain('name="injection_kind"');
+    expect(page).not.toContain('Change destination…');
+  });
+
+  it('a custom credential keeps Change destination and its Destination tray', async () => {
+    const admin = await sessionFor('admin');
+    const id = await createCustom(admin);
+    const page = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
+    const tray = destinationTray(page);
+    expect(tray).toMatch(/id="destination-h">Destination</);
+    expect(tray).toContain('Base URL');
+    expect(tray).toContain('https://api.example.com/v1');
+    expect(tray).toContain(`href="/admin/credentials/${id}?open=destination#destination"`);
+    expect(tray).toContain('Change destination…');
+    const open = await (
+      await adminGet(app, admin, `/admin/credentials/${id}?open=destination`)
+    ).text();
+    const form =
+      new RegExp(`<form[^>]*action="/admin/credentials/${id}/destination"[\\s\\S]*?</form>`).exec(
+        open,
+      )?.[0] ?? '';
+    expect(form).toContain('name="base_url"');
+    expect(form).toContain('name="injection_kind"');
+    expect(open).toContain('Replace secret…');
+  });
+});
+
+describe('problems and history', () => {
   it('a disabled token says so first, with Enable for writers', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
@@ -273,11 +371,11 @@ describe('settings pages', () => {
     expect(html).toMatch(/name="mode" value="list" checked=""/);
   });
 
-  it('Encryption keys lists the keys in a tray with their state as a word', async () => {
+  it('Rotate encryption lists the keys in a tray with their state as a word', async () => {
     const html = await (
       await adminGet(app, await sessionFor('viewer'), '/admin/credentials/keys')
     ).text();
-    expect(html).toContain('<h1>Encryption keys</h1>');
+    expect(html).toContain('<h1>Rotate encryption</h1>');
     expect(html).toMatch(/<section class="tray" id="keys" aria-labelledby="keys-h">/);
     expect(html).toContain('<span class="badge ok"><span aria-hidden="true">✓</span>Active</span>');
     expect(html).toContain('Every stored secret uses the active key.');

@@ -20,7 +20,7 @@ In the admin UI, open **Credentials**, select **Add a token** and open the **Sla
 | Suggested grant rule | `POST /` | `POST /` |
 | Host for the upstream host allowlist | `hooks.slack.com` | `discord.com` |
 
-If **Credentials › Allowed hosts** is set and does not include the host, the card says so before you type anything. An owner ticks **Also allow** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
+If **Settings › Allowed hosts** is set and does not include the host, the card says so before you type anything. An owner ticks **Also allow** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
 
 ### Secret value
 

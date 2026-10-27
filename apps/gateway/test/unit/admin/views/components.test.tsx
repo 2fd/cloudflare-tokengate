@@ -711,7 +711,7 @@ describe('patterns', () => {
     const rendered = [...out.matchAll(/pattern="([^"]*)"/g)].map((m) =>
       (m[1] as string).replaceAll('&amp;', '&').replaceAll('&quot;', '"'),
     );
-    expect(rendered).toHaveLength(4);
+    expect(rendered).toHaveLength(Object.keys(ID_PATTERNS).length);
     for (const pattern of rendered) {
       expect(() => new RegExp(`^(?:${pattern})$`, 'v')).not.toThrow();
     }
@@ -850,18 +850,13 @@ describe('AskSomeone', () => {
 });
 
 describe('NotFound', () => {
-  it('links the four sections in sidebar order as link cards and never echoes anything', () => {
+  it('links the three sections in sidebar order as link cards and never echoes anything', () => {
     const out = html(<NotFound />);
     const links = [...out.matchAll(/<a class="tcard" href="([^"]+)">/g)].map((m) => m[1]);
-    expect(links).toEqual([
-      '/admin',
-      '/admin/credentials',
-      '/admin/credential-access-rules',
-      '/admin/users',
-    ]);
+    expect(links).toEqual(['/admin', '/admin/credentials', '/admin/users']);
     expect(out).toContain('<h2 id="nf-sections-h">Go to a section</h2>');
     expect(out).toContain(
-      '<a class="tcard" href="/admin/credentials"><span class="t">Credentials</span><span class="d">Credentials, allowed hosts and encryption keys</span>',
+      '<a class="tcard" href="/admin/credentials"><span class="t">Credentials</span><span class="d">Credentials, and credential and global access rules</span>',
     );
     // No bare user-agent list: the cards are a plain list.
     expect(out).not.toMatch(/<ul>/);

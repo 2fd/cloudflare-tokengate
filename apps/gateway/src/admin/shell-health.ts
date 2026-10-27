@@ -1,12 +1,14 @@
 // What the shell says about the health of the deployment, on every page, from the alert catalogue
 // (telemetry/dashboard.ts overviewAlerts): the health line in the sidebar counts errors, then
 // warnings, then notes; the health strip shows the error-level problems that stop calls, with one
-// fix link each. Text names variables and states only, never values.
+// fix link each; a sidebar page that shows a problem, a warning or a note gets a dot. Text names
+// variables and states only, never values.
 import { SCHEMA_HEAD } from '../generated/schema-head';
 import type { ConfigProblem, CronHealth, KeyringHealth } from '../health';
 import { type AlertData, checkHref } from '../telemetry/dashboard';
+import type { Permission } from './auth/rbac';
 import { paths } from './paths';
-import type { Alert } from './views/alerts';
+import type { Alert, AlertCode } from './views/alerts';
 import { docsUrl } from './views/docs';
 
 /** An error-level problem in the health strip, with the link that fixes it. */
@@ -52,7 +54,7 @@ export function stripProblems(data: StripInput): HealthProblem[] {
     problems.push({
       title: 'Encryption keys are not loaded.',
       detail: `Token requests fail with 503 and secrets cannot change (${data.keyring.error}).`,
-      fix: { href: paths.tokenKeys(), label: 'Open encryption keys' },
+      fix: { href: paths.tokenKeys(), label: 'Open rotate encryption' },
     });
   }
   for (const database of ['DB', 'TELEMETRY_DB'] as const) {
@@ -93,8 +95,10 @@ function plural(n: number, one: string, many: string): string {
 }
 
 /**
- * The health line: errors link to the Overview health checks, warnings to Needs attention, and
- * notes (or nothing) say "Healthy". It never claims more than the alert catalogue checked.
+ * The health line: errors and warnings link to Needs attention on the Overview, which lists every
+ * alert; notes (or nothing) say "Healthy" and link to the Overview. The health checks are not the
+ * target: the Overview shows them only while one fails, and some errors fail no check. It never
+ * claims more than the alert catalogue checked.
  */
 export function healthSummary(alerts: readonly Alert[]): HealthSummary {
   const count = (level: Alert['level']) => alerts.filter((alert) => alert.level === level).length;
@@ -103,8 +107,8 @@ export function healthSummary(alerts: readonly Alert[]): HealthSummary {
     return {
       tone: 'bad',
       text: `${plural(errors, 'problem', 'problems')} to fix`,
-      href: paths.overview({ hash: 'health' }),
-      srSuffix: '. Open Overview, Health',
+      href: paths.overview({ hash: 'attention' }),
+      srSuffix: '. Open Overview, Needs attention',
     };
   }
   const warnings = count('warning');
@@ -116,12 +120,11 @@ export function healthSummary(alerts: readonly Alert[]): HealthSummary {
       srSuffix: '. Open Overview, Needs attention',
     };
   }
-  const notes = count('info');
   return {
     tone: 'ok',
-    text: notes > 0 ? `Healthy · ${plural(notes, 'note', 'notes')}` : 'Healthy',
-    href: paths.overview({ hash: 'health' }),
-    srSuffix: '. Open Overview, Health',
+    text: 'Healthy',
+    href: paths.overview(),
+    srSuffix: '. Open Overview',
   };
 }
 
@@ -144,4 +147,78 @@ export function uncheckedHealth(problems: number): HealthSummary {
     href: paths.overview({ hash: 'health' }),
     srSuffix: '. The checks could not read the database. Open Overview, Health',
   };
+}
+
+/** A sidebar page's dot: the worst level among the alerts it shows. */
+export interface NavAttention {
+  tone: 'bad' | 'warn' | 'info';
+  /** ": 1 warning", ": 1 problem, 2 notes". */
+  srSuffix: string;
+}
+
+/**
+ * The sidebar page (a SECTIONS tab key) that shows and fixes each alert. null: the Overview alone
+ * shows it (the deployment checks, which the health line already covers), or the Settings pill
+ * already says it (people waiting for a decision).
+ */
+const ALERT_PAGES: Readonly<Record<AlertCode, string | null>> = {
+  keyring_unavailable: 'keys',
+  key_missing: 'keys',
+  key_changed: 'keys',
+  key_not_active: 'keys',
+  credential_malformed: 'tokens',
+  credential_missing_used: 'tokens',
+  upstream_auth: 'tokens',
+  outside_hosts: 'hosts',
+  access_expiring: 'access-rules',
+  single_owner: 'members',
+  users_need_decision: null,
+  schema_behind: null,
+  schema_ahead: null,
+  schema_unknown: null,
+  config_problem: null,
+  cron_failing: null,
+  cron_stale: null,
+  cron_never: null,
+};
+
+const TONES: Readonly<Record<Alert['level'], NavAttention['tone']>> = {
+  error: 'bad',
+  warning: 'warn',
+  info: 'info',
+};
+
+/**
+ * The dot of each sidebar page, by tab key. An alert whose fix needs a permission the viewer
+ * lacks gets none: the page does not ask them to act (the single owner callout is for owners).
+ */
+export function navAttention(
+  alerts: readonly Alert[],
+  can: (permission: Permission) => boolean,
+): Record<string, NavAttention> {
+  const byPage = new Map<string, Alert[]>();
+  for (const alert of alerts) {
+    const page = ALERT_PAGES[alert.code];
+    if (!page || (alert.fix && !can(alert.fix.permission))) continue;
+    byPage.set(page, [...(byPage.get(page) ?? []), alert]);
+  }
+  const words = [
+    ['error', 'problem', 'problems'],
+    ['warning', 'warning', 'warnings'],
+    ['info', 'note', 'notes'],
+  ] as const;
+  const result: Record<string, NavAttention> = {};
+  for (const [page, list] of byPage) {
+    const parts = words.flatMap(([level, one, many]) => {
+      const n = list.filter((alert) => alert.level === level).length;
+      return n > 0 ? [{ level, text: plural(n, one, many) }] : [];
+    });
+    const worst = parts[0];
+    if (!worst) continue;
+    result[page] = {
+      tone: TONES[worst.level],
+      srSuffix: `: ${parts.map((part) => part.text).join(', ')}`,
+    };
+  }
+  return result;
 }

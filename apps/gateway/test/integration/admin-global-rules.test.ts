@@ -12,6 +12,7 @@ import { WORLD_SECRET } from '../fixtures/admin-forms';
 import {
   auditActions,
   checkedValues,
+  selectedValue,
   formFields,
   GITLAB_ISSUER,
   idFromLocation,
@@ -197,7 +198,7 @@ describe('global access rules list (§A7.3)', () => {
       issuer: GITLAB_ISSUER,
     });
     const page = await html(GLOBALS);
-    expect(page).toContain('<title>Global access rules – Access Rules – tokengate</title>');
+    expect(page).toContain('<title>Global access rules – Credentials – tokengate</title>');
     // One group row per issuer key, then its rules; the GitHub key sorts after gitlab.com.
     const table = page.slice(page.indexOf('id="global-list"'));
     const order = [GITLAB_KEY, gitlab.id, GITHUB_KEY, acme.id, other.id].map((needle) =>
@@ -293,13 +294,32 @@ describe('global access rule form (§A7.4)', () => {
     ]) {
       expect(page, column).toContain(`name="limit.${column}"`);
     }
-    expect(checkedValues(page, 'type')).toEqual(['gitlab-ci']);
+    expect(selectedValue(page, 'type')).toBe('gitlab-ci');
     expect(inputValue(page, 'issuer')).toBe('https://gitlab.acme.example');
     expect(/<details[^>]*id="gr-token"[^>]*\sopen/.test(page)).toBe(false);
     expect(page).toContain('Save global access rule');
     // No impact preview until WP-R3.
     expect(page).not.toContain('value="preview"');
     expect(page).not.toContain('Preview the impact');
+  });
+
+  it('limits the Vercel global issuer to teams', async () => {
+    const team = 'team_7Gw5ZMzpQA8h90F832KGp7nwbuh3';
+    const res = await adminPost(world.app, admin(), GLOBALS, {
+      type: 'vercel',
+      issuer: '',
+      name: 'acme teams only',
+      enabled: '1',
+      'limit.tenant_pin': '1',
+      'tenants.vercel': `acme (${team})`,
+      confirm_new_ceiling: '1',
+    });
+    expect(res.status).toBe(303);
+    expect(await getGlobalAccessRule(env.DB, idFromLocation(locationOf(res)))).toMatchObject({
+      profile: 'vercel',
+      issuer: 'https://oidc.vercel.com',
+      tenant_pin: [{ claim: 'owner_id', match: 'exact', values: [team] }],
+    });
   });
 
   it('asks to confirm the first ceiling of an issuer, writes nothing, then saves', async () => {
@@ -445,7 +465,7 @@ describe('global access rule page (§A7.5)', () => {
       tenant_pin: [{ claim: 'repository_owner_id', match: 'exact', values: ['999'] }],
     });
     const page = await html(`${GLOBALS}/${rule.id}`);
-    expect(page).toContain('<title>acme only – Access Rules – tokengate</title>');
+    expect(page).toContain('<title>acme only – Credentials – tokengate</title>');
     const affected = page.slice(page.indexOf('id="affected"'), page.indexOf('id="history"'));
     expect(affected).toContain(`href="/admin/credential-access-rules/${credentialRule.id}"`);
     expect(affected).toContain('Blocked');

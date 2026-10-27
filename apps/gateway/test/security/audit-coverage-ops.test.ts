@@ -39,7 +39,7 @@ import {
   CONTEXT,
   dumpControlPlane,
   fakeNetwork,
-  KEYRING_1_2,
+  ROTATION_ENV,
   OWNER_ID,
   opsDeps,
   resetControlPlane,
@@ -105,7 +105,7 @@ const seedOwnGlobal =
     (await seedGlobalRule(d, { name: `global ${++seeded}`, tenant_pin: PIN, ...overrides })).id;
 const rotatedKeyring = (d: Deps): Deps => ({
   ...d,
-  env: { ...d.env, TOKENGATE_KEK: '', TOKENGATE_KEYRING: KEYRING_1_2 },
+  env: { ...d.env, ...ROTATION_ENV },
 });
 
 const successes: Array<OpCase & { action: string }> = [
@@ -287,7 +287,11 @@ const successes: Array<OpCase & { action: string }> = [
   {
     name: 'rewrapCredentials',
     action: 'keyring.rewrap',
-    run: (d) => rewrapCredentials(rotatedKeyring(d), ACTOR),
+    run: async (d) => {
+      const result = await rewrapCredentials(rotatedKeyring(d), ACTOR);
+      if (result.ok) await result.finished;
+      return result;
+    },
   },
   {
     name: 'exportConfiguration',

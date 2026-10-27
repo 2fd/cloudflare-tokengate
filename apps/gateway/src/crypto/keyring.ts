@@ -1,16 +1,30 @@
-// Parses TOKENGATE_KEK / TOKENGATE_KEYRING into non-extractable AES-256-GCM key-encryption keys,
-// failing closed with a named error. Each key is bound to the login variables (I-CRED-3): the AES
-// key is HKDF-SHA256 of the secret with the AUTH_ACCESS_* values as info, so changing any of them
-// makes every stored credential impossible to open. Has no value imports so scripts/keyring.ts can
-// load this file under Node type stripping and validate a keyring exactly like the Worker does.
+// Parses TOKENGATE_KEK (the current key) and TOKENGATE_KEYRING (the next key, during a rotation)
+// into non-extractable AES-256-GCM key-encryption keys, failing closed with a named error (ADR
+// 0028). Each key is bound to the login variables (I-CRED-3): the AES key is HKDF-SHA256 of the
+// secret with the AUTH_ACCESS_* values as info, so changing any of them makes every stored
+// credential impossible to open. A key's id is its key check value, so a key keeps its id when it
+// moves from one secret to the other. Has no value imports so scripts/keyring.ts can load this
+// file under Node type stripping and validate a key exactly like the Worker does.
 
 export type KeyringError =
   | 'keyring_absent'
   | 'keyring_malformed'
-  | 'active_kid_missing'
   | 'key_not_32_bytes'
-  | 'both_kek_and_keyring_set'
+  | 'key_not_random'
   | 'dev_placeholder_key';
+
+/**
+ * TOKENGATE_KEYRING: `absent`; `ready` (a new key, active); `same` (the value of TOKENGATE_KEK);
+ * or why it is not used: not base64, not 32 bytes, the public development key, or not random.
+ */
+export type NextKeyStatus =
+  | 'absent'
+  | 'ready'
+  | 'same'
+  | 'malformed'
+  | 'not_32_bytes'
+  | 'dev_placeholder'
+  | 'not_random';
 
 /** The variables a keyring reads: the secrets and the login variables its keys are bound to. */
 export interface KeyringEnv {
@@ -22,44 +36,55 @@ export interface KeyringEnv {
 }
 
 export interface Keyring {
-  /** Key id used for new seals. */
+  /** Key id used for new seals: the next key when it is ready, else the current key. */
   activeKid: string;
-  /** All key ids, sorted. */
+  /** Loaded key ids (key check values), sorted. The legacy id `k1` is not listed. */
   kids: string[];
-  /** kid → key check value (see keyCheckValue). Safe to display. */
+  /** Key id → key check value, `k1` included. Safe to display. */
   kcv: Record<string, string>;
-  /** Non-extractable AES-GCM key for `kid`, usages encrypt/decrypt. */
+  /** Non-extractable AES-GCM key for `kid` (`k1` included), usages encrypt/decrypt. */
   key(kid: string): CryptoKey | undefined;
+  /** The loaded key id a sealed kid refers to (`k1` → TOKENGATE_KEK), or null. */
+  resolve(kid: string): string | null;
+  /** Key id of TOKENGATE_KEK; null when only TOKENGATE_KEYRING is set. */
+  currentKid: string | null;
+  /** State of TOKENGATE_KEYRING. */
+  next: NextKeyStatus;
+  /** Key id of TOKENGATE_KEYRING when `ready` or `same`. */
+  nextKid: string | null;
 }
 
 export type LoadKeyringResult = { ok: true; keyring: Keyring } | { ok: false; error: KeyringError };
 
-/** Kid assigned to a bare TOKENGATE_KEK. */
-export const SHORTHAND_KID = 'k1';
+/** Id that sealed values from before ADR 0027 use for TOKENGATE_KEK. */
+export const LEGACY_KID = 'k1';
 
 /** Key ids appear in sealed blobs, logs and the admin UI, so they use a small closed alphabet. */
 export const KID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 const KEY_BYTES = 32;
+/** A random 32-byte key has about 30 distinct byte values; fewer than this is not random. */
+const MIN_DISTINCT_BYTES = 16;
 const KCV_LABEL = 'tokengate/v1/kek-check';
 const BINDING_LABEL = 'tokengate/v1/kek-binding';
 const BASE64_PATTERN = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /**
- * TOKENGATE_KEK in .dev.vars.example: base64 of "DEV-ONLY-KEY-NOT-FOR-PRODUCTION!". Accepted only
- * in development mode (AUTH_ACCESS_DEVELOPMENT set, no Access variable), in any keyring slot.
+ * TOKENGATE_KEK in .dev.vars.example: base64 of "DEV-ONLY-KEY-NOT-FOR-PRODUCTION!". Accepted as
+ * TOKENGATE_KEK only in development mode (AUTH_ACCESS_DEVELOPMENT set, no Access variable), never
+ * as TOKENGATE_KEYRING.
  */
 export const DEV_PLACEHOLDER_KEK = 'REVWLU9OTFktS0VZLU5PVC1GT1ItUFJPRFVDVElPTiE=';
 
 let cache: { id: string; result: Promise<LoadKeyringResult> } | null = null;
 
 /**
- * Loads the keyring from the Worker secrets. Exactly one of TOKENGATE_KEK (standard base64 of
- * 32 bytes, kid "k1") or TOKENGATE_KEYRING (JSON `{"active":"k2","keys":{"k1":"<b64>","k2":"<b64>"}}`)
- * must be set; empty or whitespace-only values count as absent.
- * Check order: presence, JSON shape and kid syntax, active kid present, each key 32 bytes, no
- * development placeholder outside development mode. Every key is then bound to the login
- * variables (`kekBindingInfo`). The last result is cached per isolate, keyed by all inputs.
+ * Loads the keyring from the Worker secrets; empty or whitespace-only values count as absent.
+ * TOKENGATE_KEK must be standard base64 of 32 bytes, and not the development key outside
+ * development mode. TOKENGATE_KEYRING is used only when it also passes checkNextKey; otherwise
+ * it is ignored and reported in `next`. Without TOKENGATE_KEK, TOKENGATE_KEYRING is the only key
+ * and must pass the same checks. Every key is bound to the login variables (`kekBindingInfo`).
+ * The last result is cached per isolate, keyed by all inputs.
  */
 export function loadKeyring(env: KeyringEnv): Promise<LoadKeyringResult> {
   const kek = env.TOKENGATE_KEK ?? '';
@@ -67,7 +92,7 @@ export function loadKeyring(env: KeyringEnv): Promise<LoadKeyringResult> {
   const info = kekBindingInfo(env);
   const id = JSON.stringify([kek, keyring, info]);
   if (cache && cache.id === id) return cache.result;
-  const result = parseAndImport(kek, keyring, info, developmentMode(env));
+  const result = parseAndImport(kek.trim(), keyring.trim(), info, developmentMode(env));
   cache = { id, result };
   return result;
 }
@@ -131,86 +156,101 @@ export async function keyCheckValue(rawKey: Uint8Array): Promise<string> {
   return hex;
 }
 
+/**
+ * Why a value cannot be the next key, or null when it can: standard base64 of exactly 32 bytes,
+ * not the public development key, not printable text (a passphrase, not random bytes) and at
+ * least MIN_DISTINCT_BYTES distinct byte values. A random key fails the last two with a
+ * probability below 1e-13.
+ */
+export function checkNextKey(
+  text: string,
+): Exclude<NextKeyStatus, 'absent' | 'ready' | 'same'> | null {
+  const raw = decodeKey(text);
+  if (raw === 'keyring_malformed') return 'malformed';
+  if (raw === 'key_not_32_bytes') return 'not_32_bytes';
+  if (isDevPlaceholder(raw)) return 'dev_placeholder';
+  if (raw.every((byte) => byte >= 0x20 && byte <= 0x7e)) return 'not_random';
+  if (new Set(raw).size < MIN_DISTINCT_BYTES) return 'not_random';
+  return null;
+}
+
+const NEXT_KEY_ERROR: Readonly<
+  Record<Exclude<NextKeyStatus, 'absent' | 'ready' | 'same'>, KeyringError>
+> = {
+  malformed: 'keyring_malformed',
+  not_32_bytes: 'key_not_32_bytes',
+  dev_placeholder: 'dev_placeholder_key',
+  not_random: 'key_not_random',
+};
+
 async function parseAndImport(
   kekSecret: string,
-  keyringSecret: string,
+  nextSecret: string,
   bindingInfo: string,
   development: boolean,
 ): Promise<LoadKeyringResult> {
-  const parsed = parseSecrets(kekSecret.trim(), keyringSecret.trim());
-  if (!parsed.ok) return parsed;
-  if (!development) {
-    const placeholder = decodeKey(DEV_PLACEHOLDER_KEK) as Uint8Array;
-    for (const raw of parsed.rawKeys.values()) {
-      if (raw.every((byte, i) => byte === placeholder[i])) {
-        return { ok: false, error: 'dev_placeholder_key' };
-      }
+  if (kekSecret === '' && nextSecret === '') return { ok: false, error: 'keyring_absent' };
+
+  let current: Uint8Array<ArrayBuffer> | null = null;
+  if (kekSecret !== '') {
+    const raw = decodeKey(kekSecret);
+    if (typeof raw === 'string') return { ok: false, error: raw };
+    if (!development && isDevPlaceholder(raw)) return { ok: false, error: 'dev_placeholder_key' };
+    current = raw;
+  }
+  let next: NextKeyStatus = 'absent';
+  let nextRaw: Uint8Array<ArrayBuffer> | null = null;
+  if (nextSecret !== '') {
+    const problem = checkNextKey(nextSecret);
+    if (problem && current === null) return { ok: false, error: NEXT_KEY_ERROR[problem] };
+    if (problem) next = problem;
+    else {
+      nextRaw = decodeKey(nextSecret) as Uint8Array<ArrayBuffer>;
+      next = current && sameBytes(current, nextRaw) ? 'same' : 'ready';
     }
   }
 
-  const kids = [...parsed.rawKeys.keys()].sort();
   const keys = new Map<string, CryptoKey>();
-  // Null prototype: `kcv["constructor"]` must be undefined, like any other unknown kid.
-  const kcv: Record<string, string> = Object.create(null);
-  for (const kid of kids) {
-    const bound = await boundKey(parsed.rawKeys.get(kid) as Uint8Array, bindingInfo);
-    kcv[kid] = await keyCheckValue(bound);
+  const importKey = async (raw: Uint8Array): Promise<string> => {
+    const bound = await boundKey(raw, bindingInfo);
+    const kid = await keyCheckValue(bound);
     keys.set(
       kid,
       await crypto.subtle.importKey('raw', bound, 'AES-GCM', false, ['encrypt', 'decrypt']),
     );
-  }
+    return kid;
+  };
+  const currentKid = current ? await importKey(current) : null;
+  const nextKid = nextRaw ? await importKey(nextRaw) : null;
+  const kids = [...keys.keys()].sort();
+  // Null prototype: `kcv["constructor"]` must be undefined, like any other unknown kid.
+  const kcv: Record<string, string> = Object.create(null);
+  for (const kid of kids) kcv[kid] = kid;
+  if (currentKid) kcv[LEGACY_KID] = currentKid;
+  const resolve = (kid: string): string | null =>
+    kid === LEGACY_KID ? currentKid : keys.has(kid) ? kid : null;
   const keyring: Keyring = {
-    activeKid: parsed.activeKid,
+    activeKid: (next === 'ready' ? nextKid : currentKid) as string,
     kids: Object.freeze(kids) as string[],
     kcv: Object.freeze(kcv),
-    key: (kid) => keys.get(kid),
+    key: (kid) => {
+      const loaded = resolve(kid);
+      return loaded === null ? undefined : keys.get(loaded);
+    },
+    resolve,
+    currentKid,
+    next,
+    nextKid,
   };
   return { ok: true, keyring: Object.freeze(keyring) };
 }
 
-type ParsedSecrets =
-  | { ok: true; activeKid: string; rawKeys: Map<string, Uint8Array<ArrayBuffer>> }
-  | { ok: false; error: KeyringError };
+function isDevPlaceholder(raw: Uint8Array): boolean {
+  return sameBytes(raw, decodeKey(DEV_PLACEHOLDER_KEK) as Uint8Array);
+}
 
-function parseSecrets(kek: string, keyringJson: string): ParsedSecrets {
-  if (kek !== '' && keyringJson !== '') return { ok: false, error: 'both_kek_and_keyring_set' };
-  if (kek === '' && keyringJson === '') return { ok: false, error: 'keyring_absent' };
-
-  if (kek !== '') {
-    const raw = decodeKey(kek);
-    if (typeof raw === 'string') return { ok: false, error: raw };
-    return { ok: true, activeKid: SHORTHAND_KID, rawKeys: new Map([[SHORTHAND_KID, raw]]) };
-  }
-
-  let doc: unknown;
-  try {
-    doc = JSON.parse(keyringJson);
-  } catch {
-    return { ok: false, error: 'keyring_malformed' };
-  }
-  if (!isPlainObject(doc) || !hasExactlyKeys(doc, ['active', 'keys'])) {
-    return { ok: false, error: 'keyring_malformed' };
-  }
-  const { active, keys } = doc;
-  if (typeof active !== 'string' || !KID_PATTERN.test(active) || !isPlainObject(keys)) {
-    return { ok: false, error: 'keyring_malformed' };
-  }
-  const entries = Object.entries(keys);
-  for (const [kid, value] of entries) {
-    if (!KID_PATTERN.test(kid) || typeof value !== 'string') {
-      return { ok: false, error: 'keyring_malformed' };
-    }
-  }
-  if (!Object.hasOwn(keys, active)) return { ok: false, error: 'active_kid_missing' };
-
-  const rawKeys = new Map<string, Uint8Array<ArrayBuffer>>();
-  for (const [kid, value] of entries) {
-    const raw = decodeKey((value as string).trim());
-    if (typeof raw === 'string') return { ok: false, error: raw };
-    rawKeys.set(kid, raw);
-  }
-  return { ok: true, activeKid: active, rawKeys };
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, i) => byte === b[i]);
 }
 
 /** Strict standard base64 (padding optional) of exactly 32 bytes. */
@@ -228,13 +268,4 @@ function decodeKey(
   const bytes = new Uint8Array(KEY_BYTES);
   for (let i = 0; i < KEY_BYTES; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function hasExactlyKeys(value: Record<string, unknown>, expected: string[]): boolean {
-  const actual = Object.keys(value);
-  return actual.length === expected.length && expected.every((key) => Object.hasOwn(value, key));
 }

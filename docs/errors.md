@@ -299,13 +299,16 @@ does not opt in to it ([I-AUTHZ-3](threat-model.md#i-authz-3)).
 **Status 503.** The gateway is not fully configured for this request.
 
 - **Causes** (the record has the exact reason):
-  - `keyring_absent`, `keyring_malformed`, `active_kid_missing`, `key_not_32_bytes`,
-    `both_kek_and_keyring_set`: the `TOKENGATE_KEK` or `TOKENGATE_KEYRING` secret is missing or invalid.
+  - `keyring_absent`, `keyring_malformed`, `key_not_32_bytes`, `key_not_random`: `TOKENGATE_KEK` is
+    missing or invalid, or only `TOKENGATE_KEYRING` is set and it is invalid. An invalid
+    `TOKENGATE_KEYRING` next to a valid `TOKENGATE_KEK` is ignored and causes no error. Records from
+    before [ADR 0027](adr/0027-two-slot-key-rotation.md) can also hold `active_kid_missing` or
+    `both_kek_and_keyring_set`.
   - `dev_placeholder_key`: the keyring holds the public development key from `.dev.vars.example`,
     and the Worker is not in development mode (`AUTH_ACCESS_DEVELOPMENT` set, no Access variable).
     Set a key of your own ([configuration.md](configuration.md#development-key)).
   - `base_url_invalid`: the service's base URL is no longer allowed, for example after a change to
-    the upstream host allowlist (Credentials › Allowed hosts) or the admin hosts (Users › Sign-in) ([I-SSRF-1](threat-model.md#i-ssrf-1)).
+    the upstream host allowlist (Settings › Allowed hosts) ([I-SSRF-1](threat-model.md#i-ssrf-1)).
   - `profile_unknown`: the credential access rule names a profile this version does not know. This check
     runs before the token is verified, so these records are pre-trust records.
 - **Caller:** contact the admins with the request ID.
@@ -375,11 +378,12 @@ The reason is the gateway error code, or a finer reason for some codes:
 | `keyring_missing_key` | `credential_unavailable` | The credential was encrypted with a key that is no longer in the keyring |
 | `sealed_malformed` | `credential_unavailable` | The stored credential is damaged |
 | `injection_invalid` | `credential_unavailable` | The service's injection settings are invalid |
-| `keyring_absent` | `not_configured` | No keyring is configured (`TOKENGATE_KEK` or `TOKENGATE_KEYRING`) |
-| `keyring_malformed` | `not_configured` | The keyring secret is malformed |
-| `active_kid_missing` | `not_configured` | The keyring has no active key |
+| `keyring_absent` | `not_configured` | No encryption key is configured (`TOKENGATE_KEK`) |
+| `keyring_malformed` | `not_configured` | `TOKENGATE_KEK` (or a `TOKENGATE_KEYRING` set alone) is not base64 |
+| `active_kid_missing` | `not_configured` | Before ADR 0027 only: the JSON keyring had no active key |
 | `key_not_32_bytes` | `not_configured` | A keyring key is not 32 bytes |
-| `both_kek_and_keyring_set` | `not_configured` | Both `TOKENGATE_KEK` and `TOKENGATE_KEYRING` are set |
+| `key_not_random` | `not_configured` | Only `TOKENGATE_KEYRING` is set and it is not random |
+| `both_kek_and_keyring_set` | `not_configured` | Before ADR 0027 only: both secrets were set |
 | `dev_placeholder_key` | `not_configured` | The keyring holds the development key from `.dev.vars.example` |
 | `base_url_invalid` | `not_configured` | The service's base URL is no longer allowed |
 | `profile_unknown` | `not_configured` | The credential access rule uses an unknown profile |

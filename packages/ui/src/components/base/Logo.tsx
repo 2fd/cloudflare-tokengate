@@ -15,6 +15,7 @@ export const LOGO_BRANDS = {
   github: { name: 'GitHub', letters: 'GH' },
   discord: { name: 'Discord', letters: 'D' },
   gitlab: { name: 'GitLab', letters: 'GL' },
+  vercel: { name: 'Vercel', letters: '▲' },
   buildkite: { name: 'Buildkite', letters: 'BK' },
   oidc: { name: 'OIDC', icon: 'token' },
   custom: { name: 'Custom', letters: '</>' },
@@ -45,6 +46,11 @@ export interface LogoProps {
   label?: string;
   /** Replaces the brand letters (`custom` tiles of a named upstream: "AC" for Acme CRM). */
   children?: Child;
+  /**
+   * Draw the letters with CSS (`data-l`) instead of as text: the tile then adds nothing to the text
+   * of what holds it, such as a select option.
+   */
+  cssLetters?: boolean;
   class?: string;
 }
 
@@ -58,14 +64,18 @@ export function Logo({
   disabled,
   label,
   children,
+  cssLetters,
   class: className,
 }: LogoProps) {
+  const content = children ?? logoContent(brand);
+  const css = cssLetters === true && typeof content === 'string';
   return (
     <span
       class={cx('logo', size !== 'md' && size, `lg-${brand}`, disabled && 'dis', className)}
+      data-l={css ? content : undefined}
       {...(label ? { role: 'img', 'aria-label': label } : { 'aria-hidden': 'true' })}
     >
-      {children ?? logoContent(brand)}
+      {css ? null : content}
     </span>
   );
 }
@@ -89,13 +99,18 @@ export type LogoSpec =
  * The tile of a `LogoSpec` (internal: every component with a `logo` prop draws it through this),
  * decorative. `disabled` dims it on top of the spec's own state.
  */
-export function LogoTile(props: { logo: LogoSpec; size?: LogoSize; disabled?: boolean }) {
+export function LogoTile(props: {
+  logo: LogoSpec;
+  size?: LogoSize;
+  disabled?: boolean;
+  cssLetters?: boolean;
+}) {
   const spec = typeof props.logo === 'string' ? { brand: props.logo } : props.logo;
   const disabled = Boolean(spec.disabled || props.disabled) || undefined;
   return spec.text === undefined || spec.brand === 'oidc' ? (
-    <Logo brand={spec.brand} size={props.size} disabled={disabled} />
+    <Logo brand={spec.brand} size={props.size} disabled={disabled} cssLetters={props.cssLetters} />
   ) : (
-    <Logo brand={spec.brand} size={props.size} disabled={disabled}>
+    <Logo brand={spec.brand} size={props.size} disabled={disabled} cssLetters={props.cssLetters}>
       {spec.text}
     </Logo>
   );

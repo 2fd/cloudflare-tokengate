@@ -25,9 +25,7 @@ import {
   RowHeader,
   Slug,
   Table,
-  Time,
   Tray,
-  formatTime as uiFormatTime,
 } from '@tokengate/ui';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { App } from '../../app';
@@ -40,7 +38,7 @@ import type { RuleUsage } from '../../db/rollups';
 import { getAllowedUpstreamHosts } from '../../db/settings';
 import type { Service } from '../../db/types';
 import { normalizeCredential, normalizeInjection, validateBaseUrl } from '../../policy/validate';
-import { EXPIRY_WARNING_MS, trafficStats } from '../../telemetry/dashboard';
+import { trafficStats } from '../../telemetry/dashboard';
 import { loadTokenTraffic } from '../access-traffic';
 import { can, type Permission } from '../auth/rbac';
 import { loadConnections, type RuleEdge } from '../connections';
@@ -99,15 +97,13 @@ import {
   vendor,
 } from '../views/token-cards';
 import {
-  dateInput,
   draftHint,
-  EXPIRY_FORMAT_ERROR,
   type FormState,
   flag,
   forwardHeadersFromValues,
   inSentence,
   injectionFromValues,
-  parseDateInput,
+  injectionValues,
   summaryErrors,
   type TokenFormValues,
   text,
@@ -118,7 +114,6 @@ import {
 } from '../views/token-forms';
 import {
   type BindingState,
-  daysUntil,
   LastUsed,
   TokenHeader,
   TokenPage,
@@ -144,17 +139,12 @@ const FAILURE_STATUS: Record<OpFailureReason, ContentfulStatusCode> = {
 const TEMPLATE_CARD_FIELDS = new Set([
   'credential',
   'credential_draft',
-  'slug',
-  'name',
-  'description',
-  'credential_expires_at',
   'allow_host',
   'also_uploads',
 ]);
 
-/** Status quick links of the list, in their order. `expiring` includes expired secrets. */
+/** Status quick links of the list, in their order. */
 const STATUS_FILTERS = [
-  'expiring',
   'disabled',
   'no_credential',
   'credential_unreadable',
@@ -165,7 +155,6 @@ type StatusFilter = (typeof STATUS_FILTERS)[number];
 const STATUS_LINKS: Readonly<
   Record<StatusFilter, { label: string; glyph: string; tone?: 'warn' | 'bad' }>
 > = {
-  expiring: { label: 'Expired or expiring', glyph: '⌛', tone: 'warn' },
   disabled: { label: 'Disabled', glyph: '⏸' },
   no_credential: { label: 'No secret', glyph: '–', tone: 'bad' },
   credential_unreadable: { label: 'Secret does not open', glyph: '✕', tone: 'bad' },
@@ -294,10 +283,6 @@ function alsoParam(c: AdminContext): TokenAlso | null {
 // ---------------------------------------------------------------------------------------------
 // Shared loading
 
-function todayUtc(now: number): string {
-  return new Date(now).toISOString().slice(0, 10);
-}
-
 async function cardsData(c: AdminContext, tokens?: Service[]): Promise<CardsData> {
   const deps = c.get('deps');
   const [list, allowlist, keyring] = await Promise.all([
@@ -311,7 +296,6 @@ async function cardsData(c: AdminContext, tokens?: Service[]): Promise<CardsData
     keyringError: keyring.ok ? null : keyring.error,
     activeKid: keyring.ok ? keyring.keyring.activeKid : null,
     proxyOrigin: new URL(c.req.url).origin,
-    today: todayUtc(deps.now()),
   };
 }
 
@@ -320,7 +304,7 @@ const notFound = (c: AdminContext) =>
     c,
     {
       title: 'Token not found',
-      section: 'tokens',
+      section: 'credentials',
       subsection: 'tokens',
       status: 404,
       header: (
@@ -596,12 +580,6 @@ async function listPage(c: AdminContext) {
         return outside;
       case 'disabled':
         return !token.enabled;
-      case 'expiring':
-        return (
-          token.credential_sealed !== null &&
-          token.credential_expires_at !== null &&
-          token.credential_expires_at - now <= EXPIRY_WARNING_MS
-        );
     }
   };
   const needle = query.toLowerCase();
@@ -623,7 +601,7 @@ async function listPage(c: AdminContext) {
     c,
     {
       title: 'Credentials',
-      section: 'tokens',
+      section: 'credentials',
       subsection: 'tokens',
       notice: resolveNotice(LIST_NOTICES, c.req.query('notice'), null),
       header: (ctx) => (
@@ -659,16 +637,7 @@ async function listPage(c: AdminContext) {
             <AskSomeone permission="tokens:write" ctx={ctx} verb="add a token" />
           ) : null}
           {cards.keyringError !== null ? <KeyringGate error={cards.keyringError} /> : null}
-          <ListAlerts
-            ctx={ctx}
-            tokens={tokens}
-            facts={facts}
-            keyringError={cards.keyringError}
-            edges={(token) => byToken.get(token.id) ?? []}
-            usage={
-              connections.usageAvailable && connections.sampleRate > 0 ? connections.usage : null
-            }
-          />
+          <ListAlerts ctx={ctx} tokens={tokens} facts={facts} keyringError={cards.keyringError} />
           <Tray
             id="tokens"
             title={`Credentials (${rows.length})`}
@@ -763,7 +732,7 @@ async function listPage(c: AdminContext) {
                   {cards.activeKid ? (
                     <span>
                       New secrets are sealed with key <code>{cards.activeKid}</code> ·{' '}
-                      <a href={paths.tokenKeys()}>Encryption keys</a>
+                      <a href={paths.tokenKeys()}>Rotate encryption</a>
                     </span>
                   ) : null}
                 </>
@@ -878,7 +847,7 @@ function TokenRow(props: {
         />
       </RowHeader>
       <Cell label="Secret" nowrap>
-        <SecretCell token={token} unreadable={facts.unreadable} now={now} />
+        <SecretCell token={token} unreadable={facts.unreadable} />
       </Cell>
       <Cell label="Used by">
         <UsedBy token={token} edges={edges} now={now} />
@@ -905,13 +874,12 @@ function TokenRow(props: {
   );
 }
 
-/** The masked secret and its expiry, or why there is none. */
-function SecretCell(props: { token: Service; unreadable: boolean; now: number }) {
-  const { token, now } = props;
+/** The masked secret, or why there is none. */
+function SecretCell(props: { token: Service; unreadable: boolean }) {
+  const { token } = props;
   if (token.credential_sealed === null) return <StatusBadge status="no_credential" />;
   if (props.unreadable) return <StatusBadge status="credential_unreadable" />;
   const parts = secretParts(token.credential_hint);
-  const expires = token.credential_expires_at;
   return (
     <span class="ent-t">
       <span>
@@ -924,22 +892,6 @@ function SecretCell(props: { token: Service; unreadable: boolean; now: number })
           </>
         )}
       </span>
-      {expires === null ? (
-        <span class="meta">Does not expire</span>
-      ) : expires <= now ? (
-        <span class="meta t-bad">
-          <span aria-hidden="true">✕ </span>Expired{' '}
-          <Time datetime={new Date(expires)} format="date" />
-        </span>
-      ) : expires - now <= EXPIRY_WARNING_MS ? (
-        <span class="meta t-warn">
-          <span aria-hidden="true">⌛ </span>Expires in {plural(daysUntil(expires, now), 'day')}
-        </span>
-      ) : (
-        <span class="meta">
-          Expires <Time datetime={new Date(expires)} format="date" />
-        </span>
-      )}
     </span>
   );
 }
@@ -1032,40 +984,14 @@ interface ListProblem {
   fix?: { href: string; label: string; srSuffix?: string; permission: Permission };
 }
 
-/**
- * What an expiring secret breaks, as the consequence: "acme/api made 51,200 calls through it in
- * the last 30 days. After 21 Oct, they are refused." Without recorded calls, the plain advice.
- */
-function expiryConsequence(
-  token: Service,
-  edges: readonly RuleEdge[],
-  usage: ReadonlyMap<string, RuleUsage> | null,
-  at: number,
-): string {
-  if (usage === null) return 'Replace it before then.';
-  const used = edges.filter((edge) => (usage.get(edge.rule.id)?.requests ?? 0) > 0);
-  const calls = used.reduce((sum, edge) => sum + (usage.get(edge.rule.id)?.requests ?? 0), 0);
-  if (calls === 0) return 'Replace it before then.';
-  const subjects = [...new Set(used.map((edge) => edge.subject))];
-  const who =
-    subjects.length <= 2
-      ? subjects.join(' and ')
-      : `${plural(subjects.length, 'repository', 'repositories')}`;
-  return `${who} made ${formatCount(calls)} ${calls === 1 ? 'call' : 'calls'} through ${token.name} in the last 30 days. After ${uiFormatTime(new Date(at), 'day')}, they are refused.`;
-}
-
 /** Problems of the listed tokens, one callout each; past 3, the rest behind a disclosure. */
 function ListAlerts(props: {
   ctx: ViewContext;
   tokens: Service[];
   facts: (token: Service) => TokenFacts;
   keyringError: KeyringError | null;
-  edges: (token: Service) => RuleEdge[];
-  /** Allowed requests per credential access rule in the last 30 days; null when not recorded. */
-  usage: ReadonlyMap<string, RuleUsage> | null;
 }) {
   const { ctx, tokens, facts } = props;
-  const now = ctx.now;
   const link = (hash: 'secret' | 'destination') => (token: Service) => ({
     href:
       hash === 'destination'
@@ -1093,55 +1019,6 @@ function ListAlerts(props: {
       title: `${unparsed.length === 1 ? '1 token has a base URL' : `${unparsed.length} tokens have base URLs`} that cannot be read, so requests through ${unparsed.length === 1 ? 'it' : 'them'} are refused.`,
       more: 'Set the destination again under Change destination.',
       objects: unparsed.map(link('destination')),
-    });
-  }
-  const sealed = tokens.filter(
-    (token) => token.credential_sealed !== null && token.credential_expires_at !== null,
-  );
-  const expired = sealed.filter((token) => (token.credential_expires_at ?? 0) <= now);
-  const expiring = sealed.filter((token) => {
-    const at = token.credential_expires_at ?? 0;
-    return at > now && at - now <= EXPIRY_WARNING_MS;
-  });
-  const replace = (token: Service) => ({
-    href: paths.token(token.id, { hash: 'secret' }),
-    label: 'Replace secret',
-    srSuffix: `of ${token.name}`,
-    permission: 'tokens:write' as const,
-  });
-  const [onlyExpired] = expired;
-  if (expired.length === 1 && onlyExpired) {
-    problems.push({
-      tone: 'bad',
-      title: `The secret of ${onlyExpired.name} expired on ${uiFormatTime(new Date(onlyExpired.credential_expires_at ?? 0), 'date')}.`,
-      more: 'Upstream calls through it fail until it is replaced.',
-      objects: [],
-      fix: replace(onlyExpired),
-    });
-  } else if (expired.length > 1) {
-    problems.push({
-      tone: 'bad',
-      title: `${expired.length} secrets have expired.`,
-      more: 'Replace them on the token page.',
-      objects: expired.map(link('secret')),
-    });
-  }
-  const [onlyExpiring] = expiring;
-  if (expiring.length === 1 && onlyExpiring) {
-    const at = onlyExpiring.credential_expires_at ?? 0;
-    problems.push({
-      tone: 'warn',
-      title: `The secret of ${onlyExpiring.name} expires on ${uiFormatTime(new Date(at), 'date')} (in ${plural(daysUntil(at, now), 'day')}).`,
-      more: expiryConsequence(onlyExpiring, props.edges(onlyExpiring), props.usage, at),
-      objects: [],
-      fix: replace(onlyExpiring),
-    });
-  } else if (expiring.length > 1) {
-    problems.push({
-      tone: 'warn',
-      title: `${expiring.length} secrets expire within 14 days.`,
-      more: 'Replace them before then.',
-      objects: expiring.map(link('secret')),
     });
   }
   // Warnings in the alert catalogue too (overviewAlerts), so the same tone here.
@@ -1233,7 +1110,7 @@ async function renderNew(
     c,
     {
       title: 'Add a credential',
-      section: 'tokens',
+      section: 'credentials',
       subsection: 'tokens',
       header: (
         <PageHeader
@@ -1300,10 +1177,6 @@ async function create(c: AdminContext) {
   };
   // 1. Field formats and the secret format (A7.4).
   const errors: FieldError[] = [];
-  const expiry = template?.expiry_from_check
-    ? ({ ok: true, value: null } as const)
-    : parseDateInput(values.credential_expires_at);
-  if (!expiry.ok) errors.push(fieldError('credential_expires_at', EXPIRY_FORMAT_ERROR));
   const secret = await resolveSecret(c, form, target);
   if (secret.error) errors.push(secret.error);
 
@@ -1381,18 +1254,18 @@ async function create(c: AdminContext) {
       status,
     });
   };
+  // A template card has no slug or name fields: both are derived, and the check's identity (the
+  // Slack bot name) replaces the name.
+  const slugText = template ? '' : values.slug.trim();
+  const nameText = template ? '' : values.name.trim();
   const slugBase = template ? template.slug : slugBaseFor(destination.base_url);
-  const slug = values.slug.trim() === '' ? await freeSlug(db, slugBase) : values.slug.trim();
-  const name =
-    values.name.trim() === ''
-      ? await freeName(db, template ? template.name : slug)
-      : values.name.trim();
+  const slug = slugText === '' ? await freeSlug(db, slugBase) : slugText;
+  const name = nameText === '' ? await freeName(db, template ? template.name : slug) : nameText;
   const input: ServiceCreateInput = {
     slug,
     name,
-    description: values.description,
     ...destination,
-    credential_expires_at: expiry.ok ? expiry.value : null,
+    name_from_check: nameText === '',
     secret: secret.secret,
     save_anyway: flag(form, 'save_anyway'),
   };
@@ -1453,13 +1326,11 @@ async function create(c: AdminContext) {
       {
         slug: await freeSlug(db, uploads.slug),
         name: await freeName(db, uploads.name),
-        description: values.description,
         base_url: uploads.base_url,
         injection: uploads.injection,
         forward_headers: [...uploads.forward_headers],
         timeout_ms: uploads.timeout_ms,
         verify: uploads.verify,
-        credential_expires_at: result.service.credential_expires_at,
         secret: secret.secret,
         save_anyway: input.save_anyway,
       },
@@ -1558,7 +1429,6 @@ async function loadPage(c: AdminContext, service: Service): Promise<TokenPageDat
     destinationFingerprint: await destinationFingerprint(service),
     tokens,
     proxyOrigin: new URL(c.req.url).origin,
-    today: todayUtc(deps.now()),
     also: alsoParam(c),
   };
 }
@@ -1580,7 +1450,7 @@ async function renderToken(
     c,
     {
       title: service.name,
-      section: 'tokens',
+      section: 'credentials',
       subsection: 'tokens',
       header: (ctx) => <TokenHeader ctx={ctx} data={data} />,
       errors: o.errors,
@@ -1628,32 +1498,15 @@ async function update(c: AdminContext) {
     draft: null,
     verify: null,
   });
-  const expiry = parseDateInput(values.credential_expires_at);
-  if (!expiry.ok) {
-    return pageFailure(
-      c,
-      service,
-      'details',
-      state([fieldError('credential_expires_at', EXPIRY_FORMAT_ERROR)]),
-      400,
-    );
-  }
-  // The form shows dates only; an unchanged date keeps the stored time of day.
-  const expiresAt =
-    values.credential_expires_at.trim() === dateInput(service.credential_expires_at)
-      ? service.credential_expires_at
-      : expiry.value;
   // Template check headers have no input: they are kept with the check.
   const posted = verifyFromValues(values);
   const verify =
     posted && service.verify?.headers ? { ...posted, headers: service.verify.headers } : posted;
   const result = await updateServiceFields(deps, adminActor(c), service.id, {
     name: values.name,
-    description: values.description,
     forward_headers: forwardHeadersFromValues(values),
     timeout_ms: timeoutFromValues(values),
     verify,
-    credential_expires_at: expiresAt,
     expected_updated_at: submittedVersion(values.expected_updated_at),
   });
   if (!result.ok) {
@@ -1690,10 +1543,6 @@ async function rotate(c: AdminContext) {
     target: service.id,
   };
   const errors: FieldError[] = [];
-  const expiry = template?.expiry_from_check
-    ? ({ ok: true, value: null } as const)
-    : parseDateInput(values.credential_expires_at);
-  if (!expiry.ok) errors.push(fieldError('credential_expires_at', EXPIRY_FORMAT_ERROR));
   const secret = await resolveSecret(c, form, target);
   if (secret.error) errors.push(secret.error);
   const fail = async (
@@ -1739,7 +1588,6 @@ async function rotate(c: AdminContext) {
     {
       secret: secret.secret,
       save_anyway: flag(form, 'save_anyway'),
-      credential_expires_at: (expiry.ok ? expiry.value : null) ?? undefined,
       siblings: texts(form, 'also_replace'),
       expected_destination: expected,
     },
@@ -1793,7 +1641,12 @@ async function changeDestination(c: AdminContext) {
   const service = await getService(db, c.req.param('id') ?? '');
   if (!service) return notFound(c);
   const form = await formData(c);
-  const values: TokenFormValues = valuesFromForm(form);
+  // A type's destination is fixed: the secret is set for the type's base URL and injection,
+  // never posted ones (the form has no destination fields for it).
+  const fixed = templateForService(service);
+  const values: TokenFormValues = fixed
+    ? { ...valuesFromForm(form), base_url: fixed.base_url, ...injectionValues(fixed.injection) }
+    : valuesFromForm(form);
   const injection = injectionFromValues(values);
   const normalizedInjection = normalizeInjection(injection);
   const base = validateBaseUrl(values.base_url, { gatewayHosts: [], allowedUpstreamHosts: null });
@@ -1810,8 +1663,11 @@ async function changeDestination(c: AdminContext) {
     target: service.id,
   };
   const errors: FieldError[] = [];
-  const expiry = parseDateInput(values.credential_expires_at);
-  if (!expiry.ok) errors.push(fieldError('credential_expires_at', EXPIRY_FORMAT_ERROR));
+  // A type's secret is replaced through Replace secret; this form only sets a missing or
+  // unopenable one, and always after the admin typed the type's host.
+  const unconfirmed =
+    fixed !== null &&
+    values.confirm_destination.trim().toLowerCase() !== upstreamHost(fixed.base_url);
   const secret = await resolveSecret(c, form, target);
   if (secret.error) errors.push(secret.error);
   // The allowlist (A7.4 step 3): the owner's box is shown from the start (value 1) and applies
@@ -1844,14 +1700,18 @@ async function changeDestination(c: AdminContext) {
       { values, errors: failure, draft: await draftFor(c, secret, target), verify },
       status,
     );
+  if (fixed && unconfirmed) {
+    const host = upstreamHost(fixed.base_url);
+    return fail(
+      [...errors, fieldError('confirm_destination', `Type ${host} to confirm the host`)],
+      422,
+    );
+  }
   const input = {
     base_url: values.base_url,
     injection,
     secret: secret.secret ?? '',
     save_anyway: flag(form, 'save_anyway'),
-    // Undefined: the op uses the expiry the check reports (GitHub), else none.
-    credential_expires_at:
-      expiry.ok && !template?.expiry_from_check ? (expiry.value ?? undefined) : undefined,
     confirm_destination: values.confirm_destination,
   };
   const context = opContextFor(new URL(c.req.url));
@@ -1924,8 +1784,8 @@ async function testSecret(c: AdminContext) {
       status: FAILURE_STATUS[result.reason],
     });
   }
-  // Rendered directly (no redirect): the result is shown once and not stored. A changed GitHub
-  // expiry was saved by the op, so the page reads the row again.
+  // Rendered directly (no redirect): the result is shown once and not stored. A bot name read by
+  // the check may have been saved by the op, so the page reads the row again.
   const current = (await getService(deps.env.DB, service.id)) ?? service;
   return renderToken(c, current, {
     state: { test: result.verify },

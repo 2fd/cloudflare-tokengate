@@ -21,6 +21,8 @@ import {
   rulesWorld,
   seedLabel,
   seedRequests,
+  VERCEL_GLOBAL_ISSUER,
+  VERCEL_TEAM_ISSUER,
 } from '../helpers/access-rules';
 import { adminGet, adminPost } from '../helpers/admin-auth';
 import {
@@ -162,16 +164,21 @@ describe('credential access rules: who may change them', () => {
 });
 
 describe('credential access rules: add', () => {
-  it('renders the merged form: credential, issuer cards, jobs, operations, name, token settings', async () => {
+  it('renders the merged form: credential, issuer select, jobs, operations, name, token settings', async () => {
     const page = await html(`${RULES}/new?credential=${serviceId}&type=gitlab-ci`);
     // form-layout is the page grid of the form column and the summary rail.
     expect(page).toContain(
       '<form class="lform form-layout ga-form" method="post" action="/admin/credential-access-rules" id="rule-form">',
     );
-    for (const type of ['github-actions', 'gitlab-ci', 'generic']) {
-      expect(page).toContain(`name="new.type" value="${type}"`);
-    }
-    expect(page).toMatch(/name="new\.type" value="gitlab-ci" checked/);
+    // One rich select (a customizable select): option K carries data-o=K and opens branch K.
+    expect(page).toContain('<select class="select rich" id="f-new-type" name="new.type">');
+    ['github-actions', 'gitlab-ci', 'vercel', 'generic'].forEach((type, index) => {
+      expect(page).toMatch(
+        new RegExp(`<option value="${type}"( selected="")? data-o="${index + 1}"`),
+      );
+    });
+    expect(page).toContain('<option value="gitlab-ci" selected="" data-o="2">');
+    expect(page).not.toContain('name="new.type" value=');
     expect(page).toContain('name="name"');
     expect(page).toContain('name="audience"');
     expect(page).toContain('name="jwks_uri"');
@@ -277,6 +284,90 @@ describe('credential access rules: add', () => {
     expect(selfManaged.status).toBe(422);
     expect(await selfManaged.text()).toContain('href="#f-');
     expect(await ruleAudit()).toEqual(['credential_access_rule.create']);
+  });
+
+  describe('Vercel', () => {
+    const V = 'new.vercel.';
+    const TEAM = 'team_7Gw5ZMzpQA8h90F832KGp7nwbuh3';
+    const PROJECT = 'prj_7Gw5ZMBpQA8h9GF832KGp7nwbuh3';
+    const vercel = (extra: Record<string, string> = {}) => ({
+      token_id: serviceId,
+      'new.type': 'vercel',
+      'new.vercel_team': `acme (${TEAM})`,
+      [`${V}editor`]: 'structured',
+      [`${V}repository`]: `acme-web (${PROJECT})`,
+      [`${V}context`]: 'environment',
+      [`${V}environment`]: 'production',
+      ops: '1',
+      op: 'custom',
+      'rule.0.m': 'GET',
+      'rule.0.path': '/rate_limit',
+      expires: 'never',
+      ...extra,
+    });
+
+    it('creates a rule on the team issuer: team pin, project anchor, labels, the @vercel/oidc snippet', async () => {
+      const res = await adminPost(world.app, admin(), RULES, vercel());
+      expect(res.status).toBe(303);
+      const rule = await getCredentialAccessRule(env.DB, idFromLocation(locationOf(res)));
+      expect(rule).toMatchObject({
+        profile: 'vercel',
+        issuer: VERCEL_TEAM_ISSUER,
+        jwks_uri: `${VERCEL_TEAM_ISSUER}/.well-known/jwks`,
+        max_token_age_seconds: 7200,
+        tenant_pin: [{ claim: 'owner_id', match: 'exact', values: [TEAM] }],
+      });
+      expect(rule?.conditions).toEqual([
+        { claim: 'owner_id', match: 'exact', values: [TEAM] },
+        { claim: 'project_id', match: 'exact', values: [PROJECT] },
+        { claim: 'environment', match: 'exact', values: ['production'] },
+      ]);
+      expect(await labels(rule?.id)).toEqual([
+        { claim: 'owner_id', value: TEAM, label: 'acme' },
+        { claim: 'project_id', value: PROJECT, label: 'acme-web' },
+      ]);
+      const page = await html(locationOf(res));
+      expect(page).toContain('getVercelOidcToken({ audience: ');
+      // A copy reads the stored rule back into the structured fields.
+      const copy = await html(`${RULES}/new?copy=${rule?.id}`);
+      expect(copy).toContain('<option value="vercel" selected="" data-o="3">');
+      expect(inputValue(copy, 'new.vercel_team')).toBe(`acme (${TEAM})`);
+      expect(inputValue(copy, `${V}repository`)).toBe(`acme-web (${PROJECT})`);
+    });
+
+    it('uses the shared global issuer when the project says so', async () => {
+      const res = await adminPost(world.app, admin(), RULES, vercel({ 'new.vercel_global': '1' }));
+      expect(res.status).toBe(303);
+      expect(await getCredentialAccessRule(env.DB, idFromLocation(locationOf(res)))).toMatchObject({
+        issuer: VERCEL_GLOBAL_ISSUER,
+        tenant_pin: [{ claim: 'owner_id', match: 'exact', values: [TEAM] }],
+      });
+    });
+
+    it('asks to accept development tokens before saving (I-AUTHZ-3)', async () => {
+      const res = await adminPost(
+        world.app,
+        admin(),
+        RULES,
+        vercel({ [`${V}environment`]: 'development' }),
+      );
+      expect(res.status).toBe(422);
+      expect(await res.text()).toContain(
+        'environment &quot;development&quot; is not a trusted event',
+      );
+      expect(await listCredentialAccessRules(env.DB)).toEqual([]);
+    });
+
+    it.each([
+      ['a numeric team ID', { 'new.vercel_team': 'acme (1234567)' }, 'new.vercel_team'],
+      ['two teams', { 'new.vercel_team': `acme (${TEAM}), beta (team_b)` }, 'new.vercel_team'],
+      ['a numeric project ID', { [`${V}repository`]: 'acme-web (42)' }, `${V}repository`],
+    ])('refuses %s, writing nothing', async (_name, extra, field) => {
+      const res = await adminPost(world.app, admin(), RULES, vercel(extra));
+      expect(res.status).toBe(422);
+      expect(await res.text()).toContain(`href="#f-${field.replaceAll('.', '-')}"`);
+      expect(await listCredentialAccessRules(env.DB)).toEqual([]);
+    });
   });
 
   it('creates a generic rule: the issuer preset gives the anchor, discovery the algorithms', async () => {

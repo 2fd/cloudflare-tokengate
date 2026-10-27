@@ -355,8 +355,14 @@ describe('I-SSRF-1 and I-CRED-2: rotation and the destination pre-check send not
   it('checkServiceCredential writes and sends nothing; hostAllowed skips only the allowlist', async () => {
     const network = fakeNetwork();
     const deps = opsDeps({ fetch: network.fetch });
-    const id = await seedService(deps, { secret: SECRET, verify: VERIFY });
-    await setUpstreamHosts(['*.github.com']);
+    // A custom credential: a template credential refuses any other destination.
+    const id = await seedService(deps, {
+      slug: 'custom',
+      base_url: 'https://api.example.com',
+      secret: SECRET,
+      verify: VERIFY,
+    });
+    await setUpstreamHosts(['*.example.com']);
     const openai = {
       base_url: 'https://api.openai.com/v1',
       injection: { kind: 'bearer' },

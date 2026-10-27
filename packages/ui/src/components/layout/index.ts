@@ -21,11 +21,14 @@ export { HealthStrip, type HealthStripProps } from './HealthStrip';
 export { Identity, type IdentityProps } from './Identity';
 export {
   Menu,
+  MenuChoice,
   MenuHeader,
   MenuItem,
   MenuSeparator,
   RowMenu,
   type MenuActionItemProps,
+  type MenuChoiceOption,
+  type MenuChoiceProps,
   type MenuDialogItemProps,
   type MenuHeaderProps,
   type MenuItemProps,

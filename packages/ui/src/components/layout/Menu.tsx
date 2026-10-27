@@ -180,6 +180,53 @@ export function MenuItem(props: MenuItemProps) {
   );
 }
 
+export interface MenuChoiceOption {
+  value: string;
+  label: Child;
+  /** The current value (`aria-pressed="true"`). Exactly one. */
+  current?: boolean;
+}
+
+export interface MenuChoiceProps {
+  /** What the row sets ("Theme"): the visible label and the name of the button group. */
+  label: string;
+  /** POST target of the row's form. */
+  action: string;
+  /** Field name sent with the pressed option's value. */
+  name: string;
+  /** 2–4 options, each a submit button. */
+  options: readonly MenuChoiceOption[];
+  /** Hidden fields of the form (`_csrf`, a return path), one `input type="hidden"` each. */
+  hidden?: HiddenFields;
+  class?: string;
+}
+
+/**
+ * A menu row that sets one preference (`form.menu-choice`): the label, then a small segmented
+ * control (`.seg.sm`) whose options are submit buttons of one POST form. The current option is
+ * `aria-pressed="true"`.
+ */
+export function MenuChoice(props: MenuChoiceProps) {
+  return (
+    <form class={cx('menu-choice', props.class)} method="post" action={props.action}>
+      <Hidden fields={props.hidden} />
+      <span aria-hidden="true">{props.label}</span>
+      <span class="seg sm" role="group" aria-label={props.label}>
+        {props.options.map((option) => (
+          <button
+            type="submit"
+            name={props.name}
+            value={option.value}
+            aria-pressed={option.current ? 'true' : 'false'}
+          >
+            {option.label}
+          </button>
+        ))}
+      </span>
+    </form>
+  );
+}
+
 /** A divider between groups of menu items (`hr`, a native separator). */
 export function MenuSeparator() {
   return <hr />;

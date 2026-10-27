@@ -29,8 +29,10 @@ export const REPOSITORY_ID = '987654321';
 export const CONTEXT = { requestHost: 'gw.example.com' };
 
 export const KEK_1 = toBase64(new Uint8Array(32).fill(1));
-export const KEK_2 = toBase64(new Uint8Array(32).fill(2));
-export const KEYRING_1_2 = JSON.stringify({ active: 'k2', keys: { k1: KEK_1, k2: KEK_2 } });
+/** Passes the next-key checks (ADR 0027): 32 distinct byte values, not all printable. */
+export const KEK_2 = toBase64(Uint8Array.from({ length: 32 }, (_, i) => 0x40 + i * 5));
+/** A rotation in progress: KEK_1 is the current key, KEK_2 the next one. */
+export const ROTATION_ENV = { TOKENGATE_KEK: KEK_1, TOKENGATE_KEYRING: KEK_2 };
 
 export const ACTOR: Actor = {
   type: 'user',
@@ -98,6 +100,7 @@ export async function resetControlPlane(): Promise<void> {
     env.DB.prepare('DELETE FROM access_rules'),
     env.DB.prepare('DELETE FROM credentials'),
     env.DB.prepare('DELETE FROM audit_log'),
+    env.DB.prepare("DELETE FROM settings WHERE key = 'keyring_rewrap'"),
   ]);
 }
 

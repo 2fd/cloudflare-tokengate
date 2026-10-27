@@ -77,6 +77,20 @@ describe('sealed v1 known-answer vectors', () => {
     });
     expect(sealedKid(vector.sealed)).toBe(keyring.activeKid);
   });
+
+  it.each(vectors.sealed.filter((vector) => 'legacy_sealed' in vector))(
+    '$name: the value sealed before ADR 0027 under kid k1 still opens',
+    async (vector) => {
+      const keyring = await keyringOf(vector.env);
+      const aad = credentialAad(vector.service_id, vector.base_url, vector.injection_json);
+      const legacy = (vector as { legacy_sealed: string }).legacy_sealed;
+      expect(sealedKid(legacy)).toBe('k1');
+      expect(await openCredential(keyring, legacy, aad)).toEqual({
+        ok: true,
+        plaintext: vector.plaintext,
+      });
+    },
+  );
 });
 
 describe('sealCredential', () => {
@@ -102,12 +116,11 @@ describe('sealCredential', () => {
     expect(sealed).not.toContain(toBase64Url(new TextEncoder().encode('sk-live-PLAINTEXT')));
   });
 
-  it('seals under the active kid', async () => {
-    const keyring = await keyringOf({
-      TOKENGATE_KEYRING: JSON.stringify({ active: 'k2', keys: { k1: K1, k2: K2 } }),
-    });
+  it('seals under the next key, named by its key check value', async () => {
+    const keyring = await keyringOf({ TOKENGATE_KEK: K1, TOKENGATE_KEYRING: K2 });
     const sealed = await sealCredential(keyring, 'v', aadOf(SLACK), secureRandom);
-    expect(sealedKid(sealed)).toBe('k2');
+    expect(sealedKid(sealed)).toBe(vectors.kcv[1]?.kcv);
+    expect(sealedKid(sealed)).toBe(keyring.activeKid);
   });
 
   it('refuses a random source that returns the wrong length', async () => {
@@ -144,7 +157,16 @@ describe('sealCredential', () => {
 
   it('refuses a hand-built keyring whose active kid openCredential would reject', async () => {
     const key = (await keyringOf({ TOKENGATE_KEK: K1 })).key('k1');
-    const keyring: Keyring = { activeKid: 'k 1', kids: ['k 1'], kcv: {}, key: () => key };
+    const keyring: Keyring = {
+      activeKid: 'k 1',
+      kids: ['k 1'],
+      kcv: {},
+      key: () => key,
+      resolve: () => 'k 1',
+      currentKid: 'k 1',
+      next: 'absent',
+      nextKid: null,
+    };
     await expect(sealCredential(keyring, 'v', aadOf(SLACK), secureRandom)).rejects.toThrow(
       /invalid active kid/,
     );
@@ -176,11 +198,28 @@ describe('I-CRED-3: a change of the login variables makes stored credentials und
       await openCredential(await keyringOf({ TOKENGATE_KEK: K1, ...env }), sealed, aadOf(SLACK)),
     ).toEqual({
       ok: false,
-      error: 'credential_binding_mismatch',
+      error: 'keyring_missing_key',
     });
     expect(
       await openCredential(await keyringOf({ TOKENGATE_KEK: K1, ...access }), sealed, aadOf(SLACK)),
     ).toEqual({ ok: true, plaintext: 'xoxb-secret' });
+  });
+
+  it.each(others)('sealed under Access with the legacy kid k1, opened with %s', async (_, env) => {
+    const sealed = edit(
+      await sealCredential(
+        await keyringOf({ TOKENGATE_KEK: K1, ...access }),
+        'xoxb-secret',
+        aadOf(SLACK),
+        secureRandom,
+      ),
+      (doc) => {
+        doc.kid = 'k1';
+      },
+    );
+    expect(
+      await openCredential(await keyringOf({ TOKENGATE_KEK: K1, ...env }), sealed, aadOf(SLACK)),
+    ).toEqual({ ok: false, error: 'credential_binding_mismatch' });
   });
 });
 
@@ -201,9 +240,7 @@ describe('credentialAad', () => {
 
 describe('I-CRED-2: sealed credentials are bound to service id, base URL and injection', () => {
   const setup = async () => {
-    const keyring = await keyringOf({
-      TOKENGATE_KEYRING: JSON.stringify({ active: 'k2', keys: { k1: K1, k2: K2 } }),
-    });
+    const keyring = await keyringOf({ TOKENGATE_KEK: K1, TOKENGATE_KEYRING: K2 });
     const slack = await sealCredential(keyring, 'xoxb-slack', aadOf(SLACK), secureRandom);
     const openai = await sealCredential(keyring, 'sk-openai', aadOf(OPENAI), secureRandom);
     return { keyring, slack, openai };
@@ -241,10 +278,12 @@ describe('I-CRED-2: sealed credentials are bound to service id, base URL and inj
 
   it('relabelling the kid to another loaded key fails closed', async () => {
     const { keyring, slack } = await setup();
-    const relabelled = edit(slack, (doc) => {
-      doc.kid = 'k1';
-    });
-    expect(await openCredential(keyring, relabelled, aadOf(SLACK))).toEqual(mismatch);
+    for (const kid of [keyring.currentKid as string, 'k1']) {
+      const relabelled = edit(slack, (doc) => {
+        doc.kid = kid;
+      });
+      expect(await openCredential(keyring, relabelled, aadOf(SLACK))).toEqual(mismatch);
+    }
   });
 
   it('a kid that is not loaded reports keyring_missing_key', async () => {
@@ -265,12 +304,17 @@ describe('I-CRED-2: sealed credentials are bound to service id, base URL and inj
     });
   });
 
-  it('different key material under the same kid fails closed', async () => {
-    const { slack } = await setup();
-    const replaced = await keyringOf({
-      TOKENGATE_KEYRING: JSON.stringify({ active: 'k2', keys: { k2: OTHER } }),
+  it('different key material under the legacy kid k1 fails closed', async () => {
+    const original = await keyringOf({ TOKENGATE_KEK: K1 });
+    const legacy = edit(await sealCredential(original, 'v', aadOf(SLACK), secureRandom), (doc) => {
+      doc.kid = 'k1';
     });
-    expect(await openCredential(replaced, slack, aadOf(SLACK))).toEqual(mismatch);
+    expect(await openCredential(original, legacy, aadOf(SLACK))).toEqual({
+      ok: true,
+      plaintext: 'v',
+    });
+    const replaced = await keyringOf({ TOKENGATE_KEK: OTHER });
+    expect(await openCredential(replaced, legacy, aadOf(SLACK))).toEqual(mismatch);
   });
 
   it('flipping a bit in any byte of ct, wdek, iv or dek_iv fails closed', async () => {

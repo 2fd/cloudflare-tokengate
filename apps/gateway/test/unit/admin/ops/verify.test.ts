@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  maskSecret,
-  parseGithubTokenExpiration,
-  runVerifyCheck,
-  VERIFY_PREVIEW_BYTES,
-} from '../../../../src/admin/ops/verify';
+import { maskSecret, runVerifyCheck, VERIFY_PREVIEW_BYTES } from '../../../../src/admin/ops/verify';
 import { toBase64 } from '../../../../src/lib/encoding';
 import type { Injection, VerifyCheck } from '../../../../src/policy/types';
 import { fakeNetwork } from './helpers';
@@ -99,7 +94,7 @@ describe('runVerifyCheck', () => {
       status: null,
       passed: false,
       bodyPreview: '',
-      expiresAt: null,
+      identity: null,
       error: 'the upstream could not be reached (TypeError)',
     });
   });
@@ -109,6 +104,62 @@ describe('runVerifyCheck', () => {
     const outcome = await runVerifyCheck(deps(network.fetch), target(SLACK_CHECK), 'a\nb');
     expect(outcome.passed).toBe(false);
     expect(network.calls).toHaveLength(0);
+  });
+});
+
+describe('runVerifyCheck: Slack bot identity', () => {
+  const slackBot = () => ({ ...target(SLACK_CHECK), identity: 'slack-bot' as const });
+
+  it('reads the bot user name from auth.test when there is no bot id', async () => {
+    const network = fakeNetwork(() => Response.json({ ok: true, user: 'deploy-bot' }));
+    const outcome = await runVerifyCheck(deps(network.fetch), slackBot(), SECRET);
+    expect(outcome).toMatchObject({ passed: true, identity: 'deploy-bot' });
+    expect(network.calls).toHaveLength(1);
+  });
+
+  it('prefers the bots.info name, asked with the same credential', async () => {
+    const network = fakeNetwork((url) =>
+      url.pathname === '/api/bots.info'
+        ? Response.json({ ok: true, bot: { id: 'B0123ABC', name: 'Deploy Bot' } })
+        : Response.json({ ok: true, user: 'deploy-bot', bot_id: 'B0123ABC' }),
+    );
+    const outcome = await runVerifyCheck(deps(network.fetch), slackBot(), SECRET);
+    expect(outcome).toMatchObject({ passed: true, identity: 'Deploy Bot' });
+    expect(network.calls[1]).toMatchObject({
+      url: 'https://slack.com/api/bots.info?bot=B0123ABC',
+      method: 'GET',
+      redirect: 'manual',
+    });
+    expect(network.calls[1]?.headers.get('authorization')).toBe(`Bearer ${SECRET}`);
+  });
+
+  it.each([
+    ['returns ok:false', () => Response.json({ ok: false, error: 'missing_scope' })],
+    ['fails with HTTP 500', () => new Response('oops', { status: 500 })],
+    [
+      'cannot be reached',
+      () => {
+        throw new TypeError('connect failed');
+      },
+    ],
+  ])('falls back to the auth.test user when bots.info %s', async (_, botsInfo) => {
+    const network = fakeNetwork((url) =>
+      url.pathname === '/api/bots.info'
+        ? botsInfo()
+        : Response.json({ ok: true, user: 'deploy-bot', bot_id: 'B0123ABC' }),
+    );
+    const outcome = await runVerifyCheck(deps(network.fetch), slackBot(), SECRET);
+    expect(outcome).toMatchObject({ passed: true, identity: 'deploy-bot' });
+    expect(network.calls).toHaveLength(2);
+  });
+
+  it('reads no identity when the check fails or the template asks for none', async () => {
+    const failing = fakeNetwork(() => Response.json({ ok: false, user: 'deploy-bot' }));
+    expect((await runVerifyCheck(deps(failing.fetch), slackBot(), SECRET)).identity).toBeNull();
+    const plain = fakeNetwork(() => Response.json({ ok: true, user: 'deploy-bot' }));
+    expect(
+      (await runVerifyCheck(deps(plain.fetch), target(SLACK_CHECK), SECRET)).identity,
+    ).toBeNull();
   });
 });
 
@@ -122,23 +173,6 @@ describe('maskSecret', () => {
     expect(masked).not.toContain(encodeURIComponent('p@ss/word'));
     expect(masked).not.toContain(basic.replace(/=+$/, ''));
   });
-});
-
-describe('parseGithubTokenExpiration', () => {
-  it.each([
-    ['2026-12-01 00:00:00 UTC', Date.UTC(2026, 11, 1)],
-    ['2026-12-01 10:30:00 -0800', Date.UTC(2026, 11, 1, 18, 30)],
-    ['2026-12-01 10:30:00 +0130', Date.UTC(2026, 11, 1, 9, 0)],
-  ])('parses %s', (value, expected) => {
-    expect(parseGithubTokenExpiration(value)).toBe(expected);
-  });
-
-  it.each([null, '', '2026-02-30 00:00:00 UTC', '2026-12-01T00:00:00Z', '2026-12-01 24:00:00 UTC'])(
-    'rejects %s',
-    (value) => {
-      expect(parseGithubTokenExpiration(value)).toBeNull();
-    },
-  );
 });
 
 describe('runVerifyCheck: template check headers', () => {

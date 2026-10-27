@@ -21,6 +21,8 @@ import type { Condition } from '../../src/policy/types';
 
 export const GITHUB_ISSUER = 'https://token.actions.githubusercontent.com';
 export const GITLAB_ISSUER = 'https://gitlab.com';
+/** Vercel's team issuer mode for the team `acme`. */
+export const VERCEL_ISSUER = 'https://oidc.vercel.com/acme';
 /** Audience shared by test tokens and `testCredentialAccessRule` rows (≥ 16 chars like real ones). */
 export const TEST_AUDIENCE = 'tokengate:01JTESTAUD1ENCE0000000000000';
 /** Owner/namespace IDs used by the claim factories and the default tenant pins. */
@@ -28,6 +30,8 @@ export const TEST_GITHUB_OWNER_ID = '4242';
 export const TEST_GITHUB_REPOSITORY_ID = '987654321';
 export const TEST_GITLAB_NAMESPACE_ID = '72';
 export const TEST_GITLAB_PROJECT_ID = '20';
+export const TEST_VERCEL_TEAM_ID = 'team_7Gw5ZMzpQA8h90F832KGp7nwbuh3';
+export const TEST_VERCEL_PROJECT_ID = 'prj_7Gw5ZMBpQA8h9GF832KGp7nwbuh3';
 /** 2026-10-13T12:00:00Z. Default start of `createClock`. */
 export const TEST_EPOCH_MS = Date.UTC(2026, 9, 13, 12, 0, 0);
 
@@ -287,9 +291,27 @@ export function gitlabClaims(overrides: Record<string, unknown> = {}): Record<st
   );
 }
 
+/** Claims of a production function of acme/acme-web, shaped like @vercel/oidc tokens (no jti). */
+export function vercelClaims(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return withOverrides(
+    {
+      // The audience @vercel/oidc sets when the caller passes `audience` to getVercelOidcToken.
+      aud: TEST_AUDIENCE,
+      sub: 'owner:acme:project:acme-web:environment:production',
+      owner: 'acme',
+      owner_id: TEST_VERCEL_TEAM_ID,
+      project: 'acme-web',
+      project_id: TEST_VERCEL_PROJECT_ID,
+      environment: 'production',
+    },
+    overrides,
+  );
+}
+
 function defaultProfile(issuer: string): ProfileId {
   if (issuer === GITHUB_ISSUER) return 'github-actions';
   if (issuer === GITLAB_ISSUER) return 'gitlab-ci';
+  if (issuer === VERCEL_ISSUER) return 'vercel';
   return 'generic';
 }
 
@@ -298,6 +320,7 @@ const DEFAULT_PINS: Record<ProfileId, Condition[]> = {
     { claim: 'repository_owner_id', match: 'exact', values: [TEST_GITHUB_OWNER_ID] },
   ],
   'gitlab-ci': [{ claim: 'namespace_id', match: 'exact', values: [TEST_GITLAB_NAMESPACE_ID] }],
+  vercel: [{ claim: 'owner_id', match: 'exact', values: [TEST_VERCEL_TEAM_ID] }],
   generic: [],
 };
 

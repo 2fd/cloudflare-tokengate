@@ -19,7 +19,7 @@ import {
   ACTOR,
   fakeNetwork,
   KEK_1,
-  KEYRING_1_2,
+  ROTATION_ENV,
   OWNER_ID,
   REPOSITORY_ID,
   seedCredentialRule,
@@ -48,7 +48,8 @@ export interface MutationRequest {
   fields: Record<string, string | string[]>;
   /**
    * The audit action the mutation must write, or the ordered actions when one submit makes several
-   * mutations (each its own batch with its own row).
+   * mutations (each its own batch with its own row). Empty for a route that changes no admin
+   * state (the theme cookie).
    */
   action: string | readonly string[];
   /** Statuses that mean "succeeded" (default: a 303 POST-redirect-GET). */
@@ -185,15 +186,10 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
     action: 'settings.update',
     fields: { title: 'Acme Gateway' },
   }),
-  'POST /admin/users/sign-in/policy': async () => ({
-    path: '/admin/users/sign-in/policy',
+  'POST /admin/users/join-policy': async () => ({
+    path: '/admin/users/join-policy',
     action: 'user.join_defaults',
     fields: { join_policy: 'pending' },
-  }),
-  'POST /admin/users/sign-in/hosts': async () => ({
-    path: '/admin/users/sign-in/hosts',
-    action: 'settings.admin_hosts',
-    fields: { add: `${unique('host')}.example.com` },
   }),
   'POST /admin/users': async () => ({
     path: '/admin/users',
@@ -279,14 +275,14 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
     fields: { mode: 'list', host: [`${unique('host')}.example.com`] },
   }),
   // A rewrap with nothing to re-encrypt changes nothing and is not audited, so this request is
-  // served with a rotated keyring: the world credential, sealed under k1, moves to k2.
+  // served during a rotation: the world credential, sealed under KEK_1, moves to KEK_2.
   'POST /admin/credentials/keys/rewrap': async () => ({
     path: '/admin/credentials/keys/rewrap',
     action: 'keyring.rewrap',
     fields: {},
     app: createTestApp({
       fetch: fakeNetwork().fetch,
-      env: { TOKENGATE_KEK: '', TOKENGATE_KEYRING: KEYRING_1_2 },
+      env: { ...ROTATION_ENV },
     }),
   }),
   // A template card: the destination, headers and check come from the template; slug and name
@@ -301,7 +297,6 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
     action: 'service.update',
     fields: {
       name: 'Renamed service',
-      description: 'changed',
       forward_headers: 'x-github-api-version',
       timeout_ms: '60000',
       verify_method: WORLD_VERIFY.method,
@@ -450,6 +445,12 @@ export const MUTATION_FIXTURES: Readonly<Record<string, MutationFixture>> = {
     fields: {},
     // The export is the response body (a download), not a redirect.
     successStatus: [200],
+  }),
+  // A cookie in the browser, not admin state: no audit row.
+  'POST /admin/theme': async () => ({
+    path: '/admin/theme',
+    action: [],
+    fields: { theme: 'dark', return: '/admin/credentials' },
   }),
 };
 

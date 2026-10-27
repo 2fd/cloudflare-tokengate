@@ -6,7 +6,7 @@ import {
   SHARED_ISSUERS,
 } from '../../../src/identity/profiles';
 import type { Condition } from '../../../src/policy/types';
-import { githubClaims, gitlabClaims } from '../../helpers/jwt';
+import { githubClaims, gitlabClaims, vercelClaims } from '../../helpers/jwt';
 
 const noProviderConfig = { anchor_claims: [] as string[], tenant_pin: [] as Condition[] };
 
@@ -35,11 +35,13 @@ describe('profile registry', () => {
     expect(SHARED_ISSUERS).toEqual([
       'https://token.actions.githubusercontent.com',
       'https://gitlab.com',
+      'https://oidc.vercel.com',
     ]);
     expect(isSharedIssuer('https://gitlab.com')).toBe(true);
     for (const issuer of [
       'https://gitlab.example.com',
       'https://token.actions.githubusercontent.com/acme',
+      'https://oidc.vercel.com/acme',
     ]) {
       expect(isSharedIssuer(issuer)).toBe(false);
     }
@@ -175,6 +177,47 @@ describe('gitlab-ci profile', () => {
       ref: 'main',
       event: 'push',
       workflow: 'gitlab.com/my-group/my-project//.gitlab-ci.yml@refs/heads/main',
+    });
+  });
+});
+
+describe('vercel profile', () => {
+  const profile = PROFILES.vercel;
+
+  it('matches the documented profile (docs/policies.md)', () => {
+    expect(profile.defaults).toEqual({
+      issuer: 'https://oidc.vercel.com',
+      allowedAlgs: ['RS256'],
+      maxTokenAgeSeconds: 7200,
+      maxTokenAgeLimitSeconds: 7200,
+    });
+    expect(profile.eventClaim).toBe('environment');
+    expect(profile.trustedEvents).toEqual(['production', 'preview']);
+    expect(profile.tenantClaims).toEqual(['owner_id']);
+    expect(profile.sharedIssuers).toEqual(['https://oidc.vercel.com']);
+    expect(profile.anchorRules(noProviderConfig)).toEqual([['owner_id', 'project_id']]);
+    // @vercel/oidc tokens carry no jti unless the caller asks for one.
+    expect(profile.verifyRequiredClaims(noProviderConfig)).toEqual([
+      'sub',
+      'iat',
+      'exp',
+      'owner_id',
+      'project_id',
+      'environment',
+    ]);
+  });
+
+  it('never trusts development tokens or Custom Environments by default', () => {
+    expect(profile.trustedEvents).not.toContain('development');
+    expect(profile.trustedEvents).toHaveLength(2);
+  });
+
+  it('displays project and environment', () => {
+    expect(profile.display(vercelClaims())).toEqual({
+      subject: 'owner:acme:project:acme-web:environment:production',
+      repository: 'acme-web',
+      event: 'production',
+      environment: 'production',
     });
   });
 });

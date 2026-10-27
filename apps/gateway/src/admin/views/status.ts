@@ -17,7 +17,6 @@ export type StatusKey =
   | 'global_blocked'
   | 'global_limited'
   | 'global_within'
-  | 'credential_expired_warning'
   | 'unused'
   | 'risk_accepted'
   | 'not_confirmed'
@@ -71,7 +70,6 @@ export const STATUS: Readonly<Record<StatusKey, StatusInfo>> = {
   global_blocked: { tone: 'bad', glyph: '✕', label: fixed('Blocked by global access rules') },
   global_limited: { tone: 'warn', glyph: '◐', label: fixed('Limited by global access rules') },
   global_within: { tone: 'ok', glyph: '✓', label: fixed('Within global access rules') },
-  credential_expired_warning: { tone: 'warn', glyph: '⚠', label: fixed('Credential expired') },
   unused: {
     tone: 'muted',
     glyph: '',

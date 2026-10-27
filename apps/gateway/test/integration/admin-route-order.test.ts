@@ -1,5 +1,5 @@
 // I-RBAC-1 and route registration order: the admin middleware looks up the permission of the first
-// matched route, so a static segment (`hosts`, `keys`, `new`, `sign-in`) must be registered before
+// matched route, so a static segment (`hosts`, `keys`, `new`, `join-policy`) must be registered before
 // the `:id` route it would otherwise be taken for (src/admin/routes/index.ts).
 import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -28,10 +28,7 @@ describe('I-RBAC-1: static admin routes are registered before their :id siblings
   };
 
   it.each([
-    ['GET /admin/users/sign-in', 'POST /admin/users/:id'],
-    ['POST /admin/users/sign-in/hosts', 'POST /admin/users/:id'],
-    ['POST /admin/users/sign-in/policy', 'POST /admin/users/:id'],
-    ['GET /admin/users/sign-in', 'GET /admin/users/:id'],
+    ['POST /admin/users/join-policy', 'POST /admin/users/:id'],
     ['GET /admin/credentials/hosts', 'GET /admin/credentials/:id'],
     ['POST /admin/credentials/hosts', 'POST /admin/credentials/:id'],
     ['GET /admin/credentials/keys', 'GET /admin/credentials/:id'],
@@ -43,17 +40,16 @@ describe('I-RBAC-1: static admin routes are registered before their :id siblings
   });
 
   it.each([
-    ['/admin/credentials/keys', '<title>Encryption keys – Credentials – tokengate</title>'],
-    ['/admin/credentials/hosts', '<title>Allowed hosts – Credentials – tokengate</title>'],
+    ['/admin/credentials/keys', '<title>Rotate encryption – Settings – tokengate</title>'],
+    ['/admin/credentials/hosts', '<title>Allowed hosts – Settings – tokengate</title>'],
     [
       '/admin/global-access-rules/new',
-      '<title>Add global access rule – Access Rules – tokengate</title>',
+      '<title>Add global access rule – Credentials – tokengate</title>',
     ],
     [
       '/admin/credential-access-rules/new',
-      '<title>Add credential access rule – Access Rules – tokengate</title>',
+      '<title>Add credential access rule – Credentials – tokengate</title>',
     ],
-    ['/admin/users/sign-in', '<title>Sign-in – Users – tokengate</title>'],
   ])('GET %s renders its own page', async (path, title) => {
     const app = createTestApp();
     const res = await adminGet(app, await sessionFor(app, 'owner'), path);

@@ -1154,7 +1154,7 @@ const openRule = ({ record }: ActionContext): NextAction[] =>
       ]
     : [];
 
-const openKeys = (): NextAction[] => [{ href: paths.tokenKeys(), label: 'Open encryption keys' }];
+const openKeys = (): NextAction[] => [{ href: paths.tokenKeys(), label: 'Open rotate encryption' }];
 
 const giveAccess = ({ record, accessAllowsNow }: ActionContext): NextAction[] =>
   record.claims_verified === 1 && !accessAllowsNow
@@ -1310,27 +1310,32 @@ export const NEXT_ACTIONS: Readonly<
     actions: setSecretAgain,
   },
   keyring_absent: {
-    text: 'Set the TOKENGATE_KEK secret on the Worker. See Credentials › Encryption keys for the keyring status.',
+    text: 'Set the TOKENGATE_KEK secret on the Worker. See Settings › Rotate encryption for the keyring status.',
     actions: openKeys,
   },
   keyring_malformed: {
-    text: 'Fix the TOKENGATE_KEK or TOKENGATE_KEYRING secret. See Credentials › Encryption keys.',
+    text: 'Fix the TOKENGATE_KEK secret. See Settings › Rotate encryption.',
     actions: openKeys,
   },
+  // Before ADR 0027 (JSON keyring); kept for request records that hold them.
   active_kid_missing: {
-    text: 'Fix the TOKENGATE_KEYRING secret: its active key is missing. See Credentials › Encryption keys.',
+    text: 'Fix the TOKENGATE_KEYRING secret: its active key is missing. See Settings › Rotate encryption.',
     actions: openKeys,
   },
   key_not_32_bytes: {
-    text: 'Fix the keyring secret: every key must be 32 bytes. See Credentials › Encryption keys.',
+    text: 'Fix the keyring secret: every key must be 32 bytes. See Settings › Rotate encryption.',
     actions: openKeys,
   },
   both_kek_and_keyring_set: {
     text: 'Remove one of TOKENGATE_KEK and TOKENGATE_KEYRING.',
     actions: openKeys,
   },
+  key_not_random: {
+    text: 'TOKENGATE_KEYRING is the only key and it is not random. Set TOKENGATE_KEK to a key from openssl rand -base64 32. See Settings › Rotate encryption.',
+    actions: openKeys,
+  },
   dev_placeholder_key: {
-    text: 'Replace the development TOKENGATE_KEK from .dev.vars.example with a key of your own. See Credentials › Encryption keys.',
+    text: 'Replace the development TOKENGATE_KEK from .dev.vars.example with a key of your own. See Settings › Rotate encryption.',
     actions: openKeys,
   },
   credential_missing: {
@@ -1338,12 +1343,12 @@ export const NEXT_ACTIONS: Readonly<
     actions: setSecretAgain,
   },
   credential_binding_mismatch: {
-    text: 'If Credentials › Encryption keys shows a replaced key, restore it. Otherwise the token row was probably edited in D1: check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the secret again.',
+    text: 'If Settings › Rotate encryption shows a replaced key, restore it. Otherwise the token row was probably edited in D1: check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the secret again.',
     actions: setSecretAgain,
   },
   credential_invalid: { text: 'Re-enter the secret on the token page.', actions: setSecretAgain },
   credential_unavailable: {
-    text: "The token's secret could not be opened. Check Credentials › Encryption keys; if the keys are fine, check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the secret again.",
+    text: "The token's secret could not be opened. Check Settings › Rotate encryption; if the keys are fine, check the base URL and injection against an out-of-band source (provider docs, configuration as code) before you enter the secret again.",
     actions: setSecretAgain,
   },
   keyring_missing_key: {

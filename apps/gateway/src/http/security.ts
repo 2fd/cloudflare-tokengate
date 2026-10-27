@@ -1,10 +1,8 @@
 // Browser hardening for every response outside /proxy (docs/threat-model.md): script-free CSP, nosniff,
-// no-referrer, HSTS on https, no-store on /admin. Host pinning (I-DEPLOY-1): /admin answers 404 on
-// workers.dev and, once the admin hosts are set in Settings, on any unlisted hostname. /proxy sets
-// its own headers.
+// no-referrer, HSTS on https, no-store on /admin. /admin answers 404 on workers.dev and over plain
+// http on a hostname that is not a loopback host (I-DEPLOY-1). /proxy sets its own headers.
 import type { App } from '../app';
 import { adminHostAllowed } from '../config';
-import { getAdminHosts } from '../db/settings';
 
 export const CONTENT_SECURITY_POLICY =
   "default-src 'none'; style-src 'self'; img-src 'self' data:; form-action 'self'; frame-ancestors 'none'; base-uri 'none'";
@@ -21,7 +19,7 @@ export function applySecurityMiddleware(app: App): void {
       return;
     }
     const pinned = isUnder(path, '/admin');
-    if (pinned && !adminHostAllowed(await getAdminHosts(c.get('deps').env.DB), url)) {
+    if (pinned && !adminHostAllowed(url)) {
       c.res = c.text('Not Found', 404);
     } else {
       await next();

@@ -12,7 +12,7 @@ applies to a custom domain in your own zone.
 | Setting | Where | Recommended |
 |---|---|---|
 | Custom domain | Workers & Pages > tokengate > Settings > Domains & Routes, or `routes` in your clone's `apps/gateway/wrangler.jsonc` | One hostname for the gateway, for example `tokengate.example.com` |
-| Admin hosts | Admin UI: Users › Sign-in › "Admin hosts" | `tokengate.example.com`, stored on the first sign-in. `/admin` then answers `404` on every other hostname ([I-DEPLOY-1](../threat-model.md#i-deploy-1)) |
+| Access application | Cloudflare One | Covers every hostname of the Worker. `/admin` answers on every hostname that routes to the Worker, except `workers.dev` ([I-DEPLOY-1](../threat-model.md#i-deploy-1)) |
 | `workers_dev` | `apps/gateway/wrangler.jsonc` | `false` once the custom domain works |
 | `preview_urls` | `apps/gateway/wrangler.jsonc` | `false` (already set; `apps/gateway/scripts/check-config.sh` enforces it) |
 
@@ -26,7 +26,7 @@ To declare the custom domain in `apps/gateway/wrangler.jsonc` instead of the das
 Then run `pnpm run deploy`.
 
 Why turn off `workers_dev`: with it on, `/proxy/` also answers on the workers.dev hostname, where your
-zone's rate limiting and WAF rules do not run. Host pinning always closes `/admin` there
+zone's rate limiting and WAF rules do not run. The admin host rule always closes `/admin` there
 (`apps/gateway/src/config.ts`, `adminHostAllowed`). So the admin UI is never available on workers.dev.
 
 ## Bot Fight Mode
@@ -94,8 +94,9 @@ tokens and cannot pass an Access login. `/healthz` and `/readyz` must stay reach
 5. Open `https://tokengate.example.com/admin` in a private window. Access must ask you to sign in.
 6. Open `https://tokengate.example.com/readyz`. It must answer without an Access login.
 
-Each hostname that you add later in Users › Sign-in › "Admin hosts" needs the same two destinations in this
-application ([configuration](../configuration.md#admin-hosts)).
+Each hostname that you add later as a route or custom domain needs the same two destinations in this
+application: `/admin` answers on it as soon as it routes to the Worker
+([configuration](../configuration.md#admin-hostnames)).
 
 The gateway keeps no admin sessions. On every `/admin` request it verifies the
 `Cf-Access-Jwt-Assertion` header itself (`apps/gateway/src/admin/auth/access.ts`): signature, issuer, audience
@@ -134,4 +135,4 @@ a `CF-Worker` header that names your zone ([known limitations](../threat-model.m
 - [getting-started.md](../getting-started.md#production-on-a-custom-domain): moving to a custom domain.
 - [troubleshooting.md](troubleshooting.md#the-response-has-no-x-tokengate-request-id): responses that
   come from Cloudflare, not the gateway.
-- [configuration.md](../configuration.md): admin hosts, Access variables and bindings.
+- [configuration.md](../configuration.md): admin hostnames, Access variables and bindings.

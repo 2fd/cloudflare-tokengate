@@ -23,7 +23,7 @@ import {
   type WarningCode,
 } from './validate';
 
-/** Same as DESCRIPTION_MAX_LENGTH in admin/ops/shared.ts and the access_rules CHECK. */
+/** Same as the access_rules CHECK. */
 const DESCRIPTION_MAX_LENGTH = 2000;
 /** Distinct (JWKS URI, audience) pairs per credential and issuer key; the SQL triggers use the same cap (AR-10). */
 export const VERIFICATION_PAIRS_MAX = 4;

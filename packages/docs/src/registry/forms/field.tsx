@@ -223,6 +223,11 @@ export const field: ComponentDoc = {
           type: 'Child',
           description: 'Line after the control that also describes it.',
         },
+        {
+          name: 'live',
+          type: 'LiveSlot',
+          description: 'Live-form slot (.sfN) for a Select whose options carry o.',
+        },
         { name: 'class', type: 'string', description: 'Extra classes on the .field div.' },
         {
           name: 'children',

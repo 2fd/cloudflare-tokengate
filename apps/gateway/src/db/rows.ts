@@ -125,7 +125,6 @@ export function serviceFromRow(row: Row): Service {
     id: str(row.id),
     slug: str(row.slug),
     name: str(row.name),
-    description: str(row.description),
     base_url: str(row.base_url),
     // An unparsable injection yields kind "invalid"; the proxy refuses to inject with it.
     injection: (injection && typeof injection === 'object'
@@ -137,7 +136,7 @@ export function serviceFromRow(row: Row): Service {
     credential_sealed: strOrNull(row.credential_sealed),
     credential_hint: strOrNull(row.credential_hint),
     credential_updated_at: numOrNull(row.credential_updated_at),
-    credential_expires_at: numOrNull(row.credential_expires_at),
+    name_from_check: num(row.name_from_check) === 1,
     verify: verify && typeof verify === 'object' ? (verify as VerifyCheck) : null,
     template_id: strOrNull(row.template_id),
     enabled: num(row.enabled) === 1,

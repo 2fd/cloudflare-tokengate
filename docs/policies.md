@@ -44,23 +44,29 @@ A credential access rule trusts one token issuer. Its profile holds what the cod
 |---|---|---|---|---|---|
 | `github-actions` | `https://token.actions.githubusercontent.com` | `event_name` | `push`, `workflow_dispatch`, `schedule`, `release` | `repository_owner_id`, `enterprise_id` | `repository_owner_id` + `repository_id`, or `repository_owner_id` + `job_workflow_ref` |
 | `gitlab-ci` | `https://gitlab.com` | `pipeline_source` | `push`, `web`, `schedule`, `api`, `trigger` | `namespace_id` | `namespace_id` + `project_id`, or `namespace_id` + `ci_config_ref_uri` |
+| `vercel` | `https://oidc.vercel.com` (global mode); the team mode issuer is `https://oidc.vercel.com/<team slug>` | `environment` | `production`, `preview` | `owner_id` | `owner_id` + `project_id` |
 | `generic` | none | none | none (no event guard) | any claim | any one of the credential access rule's anchor claims |
 
 Other fixed rules:
 
 - The profile cannot change after the credential access rule is created.
-- An issuer on `token.actions.githubusercontent.com` or `gitlab.com` must use the matching profile.
+- An issuer on `token.actions.githubusercontent.com`, `gitlab.com` or `oidc.vercel.com` must use the matching profile.
   Under `generic`, neither the tenant pin rules nor the event guard would apply.
 - The token must carry these claims, or it is refused with `claims_invalid`:
   - `github-actions`: `sub`, `jti`, `iat`, `exp`, `repository_id`, `repository_owner_id`, `event_name`, `ref`.
   - `gitlab-ci`: `sub`, `jti`, `iat`, `exp`, `project_id`, `namespace_id`, `pipeline_source`, `ref`.
+  - `vercel`: `sub`, `iat`, `exp`, `owner_id`, `project_id`, `environment`. No `jti`: @vercel/oidc sets
+    one only when the caller asks for it.
   - `generic`: `sub`, `iat`, `exp` and every anchor claim.
-- Maximum token age: default 600 seconds; at least 60; at most 900 for `github-actions` and 3600 for
-  the others.
+- Maximum token age: default 600 seconds (7200 for `vercel`); at least 60; at most 900 for
+  `github-actions`, 7200 for `vercel` and 3600 for the others. Vercel function tokens live two hours,
+  and @vercel/oidc keeps an exchanged token until it expires.
 
 Claim references: [GitHub OIDC claims](https://docs.github.com/en/actions/reference/security/oidc),
-[GitLab ID token claims](https://docs.gitlab.com/ci/secrets/id_token_authentication/). Per-platform setup:
+[GitLab ID token claims](https://docs.gitlab.com/ci/secrets/id_token_authentication/),
+[Vercel OIDC token anatomy](https://vercel.com/docs/oidc/reference). Per-platform setup:
 [callers/github-actions.md](callers/github-actions.md), [callers/gitlab-ci.md](callers/gitlab-ci.md),
+[callers/vercel.md](callers/vercel.md),
 [callers/generic-oidc.md](callers/generic-oidc.md).
 
 ## Tenant pin
@@ -218,6 +224,7 @@ same commit still supplies its own variables, environments and runners. See
 - For `github-actions`: `repository_owner_id` plus `repository_id`, or `repository_owner_id` plus a
   `job_workflow_ref` pin.
 - For `gitlab-ci`: `namespace_id` plus `project_id`, or `namespace_id` plus `ci_config_ref_uri`.
+- For `vercel`: `owner_id` plus `project_id`.
 - For `generic`: an exact condition on any one of the credential access rule's "Anchor claims" (1–8 claims set
   on the credential access rule).
 

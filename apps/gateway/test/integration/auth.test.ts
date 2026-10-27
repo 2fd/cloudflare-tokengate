@@ -6,7 +6,7 @@ import { ACCESS_JWT_HEADER, resetAccessCertsCacheForTests } from '../../src/admi
 import { CSRF_COOKIE } from '../../src/admin/auth/csrf';
 import { SEEN_INTERVAL_MS } from '../../src/admin/auth/middleware';
 import { formData, renderPage } from '../../src/admin/render';
-import { getAdminHosts, putSettingStatement } from '../../src/db/settings';
+import { putSettingStatement } from '../../src/db/settings';
 import {
   adminGet,
   adminPost,
@@ -236,7 +236,11 @@ describe('Cloudflare Access login', () => {
     const app = createAdminTestApp({
       routes: (a) =>
         a.get('/admin/users', (c) =>
-          renderPage(c, { title: 'Users', section: 'users', subsection: 'people' }, () => 'body'),
+          renderPage(
+            c,
+            { title: 'Users', section: 'settings', subsection: 'people' },
+            () => 'body',
+          ),
         ),
     });
     const owner = await createUser({ email: 'o@acme.com', role: 'owner' });
@@ -252,7 +256,7 @@ describe('dev login', () => {
     AUTH_ACCESS_DEVELOPMENT: 'dev@example.com',
   };
 
-  it('signs every request to localhost in as AUTH_ACCESS_DEVELOPMENT and pins admin to localhost', async () => {
+  it('signs every request to localhost in as AUTH_ACCESS_DEVELOPMENT, and only those', async () => {
     const app = createAdminTestApp({ env: DEV_ENV, routes: stubAdminPages });
     const res = await app.request('/admin', { origin: DEV_ORIGIN });
     expect(res.status).toBe(200);
@@ -261,12 +265,11 @@ describe('dev login', () => {
       'SELECT login_provider, subject FROM user_identities',
     ).first();
     expect(identity).toEqual({ login_provider: 'dev', subject: 'dev@example.com' });
-    expect(await getAdminHosts(env.DB)).toEqual(['localhost']);
-    // The bootstrap hostname is now the only admin host.
-    expect((await app.request('/admin', { origin: 'https://gw.test' })).status).toBe(404);
+    // No host is pinned: a public host still answers, but the dev login signs nobody in there.
+    expect((await app.request('/admin', { origin: 'https://gw.test' })).status).toBe(503);
   });
 
-  it('is refused on a non-loopback host, before any admin host is stored', async () => {
+  it('is refused on a non-loopback host', async () => {
     const app = createAdminTestApp({ env: DEV_ENV, routes: stubAdminPages });
     const res = await app.request('/admin', { origin: 'https://gw.test' });
     expect(res.status).toBe(503);

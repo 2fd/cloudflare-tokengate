@@ -932,6 +932,12 @@ export const base: readonly ComponentDoc[] = [
           },
           CLASS_PROP,
           { name: 'children', type: 'Child', description: 'Letters instead of the brand’s.' },
+          {
+            name: 'cssLetters',
+            type: 'boolean',
+            description:
+              'Letters drawn by CSS (data-l): the tile adds no text, as in a select option.',
+          },
         ],
       },
       {

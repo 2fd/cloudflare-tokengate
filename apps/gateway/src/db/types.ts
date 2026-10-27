@@ -82,7 +82,6 @@ export interface Credential {
   id: string;
   slug: string;
   name: string;
-  description: string;
   base_url: string;
   injection: Injection;
   /** Exact stored JSON text of `injection`; part of the credential AAD (I-CRED-2). */
@@ -92,8 +91,9 @@ export interface Credential {
   credential_sealed: string | null;
   credential_hint: string | null;
   credential_updated_at: number | null;
-  credential_expires_at: number | null;
   verify: VerifyCheck | null;
+  /** The name came from the verify check (the Slack bot name); a manual rename clears it. */
+  name_from_check: boolean;
   /**
    * The template the service was made from (src/admin/service-templates.ts), or null. Display and
    * preset data only, never part of the credential AAD (ADR 0004).
@@ -132,10 +132,15 @@ export interface Actor {
 }
 
 /** Claims whose numeric IDs can carry a display label (`claim_labels`). */
-export type LabelledClaim = 'repository_owner_id' | 'repository_id' | 'namespace_id' | 'project_id';
+export type LabelledClaim =
+  | 'repository_owner_id'
+  | 'repository_id'
+  | 'namespace_id'
+  | 'project_id'
+  | 'owner_id';
 
 /**
- * Human label for one numeric claim value, per access rule, e.g. repository_id 987654321 →
+ * Human label for one claim ID, per access rule, e.g. repository_id 987654321 →
  * "acme/api". Display and form derivation only: policy evaluation never reads it.
  */
 export interface ClaimLabel {

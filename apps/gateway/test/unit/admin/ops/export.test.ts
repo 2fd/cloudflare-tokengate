@@ -60,7 +60,7 @@ describe('buildExport', () => {
     const { rules, global } = await seed();
     const document = await buildExport(env.DB);
     expect(document.schema_version).toBe(EXPORT_SCHEMA_VERSION);
-    expect(EXPORT_SCHEMA_VERSION).toBe(4);
+    expect(EXPORT_SCHEMA_VERSION).toBe(5);
     expect(document.credential_access_rules.map((rule) => [rule.credential, rule.name])).toEqual([
       ['github', 'alpha'],
       ['github', 'beta'],
@@ -109,7 +109,11 @@ describe('buildExport', () => {
       },
     ]);
     expect(document.credentials.map((s) => s.slug)).toEqual(['github', 'slack']);
-    expect(document.credentials[0]?.credential).toMatchObject({ hint: '…cdef (30 chars)' });
+    // Export version 5: a credential has no expiry.
+    expect(document.credentials[0]?.credential).toEqual({
+      hint: '…cdef (30 chars)',
+      updated_at: expect.any(Number),
+    });
     expect(document.credentials[1]?.credential).toBeNull();
     // createService derives template_id from the destination.
     expect(document.credentials.map((s) => s.template_id)).toEqual(['github', 'slack']);

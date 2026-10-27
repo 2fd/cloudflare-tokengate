@@ -1,7 +1,7 @@
 // Parses and validates environment configuration per feature (docs/configuration.md). A malformed feature is
 // disabled and reported by variable name; it never runs half-configured (I-CFG-1). Also decides
-// admin host pinning against the admin hosts stored in Settings (I-DEPLOY-1). Error messages name
-// variables only and never echo values.
+// on which hostnames /admin answers (I-DEPLOY-1). Error messages name variables only and never
+// echo values.
 import type { AppEnv } from './env';
 
 export type ConfigFeature = 'login.access' | 'login.dev';
@@ -61,17 +61,14 @@ export function parseConfig(env: AppEnv): Config {
 }
 
 /**
- * Host pinning for /admin (I-DEPLOY-1), against the admin hosts stored in Settings
- * (`adminHostsFromValue`). `null` (no owner has signed in yet) serves any hostname except
- * workers.dev. Otherwise only a listed hostname is served, over https unless it is a loopback
- * host; the port is ignored. An empty list (a stored value that is not valid) denies every host.
+ * Hostnames /admin answers on (I-DEPLOY-1): never workers.dev, and only over https unless the
+ * hostname is a loopback host. Every other hostname routed to the Worker is served: the operator
+ * picks them with Worker routes and puts each behind the Access application.
  */
-export function adminHostAllowed(adminHosts: string[] | null, requestUrl: URL): boolean {
+export function adminHostAllowed(requestUrl: URL): boolean {
   const host = requestUrl.hostname;
   if (isWorkersDev(host)) return false;
-  if (adminHosts === null) return true;
-  if (requestUrl.protocol !== 'https:' && !LOCAL_DEV_HOSTS.has(host)) return false;
-  return hostListed(host, adminHosts);
+  return requestUrl.protocol === 'https:' || LOCAL_DEV_HOSTS.has(host);
 }
 
 /**
@@ -186,17 +183,6 @@ export function isUpstreamHostEntry(entry: string): boolean {
 function isDomainName(name: string): boolean {
   if (name.length === 0 || name.length > 253) return false;
   return name.split('.').every((label) => DNS_LABEL_RE.test(label));
-}
-
-/**
- * An admin host entry: an upstream-style entry (exact hostname or `*.<domain>`) or a loopback
- * host, never on workers.dev (admin is not served there, see `adminHostAllowed`). Lowercase.
- */
-export function isAdminHostEntry(entry: string): boolean {
-  if (LOCAL_DEV_HOSTS.has(entry)) return true;
-  // `*.<domain>` needs two labels, so `*.dev` is already refused here.
-  if (!isUpstreamHostEntry(entry)) return false;
-  return !isWorkersDev(entry.startsWith('*.') ? entry.slice(2) : entry);
 }
 
 function isWorkersDev(hostname: string): boolean {

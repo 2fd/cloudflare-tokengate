@@ -54,8 +54,7 @@ Steps:
 
 `AUTH_ACCESS_DEVELOPMENT` is the local development login: every admin request is signed in as that
 email, without Cloudflare Access. The gateway accepts it only on requests to `localhost`, `127.0.0.1`
-or `[::1]`. On an empty local database, the first sign-in becomes the owner, and its hostname
-(`localhost`) becomes the admin host in the local database. To try another user, change
+or `[::1]`. On an empty local database, the first sign-in becomes the owner. To try another user, change
 `AUTH_ACCESS_DEVELOPMENT` in `apps/gateway/.dev.vars` and restart: that email joins with the join
 defaults from Users > "New users".
 
@@ -123,7 +122,7 @@ scripts/                   Repository checks: links, threat-model IDs.
 | `pnpm run setup` | Copies `apps/gateway/.dev.vars.example` to `apps/gateway/.dev.vars` (overwriting it), deletes the local D1 databases and recreates them with every migration applied. |
 | `pnpm dev` | `wrangler dev src/dev.ts` in `apps/gateway`, with `apps/gateway/.dev.vars`, on http://localhost:8787. It is the production Worker plus the design system docs at http://localhost:8787/docs (loopback hostnames only). It does not fetch the real `Request.cf` object: requests get Miniflare's placeholder (colo `DFW`). |
 | `pnpm db:migrate:local` | Applies `apps/gateway/migrations/` to `DB` and `apps/gateway/migrations-telemetry/` to `TELEMETRY_DB`, locally. |
-| `pnpm keyring generate` / `pnpm keyring check` | Generates a key, or validates a `TOKENGATE_KEK` or `TOKENGATE_KEYRING` value read from stdin. See [docs/operations/key-rotation.md](docs/operations/key-rotation.md). |
+| `pnpm keyring generate` / `pnpm keyring check` | Generates a key and prints its key id, or checks one key read from stdin like the Worker checks `TOKENGATE_KEYRING` and prints its key id. See [docs/operations/key-rotation.md](docs/operations/key-rotation.md). |
 | `pnpm run deploy` | Applies both remote migrations, then `wrangler deploy` with `wrangler.jsonc` `main` (`src/index.ts`), which has no `/docs` (404 in production). Operators use it; contributors rarely need it. |
 | `pnpm wrangler <args>` | Wrangler in `apps/gateway`, for example `pnpm wrangler secret put TOKENGATE_KEK`. |
 
@@ -195,7 +194,7 @@ Comments are concise and say what the code guarantees and why. They are part of 
 | `apps/gateway/src/policy/` | Conditions, globs, rules, anchor claims, trusted events ([I-AUTHZ-1](docs/threat-model.md#i-authz-1) to [I-AUTHZ-4](docs/threat-model.md#i-authz-4)). |
 | `apps/gateway/src/proxy/` | The request pipeline, injection, header and response filtering ([I-TOK-1](docs/threat-model.md#i-tok-1), [I-INJ-1](docs/threat-model.md#i-inj-1), [I-RESP-1](docs/threat-model.md#i-resp-1), [I-SSRF-1](docs/threat-model.md#i-ssrf-1), …). |
 | `apps/gateway/src/admin/auth/` | Per-request Access identity, CSRF, RBAC, email linking, bootstrap ([I-SESS-1](docs/threat-model.md#i-sess-1), [I-CSRF-1](docs/threat-model.md#i-csrf-1), [I-LINK-1](docs/threat-model.md#i-link-1), [I-BOOT-1](docs/threat-model.md#i-boot-1), [I-RBAC-1](docs/threat-model.md#i-rbac-1)). |
-| `apps/gateway/src/http/` | Security headers and host pinning ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)). |
+| `apps/gateway/src/http/` | Security headers and the admin host rule ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)). |
 | `apps/gateway/migrations/`, `apps/gateway/migrations-telemetry/` | Schema, including SQL-enforced invariants. |
 | `apps/gateway/wrangler.jsonc` | `main`, compatibility flags, `preview_urls`, `keep_vars` ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1), [I-DEPLOY-2](docs/threat-model.md#i-deploy-2), [I-SSRF-1](docs/threat-model.md#i-ssrf-1)). |
 | `apps/gateway/src/dev.ts` | The local entry that adds the dev-only docs on loopback hostnames ([I-DEPLOY-2](docs/threat-model.md#i-deploy-2)). |
@@ -218,9 +217,14 @@ A Profile is code-reviewed knowledge about one issuer type. Open an issue first.
 1. Add the ID to `ProfileId` in `apps/gateway/src/identity/types.ts`.
 2. Create `apps/gateway/src/identity/profiles/<id>.ts` that implements `IssuerProfile`: `id`, `label`, `defaults`, `eventClaim`, `trustedEvents`, `tenantClaims`, `sharedIssuers`, `anchorRules`, `verifyRequiredClaims`, `logClaimAllowlist`, `display`. Cite the platform's claim documentation in comments.
 3. Register it in `PROFILES` in `apps/gateway/src/identity/profiles/index.ts`.
-4. Run `pnpm typecheck`. It lists every `Record<ProfileId, …>` table to fill, for example in `apps/gateway/src/admin/routes/consumers.tsx`.
-5. Update the profile-specific code that the type checker does not flag: `CI_ISSUER_HOSTS` and `grantWarnings` in `apps/gateway/src/policy/validate.ts`, the error text in `apps/gateway/src/admin/ops/credential-access-rules.ts`, `PROFILE_ORDER` in `apps/gateway/src/admin/routes/consumers.tsx`, and `PREFILL_EXTRA_CLAIMS` in `apps/gateway/src/admin/routes/access.tsx`.
-6. The `credential_access_rules.profile` column has a `CHECK` constraint with the allowed IDs (`apps/gateway/migrations/0001_initial.sql`). SQLite cannot change a `CHECK` constraint in place, so this needs a migration that rebuilds the table. That is not additive (see [Migrations](#migrations)): agree on the approach in the issue and write an ADR.
+4. Run `pnpm typecheck`. It lists every `Record<ProfileId, …>` table to fill, for example `TYPE_INFO` in `apps/gateway/src/admin/views/issuer-fields.tsx`.
+5. Update the profile-specific code that the type checker does not flag:
+   - `CI_ISSUER_HOSTS` and `grantWarnings` in `apps/gateway/src/policy/validate.ts`.
+   - `TENANT_CLAIM`, `claimIdPattern`, `LABELLED` and `ruleIssuer` in `apps/gateway/src/admin/ops/credential-access-rules.ts`.
+   - `ISSUER_TYPES`, `IssuerForm`, `parseIssuerForm` and the type's branch in `apps/gateway/src/admin/views/issuer-fields.tsx`. Each new option needs its `.ga-tbranch[data-o=N]` rule in `apps/gateway/src/admin/pages.css`.
+   - The structured jobs: `anchorClaims`, `contextsFor`, `parseJobs` and `jobsFormFromConditions` in `apps/gateway/src/admin/rule-access.ts`, with a builder in `apps/gateway/src/policy/presets.ts`.
+   - `PREFILL_EXTRA_CLAIMS` and `jobsFromClaims` in `apps/gateway/src/admin/routes/credential-access-rules.tsx`, the snippet in `apps/gateway/src/admin/views/rule-snippet.tsx`, and a logo brand in `packages/ui/src/components/base/Logo.tsx`.
+6. No migration: the schema stores the profile ID and claim labels without a fixed list ([ADR 0028](docs/adr/0028-issuer-profiles-are-code.md)). Check the ID shape of the new claims in `claimIdPattern` instead.
 7. Add tests in `apps/gateway/test/unit/identity/profiles.test.ts` and security tests for the tenant pin and anchor claims.
 8. Add `docs/callers/<platform>.md`, and update [docs/policies.md](docs/policies.md) and the profile entry in [docs/concepts.md](docs/concepts.md#profile).
 

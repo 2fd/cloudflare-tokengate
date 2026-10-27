@@ -21,7 +21,6 @@ import {
   Select as UiSelect,
   SubmitRow,
   type Suggestion,
-  Textarea,
 } from '@tokengate/ui';
 import { type Child, useContext } from 'hono/jsx';
 import type { Service } from '../../db/types';
@@ -30,7 +29,6 @@ import type { FieldError } from '../ops/shared';
 import type { VerifyOutcome } from '../ops/verify';
 import type { FormFields } from '../render';
 import { fieldId, FocusTargets } from './components';
-import { formatTime } from './format';
 
 export const DEFAULT_TIMEOUT_MS = 120_000;
 
@@ -39,8 +37,6 @@ export interface TokenFormValues {
   template: string;
   slug: string;
   name: string;
-  description: string;
-  credential_expires_at: string;
   base_url: string;
   injection_kind: string;
   injection_header_name: string;
@@ -66,8 +62,6 @@ export const EMPTY_VALUES: TokenFormValues = {
   template: '',
   slug: '',
   name: '',
-  description: '',
-  credential_expires_at: '',
   base_url: '',
   injection_kind: 'bearer',
   injection_header_name: '',
@@ -146,13 +140,11 @@ export function valuesFromService(service: Service): TokenFormValues {
     ...EMPTY_VALUES,
     slug: service.slug,
     name: service.name,
-    description: service.description,
     base_url: service.base_url,
     ...injectionValues(service.injection),
     forward_headers: service.forward_headers.join(', '),
     timeout_ms: String(service.timeout_ms),
     ...verifyValues(service.verify),
-    credential_expires_at: dateInput(service.credential_expires_at),
     expected_updated_at: String(service.updated_at),
   };
 }
@@ -203,25 +195,6 @@ export function verifyFromValues(values: TokenFormValues): VerifyCheck | null {
     expect_ok_field: values.verify_expect_ok_field,
   };
 }
-
-/** `YYYY-MM-DD` (UTC midnight) → ms; empty → null. */
-export function parseDateInput(raw: string): { ok: true; value: number | null } | { ok: false } {
-  const value = raw.trim();
-  if (value === '') return { ok: true, value: null };
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) return { ok: false };
-  const [year, month, day] = match.slice(1).map(Number) as [number, number, number];
-  const ms = Date.UTC(year, month - 1, day);
-  const date = new Date(ms);
-  if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return { ok: false };
-  return { ok: true, value: ms };
-}
-
-export function dateInput(ms: number | null): string {
-  return ms === null ? '' : new Date(ms).toISOString().slice(0, 10);
-}
-
-export const EXPIRY_FORMAT_ERROR = 'Enter the expiry as a date like 2027-01-31, or leave it empty';
 
 // ---------------------------------------------------------------------------------------------
 // Form state and ids
@@ -340,43 +313,8 @@ function DraftNote(props: { hint: string }) {
   );
 }
 
-export function ExpiryField(props: {
-  ids: FormIds;
-  values: TokenFormValues;
-  /** `min` = today (UTC); the details form has none, so a stored past date still saves. */
-  min?: string;
-  hint?: Child;
-  label?: string;
-  optional?: boolean;
-  class?: string;
-  /** A hint shared with other fields (the "Name and options" hint). */
-  describedBy?: string;
-}) {
-  return (
-    <Field
-      id={props.ids.id('credential_expires_at')}
-      label={props.label ?? 'Secret expires on'}
-      optional={props.optional}
-      hint={props.hint}
-      error={props.ids.error('credential_expires_at') ?? undefined}
-      class={props.class}
-    >
-      <Input
-        name="credential_expires_at"
-        type="date"
-        width="date"
-        value={props.values.credential_expires_at}
-        min={props.min}
-        describedBy={props.describedBy}
-      />
-    </Field>
-  );
-}
-
-const DESCRIPTION_EXAMPLE = 'Bot "deploy-bot" in workspace acme; owner: platform team';
-
 /**
- * Name, slug, expiry and description of a new token, as one optional group ("Name and options")
+ * Name and slug of a new token, as one optional group ("Name and options")
  * with one shared hint: every field is derived when left empty.
  */
 export function OptionalFields(props: {
@@ -384,9 +322,6 @@ export function OptionalFields(props: {
   values: TokenFormValues;
   slugPlaceholder: string;
   namePlaceholder: string;
-  /** False for GitHub types: the expiry is read from GitHub. */
-  expiry: boolean;
-  today: string;
   /** How an empty slug and name are derived; default: the suggestions shown are the derived values. */
   derived?: { slug: string; name: string };
 }) {
@@ -403,7 +338,6 @@ export function OptionalFields(props: {
           {props.derived
             ? `Slug: ${props.derived.slug} Name: ${props.derived.name}`
             : 'Leave empty to use the suggestions shown.'}{' '}
-          {props.expiry ? 'An empty expiry means the secret does not expire. ' : ''}
           Consumers call <code>{`/proxy/${props.slugPlaceholder}`}</code>; the slug cannot be
           changed later.
         </>
@@ -431,72 +365,25 @@ export function OptionalFields(props: {
             describedBy={hintId}
           />
         </Field>
-        {props.expiry ? (
-          <ExpiryField
-            ids={ids}
-            values={values}
-            label="Secret expires"
-            min={props.today}
-            describedBy={hintId}
-          />
-        ) : null}
-        <Field
-          id={ids.id('description')}
-          label="Description"
-          hint="Which account the secret belongs to and who owns it. Access managers see this."
-          error={ids.error('description') ?? undefined}
-          class="span-all"
-        >
-          <Textarea
-            name="description"
-            rows={2}
-            maxlength={2000}
-            value={values.description}
-            placeholder={DESCRIPTION_EXAMPLE}
-          />
-        </Field>
       </FieldGrid>
     </FieldSet>
   );
 }
 
-/** Name, description and expiry of a stored token (the details form). */
+/** Name of a stored token (the details form). */
 export function DetailFields(props: { ids: FormIds; values: TokenFormValues; example: string }) {
   const { ids, values } = props;
   return (
-    <>
-      <Field id={ids.id('name')} label="Name" error={ids.error('name') ?? undefined}>
-        <Input
-          name="name"
-          value={values.name}
-          placeholder={props.example}
-          required
-          maxlength={100}
-          autocomplete="off"
-        />
-      </Field>
-      <Field
-        id={ids.id('description')}
-        label="Description"
-        optional
-        hint="Which account the secret belongs to and who owns it. Access managers see this."
-        error={ids.error('description') ?? undefined}
-      >
-        <Textarea
-          name="description"
-          rows={2}
-          maxlength={2000}
-          value={values.description}
-          placeholder={DESCRIPTION_EXAMPLE}
-        />
-      </Field>
-      <ExpiryField
-        ids={ids}
-        values={values}
-        optional
-        hint="Fix the expiry without pasting the secret again. Empty = does not expire."
+    <Field id={ids.id('name')} label="Name" error={ids.error('name') ?? undefined}>
+      <Input
+        name="name"
+        value={values.name}
+        placeholder={props.example}
+        required
+        maxlength={100}
+        autocomplete="off"
       />
-    </>
+    </Field>
   );
 }
 
@@ -825,7 +712,7 @@ export function checkTitle(verify: VerifyOutcome): string {
 }
 
 /**
- * The result of a credential check: a callout with the outcome and the reported expiry, then the
+ * The result of a credential check: a callout with the outcome and whose secret it is, then the
  * start of the upstream answer (any copy of the secret is masked). `role="status"` right after
  * a Test, so the result is announced.
  */
@@ -842,11 +729,7 @@ export function CheckResult(props: {
         tone={verify.passed ? 'ok' : 'bad'}
         role={props.announce ? 'status' : undefined}
         title={checkTitle(verify)}
-        more={
-          verify.expiresAt !== null
-            ? `The upstream reports that this secret expires ${formatTime(verify.expiresAt)}.`
-            : undefined
-        }
+        more={verify.identity !== null ? `The secret belongs to ${verify.identity}.` : undefined}
       />
       {verify.bodyPreview ? (
         <CodeBlock

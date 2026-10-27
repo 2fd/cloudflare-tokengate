@@ -27,9 +27,8 @@ const DOCUMENTED_ADMIN_ROUTES = [
   // == users ==
   'GET /admin/users/appearance',
   'POST /admin/users/appearance',
-  'GET /admin/users/sign-in',
-  'POST /admin/users/sign-in/policy',
-  'POST /admin/users/sign-in/hosts',
+  'GET /admin/faq',
+  'POST /admin/users/join-policy',
   'GET /admin/users',
   'POST /admin/users',
   'GET /admin/users/:id',
@@ -77,6 +76,7 @@ const DOCUMENTED_ADMIN_ROUTES = [
 
   // == global ==
   'POST /admin/export',
+  'POST /admin/theme',
 ];
 
 /** Field permissions per route, in the same section blocks. */
@@ -130,9 +130,11 @@ describe('I-RBAC-1: permission matrix and route table', () => {
     }
   });
 
-  it('only read routes are open to viewers', () => {
+  it('only read routes and the theme cookie are open to viewers', () => {
     for (const [key, rule] of Object.entries(ROUTE_PERMISSIONS)) {
-      if (rule.mutates) expect(can('viewer', rule.permission), key).toBe(false);
+      // The theme is a cookie in the browser, not admin state.
+      if (key === 'POST /admin/theme') expect(rule.permission).toBe('read');
+      else if (rule.mutates) expect(can('viewer', rule.permission), key).toBe(false);
     }
   });
 
@@ -169,9 +171,7 @@ describe('I-RBAC-1: permission matrix and route table', () => {
     expect(routePermission('POST', '/admin/users/:id/revoke-sessions')).toBeNull();
     expect(routePermission('POST', '/admin/retention')?.permission).toBe('settings:write');
     expect(routePermission('POST', '/admin/credentials/hosts')?.permission).toBe('settings:write');
-    expect(routePermission('POST', '/admin/users/sign-in/hosts')?.permission).toBe(
-      'settings:write',
-    );
+    expect(routePermission('POST', '/admin/users/sign-in/hosts')).toBeNull();
     expect(routePermission('POST', '/admin/credentials/keys/rewrap')?.permission).toBe(
       'keyring:rewrap',
     );

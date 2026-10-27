@@ -1,16 +1,17 @@
 // The issuer fields of the credential access rule form (A14.1, A14.7.1, prefix `new.`): the issuer type as
-// logo cards (IssuerCards, shared with the global access rule form) and each type's few inputs in its
-// branch: organizations or groups (the tenant pin, I-TEN-1), a GitHub Enterprise or self-managed
-// GitLab issuer, or a generic issuer with its anchor and pin claims. The token settings (JWKS,
+// a rich select (IssuerType, shared with the global access rule form) and each type's few inputs in
+// its branch: organizations, groups or a team (the tenant pin, I-TEN-1), a GitHub Enterprise,
+// self-managed GitLab or global Vercel issuer, or a generic issuer with its anchor and pin claims. The token settings (JWKS,
 // algorithms, token age, audience) are derived and sit in the form's "Token settings" disclosure.
 // Every input sits in a hidden branch, so none carries native validation (A7.6); the server checks
 // them.
-import { Badge, FieldSet, type LogoSpec, More, RadioCards, Reveal } from '@tokengate/ui';
+import { Field as UiField, type LogoSpec, More, Reveal, Select as UiSelect } from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
 import { labelFor } from '../../db/claim-labels';
 import type { ClaimLabel, CredentialAccessRule } from '../../db/types';
 import { GITHUB_ACTIONS_ISSUER } from '../../identity/profiles/github-actions';
 import { GITLAB_COM_ISSUER } from '../../identity/profiles/gitlab-ci';
+import { VERCEL_OIDC_ISSUER } from '../../identity/profiles/vercel';
 import type { ProfileId } from '../../identity/types';
 import { CLAIM_NAME_MAX_LENGTH } from '../../policy/conditions';
 import type { Condition } from '../../policy/types';
@@ -23,9 +24,15 @@ import {
 import type { FieldError } from '../ops/shared';
 import { type Fields, ownerFindCommand, parseOwnerList, text } from '../rule-access';
 import { useFocusTarget } from './access-visuals';
-import { Field, fieldId, IdWithLabelField } from './components';
+import { Checkbox, Field, fieldId, IdWithLabelField } from './components';
 
-export const ISSUER_TYPES: readonly ProfileId[] = ['github-actions', 'gitlab-ci', 'generic'];
+/** The issuer types in the order of the select; `data-o` is the 1-based position. */
+export const ISSUER_TYPES: readonly ProfileId[] = [
+  'github-actions',
+  'gitlab-ci',
+  'vercel',
+  'generic',
+];
 
 export const TYPE_INFO: Readonly<
   Record<ProfileId, { title: string; description: string; logo: LogoSpec }>
@@ -40,9 +47,14 @@ export const TYPE_INFO: Readonly<
     description: 'Pipelines on GitLab.com or your own GitLab',
     logo: 'gitlab',
   },
+  vercel: {
+    title: 'Vercel',
+    description: 'Functions and builds of Vercel projects',
+    logo: 'vercel',
+  },
   generic: {
     title: 'Generic OIDC',
-    description: 'Buildkite, CircleCI, Kubernetes or any OIDC issuer',
+    description: 'Buildkite and CircleCI presets, Kubernetes or any OIDC issuer',
     logo: 'oidc',
   },
 };
@@ -83,6 +95,9 @@ export interface IssuerForm {
   github_enterprise_id: string;
   gitlab_group: string;
   gitlab_url: string;
+  vercel_team: string;
+  /** "1": the project uses the global issuer mode (`https://oidc.vercel.com`). */
+  vercel_global: string;
   generic_issuer: string;
   generic_anchor_claims: string;
   generic_pin_claim: string;
@@ -96,6 +111,8 @@ const KEYS: ReadonlyArray<keyof IssuerForm> = [
   'github_enterprise_id',
   'gitlab_group',
   'gitlab_url',
+  'vercel_team',
+  'vercel_global',
   'generic_issuer',
   'generic_anchor_claims',
   'generic_pin_claim',
@@ -120,7 +137,7 @@ export interface IssuerInput {
   profile: ProfileId;
   /** The exact issuer: the platform default, a GitHub Enterprise slug issuer, or as typed. */
   issuer: string;
-  /** Organizations (GitHub) or groups (GitLab), at least one; generic: none. */
+  /** Organizations (GitHub), groups (GitLab) or one team (Vercel), at least one; generic: none. */
   tenants: TenantEntry[];
   /** GitHub Enterprise ID, an extra pin; empty for none. */
   enterprise_id?: string;
@@ -179,6 +196,9 @@ export function issuerFormFromRule(
   } else if (rule.profile === 'gitlab-ci') {
     form.gitlab_group = tenants;
     form.gitlab_url = rule.issuer.replace(/\/$/, '') === GITLAB_COM_ISSUER ? '' : rule.issuer;
+  } else if (rule.profile === 'vercel') {
+    form.vercel_team = tenants;
+    form.vercel_global = rule.issuer === VERCEL_OIDC_ISSUER ? '1' : '';
   } else {
     form.generic_issuer = rule.issuer;
     form.generic_anchor_claims = rule.anchor_claims.join(', ');
@@ -269,6 +289,33 @@ export function parseIssuerForm(
       },
     };
   }
+  if (type === 'vercel') {
+    const teams = parseOwnerList(form.vercel_team, { id: type });
+    const [team] = teams.ok ? teams.entries : [];
+    if (!teams.ok || teams.entries.length !== 1 || !team) {
+      return {
+        ok: false,
+        errors: [
+          {
+            field: field('vercel_team'),
+            message: teams.ok
+              ? 'Enter one team: a rule holds the projects of one Vercel team.'
+              : teams.message,
+          },
+        ],
+      };
+    }
+    // The default "team" issuer mode signs with `https://oidc.vercel.com/<team slug>`.
+    const global = form.vercel_global === '1' || form.vercel_global === 'on';
+    return {
+      ok: true,
+      input: {
+        profile: type,
+        issuer: global ? VERCEL_OIDC_ISSUER : `${VERCEL_OIDC_ISSUER}/${team.label}`,
+        tenants: [{ value: team.id, label: team.label }],
+      },
+    };
+  }
   const issuer = form.generic_issuer.trim();
   const issuerError = issuer === '' ? 'is required' : httpsError(issuer, false);
   if (issuerError !== null) {
@@ -332,14 +379,15 @@ function presetFor(issuer: string): (typeof GENERIC_PRESETS)[number] | null {
   }
 }
 
-/** How the type cards take part in the form: a live slot of the page, or a scoped branch. */
+/** How the type select takes part in the form: a live slot of the page, or a scoped branch. */
 export type IssuerFieldsLive = 1 | 'scoped';
 
 /**
- * The issuer type as logo cards (`name` = `${prefix}type`). `fixed` shows only the card of a stored
- * type (an edit: the profile never changes), still checked, so its branch stays open.
+ * The issuer type as a rich select (`name` = `${prefix}type`): logo, name and one line per type,
+ * so the list can keep growing. Option K carries `data-o=K` and shows branch K. `fixed` offers
+ * only the stored type (an edit: the profile never changes), so its branch stays open.
  */
-export function IssuerCards(props: {
+export function IssuerType(props: {
   prefix: string;
   value: string;
   error: string | null;
@@ -354,42 +402,26 @@ export function IssuerCards(props: {
     value: type,
     o: index + 1,
     logo: TYPE_INFO[type].logo,
-    title: TYPE_INFO[type].title,
-    description:
-      type === 'generic' && !props.fixed ? (
-        <>
-          {TYPE_INFO[type].description}
-          <span class="d-block con-preset">
-            <Badge tone="accent">Presets: Buildkite, CircleCI</Badge>
-          </span>
-        </>
-      ) : (
-        TYPE_INFO[type].description
-      ),
+    label: TYPE_INFO[type].title,
+    description: TYPE_INFO[type].description,
   })).filter((option) => !props.fixed || option.value === props.value);
-  useFocusTarget(`${prefix}type`, { id: typeId, options });
+  useFocusTarget(`${prefix}type`, typeId);
   return (
-    <FieldSet
+    <UiField
       id={typeId}
-      legend={props.legend ?? 'Where do the jobs run?'}
+      label={props.legend ?? 'Where do the jobs run?'}
       live={scoped ? undefined : 1}
-      class={scoped ? 'ga-tf con-types' : 'con-types'}
+      class={scoped ? 'ga-tf' : undefined}
       error={props.error}
       hint={props.fixed ? 'The issuer type of a rule cannot change.' : undefined}
     >
-      <RadioCards
-        name={`${prefix}type`}
-        columns={props.fixed ? 1 : 3}
-        value={props.value}
-        invalid={props.error ? true : undefined}
-        options={options}
-      />
-    </FieldSet>
+      <UiSelect name={`${prefix}type`} value={props.value} options={options} />
+    </UiField>
   );
 }
 
 /**
- * The fields. The type is IssuerCards; each type's inputs sit in its branch: a ui Reveal of live
+ * The fields. The type is IssuerType; each type's inputs sit in its branch: a ui Reveal of live
  * slot 1 on a page of its own, or a scoped branch (`.ga-tbranch`, page-local CSS) in the rule form,
  * where `jobs` adds the type's "Which jobs" fields after its inputs.
  */
@@ -437,7 +469,7 @@ export function IssuerFields(props: {
     ) : null;
   return (
     <>
-      <IssuerCards
+      <IssuerType
         prefix={prefix}
         value={form.type}
         error={error('type')}
@@ -547,6 +579,42 @@ export function IssuerFields(props: {
         </>,
       )}
       {jobsBranch('gitlab-ci')}
+      {branch(
+        'vercel',
+        <>
+          <IdWithLabelField
+            kind="vercel_team"
+            name={`${prefix}vercel_team`}
+            label="Team"
+            value={form.vercel_team}
+            example="acme (team_7Gw5ZMzpQA8h90F832KGp7nwbuh3)"
+            findCommand={ownerFindCommand({ id: 'vercel' })}
+            hint="The team ID keeps working after a rename; the slug names the issuer."
+            error={error('vercel_team')}
+            autocomplete="off"
+            conditional
+          />
+          <More
+            summary="Global issuer mode"
+            open={form.vercel_global === '1' || form.vercel_global === 'on'}
+          >
+            <Checkbox
+              name={`${prefix}vercel_global`}
+              value="1"
+              label="The project uses the global issuer"
+              hint={
+                <>
+                  Project Settings › Security › Secure backend access with OIDC federation. Global
+                  signs as <code>{VERCEL_OIDC_ISSUER}</code>, team as{' '}
+                  <code>{VERCEL_OIDC_ISSUER}/&lt;team slug&gt;</code>.
+                </>
+              }
+              checked={form.vercel_global === '1' || form.vercel_global === 'on'}
+            />
+          </More>
+        </>,
+      )}
+      {jobsBranch('vercel')}
       {branch(
         'generic',
         <>

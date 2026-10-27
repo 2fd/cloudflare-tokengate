@@ -167,7 +167,9 @@ export function callerLogo(
       ? 'github'
       : rule?.profile === 'gitlab-ci'
         ? 'gitlab'
-        : 'oidc';
+        : rule?.profile === 'vercel'
+          ? 'vercel'
+          : 'oidc';
   return rule && !rule.enabled ? { brand, disabled: true } : brand;
 }
 
@@ -737,7 +739,6 @@ export const AUDIT_ACTION_TEXT: Readonly<Record<string, string>> = {
   'user.join_defaults': 'Changed the join policy',
   'user.reset_login': 'Reset a sign-in',
   'user.resend_invite': 'Renewed an invitation',
-  'settings.admin_hosts': 'Changed the admin hosts',
   'user.bootstrap': 'First owner signed in',
   'user.join': 'Joined by signing in',
   'user.link': 'Accepted an invitation',
@@ -757,8 +758,7 @@ export function actionText(action: string): string | null {
 const SETTINGS_PAGES: Readonly<Record<string, string>> = {
   'settings.update': paths.retention(),
   'settings.upstream_hosts': paths.tokenHosts(),
-  'settings.admin_hosts': paths.signIn('hosts'),
-  'user.join_defaults': paths.signIn('policy'),
+  'user.join_defaults': paths.users(),
 };
 
 /** Target types written by the ops: the noun, the id prefix and the entity page. */
@@ -800,7 +800,7 @@ export const AUDIT_TARGETS: Readonly<
       Object.hasOwn(SETTINGS_PAGES, action) ? (SETTINGS_PAGES[action] ?? null) : null,
   },
   keyring: {
-    label: 'Encryption keys',
+    label: 'Rotate encryption',
     noun: 'encryption keys',
     prefix: null,
     page: () => paths.tokenKeys(),

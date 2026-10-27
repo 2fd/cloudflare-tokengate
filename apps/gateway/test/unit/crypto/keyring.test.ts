@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import devVarsExample from '../../../.dev.vars.example?raw';
 import {
   boundKey,
+  checkNextKey,
   DEV_PLACEHOLDER_KEK,
+  type Keyring,
   type KeyringEnv,
   type KeyringError,
   kekBindingInfo,
   keyCheckValue,
   loadKeyring,
+  type NextKeyStatus,
 } from '../../../src/crypto/keyring';
 import { toBase64 } from '../../../src/lib/encoding';
 import vectors from '../../vectors/sealed.json';
@@ -18,6 +21,19 @@ const K1 = toBase64(bytes(32, 0x00));
 const K2 = toBase64(bytes(32, 0x80));
 const ring = (doc: unknown) => JSON.stringify(doc);
 
+const KID1 = vectors.kcv[0]?.kcv as string;
+const KID2 = vectors.kcv[1]?.kcv as string;
+/** 32 printable ASCII bytes: a passphrase, not a random key. */
+const TEXT_KEY = toBase64(new TextEncoder().encode('correct-horse-battery-staple-123'));
+/** 32 bytes with only two distinct values. */
+const FEW_BYTES = toBase64(Uint8Array.from({ length: 32 }, (_, i) => (i % 2 === 0 ? 0 : 0xff)));
+
+async function keyringOf(env: KeyringEnv): Promise<Keyring> {
+  const result = await loadKeyring(env);
+  if (!result.ok) throw new Error(result.error);
+  return result.keyring;
+}
+
 describe('loadKeyring errors', () => {
   const cases: Array<
     [string, { TOKENGATE_KEK?: string; TOKENGATE_KEYRING?: string }, KeyringError]
@@ -25,22 +41,12 @@ describe('loadKeyring errors', () => {
     ['neither set', {}, 'keyring_absent'],
     ['both empty strings', { TOKENGATE_KEK: '', TOKENGATE_KEYRING: '' }, 'keyring_absent'],
     ['KEK whitespace only', { TOKENGATE_KEK: ' \n' }, 'keyring_absent'],
-    [
-      'both set',
-      { TOKENGATE_KEK: K1, TOKENGATE_KEYRING: ring({ active: 'k1', keys: { k1: K1 } }) },
-      'both_kek_and_keyring_set',
-    ],
-    [
-      'both set, both invalid',
-      { TOKENGATE_KEK: 'x', TOKENGATE_KEYRING: 'y' },
-      'both_kek_and_keyring_set',
-    ],
 
     ['KEK not base64', { TOKENGATE_KEK: 'not base64!' }, 'keyring_malformed'],
     ['KEK with a base64url character', { TOKENGATE_KEK: `-${K1.slice(1)}` }, 'keyring_malformed'],
     ['KEK bad padding', { TOKENGATE_KEK: `${toBase64(bytes(31))}==` }, 'keyring_malformed'],
     [
-      'KEK given keyring JSON',
+      'KEK given the old keyring JSON',
       { TOKENGATE_KEK: ring({ active: 'k1', keys: { k1: K1 } }) },
       'keyring_malformed',
     ],
@@ -48,80 +54,25 @@ describe('loadKeyring errors', () => {
     ['KEK 31 bytes', { TOKENGATE_KEK: toBase64(bytes(31)) }, 'key_not_32_bytes'],
     ['KEK 33 bytes', { TOKENGATE_KEK: toBase64(bytes(33)) }, 'key_not_32_bytes'],
     ['KEK 64 bytes', { TOKENGATE_KEK: toBase64(bytes(64)) }, 'key_not_32_bytes'],
-
-    ['keyring not JSON', { TOKENGATE_KEYRING: '{active: k1}' }, 'keyring_malformed'],
-    ['keyring null', { TOKENGATE_KEYRING: 'null' }, 'keyring_malformed'],
-    ['keyring array', { TOKENGATE_KEYRING: '[]' }, 'keyring_malformed'],
-    ['keyring string', { TOKENGATE_KEYRING: '"k1"' }, 'keyring_malformed'],
-    ['keyring bare base64', { TOKENGATE_KEYRING: K1 }, 'keyring_malformed'],
-    ['missing active', { TOKENGATE_KEYRING: ring({ keys: { k1: K1 } }) }, 'keyring_malformed'],
-    ['missing keys', { TOKENGATE_KEYRING: ring({ active: 'k1' }) }, 'keyring_malformed'],
     [
-      'unknown field',
-      { TOKENGATE_KEYRING: ring({ active: 'k1', keys: { k1: K1 }, extra: 1 }) },
-      'keyring_malformed',
-    ],
-    [
-      'active not a string',
-      { TOKENGATE_KEYRING: ring({ active: 1, keys: { 1: K1 } }) },
-      'keyring_malformed',
-    ],
-    [
-      'keys is an array',
-      { TOKENGATE_KEYRING: ring({ active: 'k1', keys: [K1] }) },
-      'keyring_malformed',
-    ],
-    [
-      'key value not a string',
-      { TOKENGATE_KEYRING: ring({ active: 'k1', keys: { k1: 42 } }) },
-      'keyring_malformed',
-    ],
-    [
-      'kid with space',
-      { TOKENGATE_KEYRING: ring({ active: 'k 1', keys: { 'k 1': K1 } }) },
-      'keyring_malformed',
-    ],
-    [
-      'kid __proto__',
-      { TOKENGATE_KEYRING: `{"active":"k1","keys":{"k1":"${K1}","__proto__":"${K2}"}}` },
-      'keyring_malformed',
-    ],
-    [
-      'kid empty',
-      { TOKENGATE_KEYRING: ring({ active: 'k1', keys: { k1: K1, '': K2 } }) },
-      'keyring_malformed',
-    ],
-    [
-      'kid 65 chars',
-      { TOKENGATE_KEYRING: ring({ active: 'k1', keys: { k1: K1, ['k'.repeat(65)]: K2 } }) },
-      'keyring_malformed',
-    ],
-    [
-      'key not base64',
-      { TOKENGATE_KEYRING: ring({ active: 'k1', keys: { k1: '***' } }) },
+      'KEK invalid, even with a valid KEYRING',
+      { TOKENGATE_KEK: 'x', TOKENGATE_KEYRING: K2 },
       'keyring_malformed',
     ],
 
     [
-      'active kid not in keys',
-      { TOKENGATE_KEYRING: ring({ active: 'k3', keys: { k1: K1, k2: K2 } }) },
-      'active_kid_missing',
+      'KEYRING alone, the old JSON format',
+      { TOKENGATE_KEYRING: ring({ active: 'k1', keys: { k1: K1 } }) },
+      'keyring_malformed',
     ],
+    ['KEYRING alone, not base64', { TOKENGATE_KEYRING: '***' }, 'keyring_malformed'],
+    ['KEYRING alone, 16 bytes', { TOKENGATE_KEYRING: toBase64(bytes(16)) }, 'key_not_32_bytes'],
+    ['KEYRING alone, text', { TOKENGATE_KEYRING: TEXT_KEY }, 'key_not_random'],
+    ['KEYRING alone, few byte values', { TOKENGATE_KEYRING: FEW_BYTES }, 'key_not_random'],
     [
-      'no keys at all',
-      { TOKENGATE_KEYRING: ring({ active: 'k1', keys: {} }) },
-      'active_kid_missing',
-    ],
-
-    [
-      'active key 16 bytes',
-      { TOKENGATE_KEYRING: ring({ active: 'k1', keys: { k1: toBase64(bytes(16)) } }) },
-      'key_not_32_bytes',
-    ],
-    [
-      'inactive key 16 bytes',
-      { TOKENGATE_KEYRING: ring({ active: 'k2', keys: { k1: toBase64(bytes(16)), k2: K2 } }) },
-      'key_not_32_bytes',
+      'KEYRING alone, the development key',
+      { TOKENGATE_KEYRING: DEV_PLACEHOLDER_KEK },
+      'dev_placeholder_key',
     ],
   ];
 
@@ -131,67 +82,136 @@ describe('loadKeyring errors', () => {
 });
 
 describe('loadKeyring success', () => {
-  it('maps a bare TOKENGATE_KEK to kid k1', async () => {
-    const result = await loadKeyring({ TOKENGATE_KEK: K1 });
-    if (!result.ok) throw new Error(result.error);
-    expect(result.keyring.activeKid).toBe('k1');
-    expect(result.keyring.kids).toEqual(['k1']);
-    expect(result.keyring.kcv).toEqual({ k1: vectors.kcv[0]?.kcv });
+  it('names a bare TOKENGATE_KEK by its key check value, and resolves the legacy kid k1 to it', async () => {
+    const keyring = await keyringOf({ TOKENGATE_KEK: K1 });
+    expect(keyring.activeKid).toBe(KID1);
+    expect(keyring.currentKid).toBe(KID1);
+    expect(keyring.kids).toEqual([KID1]);
+    expect(keyring.kcv).toEqual({ [KID1]: KID1, k1: KID1 });
+    expect(keyring.next).toBe('absent');
+    expect(keyring.nextKid).toBeNull();
+    expect(keyring.resolve('k1')).toBe(KID1);
+    expect(keyring.resolve(KID1)).toBe(KID1);
+    expect(keyring.resolve(KID2)).toBeNull();
+    expect(keyring.key('k1')).toBe(keyring.key(KID1));
+    expect(keyring.key('k1')).toBeDefined();
   });
 
   it('trims surrounding whitespace (secrets pasted with a newline) and accepts unpadded base64', async () => {
     const padded = await loadKeyring({ TOKENGATE_KEK: `  ${K1}\n` });
     const unpadded = await loadKeyring({ TOKENGATE_KEK: K1.replace(/=+$/, '') });
-    expect(padded.ok && padded.keyring.kcv).toEqual({ k1: vectors.kcv[0]?.kcv });
-    expect(unpadded.ok && unpadded.keyring.kcv).toEqual({ k1: vectors.kcv[0]?.kcv });
+    expect(padded.ok && padded.keyring.activeKid).toBe(KID1);
+    expect(unpadded.ok && unpadded.keyring.activeKid).toBe(KID1);
   });
 
-  it('loads a multi-key keyring with sorted kids and a KCV per kid', async () => {
-    const result = await loadKeyring({
-      TOKENGATE_KEYRING: ring({ active: 'k2', keys: { k2: K2, k1: K1 } }),
-    });
-    if (!result.ok) throw new Error(result.error);
-    const { keyring } = result;
-    expect(keyring.activeKid).toBe('k2');
-    expect(keyring.kids).toEqual(['k1', 'k2']);
-    expect(keyring.kcv).toEqual({ k1: vectors.kcv[0]?.kcv, k2: vectors.kcv[1]?.kcv });
+  it('makes a ready TOKENGATE_KEYRING the active key while TOKENGATE_KEK still opens', async () => {
+    const keyring = await keyringOf({ TOKENGATE_KEK: K1, TOKENGATE_KEYRING: ` ${K2}\n` });
+    expect(keyring.next).toBe('ready');
+    expect(keyring.activeKid).toBe(KID2);
+    expect(keyring.nextKid).toBe(KID2);
+    expect(keyring.currentKid).toBe(KID1);
+    expect(keyring.kids).toEqual([KID1, KID2].sort());
+    expect(keyring.key(KID1)).toBeDefined();
+    expect(keyring.key(KID2)).toBeDefined();
+    expect(keyring.resolve('k1')).toBe(KID1);
     expect(keyring.key('k3')).toBeUndefined();
     expect(keyring.key('toString')).toBeUndefined();
-    expect(Object.keys(keyring.kcv)).toEqual(['k1', 'k2']);
     // These match KID_PATTERN, so a tampered sealed kid could name them.
     for (const inherited of ['constructor', 'toString', 'hasOwnProperty']) {
       expect(inherited in keyring.kcv).toBe(false);
       expect(keyring.kcv[inherited]).toBeUndefined();
+      expect(keyring.resolve(inherited)).toBeNull();
     }
   });
 
+  it('reports TOKENGATE_KEYRING equal to TOKENGATE_KEK as the same key', async () => {
+    const keyring = await keyringOf({ TOKENGATE_KEK: K1, TOKENGATE_KEYRING: K1 });
+    expect(keyring.next).toBe('same');
+    expect(keyring.activeKid).toBe(KID1);
+    expect(keyring.nextKid).toBe(KID1);
+    expect(keyring.kids).toEqual([KID1]);
+  });
+
+  it.each<[string, string, NextKeyStatus]>([
+    ['not base64', '***', 'malformed'],
+    ['the old JSON format', ring({ active: 'k2', keys: { k2: K2 } }), 'malformed'],
+    ['16 bytes', toBase64(bytes(16)), 'not_32_bytes'],
+    ['the development key', DEV_PLACEHOLDER_KEK, 'dev_placeholder'],
+    ['printable text', TEXT_KEY, 'not_random'],
+    ['few distinct byte values', FEW_BYTES, 'not_random'],
+  ])(
+    'ignores a TOKENGATE_KEYRING that is %s: TOKENGATE_KEK stays active',
+    async (_, value, status) => {
+      const keyring = await keyringOf({ TOKENGATE_KEK: K1, TOKENGATE_KEYRING: value });
+      expect(keyring.next).toBe(status);
+      expect(keyring.nextKid).toBeNull();
+      expect(keyring.activeKid).toBe(KID1);
+      expect(keyring.kids).toEqual([KID1]);
+    },
+  );
+
+  it('refuses the development key as TOKENGATE_KEYRING even in development mode', async () => {
+    const keyring = await keyringOf({
+      TOKENGATE_KEK: DEV_PLACEHOLDER_KEK,
+      TOKENGATE_KEYRING: DEV_PLACEHOLDER_KEK,
+      AUTH_ACCESS_DEVELOPMENT: 'dev@example.com',
+    });
+    expect(keyring.next).toBe('dev_placeholder');
+  });
+
+  it('uses a ready TOKENGATE_KEYRING alone as the only key', async () => {
+    const keyring = await keyringOf({ TOKENGATE_KEYRING: K2 });
+    expect(keyring.currentKid).toBeNull();
+    expect(keyring.next).toBe('ready');
+    expect(keyring.activeKid).toBe(KID2);
+    expect(keyring.kids).toEqual([KID2]);
+    expect(keyring.resolve('k1')).toBeNull();
+    expect(keyring.key('k1')).toBeUndefined();
+    expect(keyring.kcv).toEqual({ [KID2]: KID2 });
+  });
+
   it('imports keys as non-extractable AES-256-GCM encrypt/decrypt keys', async () => {
-    const result = await loadKeyring({ TOKENGATE_KEK: K2 });
-    if (!result.ok) throw new Error(result.error);
-    const key = result.keyring.key('k1');
-    expect(key).toBeDefined();
-    expect(key?.extractable).toBe(false);
-    expect(key?.algorithm).toMatchObject({ name: 'AES-GCM', length: 256 });
-    expect([...(key?.usages ?? [])].sort()).toEqual(['decrypt', 'encrypt']);
-    await expect(crypto.subtle.exportKey('raw', key as CryptoKey)).rejects.toThrow();
+    const keyring = await keyringOf({ TOKENGATE_KEK: K1, TOKENGATE_KEYRING: K2 });
+    for (const kid of keyring.kids) {
+      const key = keyring.key(kid);
+      expect(key).toBeDefined();
+      expect(key?.extractable).toBe(false);
+      expect(key?.algorithm).toMatchObject({ name: 'AES-GCM', length: 256 });
+      expect([...(key?.usages ?? [])].sort()).toEqual(['decrypt', 'encrypt']);
+      await expect(crypto.subtle.exportKey('raw', key as CryptoKey)).rejects.toThrow();
+    }
   });
 
   it('returns frozen objects', async () => {
-    const result = await loadKeyring({ TOKENGATE_KEK: K1 });
-    if (!result.ok) throw new Error(result.error);
-    expect(Object.isFrozen(result.keyring)).toBe(true);
-    expect(Object.isFrozen(result.keyring.kids)).toBe(true);
-    expect(Object.isFrozen(result.keyring.kcv)).toBe(true);
+    const keyring = await keyringOf({ TOKENGATE_KEK: K1 });
+    expect(Object.isFrozen(keyring)).toBe(true);
+    expect(Object.isFrozen(keyring.kids)).toBe(true);
+    expect(Object.isFrozen(keyring.kcv)).toBe(true);
   });
 
   it('caches per raw secret strings', async () => {
-    const env = { TOKENGATE_KEYRING: ring({ active: 'k1', keys: { k1: K1, k2: K2 } }) };
+    const env = { TOKENGATE_KEK: K1, TOKENGATE_KEYRING: K2 };
     const first = await loadKeyring(env);
     const second = await loadKeyring({ ...env });
     expect(second).toBe(first);
     const other = await loadKeyring({ TOKENGATE_KEK: K2 });
     expect(other).not.toBe(first);
-    expect(other.ok && other.keyring.kcv).toEqual({ k1: vectors.kcv[1]?.kcv });
+    expect(other.ok && other.keyring.activeKid).toBe(KID2);
+  });
+});
+
+describe('checkNextKey', () => {
+  it.each<[string, string, ReturnType<typeof checkNextKey>]>([
+    ['a random key', toBase64(crypto.getRandomValues(new Uint8Array(32))), null],
+    ['K1 (0x00..0x1f)', K1, null],
+    ['not base64', 'not base64!', 'malformed'],
+    ['33 bytes', toBase64(bytes(33)), 'not_32_bytes'],
+    ['the development key', DEV_PLACEHOLDER_KEK, 'dev_placeholder'],
+    ['printable text', TEXT_KEY, 'not_random'],
+    ['32 zero bytes', toBase64(new Uint8Array(32)), 'not_random'],
+    ['few distinct byte values', FEW_BYTES, 'not_random'],
+  ])('%s → %s', (_, value, expected) => {
+    expect(checkNextKey(value)).toBe(expected);
   });
 });
 
@@ -200,7 +220,7 @@ describe('I-CRED-3: keys are bound to the login variables', () => {
   const kcvOf = async (env: KeyringEnv) => {
     const result = await loadKeyring({ TOKENGATE_KEK: K1, ...env });
     if (!result.ok) throw new Error(result.error);
-    return result.keyring.kcv.k1;
+    return result.keyring.activeKid;
   };
 
   it('every change to AUTH_ACCESS_* yields a different key', async () => {
@@ -249,12 +269,16 @@ describe('the development placeholder key', () => {
       ok: false,
       error: 'dev_placeholder_key',
     });
-    expect(
-      await loadKeyring({
-        TOKENGATE_KEYRING: ring({ active: 'k1', keys: { k1: K1, dev: DEV_PLACEHOLDER_KEK } }),
-        ...env,
-      }),
-    ).toEqual({ ok: false, error: 'dev_placeholder_key' });
+    expect(await loadKeyring({ TOKENGATE_KEYRING: DEV_PLACEHOLDER_KEK, ...env })).toEqual({
+      ok: false,
+      error: 'dev_placeholder_key',
+    });
+    const withKek = await keyringOf({
+      TOKENGATE_KEK: K1,
+      TOKENGATE_KEYRING: DEV_PLACEHOLDER_KEK,
+      ...env,
+    });
+    expect(withKek.next).toBe('dev_placeholder');
   });
 
   it('is accepted in development mode only', async () => {

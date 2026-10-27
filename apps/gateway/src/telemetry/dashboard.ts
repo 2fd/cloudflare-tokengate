@@ -161,7 +161,6 @@ export interface AlertService {
   name: string;
   enabled: boolean;
   base_url: string;
-  credential_expires_at: number | null;
   has_credential: boolean;
 }
 
@@ -214,8 +213,7 @@ export async function loadAlertData(deps: Pick<Deps, 'env' | 'now'>): Promise<Al
       sealedKidByServiceStatement(db),
       recordedKcvStatement(db),
       db.prepare(
-        `SELECT id, slug, name, enabled, base_url, credential_expires_at,
-           credential_sealed IS NOT NULL AS has_credential
+        `SELECT id, slug, name, enabled, base_url, credential_sealed IS NOT NULL AS has_credential
          FROM credentials ORDER BY name, id`,
       ),
       db.prepare(
@@ -252,8 +250,6 @@ export async function loadAlertData(deps: Pick<Deps, 'env' | 'now'>): Promise<Al
       name: String(row.name),
       enabled: Number(row.enabled) === 1,
       base_url: String(row.base_url),
-      credential_expires_at:
-        row.credential_expires_at == null ? null : Number(row.credential_expires_at),
       has_credential: Number(row.has_credential) === 1,
     })),
     access_rules: rowsOf<Record<string, unknown>>(ruleRows).map((row) => ({
@@ -343,7 +339,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       title: `Encryption keys are not loaded (${keyring.error}): credential requests fail with 503 and secrets cannot change.`,
       detail: 'Set TOKENGATE_KEK or TOKENGATE_KEYRING.',
       objects: [
-        { href: paths.tokenKeys(), label: 'Encryption keys' },
+        { href: paths.tokenKeys(), label: 'Rotate encryption' },
         { href: paths.docs('operations/key-rotation.md'), label: 'Key rotation guide' },
       ],
     });
@@ -360,7 +356,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       detail: 'Restore the key in the keyring.',
       objects: [
         ...tokenLinks(affected, () => paths.tokens({ status: 'credential_unreadable' })),
-        { href: paths.tokenKeys(), label: 'Encryption keys' },
+        { href: paths.tokenKeys(), label: 'Rotate encryption' },
       ],
     });
   }
@@ -372,7 +368,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       title: `${keyring.changedKids.length === 1 ? 'Key' : 'Keys'} ${kids} now ${keyring.changedKids.length === 1 ? 'holds' : 'hold'} a different key than the one stored secrets were sealed with.`,
       detail:
         'Restore the previous key value, or set those secrets again and then accept the new key.',
-      objects: [{ href: paths.tokenKeys(), label: 'Encryption keys' }],
+      objects: [{ href: paths.tokenKeys(), label: 'Rotate encryption' }],
       fix: {
         href: paths.tokenKeys('rewrap'),
         label: 'Accept the new key',
@@ -403,62 +399,11 @@ export function overviewAlerts(data: AlertData): Alert[] {
       level: 'info',
       title: `${count(keyring.notActiveCount, 'secret uses', 'secrets use')} an older key.`,
       detail: keyring.activeKid ? `The active key is ${keyring.activeKid}.` : '',
-      objects: [{ href: paths.tokenKeys(), label: 'Encryption keys' }],
+      objects: [{ href: paths.tokenKeys(), label: 'Rotate encryption' }],
       form: { kind: 'rewrap', count: keyring.notActiveCount },
     });
   }
 
-  const withCredential = data.credentials.filter(
-    (s) => s.has_credential && s.credential_expires_at !== null,
-  );
-  const expired = withCredential.filter((s) => (s.credential_expires_at as number) <= now);
-  const expiring = withCredential.filter(
-    (s) =>
-      (s.credential_expires_at as number) > now &&
-      (s.credential_expires_at as number) <= now + EXPIRY_WARNING_MS,
-  );
-  const byExpiry = (a: AlertService, b: AlertService) =>
-    (a.credential_expires_at as number) - (b.credential_expires_at as number);
-  const [firstExpired] = expired.sort(byExpiry);
-  if (firstExpired) {
-    add(firstExpired.name, {
-      code: 'credential_expired',
-      level: 'error',
-      title:
-        expired.length === 1
-          ? `The secret of ${firstExpired.name} expired on ${formatDate(firstExpired.credential_expires_at as number)}.`
-          : `The secrets of ${expired.length} credentials expired: ${expired.map((s) => `${s.name} (${formatDate(s.credential_expires_at as number)})`).join(', ')}.`,
-      detail: '',
-      objects: tokenLinks(expired, () => paths.tokens({ status: 'expiring' })),
-      fix: {
-        href: paths.token(firstExpired.id, { hash: 'secret' }),
-        label: `Replace the secret of ${firstExpired.name}`,
-        short: { label: 'Replace secret', srSuffix: `of ${firstExpired.name}` },
-        permission: 'tokens:write',
-      },
-    });
-  }
-  const [firstExpiring] = expiring.sort(byExpiry);
-  if (firstExpiring) {
-    const days = (s: AlertService) =>
-      Math.ceil(((s.credential_expires_at as number) - now) / DAY_MS);
-    add(firstExpiring.name, {
-      code: 'credential_expiring',
-      level: 'warning',
-      title:
-        expiring.length === 1
-          ? `The secret of ${firstExpiring.name} expires on ${formatDate(firstExpiring.credential_expires_at as number)} (in ${count(days(firstExpiring), 'day', 'days')}).`
-          : `The secrets of ${expiring.length} credentials expire soon: ${expiring.map((s) => `${s.name} (${formatDate(s.credential_expires_at as number)})`).join(', ')}.`,
-      detail: '',
-      objects: tokenLinks(expiring, () => paths.tokens({ status: 'expiring' })),
-      fix: {
-        href: paths.token(firstExpiring.id, { hash: 'secret' }),
-        label: `Replace the secret of ${firstExpiring.name}`,
-        short: { label: 'Replace secret', srSuffix: `of ${firstExpiring.name}` },
-        permission: 'tokens:write',
-      },
-    });
-  }
   const accessCount = new Map<string, number>();
   for (const rule of data.access_rules) {
     if (rule.enabled)
@@ -609,7 +554,8 @@ export function overviewAlerts(data: AlertData): Alert[] {
       level: 'info',
       title: 'The hourly job has not run yet; it starts within the hour.',
       detail: '',
-      objects: cronObjects,
+      // Not a problem: its check passes, and "All checks" stays closed, so no link to the row.
+      objects: cronObjects.slice(1),
     });
   } else if (cron.stale) {
     add('', {
@@ -657,7 +603,7 @@ export function overviewAlerts(data: AlertData): Alert[] {
       level: 'warning',
       title: `${count(data.needsDecision, 'person needs', 'people need')} a decision.`,
       detail: '',
-      objects: [{ href: paths.users({ hash: 'decide' }), label: 'People' }],
+      objects: [{ href: paths.users({ hash: 'decide' }), label: 'Members' }],
       form:
         data.pendingUsers.length > 0 ? { kind: 'approve-pending', users: data.pendingUsers } : null,
     });
@@ -735,7 +681,7 @@ export function alertsFor(
         error: has ? data.keyring.error : null,
         missingKids: data.keyring.missingKids.filter((k) => k === kid),
         changedKids: data.keyring.changedKids.filter((k) => k === kid),
-        notActiveCount: has && kid !== null && kid !== data.keyring.activeKid ? 1 : 0,
+        notActiveCount: has && kid != null && !data.keyring.activeKids.includes(kid) ? 1 : 0,
         malformedCount: has && kid === null ? 1 : 0,
       },
       upstreamAuthFailures: data.upstreamAuthFailures.filter(

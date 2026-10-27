@@ -21,12 +21,20 @@ import {
   PROTECTABLE_CONTEXTS,
   RISK_WARNINGS,
   type RiskCode,
+  type VercelPresetContext,
+  vercelAccessRulePreset,
+  vercelPresetFromConditions,
 } from '../policy/presets';
 import { type Condition, PROXY_METHODS, type Rule } from '../policy/types';
 import type { WarningCode, WarningDetail } from '../policy/validate';
 import { accessSummary } from './access-summary';
 import type { Connections } from './connections';
-import { pinValues, type RuleLabel } from './ops/credential-access-rules';
+import {
+  claimIdPattern,
+  pinValues,
+  type RuleLabel,
+  tenantWord,
+} from './ops/credential-access-rules';
 import type { FieldError } from './ops/shared';
 import { formatValueList, parseValueList } from './rule-text';
 import {
@@ -109,7 +117,7 @@ export interface IdRef {
   label: string;
 }
 
-/** The claims of a profile's repository and owner (organization or group). */
+/** The claims of a profile's repository and owner (organization, group or team). */
 export function anchorClaims(
   profile: Pick<IssuerProfile, 'id'>,
 ): { repository: LabelledClaim; owner: LabelledClaim } | null {
@@ -117,6 +125,7 @@ export function anchorClaims(
     return { repository: 'repository_id', owner: 'repository_owner_id' };
   }
   if (profile.id === 'gitlab-ci') return { repository: 'project_id', owner: 'namespace_id' };
+  if (profile.id === 'vercel') return { repository: 'project_id', owner: 'owner_id' };
   return null;
 }
 
@@ -124,19 +133,30 @@ const GITHUB_REPO_LABEL = /^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/;
 const GITLAB_PROJECT_LABEL = /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)+$/;
 const GITHUB_OWNER_LABEL = /^[A-Za-z0-9-]{1,39}$/;
 const GITLAB_GROUP_LABEL = /^[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*$/;
+const VERCEL_PROJECT_LABEL = /^[a-z0-9][a-z0-9._-]{0,99}$/;
+const VERCEL_TEAM_LABEL = /^[a-z0-9][a-z0-9-]{0,47}$/;
+/** Vercel keeps the IDs of a linked directory in `.vercel/project.json` (`vercel link`). */
+const VERCEL_PROJECT_JSON = '.vercel/project.json';
 
-/** `gh`/`glab` command whose output is the repository input format, for `name` when known. */
+/**
+ * The command whose output is the repository input format, for `name` when known: `gh`, `glab`,
+ * or `jq` over the `.vercel/project.json` of a linked Vercel project.
+ */
 export function repositoryFindCommand(profile: Pick<IssuerProfile, 'id'>, name?: string): string {
   if (profile.id === 'gitlab-ci') {
     const path = name && GITLAB_PROJECT_LABEL.test(name) ? name : 'acme-group/app';
     return `glab api projects/${encodeURIComponent(path)} | jq -r '"\\(.path_with_namespace) (\\(.id))"'`;
   }
+  if (profile.id === 'vercel') {
+    return `jq -r '"\\(.projectName) (\\(.projectId))"' ${VERCEL_PROJECT_JSON}`;
+  }
   const repo = name && GITHUB_REPO_LABEL.test(name) ? name : 'acme/api';
   return `gh api repos/${repo} --jq '"\\(.full_name) (\\(.id))"'`;
 }
 
-/** `gh`/`glab` command whose output is the repository input format, for a known numeric ID. */
+/** The command whose output is the repository input format, for a known ID. */
 export function repositoryFindCommandForId(profile: Pick<IssuerProfile, 'id'>, id: string): string {
+  if (profile.id === 'vercel') return repositoryFindCommand(profile);
   const value = DIGITS_RE.test(id) ? id : '89012345';
   if (profile.id === 'gitlab-ci') {
     return `glab api projects/${value} | jq -r '"\\(.path_with_namespace) (\\(.id))"'`;
@@ -144,12 +164,16 @@ export function repositoryFindCommandForId(profile: Pick<IssuerProfile, 'id'>, i
   return `gh api repositories/${value} --jq '"\\(.full_name) (\\(.id))"'`;
 }
 
-/** `gh`/`glab` command whose output is the organization or group input format. */
+/**
+ * The command whose output is the organization or group input format. Vercel: the team ID only;
+ * its slug is the first segment of the dashboard URL (`vercel.com/acme`).
+ */
 export function ownerFindCommand(profile: Pick<IssuerProfile, 'id'>, name?: string): string {
   if (profile.id === 'gitlab-ci') {
     const path = name && GITLAB_GROUP_LABEL.test(name) ? name : 'acme-group';
     return `glab api groups/${encodeURIComponent(path)} | jq -r '"\\(.full_path) (\\(.id))"'`;
   }
+  if (profile.id === 'vercel') return `jq -r .orgId ${VERCEL_PROJECT_JSON}`;
   const org = name && GITHUB_OWNER_LABEL.test(name) ? name : 'acme';
   return `gh api orgs/${org} --jq '"\\(.login) (\\(.id))"'`;
 }
@@ -159,10 +183,45 @@ export function idText(id: string, label: string | null): string {
   return label ? `${label} (${id})` : id;
 }
 
+/** Example input of a profile's repository and owner, and the label shapes they take. */
+const ID_FORMS = {
+  'github-actions': {
+    repository: { noun: 'repository', example: 'acme/api (89012345)', shape: GITHUB_REPO_LABEL },
+    owner: { example: 'acme (1234567)', shape: GITHUB_OWNER_LABEL },
+  },
+  'gitlab-ci': {
+    repository: {
+      noun: 'project',
+      example: 'acme-group/app (4567890)',
+      shape: GITLAB_PROJECT_LABEL,
+    },
+    owner: { example: 'acme-group (5678901)', shape: GITLAB_GROUP_LABEL },
+  },
+  vercel: {
+    repository: {
+      noun: 'project',
+      example: 'acme-web (prj_7Gw5ZMBpQA8h9GF832KGp7nwbuh3)',
+      shape: VERCEL_PROJECT_LABEL,
+    },
+    owner: { example: 'acme (team_7Gw5ZMzpQA8h90F832KGp7nwbuh3)', shape: VERCEL_TEAM_LABEL },
+  },
+} as const;
+
+type LabelledProfile = keyof typeof ID_FORMS;
+
+function idForms(profile: Pick<IssuerProfile, 'id'>) {
+  return ID_FORMS[(profile.id in ID_FORMS ? profile.id : 'github-actions') as LabelledProfile];
+}
+
+/** True when `id` has the shape of an ID of `claim` for the profile. */
+function idFits(profile: Pick<IssuerProfile, 'id'>, claim: string, id: string): boolean {
+  return claimIdPattern(profile.id, claim)?.test(id) ?? false;
+}
+
 /**
- * The repository (GitHub) or project (GitLab) typed as `name (ID)`, `name #ID`, or a bare ID that
- * already has a label for this credential access rule. Null for an empty input; a message that says how to fix
- * any other input.
+ * The repository (GitHub) or project (GitLab, Vercel) typed as `name (ID)`, `name #ID`, or a bare
+ * ID that already has a label for this credential access rule. Null for an empty input; a message
+ * that says how to fix any other input.
  */
 export function parseRepositoryInput(
   raw: string,
@@ -172,14 +231,15 @@ export function parseRepositoryInput(
   const claims = anchorClaims(profile);
   const input = raw.trim();
   if (input === '' || claims === null) return { ok: true, value: null };
-  const noun = profile.id === 'gitlab-ci' ? 'project' : 'repository';
-  const example = profile.id === 'gitlab-ci' ? 'acme-group/app (4567890)' : 'acme/api (89012345)';
+  const { noun, example, shape } = idForms(profile).repository;
+  const vercel = profile.id === 'vercel';
   const parsed = parseIdWithLabel(input);
-  if (parsed === null) {
+  if (parsed === null || !idFits(profile, claims.repository, parsed.id)) {
     const name = input.replace(/\s*\(.*$/, '');
+    const sample = vercel ? 'prj_7Gw5ZMBpQA8h9GF832KGp7nwbuh3' : '987654321';
     return {
       ok: false,
-      message: `Add the numeric ID after the name, like ${GITHUB_REPO_LABEL.test(name) || GITLAB_PROJECT_LABEL.test(name) ? `${name} (987654321)` : example}. Find it with: ${repositoryFindCommand(profile, name)}`,
+      message: `Add the ${vercel ? 'project' : 'numeric'} ID after the name, like ${shape.test(name) ? `${name} (${sample})` : example}. Find it with: ${repositoryFindCommand(profile, name)}`,
     };
   }
   const label = parsed.label ?? labelFor(labels, claims.repository, parsed.id);
@@ -189,39 +249,50 @@ export function parseRepositoryInput(
       message: `Enter the ${noun} name too, like ${example}: ID ${parsed.id} has no name here yet. Find it with: ${repositoryFindCommandForId(profile, parsed.id)}`,
     };
   }
-  const shape = profile.id === 'gitlab-ci' ? GITLAB_PROJECT_LABEL : GITHUB_REPO_LABEL;
   if (!shape.test(label)) {
     return {
       ok: false,
       message:
         profile.id === 'gitlab-ci'
           ? `Enter the project as group/project (ID), like ${example}.`
-          : `Enter the repository as owner/name (ID), like ${example}.`,
+          : vercel
+            ? `Enter the project as name (ID) with the name in lower case, like ${example}.`
+            : `Enter the repository as owner/name (ID), like ${example}.`,
     };
   }
   return { ok: true, value: { id: parsed.id, label } };
 }
 
-/** One organization or group typed as `name (ID)` (the `new_owner` and `tenant` formats). */
+/**
+ * Organizations, groups or a team typed as `name (ID)`, comma-separated (the `new_owner` and
+ * `tenant` formats).
+ */
 export function parseOwnerList(
   raw: string,
   profile: Pick<IssuerProfile, 'id'>,
 ): { ok: true; entries: IdRef[] } | { ok: false; message: string } {
-  const gitlab = profile.id === 'gitlab-ci';
-  const example = gitlab ? 'acme-group (5678901)' : 'acme (1234567)';
+  const { example, shape } = idForms(profile).owner;
+  const claims = anchorClaims(profile);
   const entries = parseIdWithLabelList(raw);
-  const shape = gitlab ? GITLAB_GROUP_LABEL : GITHUB_OWNER_LABEL;
   if (
     entries === null ||
     entries.length === 0 ||
     entries.length > 20 ||
-    entries.some((entry) => entry.label === null || !shape.test(entry.label))
+    entries.some(
+      (entry) =>
+        entry.label === null ||
+        !shape.test(entry.label) ||
+        (claims !== null && !idFits(profile, claims.owner, entry.id)),
+    )
   ) {
     return {
       ok: false,
-      message: gitlab
-        ? `Enter each group as path (ID), for example ${example}.`
-        : `Enter each organization as name (ID), for example ${example}.`,
+      message:
+        profile.id === 'gitlab-ci'
+          ? `Enter each group as path (ID), for example ${example}.`
+          : profile.id === 'vercel'
+            ? `Enter the team as slug (team ID), for example ${example}.`
+            : `Enter each organization as name (ID), for example ${example}.`,
     };
   }
   return {
@@ -230,8 +301,12 @@ export function parseOwnerList(
   };
 }
 
-/** The org (GitHub: first segment) or group (GitLab: all but the last) of a repository label. */
+/**
+ * The org (GitHub: first segment) or group (GitLab: all but the last) of a repository label.
+ * Vercel project names carry no team: ''.
+ */
 export function ownerPrefix(profile: Pick<IssuerProfile, 'id'>, repositoryLabel: string): string {
+  if (profile.id === 'vercel') return '';
   const segments = repositoryLabel.split('/');
   return profile.id === 'gitlab-ci' ? segments.slice(0, -1).join('/') : (segments[0] ?? '');
 }
@@ -281,6 +356,7 @@ export function contextsFor(profile: Pick<IssuerProfile, 'id'>): AccessContext[]
     return ['environment', 'branch', 'tag', 'protected', 'release', 'pull_request', 'any'];
   }
   if (profile.id === 'gitlab-ci') return ['environment', 'branch', 'tag', 'protected', 'any'];
+  if (profile.id === 'vercel') return ['environment', 'any'];
   return [];
 }
 
@@ -422,7 +498,16 @@ export function parseJobs(form: JobsForm, ctx: JobsContext): ParsedJobs {
 
   let ownerId: string | null = null;
   const pinned = pinOwnerValues(provider, claims.owner);
-  if (out.repository) {
+  const word = tenantWord(profile.id);
+  if (profile.id === 'vercel') {
+    // One team per rule: the issuer names it (or the pin, under the global issuer).
+    ownerId =
+      pinned.length === 1
+        ? (pinned[0] ?? null)
+        : pinned.includes(form.owner_id)
+          ? form.owner_id
+          : null;
+  } else if (out.repository) {
     const prefixText = ownerPrefix(profile, out.repository.label);
     const owner = deriveOwner(prefixText, provider, profile, labels);
     if (owner) ownerId = owner.id;
@@ -440,14 +525,12 @@ export function parseJobs(form: JobsForm, ctx: JobsContext): ParsedJobs {
       if (!parsed.ok || parsed.entries.length !== 1 || !entry) {
         out.errors.push({
           field: field('new_owner'),
-          message: parsed.ok
-            ? `Enter one ${profile.id === 'gitlab-ci' ? 'group' : 'organization'}: ${prefixText}.`
-            : parsed.message,
+          message: parsed.ok ? `Enter one ${word}: ${prefixText}.` : parsed.message,
         });
       } else if (entry.label.toLowerCase() !== prefixText.toLowerCase()) {
         out.errors.push({
           field: field('new_owner'),
-          message: `Enter the ID of ${prefixText}, the ${profile.id === 'gitlab-ci' ? 'group' : 'organization'} of ${out.repository.label}, like ${prefixText} (7654321).`,
+          message: `Enter the ID of ${prefixText}, the ${word} of ${out.repository.label}, like ${prefixText} (7654321).`,
         });
       } else {
         out.newOwner = { id: entry.id, label: prefixText };
@@ -458,7 +541,7 @@ export function parseJobs(form: JobsForm, ctx: JobsContext): ParsedJobs {
       out.unknownOwner = prefixText;
       out.errors.push({
         field: field('repository'),
-        message: `${prefixText} is not ${profile.id === 'gitlab-ci' ? 'a group' : 'an organization'} of this rule. Add it under Issuer and tenant.`,
+        message: `${prefixText} is not ${word === 'organization' ? 'an' : 'a'} ${word} of this rule. Add it under Issuer and tenant.`,
       });
     }
   } else if (repository.ok) {
@@ -468,7 +551,7 @@ export function parseJobs(form: JobsForm, ctx: JobsContext): ParsedJobs {
     else if (form.workflow_ref.trim() !== '') {
       out.errors.push({
         field: field('owner_id'),
-        message: `Choose the ${profile.id === 'gitlab-ci' ? 'group' : 'organization'} that owns the calling repositories.`,
+        message: `Choose the ${word} that owns the calling repositories.`,
       });
     }
   }
@@ -491,6 +574,13 @@ export function parseJobs(form: JobsForm, ctx: JobsContext): ParsedJobs {
       requireProtectedRef,
       requireGithubHosted: form.require_github_hosted,
       workflowRef: form.workflow_ref.trim() || null,
+    });
+  } else if (profile.id === 'vercel') {
+    built = vercelAccessRulePreset({
+      ownerId: ownerId ?? '',
+      projectId: out.repository?.id ?? '',
+      context: context as VercelPresetContext,
+      pattern,
     });
   } else {
     built = gitlabAccessRulePreset({
@@ -634,6 +724,17 @@ export function jobsFormFromConditions(
     if (inputName) form[inputName] = input.pattern;
     return form;
   }
+  if (profile.id === 'vercel') {
+    const input = vercelPresetFromConditions(conditions);
+    if (input === null) return null;
+    Object.assign(form, {
+      repository: repositoryText(input.projectId),
+      owner_id: input.ownerId,
+      context: input.context,
+      environment: input.pattern,
+    });
+    return form;
+  }
   const input = gitlabPresetFromConditions(conditions);
   if (input === null) return null;
   Object.assign(form, {
@@ -715,7 +816,9 @@ export function mostUsedContext(
         ? githubPresetFromConditions(shape.conditions)
         : profile.id === 'gitlab-ci'
           ? gitlabPresetFromConditions(shape.conditions)
-          : null;
+          : profile.id === 'vercel'
+            ? vercelPresetFromConditions(shape.conditions)
+            : null;
     if (input) counts.set(input.context, (counts.get(input.context) ?? 0) + 1);
   }
   let best: AccessContext = 'environment';
@@ -1061,7 +1164,7 @@ function constrainsRef(c: Condition): boolean {
 }
 
 /**
- * True when GitHub or GitLab conditions constrain no ref, environment, protection, commit or event,
+ * True when GitHub, GitLab or Vercel conditions constrain no ref, environment, protection, commit or event,
  * so every job of the repository matches: the `any_ref` risk (A7.7). validateCredentialAccessRule does
  * not emit it (the ops accept such rules without acknowledgement), so the pages add it from the
  * conditions, the same way for the structured form, the rows editor and stored rules.
@@ -1070,7 +1173,7 @@ export function isAnyRef(
   conditions: readonly Condition[],
   profile: Pick<IssuerProfile, 'id' | 'eventClaim'>,
 ): boolean {
-  if (profile.id !== 'github-actions' && profile.id !== 'gitlab-ci') return false;
+  if (anchorClaims(profile) === null) return false;
   return !conditions.some(
     (c) =>
       c.negate !== true &&

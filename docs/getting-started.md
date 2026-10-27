@@ -151,19 +151,19 @@ If a variable is half-configured or malformed, Access login stays off. `/admin` 
 2. Sign in. The Access policy from step 8 lets in only you, so you are the first person to sign in.
 3. The gateway creates your user with the role `owner` and opens Monitoring › Overview.
 
-The bootstrap creates at most one owner, once ([I-BOOT-1](threat-model.md#i-boot-1)). The Audit log shows a `user.bootstrap` event. The same sign-in stores its hostname as the only admin host: from now on, `/admin` answers `404` on every other hostname ([I-DEPLOY-1](threat-model.md#i-deploy-1)). To add hostnames, open Users › Sign-in › "Admin hosts", and put each one behind your Access application first ([configuration](configuration.md#admin-hosts)).
+The bootstrap creates at most one owner, once ([I-BOOT-1](threat-model.md#i-boot-1)). The Audit log shows a `user.bootstrap` event. `/admin` answers on every hostname that routes to the Worker, except `workers.dev`. To serve the console on another hostname, add a route or custom domain and put it behind your Access application first ([configuration](configuration.md#admin-hostnames)).
 
 The gateway keeps no session of its own. "Sign out" ends the Access session for the hostname.
 
 ## 11. Open the admin UI to your team and add a second owner
 
-1. Open Users › Sign-in. Under "When someone new signs in", choose what people get on their first sign-in. One click saves it:
-   - "Ask an owner first": each new person waits under Users › People › "Needs your decision" until an owner approves them with a role.
+1. Open Settings › Members and select "Default access…". Choose what people get on their first sign-in. One click saves it:
+   - "Ask an owner first": each new person waits under Settings › Members › "Needs your decision" until an owner approves them with a role.
    - "Let them in as Viewer" (the default), or as Token manager, Access manager or Admin. The last three ask you to confirm, because everyone your Access policy admits gets that role.
    - "Only invited people": everyone else is refused.
 2. Widen the Access policy to the people who may reach the admin UI.
-3. Send them the console address that Users › Sign-in shows. The gateway sends no email.
-4. Invite the second owner: open Users › People › "Invite someone", enter their email, select "Owner…" and confirm. If the only owner loses access, recovery needs a manual database edit ([operations/break-glass.md](operations/break-glass.md)).
+3. Send them the console address: a hostname routed to this Worker (Settings › FAQ). The gateway sends no email.
+4. Invite the second owner: open Settings › Members › "Invite someone", enter their email, select "Owner…" and confirm. If the only owner loses access, recovery needs a manual database edit ([operations/break-glass.md](operations/break-glass.md)).
 
 To give someone a role before their first sign-in, enter their email under "Invite someone" and select the role. The role button is the submit, and Enter invites as Viewer. The notice after the invite has an "Email … the sign-in link" link that opens your mail program. The person must sign in with the invited email address within 7 days. The gateway links a login to an invited user only through the email address in the Access token ([I-LINK-1](threat-model.md#i-link-1)).
 
@@ -202,7 +202,7 @@ A credential is one upstream API plus the secret the gateway attaches. This exam
 4. Paste the token in **Personal access token**. Leave name and slug empty: the token gets the name `GitHub` and the slug `github`. Consumers use the slug in the URL: `<gateway>/proxy/github/...`. It cannot be changed later.
 5. Select **Check and save GitHub**.
 
-The template includes a secret check (`GET /rate_limit`). If it passes, the token page says "GitHub created (slug github); the secret check passed." and reads the token's expiry from GitHub. If the check fails, the page keeps the secret for 15 minutes; fix the cause and select **Check again and save**, or **Save without a passing check**.
+The template includes a secret check (`GET /rate_limit`). If it passes, the token page says "GitHub created (slug github); the secret check passed." If the check fails, the page keeps the secret for 15 minutes; fix the cause and select **Check again and save**, or **Save without a passing check**.
 
 The secret is encrypted before it is stored. The UI shows only its length and last 4 characters ([I-CRED-1](threat-model.md#i-cred-1)). The token page says "0 consumers can use this token": loading a token gives nobody access. More token types and their settings are in [upstreams/github.md](upstreams/github.md) and the other [upstreams](upstreams/) pages.
 

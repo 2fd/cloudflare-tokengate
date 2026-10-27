@@ -147,7 +147,7 @@ describe('toAttentionItems', () => {
     level: 'warning',
     title: '2 people need a decision.',
     detail: '',
-    objects: [{ href: '/admin/users#decide', label: 'People' }],
+    objects: [{ href: '/admin/users#decide', label: 'Members' }],
     form: {
       kind: 'approve-pending',
       users: [

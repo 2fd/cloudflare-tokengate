@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { canonicalJson } from '../../src/lib/json';
-import { setAdminHosts, setUpstreamHosts } from '../helpers/app';
+import { setUpstreamHosts } from '../helpers/app';
 import { sealFor, setupProxy, TEST_BASE_URL, TEST_SECRET } from '../helpers/proxy-fixtures';
 
 /**
@@ -45,16 +45,6 @@ describe('I-SSRF-1: base_url is re-validated at proxy time and fails closed with
     expect(fx.upstreamCalls).toHaveLength(0);
     const [record] = await fx.records();
     expect(record?.reason).toBe('base_url_invalid');
-  });
-
-  it('an admin host is refused even when the request arrives on another host', async () => {
-    const fx = await setupProxy();
-    onTestFinished(() => setAdminHosts(null));
-    await setAdminHosts(['gw.test', '*.tokengate.example.com']);
-    await repointWithValidSeal(fx, 'https://eu.tokengate.example.com/admin');
-    const response = await fx.call('/a');
-    expect(response.status).toBe(503);
-    expect(fx.upstreamCalls).toHaveLength(0);
   });
 
   it('the upstream host allowlist setting is enforced at proxy time, on the next request', async () => {

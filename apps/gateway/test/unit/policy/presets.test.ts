@@ -9,10 +9,13 @@ import {
   githubAccessRulePreset,
   gitlabAccessRulePreset,
   PROTECTABLE_CONTEXTS,
+  type VercelPresetInput,
+  vercelAccessRulePreset,
+  vercelPresetFromConditions,
 } from '../../../src/policy/presets';
 import type { Condition, Rule } from '../../../src/policy/types';
 import { validateCredentialAccessRule } from '../../../src/policy/validate-rules';
-import { githubProfile, gitlabProfile, provider } from './fixtures';
+import { githubProfile, gitlabProfile, provider, vercelProfile } from './fixtures';
 
 /** The merged validator on `rule` with these jobs and operations (ADR 0026). */
 function validateJobs(
@@ -300,5 +303,104 @@ describe('gitlabAccessRulePreset', () => {
     const result = validateJobs({ conditions, rules }, gitlabProfile, gitlab());
     expect(result.errors).toEqual([]);
     expect(result.warnings).toEqual([]);
+  });
+});
+
+describe('vercelAccessRulePreset', () => {
+  const TEAM = 'team_7Gw5ZMzpQA8h90F832KGp7nwbuh3';
+  const PROJECT = 'prj_7Gw5ZMBpQA8h9GF832KGp7nwbuh3';
+  const vercelBase: VercelPresetInput = {
+    ownerId: TEAM,
+    projectId: PROJECT,
+    context: 'environment',
+    pattern: 'production',
+  };
+  const vercelRule = (overrides: Partial<CredentialAccessRule> = {}) =>
+    provider({
+      profile: 'vercel',
+      issuer: 'https://oidc.vercel.com/acme',
+      issuer_key: 'https://oidc.vercel.com/acme',
+      jwks_uri: 'https://oidc.vercel.com/acme/.well-known/jwks',
+      tenant_pin: [{ claim: 'owner_id', match: 'exact', values: [TEAM] }],
+      ...overrides,
+    });
+
+  it('pins the team, the project and one environment', () => {
+    const built = vercelAccessRulePreset(vercelBase);
+    expect(built.errors).toEqual([]);
+    expect(built.risks).toEqual([]);
+    expect(built.conditions).toEqual([
+      { claim: 'owner_id', match: 'exact', values: [TEAM] },
+      { claim: 'project_id', match: 'exact', values: [PROJECT] },
+      { claim: 'environment', match: 'exact', values: ['production'] },
+    ]);
+    const validation = validateJobs(
+      { conditions: built.conditions, rules },
+      vercelProfile,
+      vercelRule(),
+    );
+    expect(validation.errors).toEqual([]);
+    expect(validation.warnings).toEqual([]);
+  });
+
+  it('without an environment admits the trusted ones only, as the any_ref risk', () => {
+    const built = vercelAccessRulePreset({ ...vercelBase, context: 'any', pattern: '' });
+    expect(built.errors).toEqual([]);
+    expect(built.risks).toEqual(['any_ref']);
+    expect(built.conditions.map((c) => c.claim)).toEqual(['owner_id', 'project_id']);
+  });
+
+  it('makes development an opt-in the validator warns about (I-AUTHZ-3)', () => {
+    const built = vercelAccessRulePreset({ ...vercelBase, pattern: 'development' });
+    expect(built.errors).toEqual([]);
+    const validation = validateJobs(
+      { conditions: built.conditions, rules },
+      vercelProfile,
+      vercelRule(),
+    );
+    expect(validation.errors).toEqual([]);
+    expect(validation.warnings.join('\n')).toContain(
+      'environment "development" is not a trusted event',
+    );
+  });
+
+  it.each([
+    ['a numeric team', { ownerId: '1234' }, 'owner'],
+    ['a project name', { projectId: 'acme-web' }, 'repository'],
+    ['no project', { projectId: '' }, 'repository'],
+    ['a glob environment', { pattern: 'prod*' }, 'pattern'],
+    ['no environment', { pattern: '' }, 'pattern'],
+  ])('refuses %s', (_name, overrides, field) => {
+    const built = vercelAccessRulePreset({ ...vercelBase, ...overrides });
+    expect(built.errors.map((error) => error.field)).toContain(field);
+  });
+
+  it('round-trips through vercelPresetFromConditions', () => {
+    for (const input of [vercelBase, { ...vercelBase, context: 'any' as const, pattern: '' }]) {
+      const built = vercelAccessRulePreset(input);
+      expect(vercelPresetFromConditions(built.conditions)).toEqual(input);
+    }
+    expect(
+      vercelPresetFromConditions([
+        ...vercelAccessRulePreset(vercelBase).conditions,
+        { claim: 'user_id', match: 'exact', values: ['u1'] },
+      ]),
+    ).toBeNull();
+  });
+
+  it('the global issuer is shared: a rule on it needs the team pin (I-TEN-1)', () => {
+    const global = {
+      issuer: 'https://oidc.vercel.com',
+      issuer_key: 'https://oidc.vercel.com',
+      jwks_uri: 'https://oidc.vercel.com/.well-known/jwks',
+    };
+    const conditions = vercelAccessRulePreset(vercelBase).conditions;
+    expect(
+      validateJobs({ conditions, rules }, vercelProfile, vercelRule({ ...global, tenant_pin: [] }))
+        .errors,
+    ).toContain('a tenant pin is required: this issuer signs tokens for every tenant (I-TEN-1)');
+    expect(validateJobs({ conditions, rules }, vercelProfile, vercelRule(global)).errors).toEqual(
+      [],
+    );
   });
 });

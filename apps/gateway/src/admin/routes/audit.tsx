@@ -101,7 +101,6 @@ export const AUDIT_CATEGORIES: Readonly<Record<AuditCategory, { label: string } 
         'user.join_defaults',
         'user.reset_login',
         'user.resend_invite',
-        'settings.admin_hosts',
       ],
     },
     signins: {

@@ -1,4 +1,4 @@
-// Users › People (`/admin/users`) and the Person page (`/admin/users/:id`). Everyone can see who
+// Settings › Members (`/admin/users`) and the Person page (`/admin/users/:id`). Everyone can see who
 // has access; only owners invite people, decide on pending sign-ins and refused attempts, change
 // roles or statuses, reset sign-ins and cancel invitations (I-RBAC-1). Mutations go through
 // ops/users.ts, which keeps an active owner (I-OWNER-1) and never links or re-invites a user who
@@ -43,8 +43,9 @@ import {
 } from '@tokengate/ui';
 import type { Child } from 'hono/jsx';
 import type { App } from '../../app';
+import { parseConfig } from '../../config';
 import { auditCountByActor, auditCountByActorAndCategory, listAuditEvents } from '../../db/audit';
-import { getJoinDefaults } from '../../db/settings';
+import { getJoinDefaults, JOIN_ROLES, JOIN_STATUSES, type JoinDefaults } from '../../db/settings';
 import type { AuditEvent, Role } from '../../db/types';
 import {
   getUser,
@@ -66,9 +67,11 @@ import {
   inviteUser,
   JOIN_POLICY_LABELS,
   joinPolicyOf,
+  parseJoinPolicy,
   resendInvite,
   resetLogin,
   type SettableStatus,
+  updateJoinDefaults,
   updateUser,
 } from '../ops/users';
 import { type AuditCategory, paths, returnPath } from '../paths';
@@ -84,6 +87,7 @@ import {
 } from '../render';
 import { AskSomeone, NotFound, notFoundText } from '../views/components';
 import { relativeTime } from '../views/format';
+import { ELEVATED, ElevatedDialogs, LoginTray, PolicyDialog } from '../views/join-policy';
 import { AUDIT_ACTION_TEXT } from '../views/monitoring';
 import { ROLE_INFO, ROLE_ORDER, roleLabel } from '../views/roles';
 import {
@@ -258,7 +262,26 @@ const NOTICES: NoticeTable<Ctx> = {
     const email = doneOf(ctx, 'user.dismiss_attempt') ? emailOf(ctx) : null;
     return { text: `Dismissed the refused sign-in${email ? ` of ${email}` : ''}.` };
   },
+  policy_saved: (ctx) => {
+    const after = doneOf(ctx, 'user.join_defaults')?.diff?.after;
+    const policy = isJoinDefaults(after) ? joinPolicyOf(after) : null;
+    return {
+      text: policy
+        ? `Saved. New people who sign in: ${JOIN_POLICY_LABELS[policy]}.`
+        : 'Saved. People who sign in for the first time from now on get this.',
+    };
+  },
+  policy_unchanged: () => ({ text: 'Nothing changed: that is the current policy.' }),
 };
+
+function isJoinDefaults(value: unknown): value is JoinDefaults {
+  if (typeof value !== 'object' || value === null) return false;
+  const { role, status } = value as Record<string, unknown>;
+  return (
+    (JOIN_ROLES as readonly unknown[]).includes(role) &&
+    (JOIN_STATUSES as readonly unknown[]).includes(status)
+  );
+}
 
 interface InviteValues {
   email: string;
@@ -279,11 +302,51 @@ interface PageOptions {
   /** The row a failed row action belongs to, and its message. */
   rowError?: RowError;
   invite?: InviteValues;
+  /** A refused join policy: the options render open, next to this message. */
+  policyError?: string;
   status?: 400 | 404 | 409 | 422;
 }
 
+const POLICY_MESSAGE = 'Choose one of the listed options.';
+
 export function registerUsersRoutes(app: App): void {
   app.get('/admin/users', (c) => peoplePage(c, {}));
+
+  // Before `/admin/users/:id`: `join-policy` is not a user id. An elevated policy is accepted
+  // only from its dialog's confirm button, which submits it as `confirmed_join_policy`; the plain
+  // cards submit `join_policy`.
+  app.post('/admin/users/join-policy', async (c) => {
+    const form = await formData(c);
+    const confirmed = text(form, 'confirmed_join_policy');
+    const parsed = parseJoinPolicy(confirmed ?? form.join_policy);
+    if (!parsed) {
+      return peoplePage(c, {
+        errors: [fieldError('join_policy', POLICY_MESSAGE)],
+        policyError: POLICY_MESSAGE,
+        status: 400,
+      });
+    }
+    const policy = joinPolicyOf(parsed);
+    if (ELEVATED.has(policy) && confirmed === undefined) {
+      const message = `Confirm in the dialog: ${JOIN_POLICY_LABELS[policy]}.`;
+      return peoplePage(c, {
+        errors: [fieldError('join_policy', message)],
+        policyError: message,
+        status: 422,
+      });
+    }
+    const result = await updateJoinDefaults(c.get('deps'), adminActor(c), parsed);
+    if (!result.ok) {
+      return peoplePage(c, {
+        errors: result.fieldErrors ?? result.errors.map((m) => fieldError(null, m)),
+        status: result.reason === 'conflict' ? 409 : 400,
+      });
+    }
+    if (!result.changed) return redirectWithNotice(c, paths.users(), 'policy_unchanged');
+    return redirectWithNotice(c, paths.users(), 'policy_saved', {
+      done: result.auditId ?? undefined,
+    });
+  });
 
   app.post('/admin/users', async (c) => {
     const form = await formData(c);
@@ -529,10 +592,10 @@ function decisionCards(users: readonly UserListEntry[], now: number): DecisionCa
   return [...pending, ...refused].map((user) => ({ kind: decisionKind(user), user }));
 }
 
-/** The order of roles in People (as in the role map): owners first, then the two duties. */
+/** The order of roles in Members (as in the role map): owners first, then the two duties. */
 const ROW_ROLES: readonly Role[] = ['owner', 'admin', 'token_manager', 'access_manager', 'viewer'];
 
-/** Rows of People: active people first, by role, then invitations, then the rest. */
+/** Rows of Members: active people first, by role, then invitations, then the rest. */
 function rowOrder(a: UserListEntry, b: UserListEntry): number {
   const state = (user: UserListEntry) =>
     user.status === 'active' ? 0 : user.status === 'invited' ? 1 : 2;
@@ -632,15 +695,15 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
   return renderPage(
     c,
     {
-      title: 'People',
-      section: 'users',
-      subsection: 'people',
+      title: 'Members',
+      section: 'settings',
+      subsection: 'members',
       errors,
       notice,
       status: options.status,
       header: (ctx) => (
         <PageHeader
-          title="People"
+          title="Members"
           count={all.length}
           description={
             <>
@@ -650,9 +713,14 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
           }
           actions={
             ctx.can('users:write') ? (
-              <Button variant="primary" plus href={paths.users({ hash: 'invite' })}>
-                Invite someone
-              </Button>
+              <>
+                <DialogTrigger dialog="dlg-policy" srSuffix="for new people who sign in">
+                  Default access…
+                </DialogTrigger>
+                <Button variant="primary" plus href={paths.users({ hash: 'invite' })}>
+                  Invite someone
+                </Button>
+              </>
             ) : undefined
           }
         />
@@ -668,6 +736,9 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
       const hasStack = cards.length > 0 || singleOwner;
       return (
         <>
+          {/* After a refused submit the options sit open at the top, next to the error. */}
+          {owner ? <PolicyDialog ctx={ctx} policy={policyKey} error={options.policyError} /> : null}
+          {owner ? <ElevatedDialogs ctx={ctx} policy={policyKey} /> : null}
           {owner ? (
             <InviteTray
               ctx={ctx}
@@ -713,6 +784,7 @@ async function peoplePage(c: AdminContext, options: PageOptions) {
             highlight={highlight}
             rowError={atRow ? rowError : undefined}
           />
+          <LoginTray config={parseConfig(deps.env)} />
           <Disclosure
             summary="Who can change what"
             hint="Roles and permissions"
@@ -831,7 +903,7 @@ function AccountsTray(props: {
     pendingPeople.length === 1 && firstPending
       ? `${firstPending.name ?? firstPending.email} is waiting`
       : `${pendingPeople.length} people are waiting`;
-  const caption = `People (${props.shown.length} shown of ${listed.length}${
+  const caption = `Members (${props.shown.length} shown of ${listed.length}${
     pendingPeople.length > 0 ? `; ${waitingCaption} for a decision above` : ''
   })`;
   const columns = [
@@ -863,13 +935,10 @@ function AccountsTray(props: {
       }
       actions={props.filtered ? <a href={paths.users()}>Clear filters</a> : undefined}
       footer={
-        <>
-          <span>
-            New people who sign in: <b>{props.policy}</b>.
-            {props.policyPending ? ' They wait in “Needs your decision”.' : null}
-          </span>
-          <a href={paths.signIn('policy')}>Change on Sign-in</a>
-        </>
+        <span>
+          New people who sign in: <b>{props.policy}</b>.
+          {props.policyPending ? ' They wait in “Needs your decision”.' : null}
+        </span>
       }
     >
       {listed.length > SEARCH_THRESHOLD ? (
@@ -918,7 +987,7 @@ function AccountsTray(props: {
         </Table>
         {props.shown.length === 0 && props.filtered ? (
           <EmptyState
-            title="No people match these filters."
+            title="No members match these filters."
             actions={
               <Button size="sm" href={paths.users()}>
                 Clear filters
@@ -1005,12 +1074,12 @@ async function personPage(c: AdminContext, id: string, options: PageOptions) {
       c,
       {
         title: 'Person not found',
-        section: 'users',
-        subsection: 'people',
+        section: 'settings',
+        subsection: 'members',
         status: 404,
         header: (
           <PageHeader
-            crumbs={[{ href: paths.users(), label: 'People' }, { label: 'Not found' }]}
+            crumbs={[{ href: paths.users(), label: 'Members' }, { label: 'Not found' }]}
             title="Person not found"
             description={notFoundText('user')}
           />
@@ -1041,7 +1110,7 @@ async function personPage(c: AdminContext, id: string, options: PageOptions) {
         host: new URL(c.req.url).hostname,
         back: 'detail',
       });
-  // As on People: link the summary only to an error this page renders. A failed Dismiss shows at
+  // As on Members: link the summary only to an error this page renders. A failed Dismiss shows at
   // the Dismiss button; anything else at the role cards, which a pending person (approve cards)
   // and the viewer's own page do not have.
   const rowError = options.rowError;
@@ -1068,15 +1137,15 @@ async function personPage(c: AdminContext, id: string, options: PageOptions) {
     c,
     {
       title: user.email,
-      section: 'users',
-      subsection: 'people',
+      section: 'settings',
+      subsection: 'members',
       errors,
       notice,
       status: options.status,
       header: (ctx) => (
         <PageHeader
           class="u-person"
-          crumbs={[{ href: paths.users(), label: 'People' }, { label: user.email }]}
+          crumbs={[{ href: paths.users(), label: 'Members' }, { label: user.email }]}
           identity={
             <Identity
               logoSlot={

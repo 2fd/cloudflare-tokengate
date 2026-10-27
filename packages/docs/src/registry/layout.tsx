@@ -21,6 +21,7 @@ import {
   HealthStrip,
   Identity,
   Menu,
+  MenuChoice,
   MenuHeader,
   MenuItem,
   MenuSeparator,
@@ -57,7 +58,16 @@ function adminSections(
 ): SideNavSection[] {
   const mark = deeper ? ('true' as const) : true;
   const sub = (items: Array<[string, string]>) =>
-    items.map(([label, href]) => ({ label, href, current: href === current ? mark : false }));
+    items.map(([label, href]) => ({
+      label,
+      href,
+      current: href === current ? mark : false,
+      // The encryption keys page shows a warning (an alert the shell maps to it).
+      attention:
+        counts && href === '?p=keys'
+          ? { tone: 'warn' as const, srSuffix: ': 1 warning' }
+          : undefined,
+    }));
   return [
     {
       label: 'Monitoring',
@@ -518,7 +528,7 @@ const sections = [
           type: 'readonly SideNavSection[]',
           required: true,
           description:
-            "label, href, icon, count, pill { label, srSuffix }, open, current, items[] { label, href, icon, current }. current is boolean | 'page' | 'true': true or 'page' is the current page, 'true' an ancestor of a deeper page.",
+            "label, href, icon, count, pill { label, srSuffix }, open, current, items[] { label, href, icon, count, current, attention { tone, srSuffix } }. current is boolean | 'page' | 'true': true or 'page' is the current page, 'true' an ancestor of a deeper page.",
         },
         {
           name: 'grouped',
@@ -620,18 +630,19 @@ const sections = [
     'The current page carries aria-current="page", on the sub-item or on a section without items. On a deeper page that is not in the nav (a token detail), its ancestor carries aria-current="true" and looks the same; forced-colors mode outlines it.',
     'The navigation is a nav landmark with the name you pass. Below 40rem it sits behind a native details “Menu” button. Its name stays “Menu”: the state is read from aria-expanded, and the chevron turns.',
     'From 40rem the sidebar is sticky and as tall as the window, so the account menu (the only way to Sign out) stays in reach on a long page. A sidebar taller than the window scrolls on its own.',
-    'The pending pill and the health line finish their sentence for screen readers (srSuffix), so the link names are complete.',
+    'The pending pill, the attention dot and the health line finish their sentence for screen readers (srSuffix), so the link names are complete. The dot itself is aria-hidden.',
     'The account button opens a popover: the browser sets aria-expanded, Esc and a click outside close it. Its name ends with “, account menu”.',
     'The health strip is role="alert" by default: it is announced when the page loads. Use it for one error-level problem only. A shell that shows it on every page load passes role={null}, and srPrefix="Error:" so the hidden glyph keeps its word.',
   ],
   do: [
     'Render the sidebar from one data structure, so it is the same markup on every page.',
     'Keep counts and the pending pill on the section row, open or closed. Drop them on an empty install.',
+    'Put an attention dot on a page item while that page shows a problem, a warning or a note (tone bad, warn or info); the page itself says what it is.',
     'Show Export configuration in the account menu only to admins and owners.',
   ],
   dont: [
     'Do not add group labels to the sidebar.',
-    'Do not vary the sidebar per page, other than the current item and the counts.',
+    'Do not vary the sidebar per page, other than the current item, the counts and the attention dots.',
     'Do not use the health strip for warnings: the health line and Needs attention carry them.',
   ],
   classes: [
@@ -653,6 +664,7 @@ const sections = [
     'nav-sub',
     'nav-count',
     'nav-pill',
+    'nav-dot',
     'ic',
     'acct',
     'acct-btn',
@@ -667,7 +679,7 @@ const sections = [
 const menu: ComponentDoc = {
   slug: 'menu',
   name: 'Menu',
-  related: ['MenuItem', 'MenuSeparator', 'RowMenu', 'MenuHeader'],
+  related: ['MenuItem', 'MenuSeparator', 'RowMenu', 'MenuHeader', 'MenuChoice'],
   summary:
     'A list of links and POST buttons: a popover Menu opened by a button (account menu), or a RowMenu disclosure in a table row (“Change ▾”). No JavaScript.',
   usage: {
@@ -675,6 +687,7 @@ const menu: ComponentDoc = {
       'The account menu (AccountMenu uses Menu).',
       'A short list of secondary actions on one object, where each item is a link or a single POST.',
       'The “Change ▾” menu of a table row (RowMenu): two-line items that say what each choice changes, with an Owner… item that confirms in a dialog.',
+      'One personal preference with a few values, such as the theme (MenuChoice): a row of the account menu.',
     ],
     whenNot: [
       'One or two actions: show the buttons (ActionForm).',
@@ -712,6 +725,44 @@ const menu: ComponentDoc = {
     Disable Slack
   </MenuItem>
 </Menu>`,
+    },
+    {
+      title: 'A preference row',
+      description:
+        'MenuChoice sets one preference in place: each option is a submit button of one POST form, and the current one is pressed. The account menu uses it for the theme.',
+      render: () => (
+        <>
+          <button class="btn secondary" type="button" popovertarget="ex-menu-2">
+            Account<span aria-hidden="true">▾</span>
+          </button>
+          <Menu id="ex-menu-2">
+            <MenuChoice
+              label="Theme"
+              action="#"
+              name="theme"
+              hidden={{ _csrf: 'csrf-token', return: '/admin' }}
+              options={[
+                { value: 'system', label: 'System', current: true },
+                { value: 'light', label: 'Light' },
+                { value: 'dark', label: 'Dark' },
+              ]}
+            />
+            <MenuSeparator />
+            <MenuItem href="#">Sign out</MenuItem>
+          </Menu>
+        </>
+      ),
+      code: `<MenuChoice
+  label="Theme"
+  action="/admin/theme"
+  name="theme"
+  hidden={{ _csrf: csrf, return: '/admin/credentials' }}
+  options={[
+    { value: 'system', label: 'System', current: true },
+    { value: 'light', label: 'Light' },
+    { value: 'dark', label: 'Dark' },
+  ]}
+/>`,
     },
     {
       title: 'Row menu with two-line items',
@@ -902,12 +953,43 @@ const menu: ComponentDoc = {
         },
       ],
     },
+    {
+      component: 'MenuChoice',
+      props: [
+        {
+          name: 'label',
+          type: 'string',
+          required: true,
+          description: 'What the row sets ("Theme"): the visible label and the group name.',
+        },
+        { name: 'action', type: 'string', required: true, description: 'POST target.' },
+        {
+          name: 'name',
+          type: 'string',
+          required: true,
+          description: 'Field name sent with the pressed option’s value.',
+        },
+        {
+          name: 'options',
+          type: 'readonly MenuChoiceOption[]',
+          required: true,
+          description: '2–4 { value, label, current? }; exactly one is current.',
+        },
+        {
+          name: 'hidden',
+          type: 'HiddenFields',
+          description: 'Hidden fields of the form (_csrf, a return path).',
+        },
+        { name: 'class', type: 'string', description: 'Extra classes on form.menu-choice.' },
+      ],
+    },
   ],
   accessibility: [
     'The Menu trigger is a real button with popovertarget: the browser exposes aria-expanded and moves focus logically.',
     'A RowMenu is a details/summary disclosure: its summary is the button, exposed as expanded or collapsed.',
     'Items are ordinary links and buttons in Tab order, not an ARIA menu (that would need scripted arrow keys).',
     'Row items name their object with srPrefix or srSuffix, so “Viewer” is read “Make diego@acme.dev Viewer”.',
+    'A MenuChoice is a named group of toggle buttons: “Theme, Dark, toggle button, pressed”. Its visible label is aria-hidden, so the name is read once.',
     'Give the trigger a visible label; the chevron is aria-hidden.',
   ],
   do: [
@@ -928,6 +1010,8 @@ const menu: ComponentDoc = {
     'k',
     's',
     'menu-item bad',
+    'menu-choice',
+    'seg sm',
     'chev',
   ],
 };

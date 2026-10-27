@@ -8,11 +8,9 @@ import {
   Callout,
   CatalogGroup,
   CodeBlock,
-  Entity,
   Field,
   Input,
   Or,
-  Slug,
   SubBox,
   TypeCard,
   TypeCatalog,
@@ -20,13 +18,12 @@ import {
 import { upstreamHostAllowed } from '../../config';
 import type { KeyringError } from '../../crypto/keyring';
 import type { Service } from '../../db/types';
-import { freeNameAmong, freeSlugAmong, slugBaseFor } from '../ops/credentials';
+import { freeSlugAmong, slugBaseFor } from '../ops/credentials';
 import { KEYRING_ERROR_TEXT } from '../ops/keyring';
 import { paths } from '../paths';
 import type { ViewContext } from '../render';
 import { getServiceTemplate, SERVICE_TEMPLATES, type ServiceTemplate } from '../service-templates';
 import { AskSomeone, Checkbox } from './components';
-import { formatTime } from './format';
 import {
   AdvancedFields,
   allowlistPattern,
@@ -42,7 +39,7 @@ import {
   SecretSubmits,
   type TokenFormValues,
 } from './token-forms';
-import { templateLogo, upstreamShort } from './token-ui';
+import { templateLogo } from './token-ui';
 
 export const CUSTOM = 'custom';
 
@@ -63,8 +60,6 @@ export interface CardsData {
   activeKid: string | null;
   /** `https://<gateway host>`, for the proxy URL in hints. */
   proxyOrigin: string;
-  /** Today in UTC, `YYYY-MM-DD` (the expiry `min`). */
-  today: string;
 }
 
 /** A card whose POST failed: re-rendered open with its values, errors and draft. */
@@ -101,7 +96,7 @@ export function KeyringGate(props: { error: KeyringError }) {
       more="No secret can be used or changed until the encryption keys load."
       actions={
         <Button size="sm" href={paths.tokenKeys()}>
-          Open encryption keys
+          Open rotate encryption
         </Button>
       }
     />
@@ -201,14 +196,6 @@ function TemplateCard(props: {
     ...EMPTY_VALUES,
     template: template.id,
   };
-  const slug = freeSlugAmong(
-    template.slug,
-    data.tokens.map((token) => token.slug),
-  );
-  const name = freeNameAmong(
-    template.name,
-    data.tokens.map((token) => token.name),
-  );
   const verify = failed?.state.verify ?? null;
   const failedCheck = verify !== null;
   const actionsId = `${ids.prefix}-actions`;
@@ -246,14 +233,6 @@ function TemplateCard(props: {
         {template.id === 'github' ? (
           <AlsoUploads ctx={ctx} data={data} ids={ids} values={values} />
         ) : null}
-        <OptionalFields
-          ids={ids}
-          values={values}
-          slugPlaceholder={slug}
-          namePlaceholder={name}
-          expiry={!template.expiry_from_check}
-          today={data.today}
-        />
         {blocked ? (
           <Checkbox
             name="allow_host"
@@ -293,62 +272,8 @@ function TemplateCard(props: {
               {verify.bodyPreview}
             </CodeBlock>
           ) : null}
-          {verify.expiresAt !== null ? (
-            <p>The upstream reports that this secret expires {formatTime(verify.expiresAt)}.</p>
-          ) : null}
         </SubBox>
-      ) : (
-        <SubBox as="aside" labelledBy={`${ids.prefix}-next`}>
-          <h3 id={`${ids.prefix}-next`}>When you save</h3>
-          <Entity
-            logo={templateLogo(template)}
-            name={name}
-            meta={
-              <>
-                <Slug>{slug}</Slug> · {upstreamShort(template.base_url)}
-              </>
-            }
-          />
-          <ol>
-            {template.verify ? (
-              <li>
-                <b>tokengate calls {vendor(template)}</b>{' '}
-                <code>
-                  {template.verify.method} {template.verify.path}
-                </code>{' '}
-                with the secret and expects HTTP {template.verify.expect_status}
-                {template.verify.expect_ok_field ? (
-                  <>
-                    {' '}
-                    and <code>"ok": true</code>
-                  </>
-                ) : null}
-                .
-              </li>
-            ) : (
-              <li>
-                <b>There is no check</b> for this type: the secret is saved as pasted.
-              </li>
-            )}
-            <li>
-              <b>The secret is sealed</b>
-              {data.activeKid ? (
-                <>
-                  {' '}
-                  with key <code>{data.activeKid}</code>
-                </>
-              ) : null}{' '}
-              and never shown again.
-            </li>
-            <li>
-              <b>Loading a credential gives nobody access.</b> Credential access rules do.
-            </li>
-          </ol>
-          <p class="hint">
-            Consumers will call <code>{`/proxy/${slug}`}</code>
-          </p>
-        </SubBox>
-      )}
+      ) : null}
     </TypeCard>
   );
 }
@@ -486,8 +411,6 @@ function CustomCard(props: {
         values={values}
         slugPlaceholder={slug}
         namePlaceholder={slug}
-        expiry
-        today={data.today}
         derived={{
           slug: "Leave empty to use the API host's name, e.g. stripe for https://api.stripe.com/v1.",
           name: 'Leave empty to use the slug.',

@@ -1,5 +1,5 @@
 {
-  "description": "Known-answer vectors for sealed credential format v1 (docs/architecture.md). Generated with node:crypto as an independent reference. Each KEK is first bound to the login variables: AES key = HKDF-SHA256(KEK, salt empty, info = binding_info) (I-CRED-3); kcv is HMAC-SHA256(bound key, \"tokengate/v1/kek-check\") truncated to 8 bytes. random_hex lists the outputs of random() in call order: DEK (32), iv (12), dek_iv (12). aad_utf8 is credentialAad(service_id, base_url, injection_json).",
+  "description": "Known-answer vectors for sealed credential format v1 (docs/architecture.md). Generated with node:crypto as an independent reference. Each KEK is first bound to the login variables: AES key = HKDF-SHA256(KEK, salt empty, info = binding_info) (I-CRED-3); kcv is HMAC-SHA256(bound key, \"tokengate/v1/kek-check\") truncated to 8 bytes. random_hex lists the outputs of random() in call order: DEK (32), iv (12), dek_iv (12). aad_utf8 is credentialAad(service_id, base_url, injection_json). kid is the key check value of the sealing key (ADR 0027). legacy_sealed is the same value as sealed before ADR 0027, under the legacy kid k1 that resolves to TOKENGATE_KEK.",
   "kcv": [
     {
       "key_b64": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
@@ -14,7 +14,7 @@
   ],
   "sealed": [
     {
-      "name": "bearer credential under TOKENGATE_KEK (kid k1)",
+      "name": "bearer credential under TOKENGATE_KEK (kid = its key check value)",
       "env": {
         "TOKENGATE_KEK": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
       },
@@ -28,13 +28,15 @@
       "injection_json": "{\"kind\":\"bearer\"}",
       "aad_utf8": "tokengate/v1/service-credential\nsvc_01JABCDEFGHJKMNPQRSTVWXYZ0\nhttps://slack.com/api\n{\"kind\":\"bearer\"}",
       "plaintext": "test-bot-token-0000000000-0000000000000-abcdefghijklmnopqrstuvwx",
-      "sealed": "{\"v\":1,\"kid\":\"k1\",\"iv\":\"QEFCQ0RFRkdISUpL\",\"wdek\":\"Aco4EPEbGUDYI6qO10OHgSmTbKoyc-l1SEuY2Op1MMGIw6DuZstWkrlCkr93xenO\",\"dek_iv\":\"UFFSU1RVVldYWVpb\",\"ct\":\"tjHO9X0Uqn9_Rj9D4CR8QiO-rbPFcJfuXtOkMFDa_zL6Iy8uBuyRCyz1XuD4ttSHt_KCXNCEv40PlroUU9MjafL1kyqMcEHmPLJdTRWPF4M\"}",
-      "binding_info": "tokengate/v1/kek-binding\n[\"\",\"\",\"\"]"
+      "sealed": "{\"v\":1,\"kid\":\"777dc23b3c745265\",\"iv\":\"QEFCQ0RFRkdISUpL\",\"wdek\":\"Aco4EPEbGUDYI6qO10OHgSmTbKoyc-l1SEuY2Op1MMGIw6DuZstWkrlCkr93xenO\",\"dek_iv\":\"UFFSU1RVVldYWVpb\",\"ct\":\"tjHO9X0Uqn9_Rj9D4CR8QiO-rbPFcJfuXtOkMFDa_zL6Iy8uBuyRCyz1XuD4ttSHt_KCXNCEv40PlroUU9MjafL1kyqMcEHmPLJdTRWPF4M\"}",
+      "binding_info": "tokengate/v1/kek-binding\n[\"\",\"\",\"\"]",
+      "legacy_sealed": "{\"v\":1,\"kid\":\"k1\",\"iv\":\"QEFCQ0RFRkdISUpL\",\"wdek\":\"Aco4EPEbGUDYI6qO10OHgSmTbKoyc-l1SEuY2Op1MMGIw6DuZstWkrlCkr93xenO\",\"dek_iv\":\"UFFSU1RVVldYWVpb\",\"ct\":\"tjHO9X0Uqn9_Rj9D4CR8QiO-rbPFcJfuXtOkMFDa_zL6Iy8uBuyRCyz1XuD4ttSHt_KCXNCEv40PlroUU9MjafL1kyqMcEHmPLJdTRWPF4M\"}"
     },
     {
-      "name": "header credential under TOKENGATE_KEYRING active k2, non-ASCII plaintext",
+      "name": "header credential under TOKENGATE_KEYRING (the next key), non-ASCII plaintext",
       "env": {
-        "TOKENGATE_KEYRING": "{\"active\":\"k2\",\"keys\":{\"k1\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\",\"k2\":\"gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8=\"}}"
+        "TOKENGATE_KEK": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+        "TOKENGATE_KEYRING": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8="
       },
       "random_hex": [
         "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
@@ -46,7 +48,7 @@
       "injection_json": "{\"kind\":\"header\",\"name\":\"x-api-key\",\"prefix\":\"Key \"}",
       "aad_utf8": "tokengate/v1/service-credential\nsvc_01JZZZZZZZZZZZZZZZZZZZZZZZ\nhttps://api.example.com/v2\n{\"kind\":\"header\",\"name\":\"x-api-key\",\"prefix\":\"Key \"}",
       "plaintext": "clé-secrète-✓-🔑",
-      "sealed": "{\"v\":1,\"kid\":\"k2\",\"iv\":\"wMHCw8TFxsfIycrL\",\"wdek\":\"-agi90PzBLtvXP2Pcol9IlnJZwmQ0f1FWwgFMu3QoAn7i8RBYFPZbl2SYR7-MSNi\",\"dek_iv\":\"0NHS09TV1tfY2drb\",\"ct\":\"Lwz4WhOzh-achTu4lEn2OWPh85rQkkZ3eroBEnel1AAv88hph68\"}",
+      "sealed": "{\"v\":1,\"kid\":\"19ed64a4691de63b\",\"iv\":\"wMHCw8TFxsfIycrL\",\"wdek\":\"-agi90PzBLtvXP2Pcol9IlnJZwmQ0f1FWwgFMu3QoAn7i8RBYFPZbl2SYR7-MSNi\",\"dek_iv\":\"0NHS09TV1tfY2drb\",\"ct\":\"Lwz4WhOzh-achTu4lEn2OWPh85rQkkZ3eroBEnel1AAv88hph68\"}",
       "binding_info": "tokengate/v1/kek-binding\n[\"\",\"\",\"\"]"
     },
     {
@@ -64,8 +66,9 @@
       "injection_json": "{\"kind\":\"path\",\"prefix\":\"\"}",
       "aad_utf8": "tokengate/v1/service-credential\nsvc_x\nhttps://hooks.slack.com/services\n{\"kind\":\"path\",\"prefix\":\"\"}",
       "plaintext": "",
-      "sealed": "{\"v\":1,\"kid\":\"k1\",\"iv\":\"AAAAAAAAAAAAAAAA\",\"wdek\":\"_fi_cjoLNRA718Hd7I1xAgrZ3eU984JBdGfSUPpUuZ7dNgh5GNAVSh2v1bwLEXjt\",\"dek_iv\":\"AQEBAQEBAQEBAQEB\",\"ct\":\"iJbBPxGg0QjECMUcRpZpng\"}",
-      "binding_info": "tokengate/v1/kek-binding\n[\"\",\"\",\"\"]"
+      "sealed": "{\"v\":1,\"kid\":\"777dc23b3c745265\",\"iv\":\"AAAAAAAAAAAAAAAA\",\"wdek\":\"_fi_cjoLNRA718Hd7I1xAgrZ3eU984JBdGfSUPpUuZ7dNgh5GNAVSh2v1bwLEXjt\",\"dek_iv\":\"AQEBAQEBAQEBAQEB\",\"ct\":\"iJbBPxGg0QjECMUcRpZpng\"}",
+      "binding_info": "tokengate/v1/kek-binding\n[\"\",\"\",\"\"]",
+      "legacy_sealed": "{\"v\":1,\"kid\":\"k1\",\"iv\":\"AAAAAAAAAAAAAAAA\",\"wdek\":\"_fi_cjoLNRA718Hd7I1xAgrZ3eU984JBdGfSUPpUuZ7dNgh5GNAVSh2v1bwLEXjt\",\"dek_iv\":\"AQEBAQEBAQEBAQEB\",\"ct\":\"iJbBPxGg0QjECMUcRpZpng\"}"
     },
     {
       "name": "bearer credential under TOKENGATE_KEK bound to an Access login",
@@ -84,8 +87,9 @@
       "injection_json": "{\"kind\":\"bearer\"}",
       "aad_utf8": "tokengate/v1/service-credential\nsvc_01JABCDEFGHJKMNPQRSTVWXYZ0\nhttps://slack.com/api\n{\"kind\":\"bearer\"}",
       "plaintext": "test-bot-token-0000000000-0000000000000-abcdefghijklmnopqrstuvwx",
-      "sealed": "{\"v\":1,\"kid\":\"k1\",\"iv\":\"QEFCQ0RFRkdISUpL\",\"wdek\":\"p4T5qBICCX9dR_Qpk2BoiEgSoXVQFByA1lts7nvLePjZvDjY-Oi3MZV-t6JIkFix\",\"dek_iv\":\"UFFSU1RVVldYWVpb\",\"ct\":\"tjHO9X0Uqn9_Rj9D4CR8QiO-rbPFcJfuXtOkMFDa_zL6Iy8uBuyRCyz1XuD4ttSHt_KCXNCEv40PlroUU9MjafL1kyqMcEHmPLJdTRWPF4M\"}",
-      "binding_info": "tokengate/v1/kek-binding\n[\"acme\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"\"]"
+      "sealed": "{\"v\":1,\"kid\":\"ec69d0872b45ab88\",\"iv\":\"QEFCQ0RFRkdISUpL\",\"wdek\":\"p4T5qBICCX9dR_Qpk2BoiEgSoXVQFByA1lts7nvLePjZvDjY-Oi3MZV-t6JIkFix\",\"dek_iv\":\"UFFSU1RVVldYWVpb\",\"ct\":\"tjHO9X0Uqn9_Rj9D4CR8QiO-rbPFcJfuXtOkMFDa_zL6Iy8uBuyRCyz1XuD4ttSHt_KCXNCEv40PlroUU9MjafL1kyqMcEHmPLJdTRWPF4M\"}",
+      "binding_info": "tokengate/v1/kek-binding\n[\"acme\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"\"]",
+      "legacy_sealed": "{\"v\":1,\"kid\":\"k1\",\"iv\":\"QEFCQ0RFRkdISUpL\",\"wdek\":\"p4T5qBICCX9dR_Qpk2BoiEgSoXVQFByA1lts7nvLePjZvDjY-Oi3MZV-t6JIkFix\",\"dek_iv\":\"UFFSU1RVVldYWVpb\",\"ct\":\"tjHO9X0Uqn9_Rj9D4CR8QiO-rbPFcJfuXtOkMFDa_zL6Iy8uBuyRCyz1XuD4ttSHt_KCXNCEv40PlroUU9MjafL1kyqMcEHmPLJdTRWPF4M\"}"
     }
   ]
 }

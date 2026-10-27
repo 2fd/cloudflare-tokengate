@@ -77,3 +77,11 @@ describe('LogoStack', () => {
     );
   });
 });
+
+describe('Logo cssLetters', () => {
+  it('moves the letters to data-l so the tile adds no text', () => {
+    expect(render(<Logo brand="vercel" size="sm" cssLetters />)).toBe(
+      '<span class="logo sm lg-vercel" data-l="▲" aria-hidden="true"></span>',
+    );
+  });
+});

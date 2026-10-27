@@ -201,7 +201,7 @@ export const SYSTEM_ACTOR: Actor = {
   userAgent: null,
 };
 
-/** Audit events written by each user since `since` (People: the "Changes" column). */
+/** Audit events written by each user since `since` (Members: the "Changes" column). */
 export async function auditCountByActor(
   db: D1Database,
   since: number,
@@ -255,6 +255,6 @@ function changeCategory(
   if (action.startsWith('credential_access_rule.')) return 'access_rules';
   if (action.startsWith('global_access_rule.')) return 'global_rules';
   if (['user.bootstrap', 'user.join', 'user.link'].includes(action)) return null;
-  if (action.startsWith('user.') || action === 'settings.admin_hosts') return 'users';
+  if (action.startsWith('user.')) return 'users';
   return 'system';
 }

@@ -7,9 +7,9 @@ configuration export, and the secrets that no backup holds. It is for platform e
 
 | State | Where | Backed up by |
 |---|---|---|
-| Keyring (`TOKENGATE_KEK` or `TOKENGATE_KEYRING`) | Worker secret | Only your vault. Cloudflare cannot return a secret's value |
+| Keyring (`TOKENGATE_KEK`, and `TOKENGATE_KEYRING` during a rotation) | Worker secrets | Only your vault, if you keep a copy. Cloudflare cannot return a secret's value |
 | Variables (`AUTH_*`) | Worker settings | Keep the exact values in your vault with the keyring: the keys are bound to them ([configuration](../configuration.md#login-binding)) |
-| Users, login identities, credential access rules, credentials, sealed credentials, issuer_access_rules, settings (including the upstream host allowlist and the admin hosts), audit log | `DB` (`tokengate`) | Time Travel, `d1 export` |
+| Users, login identities, credential access rules, credentials, sealed credentials, issuer_access_rules, settings (including the upstream host allowlist), audit log | `DB` (`tokengate`) | Time Travel, `d1 export` |
 | Access application and policy (who can reach `/admin`) | Cloudflare One | Keep a copy in your runbook ([zone settings](cloudflare-zone-settings.md#cloudflare-access)) |
 | Request log and rollups | `TELEMETRY_DB` (`tokengate-telemetry`) | Time Travel, `d1 export`; optional R2 archive |
 | Code and `wrangler.jsonc` | Your clone of the repository | Git |
@@ -93,12 +93,14 @@ pnpm wrangler d1 export tokengate-telemetry --remote --output "tokengate-telemet
 
 3. In `apps/gateway/wrangler.jsonc`, set `"database_name": "tokengate-restored"` on the `DB` binding.
 4. Make sure the keyring holds every key id the export's credentials use. If you rotated keys since
-   the export, add the old key back as a non-active key ([key rotation](key-rotation.md)).
+   the export, set the old key as `TOKENGATE_KEK` and the current key as `TOKENGATE_KEYRING`
+   ([key rotation](key-rotation.md#remove-the-old-key)). Without the old key, those credentials
+   must be entered again.
 5. Run `pnpm run deploy`. The export includes wrangler's `d1_migrations` table, so only migrations
    newer than the export are applied. Then the Worker is deployed with the new binding.
 6. Do the [checks after a restore](#checks-after-a-restore).
-7. After the checks pass, select "Re-encrypt credentials with the active key" in Settings if
-   Credentials use an old key.
+7. After the checks pass, if credentials use the old key, do steps 3 to 5 of Settings › Rotate
+   encryption ([key rotation](key-rotation.md#rotate-the-key)).
 
 ## Configuration export
 
@@ -122,7 +124,7 @@ audience, and a different value fails with `401 audience_mismatch`.
 Use this when the Cloudflare account or both databases are lost.
 
 1. Follow [getting started](../getting-started.md) to create both databases and set the secrets and
-   variables. Use the same keyring from your vault.
+   variables. Use the same keys from your vault.
 2. If you have a `d1 export`, load it into the new `DB` database before the first deploy:
    `pnpm wrangler d1 execute tokengate --remote --file tokengate-20261012.sql`. Credentials open if
    the keyring matches ([restore an export](#restore-an-export-into-a-new-database)).
@@ -150,8 +152,8 @@ Use this when the Cloudflare account or both databases are lost.
 5. Settings > System status shows the database schema as "up to date".
 6. Users shows the owners you expect, and no user you had suspended is active.
 7. Issuer access rules, credentials and credential access rules you disabled during an incident are still disabled.
-8. Users › Sign-in › "Admin hosts" and Credentials › Allowed hosts list the hosts you expect. A restore brings back
-   the lists of the restore point.
+8. Settings › Allowed hosts lists the hosts you expect. A restore brings back
+   the list of the restore point.
 9. On a service with a credential check, "Test credential" passes.
 10. A workflow call succeeds ([GitHub Actions](../callers/github-actions.md)).
 

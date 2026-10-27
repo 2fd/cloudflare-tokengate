@@ -14,8 +14,8 @@ streaming keeps running until it ends ([known limitations](../threat-model.md#av
 | Disable a grant | Issuer access rules > the issuer access rule > "Disable" | Callers that matched only this grant get `403 no_matching_rule` | One grant |
 | Disable a service | Services > the service > "Disable service" | Every caller gets `404 service_not_found` | All callers of one service |
 | Disable a credential access rule | Credential access rules > the credential access rule > "Disable" | Every token from that issuer gets `401 issuer_unknown` | All callers of one issuer |
-| Suspend a user | Users > status "Suspended" > "Save" | Every admin request of the user is refused, even with a valid Access session | One admin user |
-| Hold new users | Users > "New users" > status "Pending" | People who sign in for the first time wait for approval instead of getting in | Every new user |
+| Suspend a user | Settings > status "Suspended" > "Save" | Every admin request of the user is refused, even with a valid Access session | One admin user |
+| Hold new users | Settings > "New users" > status "Pending" | People who sign in for the first time wait for approval instead of getting in | Every new user |
 | Revoke Access sessions | Cloudflare One > the Access application or the user | The user must sign in to Access again ([zone settings](cloudflare-zone-settings.md#cloudflare-access)) | One user, or every user of the application |
 
 Each action in the admin UI writes an audit event ([I-AUDIT-1](../threat-model.md#i-audit-1)). Access

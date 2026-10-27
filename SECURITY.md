@@ -97,9 +97,10 @@ steps.
 2. Set `AUTH_ACCESS_TEAM_DOMAIN` and `AUTH_ACCESS_AUD` before you add credentials, and keep their exact
    values with the key. The key is bound to them: a later change makes every stored credential
    impossible to decrypt ([I-CRED-3](docs/threat-model.md#i-cred-3)).
-3. Serve the gateway on a custom domain and sign in there first. That hostname becomes the only admin
-   host: `/admin` then answers only on the hosts in Settings > "Admin hosts", and never on `workers.dev`
-   ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)) ([configuration](docs/configuration.md#admin-hosts)).
+3. Serve the gateway on a custom domain and put every route and custom domain of the Worker behind
+   your Access application. `/admin` answers on every hostname that routes to the Worker, never on
+   `workers.dev` and never over plain http
+   ([I-DEPLOY-1](docs/threat-model.md#i-deploy-1)) ([configuration](docs/configuration.md#admin-hostnames)).
 4. In Settings > "Upstream hosts", list the upstream hosts you use. Empty allows any public https
    host ([I-SSRF-1](docs/threat-model.md#i-ssrf-1)) ([configuration](docs/configuration.md#upstream-host-allowlist)).
 5. Set operator variables in the Cloudflare dashboard, not as `""` placeholders in

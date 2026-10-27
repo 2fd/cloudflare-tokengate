@@ -2,12 +2,7 @@ import { env } from 'cloudflare:workers';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { CONTENT_SECURITY_POLICY } from '../../src/http/security';
 import { adminGet, createUser, loginAs, resetControlPlane } from '../helpers/admin-auth';
-import { createTestApp, setAdminHosts } from '../helpers/app';
-
-async function withAdminHosts(hosts: string[]): Promise<void> {
-  onTestFinished(() => setAdminHosts(null));
-  await setAdminHosts(hosts);
-}
+import { createTestApp } from '../helpers/app';
 
 function expectBrowserHeaders(res: Response, https = true) {
   expect(res.headers.get('content-security-policy')).toBe(CONTENT_SECURITY_POLICY);
@@ -16,7 +11,7 @@ function expectBrowserHeaders(res: Response, https = true) {
   expect(res.headers.get('strict-transport-security')).toBe(https ? 'max-age=31536000' : null);
 }
 
-describe('I-DEPLOY-1: security headers and host pinning', () => {
+describe('I-DEPLOY-1: security headers and admin hostnames', () => {
   it('CSP forbids scripts, framing and foreign form targets', () => {
     expect(CONTENT_SECURITY_POLICY).toContain("default-src 'none'");
     expect(CONTENT_SECURITY_POLICY).toContain("frame-ancestors 'none'");
@@ -68,43 +63,34 @@ describe('I-DEPLOY-1: security headers and host pinning', () => {
     expect(res.headers.get('referrer-policy')).toBeNull();
   });
 
-  it('with admin hosts set, /admin answers 404 on any other host', async () => {
-    await withAdminHosts(['admin.example.com']);
+  it('/admin answers 404 on workers.dev and on plain http off loopback', async () => {
     const app = createTestApp();
-    for (const origin of ['https://tokengate.acme.workers.dev', 'https://gw.test']) {
+    for (const origin of ['https://tokengate.acme.workers.dev', 'http://gw.test']) {
       for (const path of ['/admin', '/admin/credentials', '/admin/users/x']) {
         const res = await app.request(path, { origin, redirect: 'manual' });
         expect(res.status, `${origin}${path}`).toBe(404);
-        expectBrowserHeaders(res);
+        expectBrowserHeaders(res, origin.startsWith('https:'));
       }
     }
-    // On the listed host the request reaches the Access check (no JWT here: 401). The port is
-    // ignored; plain http is refused on a non-loopback host.
-    const pinned = await app.request('/admin', { origin: 'https://admin.example.com' });
-    expect(pinned.status).toBe(401);
-    const otherPort = await app.request('/admin', { origin: 'https://admin.example.com:8443' });
-    expect(otherPort.status).toBe(401);
-    const http = await app.request('/admin', { origin: 'http://admin.example.com' });
-    expect(http.status).toBe(404);
+    // Any other https hostname reaches the Access check (no JWT here: 401), whatever its port.
+    for (const origin of ['https://gw.test', 'https://admin.example.com:8443']) {
+      expect((await app.request('/admin', { origin })).status, origin).toBe(401);
+    }
   });
 
-  it('a wildcard admin host covers subdomains, not the domain itself', async () => {
-    await withAdminHosts(['*.example.com']);
-    const app = createTestApp();
-    expect((await app.request('/admin', { origin: 'https://a.example.com' })).status).toBe(401);
-    expect((await app.request('/admin', { origin: 'https://example.com' })).status).toBe(404);
-  });
-
-  it('before the first sign-in, /admin answers on any host except workers.dev', async () => {
+  it('ignores an admin_hosts row left by an older version', async () => {
+    onTestFinished(async () => {
+      await env.DB.prepare("DELETE FROM settings WHERE key = 'admin_hosts'").run();
+    });
+    await env.DB.prepare(
+      `INSERT INTO settings (key, value, updated_at, updated_by)
+       VALUES ('admin_hosts', '["admin.example.com"]', 0, NULL)`,
+    ).run();
     const app = createTestApp();
     expect((await app.request('/admin', { origin: 'https://gw.test' })).status).toBe(401);
-    expect(
-      (await app.request('/admin', { origin: 'https://tokengate.acme.workers.dev' })).status,
-    ).toBe(404);
   });
 
-  it('percent-encoded /admin paths are pinned like the plain ones', async () => {
-    await withAdminHosts(['admin.example.com']);
+  it('percent-encoded /admin paths are checked like the plain ones', async () => {
     // Hono routes on the decoded path, so `/%61dmin` reaches the admin pages.
     const app = createTestApp();
     for (const path of ['/%61dmin', '/%61dmin/credentials', '/%41dmin/../%61dmin/users']) {
@@ -115,29 +101,16 @@ describe('I-DEPLOY-1: security headers and host pinning', () => {
       expect(res.status, path).toBe(404);
       expect(res.headers.get('cache-control'), path).toBe('no-store');
     }
-    const pinned = await app.request('/%61dmin', { origin: 'https://admin.example.com' });
-    expect(pinned.status).toBe(401);
-    expect(pinned.headers.get('cache-control')).toBe('no-store');
-    expectBrowserHeaders(pinned);
+    const served = await app.request('/%61dmin', { origin: 'https://admin.example.com' });
+    expect(served.status).toBe(401);
+    expect(served.headers.get('cache-control')).toBe('no-store');
+    expectBrowserHeaders(served);
   });
 
   it('the proxy stays reachable on every host', async () => {
-    await withAdminHosts(['admin.example.com']);
     const app = createTestApp();
     const res = await app.request('/proxy/x/y', { origin: 'https://tokengate.acme.workers.dev' });
     expect(res.status).not.toBe(404);
     expect(res.headers.get('x-tokengate-source')).toBe('gateway');
-  });
-
-  it('a stored admin host list that is not valid closes /admin everywhere', async () => {
-    onTestFinished(() => setAdminHosts(null));
-    await env.DB.prepare(
-      `INSERT INTO settings (key, value, updated_at, updated_by)
-       VALUES ('admin_hosts', '["https://admin.example.com"]', 0, NULL)`,
-    ).run();
-    const app = createTestApp();
-    for (const origin of ['https://admin.example.com', 'https://gw.test', 'http://localhost']) {
-      expect((await app.request('/admin', { origin, redirect: 'manual' })).status).toBe(404);
-    }
   });
 });

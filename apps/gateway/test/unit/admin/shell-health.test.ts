@@ -3,8 +3,10 @@
 // only the problems that stop calls in the strip (a short title, then the detail), each with its
 // fix link, and a health line that says when the checks did not run.
 import { describe, expect, it } from 'vitest';
+import type { Permission } from '../../../src/admin/auth/rbac';
 import {
   healthSummary,
+  navAttention,
   type StripInput,
   stripProblems,
   uncheckedHealth,
@@ -18,14 +20,14 @@ function alert(code: AlertCode, level: Alert['level'], title: string = code): Al
 }
 
 describe('healthSummary', () => {
-  it('counts errors first and links them to the Overview health checks', () => {
+  it('counts errors first and links them to Needs attention, which lists every alert', () => {
     expect(
       healthSummary([alert('keyring_unavailable', 'error'), alert('cron_stale', 'warning')]),
     ).toEqual({
       tone: 'bad',
       text: '1 problem to fix',
-      href: '/admin#health',
-      srSuffix: '. Open Overview, Health',
+      href: '/admin#attention',
+      srSuffix: '. Open Overview, Needs attention',
     });
     expect(
       healthSummary([alert('schema_behind', 'error'), alert('config_problem', 'error')]).text,
@@ -41,12 +43,12 @@ describe('healthSummary', () => {
     });
   });
 
-  it('says Healthy, with the number of notes', () => {
+  it('says Healthy without counting notes, linked to the Overview', () => {
     expect(healthSummary([alert('single_owner', 'info'), alert('cron_never', 'info')])).toEqual({
       tone: 'ok',
-      text: 'Healthy · 2 notes',
-      href: '/admin#health',
-      srSuffix: '. Open Overview, Health',
+      text: 'Healthy',
+      href: '/admin',
+      srSuffix: '. Open Overview',
     });
     expect(healthSummary([]).text).toBe('Healthy');
   });
@@ -89,7 +91,7 @@ describe('stripProblems', () => {
       {
         title: 'Encryption keys are not loaded.',
         detail: 'Token requests fail with 503 and secrets cannot change (keyring_absent).',
-        fix: { href: '/admin/credentials/keys', label: 'Open encryption keys' },
+        fix: { href: '/admin/credentials/keys', label: 'Open rotate encryption' },
       },
       {
         title: 'Database DB is missing migrations.',
@@ -142,5 +144,49 @@ describe('uncheckedHealth', () => {
       href: '/admin#health',
       srSuffix: '. The checks could not read the database. Open Overview, Health',
     });
+  });
+});
+
+describe('navAttention', () => {
+  const all = () => true;
+  const withFix = (code: AlertCode, level: Alert['level'], permission: Permission): Alert => ({
+    ...alert(code, level),
+    fix: { href: '/admin/x', label: 'Fix', permission },
+  });
+
+  it('marks the page that shows each alert with its worst level', () => {
+    expect(
+      navAttention(
+        [
+          alert('key_not_active', 'info'),
+          alert('key_missing', 'error'),
+          alert('credential_missing_used', 'warning'),
+          withFix('single_owner', 'info', 'users:write'),
+        ],
+        all,
+      ),
+    ).toEqual({
+      keys: { tone: 'bad', srSuffix: ': 1 problem, 1 note' },
+      tokens: { tone: 'warn', srSuffix: ': 1 warning' },
+      members: { tone: 'info', srSuffix: ': 1 note' },
+    });
+  });
+
+  it('leaves the Overview checks to the health line and pending people to the pill', () => {
+    expect(
+      navAttention(
+        [
+          alert('cron_stale', 'warning'),
+          alert('schema_behind', 'error'),
+          alert('users_need_decision', 'warning'),
+        ],
+        all,
+      ),
+    ).toEqual({});
+  });
+
+  it('skips an alert whose fix the viewer may not make', () => {
+    const single = withFix('single_owner', 'info', 'users:write');
+    expect(navAttention([single], (permission) => permission !== 'users:write')).toEqual({});
   });
 });

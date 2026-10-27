@@ -14,14 +14,15 @@ import { REPO_PLACEHOLDER, templateForService } from '../service-templates';
 import { fieldId, FocusTargets } from './components';
 import { STATUS, type StatusKey, statusLabel } from './status';
 
-/** The tile of an issuer: its CI system (github, gitlab, buildkite), else the OIDC key. */
+/** The tile of an issuer: its CI system (github, gitlab, vercel, buildkite), else the OIDC key. */
 export function issuerLogo(
   rule: Pick<CredentialAccessRule, 'profile' | 'issuer' | 'enabled'> | null,
 ): LogoSpec {
   if (!rule) return 'oidc';
-  let brand: 'github' | 'gitlab' | 'buildkite' | 'oidc' = 'oidc';
+  let brand: 'github' | 'gitlab' | 'vercel' | 'buildkite' | 'oidc' = 'oidc';
   if (rule.profile === 'github-actions') brand = 'github';
   else if (rule.profile === 'gitlab-ci') brand = 'gitlab';
+  else if (rule.profile === 'vercel') brand = 'vercel';
   else if (hostOf(rule.issuer) === 'agent.buildkite.com') brand = 'buildkite';
   return rule.enabled ? brand : { brand, disabled: true };
 }
@@ -264,7 +265,7 @@ export function trustLine(
   if (claim === null || pinValues(rule.tenant_pin, claim).length === 0) {
     return getProfile(rule.profile)?.label ?? rule.profile;
   }
-  const word = rule.profile === 'gitlab-ci' ? 'group' : 'org';
+  const word = rule.profile === 'gitlab-ci' ? 'group' : rule.profile === 'vercel' ? 'team' : 'org';
   return `${word} ${tenantsText(rule, labels)}`;
 }
 

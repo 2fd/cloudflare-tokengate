@@ -30,10 +30,12 @@ const REASON_TEXT: Readonly<Record<string, string>> = {
   upstream_invalid_status:
     'the upstream API answered with an HTTP status outside 200-599; it may have processed the request',
   profile_unknown: 'the credential access rule uses an unknown issuer type',
-  keyring_absent: 'no keyring is configured (TOKENGATE_KEK or TOKENGATE_KEYRING)',
-  keyring_malformed: 'the keyring secret is malformed',
-  active_kid_missing: 'the keyring has no active key',
+  keyring_absent: 'no encryption key is configured (TOKENGATE_KEK)',
+  keyring_malformed: 'TOKENGATE_KEK is not base64',
   key_not_32_bytes: 'a keyring key is not 32 bytes',
+  key_not_random: 'the only keyring key is not random',
+  // Before ADR 0027 (JSON keyring); kept for request records that hold them.
+  active_kid_missing: 'the keyring has no active key',
   both_kek_and_keyring_set: 'both TOKENGATE_KEK and TOKENGATE_KEYRING are set',
   dev_placeholder_key: 'the keyring holds the development key from .dev.vars.example',
 };
@@ -107,6 +109,7 @@ export const REASON_GROUPS: ReadonlyArray<{ group: string; codes: readonly strin
       'keyring_malformed',
       'active_kid_missing',
       'key_not_32_bytes',
+      'key_not_random',
       'both_kek_and_keyring_set',
       'dev_placeholder_key',
     ],

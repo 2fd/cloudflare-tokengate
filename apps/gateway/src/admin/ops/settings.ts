@@ -1,7 +1,7 @@
 // Runtime settings changes (owner only, enforced by RBAC): retention, sampling and row cap. Values
 // are checked against SETTING_BOUNDS (floors also re-applied at use time); the changed keys and one
-// audit row are written in one db.batch (I-AUDIT-1). The host allowlists live in upstream-hosts.ts
-// and admin-hosts.ts.
+// audit row are written in one db.batch (I-AUDIT-1). The upstream host allowlist lives in
+// upstream-hosts.ts.
 import { getSettings, putSettingStatement, SETTING_BOUNDS, type Settings } from '../../db/settings';
 import type { Actor } from '../../db/types';
 import type { Deps } from '../../deps';

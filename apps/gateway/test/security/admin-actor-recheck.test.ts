@@ -17,6 +17,7 @@ import {
   fakeNetwork,
   OWNER_ID,
   racingDeps,
+  seedService,
 } from '../../test/unit/admin/ops/helpers';
 import {
   createAdminWorldApp,
@@ -24,6 +25,7 @@ import {
   seedAdminWorld,
   TOKEN_FIXTURE_VARIANTS,
   WORLD_SECRET,
+  WORLD_VERIFY,
 } from '../fixtures/admin-forms';
 import { type AdminSession, adminPost, createUser, loginAs } from '../helpers/admin-auth';
 import { createTestApp } from '../helpers/app';
@@ -34,9 +36,9 @@ beforeEach(resetAdminWorld);
 const ATTACKER_HOST = 'attacker.example';
 
 /**
- * The real app with a seeded service (credential check: api.github.com). `whileInFlight` runs once
- * while a request to `host` (default `attacker.example`) is in flight, i.e. after the admin
- * middleware passed the request.
+ * The real app with a seeded service (credential check: api.github.com) and a custom credential
+ * (`customId`, api.example.com) to repoint. `whileInFlight` runs once while a request to `host`
+ * (default `attacker.example`) is in flight, i.e. after the admin middleware passed the request.
  */
 async function world() {
   let during: (() => Promise<void>) | null = null;
@@ -51,6 +53,13 @@ async function world() {
   });
   const app = createAdminWorldApp(network.fetch);
   const seeded = await seedAdminWorld(app);
+  // Only a credential without a type can change its destination: the repoint target.
+  const customId = await seedService(app.deps, {
+    slug: 'custom',
+    base_url: 'https://api.example.com',
+    secret: 'custom-secret-0123456789abcdef',
+    verify: WORLD_VERIFY,
+  });
   const owner = await createUser({ email: 'owner@example.com', role: 'owner' });
   const admin = await createUser({ email: 'admin@example.com', role: 'admin' });
   const ownerSession = await loginAs(app, owner);
@@ -58,6 +67,7 @@ async function world() {
   return {
     app,
     serviceId: seeded.serviceId,
+    customId,
     owner,
     admin,
     ownerSession,
@@ -101,9 +111,9 @@ async function credentialTests(actorId: string) {
 describe('I-SESS-1: an admin write commits only while the acting identity and role still allow it', () => {
   it('commits when nothing changes while the request is in flight (control)', async () => {
     const w = await world();
-    const res = await repoint(w.app, w.adminSession, w.serviceId);
+    const res = await repoint(w.app, w.adminSession, w.customId);
     expect(res.status).toBe(303);
-    expect(await serviceState(w.serviceId, w.admin.id)).toEqual({
+    expect(await serviceState(w.customId, w.admin.id)).toEqual({
       baseUrl: `https://${ATTACKER_HOST}`,
       audits: 1,
     });
@@ -121,14 +131,14 @@ describe('I-SESS-1: an admin write commits only while the acting identity and ro
     ],
   ])('writes nothing when an owner %s mid-request', async (_label, ownerAction) => {
     const w = await world();
-    const before = await serviceState(w.serviceId, w.admin.id);
+    const before = await serviceState(w.customId, w.admin.id);
     w.whileInFlight(async () => {
       const [path, fields] = ownerAction(w.admin.id);
       expect((await adminPost(w.app, w.ownerSession, path, fields)).status).toBe(303);
     });
-    const res = await repoint(w.app, w.adminSession, w.serviceId);
+    const res = await repoint(w.app, w.adminSession, w.customId);
     expect(res.status).toBe(409);
-    expect(await serviceState(w.serviceId, w.admin.id)).toEqual(before);
+    expect(await serviceState(w.customId, w.admin.id)).toEqual(before);
   });
 
   describe('ops without a row guard return a 409 conflict once the acting identity is unlinked', () => {

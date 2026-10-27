@@ -48,7 +48,7 @@ describe('GET /admin/users/:id', () => {
       T0 - 86_400_000,
     );
     const html = await page(`/admin/users/${person.id}`);
-    expect(html).toContain('<title>alex@acme.com – Users – tokengate</title>');
+    expect(html).toContain('<title>alex@acme.com – Settings – tokengate</title>');
     // The identity H1 holds the status badge; it is the only H1.
     expect(html).toContain('<h1>alex@acme.com <span class="badge ok">');
     expect(html.match(/<h1\b/g)).toHaveLength(1);
@@ -186,7 +186,7 @@ describe('GET /admin/users/:id', () => {
     });
     expect(res.status).toBe(409);
     const html = await res.text();
-    expect(html).toContain('<title>Error: p@example.com – Users – tokengate</title>');
+    expect(html).toContain('<title>Error: p@example.com – Settings – tokengate</title>');
     expect(html).toContain(`<a href="#f-user-${person.id}">`);
   });
 

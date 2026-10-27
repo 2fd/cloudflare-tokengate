@@ -18,7 +18,6 @@ import {
   Column,
   ConnectionsMap,
   Disclosure,
-  Dot,
   EmptyState,
   Feed,
   FeedDay,
@@ -27,7 +26,6 @@ import {
   Stack,
   Legend,
   LinkAction,
-  LiveSummary,
   type MapAccess,
   type MapConsumer,
   type MapToken,
@@ -35,8 +33,6 @@ import {
   Panel,
   Pipeline,
   Segmented,
-  SummaryRow,
-  SummaryWire,
   Button,
   Cell,
   Row,
@@ -49,7 +45,6 @@ import {
 import type { Child } from 'hono/jsx';
 import type { App } from '../../app';
 import { parseConfig } from '../../config';
-import { getAdminHosts } from '../../db/settings';
 import type { Service } from '../../db/types';
 import type { AppEnv } from '../../env';
 import { SCHEMA_HEAD } from '../../generated/schema-head';
@@ -57,7 +52,6 @@ import { PROFILES } from '../../identity/profiles';
 import {
   type AlertData,
   alertsFor,
-  EXPIRY_WARNING_MS,
   loadOverview,
   type OverviewData,
   outsideAllowedHosts,
@@ -76,7 +70,6 @@ import { loadDone, type NoticeTable, resolveNotice } from '../notice';
 import { paths } from '../paths';
 import { renderPage, type ViewContext } from '../render';
 import { issuerLogo } from '../views/access-visuals';
-import type { Alert } from '../views/alerts';
 import { AskSomeone } from '../views/components';
 import {
   formatCount,
@@ -139,14 +132,13 @@ export function registerOverviewRoutes(app: App): void {
     const rawRange = c.req.query('range');
     const parsed = parseRange(rawRange, OVERVIEW_RANGES);
     const range: OverviewRange = parsed ?? '24h';
-    const [overview, connections, verifiedCall, adminHosts, people, done] = await Promise.all([
+    const [overview, connections, verifiedCall, people, done] = await Promise.all([
       loadOverview(deps, range),
       loadConnections(deps),
       deps.env.TELEMETRY_DB.prepare(VERIFIED_CALL_SQL)
         .first()
         .then((row) => row !== null)
         .catch(() => false),
-      getAdminHosts(deps.env.DB),
       loadAuditPeople(deps.env.DB),
       loadDone(deps, { userId: c.get('viewer').user.id }, c.req.query('done')),
     ]);
@@ -217,7 +209,6 @@ export function registerOverviewRoutes(app: App): void {
           ctx,
           data: overview,
           connections,
-          adminHosts,
           env: deps.env,
           rangeNote: rawRange !== undefined && parsed === null,
           names: auditTargetNames(connections, people),
@@ -236,7 +227,6 @@ interface PageData {
   ctx: ViewContext;
   data: OverviewData;
   connections: Connections;
-  adminHosts: string[] | null;
   env: AppEnv;
   rangeNote: boolean;
   names: ReadonlyMap<string, string>;
@@ -277,7 +267,7 @@ function OverviewPage(props: PageData) {
   const { range } = data;
   const alerts = overviewAlerts(data.alertData);
   const items = toAttentionItems(alerts, ctx);
-  const checks = healthChecks(data.alertData, props.adminHosts, props.env);
+  const checks = healthChecks(data.alertData, props.env);
   const problems = checks.filter((check) => !check.ok).length;
   const warnings = alerts.filter((alert) => alert.level === 'warning').length;
   const notes = alerts.filter((alert) => alert.level === 'info').length;
@@ -309,10 +299,13 @@ function OverviewPage(props: PageData) {
               .filter(Boolean)
               .join(' · ')}{' '}
             ·{' '}
-            <a href={paths.overview({ hash: 'health' })}>
-              health checks{' '}
-              {problems > 0 ? `${problems} ${problems === 1 ? 'problem' : 'problems'}` : 'all OK'}
-            </a>
+            {problems > 0 ? (
+              <a href={paths.overview({ hash: 'health' })}>
+                health checks {problems} {problems === 1 ? 'problem' : 'problems'}
+              </a>
+            ) : (
+              'health checks all OK'
+            )}
           </span>
         }
       >
@@ -377,7 +370,7 @@ function OverviewPage(props: PageData) {
                 </Panel>
               </Tray>
             )}
-            <HealthTray checks={checks} alerts={alerts} />
+            <HealthTray checks={checks} />
           </Stack>
         </Column>
         <Column span={4}>
@@ -581,8 +574,7 @@ function FreshOverview(props: PageData) {
   const { ctx, data } = props;
   const alerts = overviewAlerts(data.alertData);
   const urgent = alerts.filter((alert) => alert.level !== 'info');
-  const notes = alerts.filter((alert) => alert.level === 'info');
-  const checks = healthChecks(data.alertData, props.adminHosts, props.env);
+  const checks = healthChecks(data.alertData, props.env);
   return (
     <>
       <RangeNote show={props.rangeNote} />
@@ -603,65 +595,10 @@ function FreshOverview(props: PageData) {
                 </Panel>
               </Tray>
             ) : null}
-            {notes.length > 0 ? (
-              <div class="notes" id="notes">
-                {notes.map((alert) => (
-                  <p class="hint">
-                    <Dot tone="info" /> <span class="vh">Note: </span>
-                    {alert.title}
-                    {alert.detail ? ` ${alert.detail}` : null}
-                    {alert.objects.map((object) => (
-                      <>
-                        {' '}
-                        <a href={object.href}>{object.label}</a>
-                      </>
-                    ))}
-                    {alert.fix && ctx.can(alert.fix.permission) ? (
-                      <>
-                        {' '}
-                        <a href={alert.fix.href}>{alert.fix.label}</a>
-                      </>
-                    ) : null}
-                  </p>
-                ))}
-              </div>
-            ) : null}
-            <HealthTray checks={checks} alerts={alerts} />
+            <HealthTray checks={checks} />
           </Stack>
         </Column>
         <Column span={4} rail>
-          <LiveSummary
-            id="plan"
-            variant="plan"
-            title="What you are building"
-            description="The map on this page fills in as you finish each step."
-          >
-            <SummaryRow
-              logo="github"
-              title={
-                <>
-                  Credential access rule <Badge>Step 2</Badge>
-                </>
-              }
-              meta="for example GitHub Actions"
-            />
-            <SummaryWire />
-            <SummaryRow
-              icon="gate"
-              title="tokengate"
-              meta="Checks every call against the credential access rules (step 2)"
-            />
-            <SummaryWire />
-            <SummaryRow
-              logo="slack"
-              title={
-                <>
-                  Credential <Badge>Step 1</Badge>
-                </>
-              }
-              meta="for example Slack or OpenAI. The upstream secret stays here."
-            />
-          </LiveSummary>
           <Tray id="traffic" title="Traffic">
             <Panel variant="pad">
               <p class="muted">
@@ -842,15 +779,12 @@ interface Check {
   detail: Child;
 }
 
-/** Every check, collapsed under one line: open while a check fails or an alert links to a row. */
-function HealthTray(props: { checks: Check[]; alerts: readonly Alert[] }) {
+/** Every check, shown only while one fails: when every check passes there is nothing to show. */
+function HealthTray(props: { checks: Check[] }) {
   const { checks } = props;
   const problems = checks.filter((check) => !check.ok).length;
+  if (problems === 0) return null;
   const ok = checks.length - problems;
-  // An alert can link to a row that passes (cron_never: the job has not run yet, which is ok).
-  const linksToCheck = props.alerts.some((alert) =>
-    alert.objects.some((object) => object.href.includes('#check-')),
-  );
   return (
     <Tray
       id="health"
@@ -871,7 +805,7 @@ function HealthTray(props: { checks: Check[]; alerts: readonly Alert[] }) {
               </Badge>
             )
           }
-          open={problems > 0 || linksToCheck}
+          open
         >
           <Table
             label="All checks"
@@ -904,7 +838,7 @@ function HealthTray(props: { checks: Check[]; alerts: readonly Alert[] }) {
   );
 }
 
-function healthChecks(data: AlertData, adminHosts: string[] | null, env: AppEnv): Check[] {
+function healthChecks(data: AlertData, env: AppEnv): Check[] {
   const { cron, keyring } = data;
   const nextRun = hourStart(data.now) + 3_600_000;
   const login = loginProviderNames(parseConfig(env));
@@ -982,7 +916,7 @@ function healthChecks(data: AlertData, adminHosts: string[] | null, env: AppEnv)
           {keyring.error
             ? `Not loaded (${keyring.error}).`
             : `${formatCount(data.keyCount)} ${data.keyCount === 1 ? 'key' : 'keys'}, active ${keyring.activeKid ?? '—'}, ${formatCount(data.sealedKids.length)} ${data.sealedKids.length === 1 ? 'secret' : 'secrets'}.`}{' '}
-          <a href={paths.tokenKeys()}>Open encryption keys</a>
+          <a href={paths.tokenKeys()}>Open Rotate encryption</a>
         </>
       ),
     },
@@ -993,20 +927,7 @@ function healthChecks(data: AlertData, adminHosts: string[] | null, env: AppEnv)
       detail: (
         <>
           {login.length > 0 ? `${login.join(', ')}.` : 'No login configured: nobody can sign in.'}{' '}
-          <a href={paths.signIn('login')}>Open sign-in</a>
-        </>
-      ),
-    },
-    {
-      id: 'admin-hosts',
-      name: 'Admin hosts',
-      ok: true,
-      detail: (
-        <>
-          {adminHosts === null
-            ? 'Not set yet: set on the first sign-in.'
-            : `${adminHosts.join(', ')}.`}{' '}
-          <a href={paths.signIn('hosts')}>Open admin hosts</a>
+          <a href={paths.users({ hash: 'login' })}>Open Members</a>
         </>
       ),
     },
@@ -1284,14 +1205,11 @@ function TokensInUse(props: PageData) {
   );
 }
 
-const DAY_MS = 86_400_000;
 const PROBLEM_STATUSES: ReadonlySet<StatusKey> = new Set([
   'no_credential',
   'credential_unreadable',
   'upstream_rejecting',
   'outside_hosts',
-  'expired',
-  'expiring',
 ]);
 
 function tokenStatus(
@@ -1299,7 +1217,6 @@ function tokenStatus(
   data: OverviewData,
   connections: Connections,
 ): { status: StatusKey; detail?: string } {
-  const now = data.generatedAt;
   if (!token.enabled) return { status: 'disabled' };
   if (token.credential_sealed === null) return { status: 'no_credential' };
   if (connections.unreadableTokenIds.has(token.id)) return { status: 'credential_unreadable' };
@@ -1308,11 +1225,6 @@ function tokenStatus(
   }
   if (outsideAllowedHosts(token.base_url, data.alertData.allowedHosts)) {
     return { status: 'outside_hosts' };
-  }
-  const expires = token.credential_expires_at;
-  if (expires !== null && expires <= now) return { status: 'expired' };
-  if (expires !== null && expires - now <= EXPIRY_WARNING_MS) {
-    return { status: 'expiring', detail: String(Math.ceil((expires - now) / DAY_MS)) };
   }
   return { status: 'active' };
 }

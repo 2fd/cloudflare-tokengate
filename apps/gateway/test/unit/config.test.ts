@@ -1,17 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { parseAdminHostInput } from '../../src/admin/ops/admin-hosts';
 import { parseUpstreamHostInput } from '../../src/admin/ops/upstream-hosts';
 import {
   adminHostAllowed,
   type Config,
   hostListed,
-  isAdminHostEntry,
   normalizeAccessTeamDomain,
   parseConfig,
   splitList,
   upstreamHostAllowed,
 } from '../../src/config';
-import { adminHostsFromValue, upstreamHostsFromValue } from '../../src/db/settings';
+import { upstreamHostsFromValue } from '../../src/db/settings';
 import type { AppEnv } from '../../src/env';
 
 const AUD = 'a'.repeat(64);
@@ -46,113 +44,27 @@ describe('parseConfig: empty environment', () => {
   });
 });
 
-describe('I-DEPLOY-1: admin host pinning against the stored admin hosts', () => {
-  const at = (href: string) => new URL(href);
-
+describe('I-DEPLOY-1: the hostnames /admin answers on', () => {
   it.each([
     ['https://gw.example.com/admin', true],
-    ['http://gw.example.com/admin', true],
+    ['https://GW.example.com:8443/admin/users', true],
+    ['https://eu.admin.example.org/admin', true],
     ['http://localhost:8787/admin', true],
+    ['http://127.0.0.1:8787/admin', true],
+    ['http://[::1]:8787/admin', true],
+    ['https://localhost/admin', true],
+    ['http://gw.example.com/admin', false],
     ['https://tokengate.acme.workers.dev/admin', false],
     ['https://TokenGate.Acme.Workers.Dev/admin', false],
     ['https://workers.dev/admin', false],
-  ])('before the first sign-in (null): %s → %s', (href, expected) => {
-    expect(adminHostAllowed(null, at(href))).toBe(expected);
-  });
-
-  const hosts = ['gw.example.com', '*.admin.example.org', 'localhost'];
-  it.each([
-    ['https://gw.example.com/admin', true],
-    ['https://GW.example.com:443/admin/users', true],
-    ['https://gw.example.com:8443/admin', true],
-    ['https://eu.admin.example.org/admin', true],
-    ['https://a.b.admin.example.org/admin', true],
-    ['http://localhost:8787/admin', true],
-    ['https://localhost/admin', true],
-    ['http://gw.example.com/admin', false],
-    ['http://eu.admin.example.org/admin', false],
-    ['https://admin.example.org/admin', false],
-    ['https://gw.example.com.evil.com/admin', false],
-    ['https://sub.gw.example.com/admin', false],
-    ['https://tokengate.acme.workers.dev/admin', false],
-    ['http://127.0.0.1:8787/admin', false],
-  ])(`${hosts.join(',')}: %s → %s`, (href, expected) => {
-    expect(adminHostAllowed(hosts, at(href))).toBe(expected);
-  });
-
-  it('an empty list (a stored value that is not valid) denies every host', () => {
-    expect(adminHostAllowed([], at('https://gw.example.com/admin'))).toBe(false);
-    expect(adminHostAllowed([], at('http://localhost:8787/admin'))).toBe(false);
+    ['http://tokengate.acme.workers.dev/admin', false],
+  ])('%s → %s', (href, expected) => {
+    expect(adminHostAllowed(new URL(href))).toBe(expected);
   });
 });
 
-describe('admin host entries', () => {
-  it.each([
-    ['gw.example.com', true],
-    ['*.example.com', true],
-    ['localhost', true],
-    ['127.0.0.1', true],
-    ['[::1]', true],
-    ['*.com', false],
-    ['*', false],
-    ['https://gw.example.com', false],
-    ['gw.example.com:443', false],
-    ['gw.example.com.', false],
-    ['.example.com', false],
-    ['tokengate.acme.workers.dev', false],
-    ['workers.dev', false],
-    ['*.workers.dev', false],
-    ['*.acme.workers.dev', false],
-    ['[fe80::1]', false],
-  ])('%j → %s', (entry, expected) => {
-    expect(isAdminHostEntry(entry)).toBe(expected);
-  });
-
-  it('parses the textarea: lowercased, deduplicated, keeps the current host', () => {
-    expect(
-      parseAdminHostInput(
-        ' GW.example.com, ,*.Admin.example.org\ngw.example.com',
-        'gw.example.com',
-      ),
-    ).toEqual({
-      ok: true,
-      hosts: ['gw.example.com', '*.admin.example.org'],
-    });
-    expect(parseAdminHostInput('*.example.com', 'eu.example.com')).toEqual({
-      ok: true,
-      hosts: ['*.example.com'],
-    });
-  });
-
-  it.each([
-    ['', 'gw.example.com'],
-    [' \n ', 'gw.example.com'],
-    ['other.example.com', 'gw.example.com'],
-    ['*.example.com', 'example.com'],
-    ['gw.example.com, tokengate.acme.workers.dev', 'gw.example.com'],
-    ['gw.example.com https://x.example.com', 'gw.example.com'],
-  ])('refuses %j while on %s', (raw, current) => {
-    expect(parseAdminHostInput(raw, current)).toEqual({ ok: false, error: expect.any(String) });
-  });
-
-  it.each([
-    [undefined, null],
-    [
-      '["gw.example.com","*.example.org","localhost"]',
-      ['gw.example.com', '*.example.org', 'localhost'],
-    ],
-    ['[]', []],
-    ['null', []],
-    ['"gw.example.com"', []],
-    ['["https://gw.example.com"]', []],
-    ['["tokengate.acme.workers.dev"]', []],
-    ['[1]', []],
-    ['{', []],
-  ])('stored admin hosts %j read as %j (malformed denies every host)', (raw, expected) => {
-    expect(adminHostsFromValue(raw)).toEqual(expected);
-  });
-
-  it('hostListed matches exact hosts and strict subdomains of wildcards', () => {
+describe('hostListed', () => {
+  it('matches exact hosts and strict subdomains of wildcards', () => {
     expect(hostListed('A.example.com', ['*.example.com'])).toBe(true);
     expect(hostListed('example.com', ['*.example.com'])).toBe(false);
     expect(hostListed('evilexample.com', ['*.example.com'])).toBe(false);

@@ -54,7 +54,6 @@ CREATE TABLE credentials (
   id TEXT PRIMARY KEY,
   slug TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
   base_url TEXT NOT NULL,
   injection TEXT NOT NULL,             -- canonical JSON Injection, see src/policy/validate.ts
   forward_headers TEXT NOT NULL DEFAULT '[]', -- JSON string[]
@@ -62,8 +61,9 @@ CREATE TABLE credentials (
   credential_sealed TEXT,              -- JSON, see src/crypto/envelope.ts
   credential_hint TEXT,
   credential_updated_at INTEGER,
-  credential_expires_at INTEGER,
   verify TEXT,                         -- JSON VerifyCheck or NULL
+  -- The name was read from the verify check (the Slack bot name); a manual rename sets it to 0.
+  name_from_check INTEGER NOT NULL DEFAULT 0 CHECK (name_from_check IN (0, 1)),
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -82,8 +82,10 @@ CREATE TABLE access_rules (
   id TEXT PRIMARY KEY,
   credential_id TEXT REFERENCES credentials (id) ON DELETE CASCADE,
   name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 100),
-  description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 2000),  -- ops/shared.ts DESCRIPTION_MAX_LENGTH
-  profile TEXT NOT NULL CHECK (profile IN ('github-actions', 'gitlab-ci', 'generic')),
+  description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 2000),  -- policy/validate-rules.ts DESCRIPTION_MAX_LENGTH
+  -- A ProfileId (src/identity/profiles). Issuer profiles are code, not schema (ADR 0028): getProfile
+  -- fails closed on an unknown one, and a new profile needs no migration.
+  profile TEXT NOT NULL CHECK (length(profile) BETWEEN 1 AND 64),
   issuer TEXT NOT NULL CHECK (length(issuer) BETWEEN 1 AND 2048),  -- exact; jose compares it with iss
   -- Matching key of global rules: ASCII case and trailing slashes folded, so a ceiling can only reach
   -- more spellings of an issuer, never fewer. Written by the ops with issuerKey() (src/policy/limits.ts);
@@ -166,12 +168,14 @@ WHEN NEW.credential_id IS NOT NULL
        UNION SELECT NEW.jwks_uri, NEW.audience)) > 4
 BEGIN SELECT RAISE(ABORT, 'too_many_verification_settings'); END;
 
--- Human labels for numeric IDs, per access rule (ADR 0021, ADR 0026). Written only by access rule
--- saves. Display and form derivation only; src/policy/* never reads it.
+-- Human labels for claim IDs, per access rule (ADR 0021, ADR 0026). Written only by access rule
+-- saves. Display and form derivation only; src/policy/* never reads it. The ops check which claims a
+-- profile labels and the shape of their IDs (ADR 0028).
 CREATE TABLE claim_labels (
   access_rule_id TEXT NOT NULL REFERENCES access_rules (id) ON DELETE CASCADE,
-  claim TEXT NOT NULL CHECK (claim IN ('repository_owner_id', 'repository_id', 'namespace_id', 'project_id')),
-  value TEXT NOT NULL CHECK (length(value) BETWEEN 1 AND 20 AND value NOT GLOB '*[^0-9]*'),
+  claim TEXT NOT NULL CHECK (length(claim) BETWEEN 1 AND 128),
+  -- An ID: digits (GitHub, GitLab) or a prefixed opaque ID (Vercel `team_…`, `prj_…`).
+  value TEXT NOT NULL CHECK (length(value) BETWEEN 1 AND 128 AND value NOT GLOB '*[^0-9A-Za-z_]*'),
   label TEXT NOT NULL CHECK (length(label) BETWEEN 1 AND 256),
   updated_at INTEGER NOT NULL,
   updated_by TEXT,
@@ -202,8 +206,9 @@ CREATE TABLE audit_log (
   resources TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(resources) AND json_type(resources) = 'array')
 );
 CREATE INDEX audit_log_ts ON audit_log (ts);
-CREATE INDEX audit_log_target ON audit_log (target_type, target_id, ts);
--- Audit list filters; the list orders by id.
+-- Audit list filters; the list orders by id. The target filter, the history of an object and its last
+-- secret change match on target_id (target_type alone is only the settings and keyring filter).
+CREATE INDEX audit_log_target ON audit_log (target_id, id);
 CREATE INDEX audit_log_actor ON audit_log (actor_id, id);
 CREATE INDEX audit_log_action ON audit_log (action, id);
 

@@ -41,7 +41,7 @@ import type { IssuerProfile } from '../../identity/types';
 import type { GlobalStatus } from '../../policy/global-status';
 import type { WarningDetail } from '../../policy/validate';
 import type { RuleEdge } from '../connections';
-import { pinValues, tenantClaimOf } from '../ops/credential-access-rules';
+import { pinValues, tenantClaimOf, tenantWord } from '../ops/credential-access-rules';
 import { paths } from '../paths';
 import type { ViewContext } from '../render';
 import { anchorClaims, ownerFindCommand } from '../rule-access';
@@ -530,7 +530,7 @@ function WhoSection(props: { model: CredentialRulePageModel; ctx: ViewContext })
         Array.isArray(c.values) &&
         c.values.includes(value),
     );
-  const word = gitlab ? 'group' : 'organization';
+  const word = tenantWord(rule.profile);
   return (
     <Tray
       id="tenants"
@@ -538,7 +538,9 @@ function WhoSection(props: { model: CredentialRulePageModel; ctx: ViewContext })
       description={
         gitlab
           ? 'Only jobs from projects in these groups match.'
-          : 'Only jobs from repositories owned by these organizations match.'
+          : rule.profile === 'vercel'
+            ? 'Only deployments of projects in this team match.'
+            : 'Only jobs from repositories owned by these organizations match.'
       }
     >
       <Panel variant="pad">
@@ -631,7 +633,12 @@ function jobItems(model: CredentialRulePageModel, f: ReturnType<typeof facts>): 
   const events = f.events;
   return [
     {
-      label: profile.id === 'gitlab-ci' ? 'Project or pipeline' : 'Repository or workflow',
+      label:
+        profile.id === 'vercel'
+          ? 'Project'
+          : profile.id === 'gitlab-ci'
+            ? 'Project or pipeline'
+            : 'Repository or workflow',
       value:
         f.repositoryId !== null ? (
           <Mono>

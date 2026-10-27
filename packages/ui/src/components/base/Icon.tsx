@@ -78,6 +78,11 @@ const ICONS = {
   table: [['path', { d: 'M3 5h18M3 10h18M3 15h18M3 20h18M9 5v15' }]],
   /** Docs: Visualization; charts. */
   chart: [['path', { d: 'M4 20V10M10 20V4M16 20v-7M21 20H3' }]],
+  /** Sidebar: FAQ. */
+  help: [
+    ['circle', { cx: '12', cy: '12', r: '9' }],
+    ['path', { d: 'M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17h.01' }],
+  ],
 } as const satisfies Record<string, ReadonlyArray<readonly [string, Record<string, string>]>>;
 
 export type IconName = keyof typeof ICONS;

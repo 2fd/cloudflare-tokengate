@@ -66,9 +66,8 @@ const WHO: Readonly<Record<string, readonly Role[]>> = {
   // == users ==
   'GET /admin/users/appearance': ALL,
   'POST /admin/users/appearance': OWNER,
-  'GET /admin/users/sign-in': ALL,
-  'POST /admin/users/sign-in/policy': OWNER,
-  'POST /admin/users/sign-in/hosts': OWNER,
+  'GET /admin/faq': ALL,
+  'POST /admin/users/join-policy': OWNER,
   'GET /admin/users': ALL,
   'POST /admin/users': OWNER,
   'GET /admin/users/:id': ALL,
@@ -117,6 +116,7 @@ const WHO: Readonly<Record<string, readonly Role[]>> = {
 
   // == global ==
   'POST /admin/export': EXPORT,
+  'POST /admin/theme': ALL,
 };
 
 let world: AdminWorld;

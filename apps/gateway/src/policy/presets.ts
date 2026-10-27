@@ -1,4 +1,4 @@
-// Structured access builders for GitHub Actions and GitLab CI (docs/policies.md, "Structured
+// Structured access builders for GitHub Actions, GitLab CI and Vercel (docs/policies.md, "Structured
 // access form"). UI-only convenience: they produce plain conditions that still go through
 // validateCredentialAccessRule. Defaults are the safe choice: numeric IDs, exact event allowlists, protected refs.
 // Patterns that the validator would call broad (a leading `*`, `**`, a wildcard environment or
@@ -40,6 +40,10 @@ export const GITLAB_CONTEXTS: readonly GitlabPresetContext[] = [
   'protected',
   'any',
 ];
+
+export type VercelPresetContext = 'environment' | 'any';
+
+export const VERCEL_CONTEXTS: readonly VercelPresetContext[] = ['environment', 'any'];
 
 /** Contexts that take a name or pattern, and so a protected-refs choice. */
 export const PATTERN_CONTEXTS: readonly string[] = [
@@ -83,6 +87,16 @@ export interface GithubPresetInput {
   requireGithubHosted: boolean;
   /** `job_workflow_ref` pin, e.g. `acme/infra/.github/workflows/deploy.yml@refs/heads/main`. */
   workflowRef: string | null;
+}
+
+export interface VercelPresetInput {
+  /** Team ID (`owner_id`, `team_…`); the slug can be renamed. */
+  ownerId: string;
+  /** Project ID (`project_id`, `prj_…`). */
+  projectId: string;
+  context: VercelPresetContext;
+  /** Environment: production, preview, development or a Custom Environment slug; '' otherwise. */
+  pattern: string;
 }
 
 export interface GitlabPresetInput {
@@ -302,6 +316,51 @@ export function gitlabAccessRulePreset(input: GitlabPresetInput): PresetResult {
   return { conditions, warnings: risks.map((risk) => RISK_WARNINGS[risk]), risks, errors };
 }
 
+const VERCEL_TEAM_ID_RE = /^team_[A-Za-z0-9]{1,64}$/;
+const VERCEL_PROJECT_ID_RE = /^prj_[A-Za-z0-9]{1,64}$/;
+const VERCEL_ENVIRONMENT_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+
+/**
+ * Builds the conditions of a Vercel access: the team and project IDs, and one environment. Without
+ * an environment only the trusted ones match, production and preview (I-AUTHZ-3); preview
+ * deployments are built from any pushed branch, so that is the `any_ref` risk.
+ */
+export function vercelAccessRulePreset(input: VercelPresetInput): PresetResult {
+  const errors: PresetError[] = [];
+  const risks: RiskCode[] = [];
+  const ownerId = input.ownerId.trim();
+  if (!VERCEL_TEAM_ID_RE.test(ownerId)) {
+    errors.push({ field: 'owner', message: 'The team ID starts with team_.' });
+  }
+  const projectId = input.projectId.trim();
+  if (!VERCEL_PROJECT_ID_RE.test(projectId)) {
+    errors.push({
+      field: 'repository',
+      message:
+        projectId === ''
+          ? 'Choose a project, like acme-web (prj_7Gw5ZMBpQA8h9GF832KGp7nwbuh3).'
+          : 'The project ID starts with prj_.',
+    });
+  }
+  const conditions = [exact('owner_id', [ownerId]), exact('project_id', [projectId])];
+  const pattern = input.pattern.trim();
+  if (input.context === 'environment') {
+    if (!VERCEL_ENVIRONMENT_RE.test(pattern)) {
+      errors.push({
+        field: 'pattern',
+        message:
+          pattern === ''
+            ? 'Enter an environment like production.'
+            : 'Enter one environment without *, like production or a Custom Environment slug.',
+      });
+    }
+    conditions.push(exact('environment', [pattern]));
+  } else {
+    risks.push('any_ref');
+  }
+  return { conditions, warnings: risks.map((risk) => RISK_WARNINGS[risk]), risks, errors };
+}
+
 /** Order-insensitive identity of a condition set (values sorted, `negate` only when true). */
 export function conditionSetKey(conditions: readonly Condition[]): string {
   return JSON.stringify(
@@ -405,4 +464,26 @@ export function gitlabPresetFromConditions(
     }
   }
   return null;
+}
+
+/** The Vercel builder input that rebuilds exactly these conditions, or null (rows editor). */
+export function vercelPresetFromConditions(
+  conditions: readonly Condition[],
+): VercelPresetInput | null {
+  const ownerId = only(conditions, 'owner_id');
+  const projectId = only(conditions, 'project_id');
+  if (typeof ownerId !== 'string' || typeof projectId !== 'string') return null;
+  const environment = only(conditions, 'environment');
+  if (environment === null) return null;
+  const input: VercelPresetInput = {
+    ownerId,
+    projectId,
+    context: environment === undefined ? 'any' : 'environment',
+    pattern: environment ?? '',
+  };
+  const built = vercelAccessRulePreset(input);
+  return built.errors.length === 0 &&
+    conditionSetKey(built.conditions) === conditionSetKey(conditions)
+    ? input
+    : null;
 }

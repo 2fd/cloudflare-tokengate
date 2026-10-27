@@ -52,7 +52,7 @@ describe('I-SSRF-1: upstream host allowlist at /admin/credentials/hosts', () => 
     const res = await adminGet(app, await sessionFor('owner'), '/admin/credentials/hosts');
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain('<title>Allowed hosts – Credentials – tokengate</title>');
+    expect(html).toContain('<title>Allowed hosts – Settings – tokengate</title>');
     expect(html).toContain('action="/admin/credentials/hosts"');
     expect(html).toMatch(/name="mode" value="any" checked=""/);
     // Template hosts are candidates; none is checked while any host is allowed.

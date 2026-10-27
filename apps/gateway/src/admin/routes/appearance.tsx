@@ -52,7 +52,7 @@ async function appearancePage(
     c,
     {
       title: 'Appearance',
-      section: 'users',
+      section: 'settings',
       subsection: 'appearance',
       errors: options.errors,
       status: options.status,

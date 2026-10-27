@@ -1,6 +1,6 @@
 import type { Child } from 'hono/jsx';
 import { cx, idList } from '../../lib/cx';
-import { FieldContext } from './context';
+import { FieldContext, type LiveSlot } from './context';
 
 export interface FieldProps {
   /** Id of the control. The hint, error and note get `${id}-hint`, `${id}-error`, `${id}-note`. */
@@ -17,6 +17,11 @@ export interface FieldProps {
   error?: Child;
   /** Line after the control that also describes it (a kept draft, a derived value). */
   note?: Child;
+  /**
+   * Live-form field slot of a Select whose options carry `o`: adds `.sfN`, so `.svN` / `.rvN`
+   * elements follow the chosen option, as with a live FieldSet.
+   */
+  live?: LiveSlot;
   class?: string;
   /** The control: an Input, Select or Textarea. It reads its id and ARIA from this Field. */
   children: Child;
@@ -42,7 +47,7 @@ export function Field(props: FieldProps) {
     invalid: Boolean(props.error),
   };
   return (
-    <div class={cx('field', props.class)}>
+    <div class={cx('field', props.live !== undefined && `sf${props.live}`, props.class)}>
       <label for={props.id}>
         {props.label}
         {props.optional || props.neededFor ? ' ' : null}

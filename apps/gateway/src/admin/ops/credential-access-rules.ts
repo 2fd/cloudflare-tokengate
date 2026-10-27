@@ -33,9 +33,10 @@ import type {
 } from '../../db/types';
 import type { Deps } from '../../deps';
 import { discoverIssuer } from '../../identity/jwt';
-import { getProfile } from '../../identity/profiles';
+import { getProfile, PROFILES } from '../../identity/profiles';
 import { GITHUB_ACTIONS_ISSUER } from '../../identity/profiles/github-actions';
 import { GITLAB_COM_ISSUER } from '../../identity/profiles/gitlab-ci';
+import { VERCEL_OIDC_ISSUER } from '../../identity/profiles/vercel';
 import type { IssuerProfile, ProfileId } from '../../identity/types';
 import { newId } from '../../lib/ids';
 import { canonicalJson } from '../../lib/json';
@@ -69,22 +70,36 @@ const AUDIENCE_RANDOM_CHARS = 26;
 /** RFC 4648 base32 alphabet, lower case. */
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const DIGITS_RE = /^[0-9]{1,20}$/;
-const LABELLED: readonly string[] = [
-  'repository_owner_id',
-  'repository_id',
-  'namespace_id',
-  'project_id',
-];
+const VERCEL_TEAM_ID_RE = /^team_[A-Za-z0-9]{1,64}$/;
+const VERCEL_PROJECT_ID_RE = /^prj_[A-Za-z0-9]{1,64}$/;
 
-/** Profiles whose pin values are numeric IDs with display labels (claim_labels). */
+/** Profiles whose pin values are IDs with display labels (claim_labels). */
 const TENANT_CLAIM: Readonly<Partial<Record<ProfileId, LabelledClaim>>> = {
   'github-actions': 'repository_owner_id',
   'gitlab-ci': 'namespace_id',
+  vercel: 'owner_id',
 };
 
-/** The labelled pin claim of a profile (organizations or groups), or null (generic). */
+/** The labelled pin claim of a profile (organizations, groups or a team), or null (generic). */
 export function tenantClaimOf(profile: ProfileId): LabelledClaim | null {
   return TENANT_CLAIM[profile] ?? null;
+}
+
+/** What one tenant pin value is called: organization (GitHub), group (GitLab) or team (Vercel). */
+export function tenantWord(profile: string): 'organization' | 'group' | 'team' {
+  return profile === 'gitlab-ci' ? 'group' : profile === 'vercel' ? 'team' : 'organization';
+}
+
+/**
+ * The ID shape of a claim a profile pins or labels: GitHub and GitLab IDs are numeric, Vercel IDs
+ * are prefixed (`team_…`, `prj_…`). Null: the profile labels no IDs (generic).
+ */
+export function claimIdPattern(profile: ProfileId, claim: string): RegExp | null {
+  if (profile === 'generic') return null;
+  if (profile === 'vercel') {
+    return claim === 'project_id' ? VERCEL_PROJECT_ID_RE : VERCEL_TEAM_ID_RE;
+  }
+  return DIGITS_RE;
 }
 
 /**
@@ -105,6 +120,7 @@ export function ruleIssuer(profile: ProfileId, typed: string | undefined): strin
   const issuer = (typed ?? '').trim();
   if (profile === 'github-actions') return issuer || GITHUB_ACTIONS_ISSUER;
   if (profile === 'gitlab-ci') return issuer || GITLAB_COM_ISSUER;
+  if (profile === 'vercel') return issuer || VERCEL_OIDC_ISSUER;
   return issuer;
 }
 
@@ -240,7 +256,7 @@ async function insertRule(
   if (!service) return opFailure('invalid', ['Select a credential for this access rule.']);
   const profile = getProfile(String(input.profile));
   if (!profile)
-    return opFailure('invalid', ['profile must be github-actions, gitlab-ci or generic']);
+    return opFailure('invalid', [`profile must be one of ${Object.keys(PROFILES).join(', ')}`]);
   const flagErrors = [
     ...booleanErrors('enabled', input.enabled),
     ...booleanErrors('acknowledge_warnings', input.acknowledge_warnings),
@@ -290,7 +306,7 @@ async function insertRule(
     null,
     context,
   );
-  const extra = [...numericPinErrors(profile, tenantPin), ...labelErrors(labels)];
+  const extra = [...pinIdErrors(profile, tenantPin), ...labelErrors(profile, labels)];
   if (precheck.errors.length > 0 || extra.length > 0) {
     return opFailure('invalid', [...precheck.errors, ...extra], precheck.warnings);
   }
@@ -496,9 +512,9 @@ export async function updateCredentialAccessRule(
   const labels = normalizeLabels(input.labels);
   const extraErrors = [
     ...(input.tenant_pin !== undefined
-      ? numericPinErrors(profile, valuesWith(existing.jwks_uri).tenant_pin)
+      ? pinIdErrors(profile, valuesWith(existing.jwks_uri).tenant_pin)
       : []),
-    ...labelErrors(labels),
+    ...labelErrors(profile, labels),
   ];
   if (extraErrors.length > 0) return opFailure('invalid', extraErrors);
   const context = {
@@ -711,7 +727,7 @@ export async function removeTenantValue(
       c.values.includes(input.value),
   );
   if (used) {
-    const word = existing.profile === 'gitlab-ci' ? 'group' : 'organization';
+    const word = tenantWord(existing.profile);
     return opFailure('invalid', [
       `Remove the jobs that use ${word} ${input.label ?? input.value} first.`,
     ]);
@@ -719,7 +735,7 @@ export async function removeTenantValue(
   const values = current.filter((value) => value !== input.value);
   if (values.length === 0 && tenantClaimOf(existing.profile) !== null) {
     return opFailure('invalid', [
-      'An access rule needs at least one organization or group: add another one first, or delete the access rule.',
+      'An access rule needs at least one organization, group or team: add another one first, or delete the access rule.',
     ]);
   }
   return updateCredentialAccessRule(deps, actor, id, {
@@ -941,30 +957,49 @@ function discoveredAlgs(algs: string[] | null): string[] {
   return allowed.length > 0 ? [...allowed] : ['RS256'];
 }
 
-/**
- * UI rule on top of the validator: GitHub and GitLab pin values are numeric IDs (names can be
- * re-registered). The validator accepts any exact value, so this keeps a typo out of the pin.
- */
-function numericPinErrors(profile: IssuerProfile, pin: readonly Condition[]): string[] {
-  if (profile.id === 'generic' || !Array.isArray(pin)) return [];
-  return pin.flatMap((condition) =>
-    Array.isArray(condition?.values) &&
-    condition.values.some((value: unknown) => typeof value !== 'string' || !DIGITS_RE.test(value))
-      ? [`tenant pin: ${condition.claim} values must be numeric IDs`]
-      : [],
-  );
+/** What the IDs of `claim` look like, for errors: "numeric IDs". */
+function idWords(profile: ProfileId, claim: string): string {
+  if (profile !== 'vercel') return 'numeric IDs';
+  return claim === 'project_id' ? 'project IDs like prj_…' : 'team IDs like team_…';
 }
 
-function labelErrors(labels: readonly RuleLabel[]): string[] {
-  return labels.flatMap((label) =>
-    !LABELLED.includes(label.claim)
+/**
+ * UI rule on top of the validator: pin values are IDs (names can be re-registered), numeric for
+ * GitHub and GitLab, prefixed for Vercel. The validator accepts any exact value, so this keeps a
+ * typo out of the pin.
+ */
+function pinIdErrors(profile: IssuerProfile, pin: readonly Condition[]): string[] {
+  if (!Array.isArray(pin)) return [];
+  return pin.flatMap((condition) => {
+    const pattern = claimIdPattern(profile.id, String(condition?.claim));
+    return pattern !== null &&
+      Array.isArray(condition?.values) &&
+      condition.values.some((value: unknown) => typeof value !== 'string' || !pattern.test(value))
+      ? [`tenant pin: ${condition.claim} values must be ${idWords(profile.id, condition.claim)}`]
+      : [];
+  });
+}
+
+/** The claims whose IDs a profile labels: the tenant and the repository or project. */
+const LABELLED: Readonly<Partial<Record<ProfileId, readonly LabelledClaim[]>>> = {
+  'github-actions': ['repository_owner_id', 'repository_id'],
+  'gitlab-ci': ['namespace_id', 'project_id'],
+  vercel: ['owner_id', 'project_id'],
+};
+
+function labelErrors(profile: IssuerProfile, labels: readonly RuleLabel[]): string[] {
+  return labels.flatMap((label) => {
+    const pattern = claimIdPattern(profile.id, label.claim);
+    return !(LABELLED[profile.id] ?? []).includes(label.claim) || pattern === null
       ? [`${label.claim} cannot carry a label`]
-      : !DIGITS_RE.test(label.value)
-        ? [`label value ${JSON.stringify(label.value)} must be a numeric ID`]
+      : !pattern.test(label.value)
+        ? [
+            `label value ${JSON.stringify(label.value)} must be one of the ${idWords(profile.id, label.claim)}`,
+          ]
         : label.label === '' || label.label.length > 256
           ? [`the label of ${label.value} must be 1-256 characters`]
-          : [],
-  );
+          : [];
+  });
 }
 
 function labelsDiff(changes: ReadonlyArray<{ input: ClaimLabelInput; before: string | null }>) {

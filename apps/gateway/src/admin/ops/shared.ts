@@ -251,27 +251,13 @@ export function nextVersion(previous: number, now: number): number {
 // ---------------------------------------------------------------------------------------------
 // Input checks shared by ops (policy/validate.ts covers the security-relevant fields).
 
-export const DESCRIPTION_MAX_LENGTH = 2000;
 export const NAME_MAX_LENGTH = 100;
 
 /** Required single-line display name. */
 export function nameErrors(name: unknown): string[] {
   if (typeof name !== 'string' || name.trim() === '') return ['name is required'];
   if (name.length > NAME_MAX_LENGTH) return [`name must be at most ${NAME_MAX_LENGTH} characters`];
-  if (hasControlChars(name, false)) return ['name must not contain control characters'];
-  return [];
-}
-
-/** Optional free text; line breaks and tabs allowed. */
-export function descriptionErrors(description: unknown): string[] {
-  if (description === undefined) return [];
-  if (typeof description !== 'string') return ['description must be text'];
-  if (description.length > DESCRIPTION_MAX_LENGTH) {
-    return [`description must be at most ${DESCRIPTION_MAX_LENGTH} characters`];
-  }
-  if (hasControlChars(description, true)) {
-    return ['description must not contain control characters'];
-  }
+  if (hasControlChars(name)) return ['name must not contain control characters'];
   return [];
 }
 
@@ -296,10 +282,9 @@ export function timestampErrors(label: string, value: unknown): string[] {
   return [];
 }
 
-function hasControlChars(text: string, allowWhitespace: boolean): boolean {
+function hasControlChars(text: string): boolean {
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
-    if (allowWhitespace && (code === 0x09 || code === 0x0a || code === 0x0d)) continue;
     if (code < 0x20 || code === 0x7f) return true;
   }
   return false;
@@ -342,17 +327,4 @@ export function allOf(...guards: SqlGuard[]): SqlGuard {
     sql: guards.map((guard) => `(${guard.sql})`).join(' AND '),
     binds: guards.flatMap((guard) => guard.binds),
   };
-}
-
-/** Host list input: entries separated by commas, spaces or new lines, lowercased and deduplicated. */
-export function hostListEntries(raw: unknown): string[] {
-  if (typeof raw !== 'string') return [];
-  return [
-    ...new Set(
-      raw
-        .split(/[\s,]+/)
-        .map((entry) => entry.trim().toLowerCase())
-        .filter((entry) => entry !== ''),
-    ),
-  ];
 }

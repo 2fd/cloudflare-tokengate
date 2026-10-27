@@ -73,16 +73,17 @@ describe('forms classes', () => {
 describe('live form contract', () => {
   const slots = [1, 2, 3, 4, 5, 6, 7, 8];
   const options = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+  // Option K is a checked input inside the label `[data-o=K]`, or the selected `option[data-o=K]` of
+  // a select (a rich Select in a live Field).
   it.each(slots)('field %i: phrases, reveals and the empty phrase', (n) => {
     for (const k of options) {
-      expect(css).toContain(
-        `.lform:has(.sf${n} [data-o="${k}"] input:checked) .sv${n}>[data-o="${k}"]`,
-      );
-      expect(css).toContain(
-        `.lform:has(.sf${n} [data-o="${k}"] input:checked) .rv${n}[data-o="${k}"]`,
-      );
+      const chosen = `:is([data-o="${k}"] input,option[data-o="${k}"]):checked`;
+      expect(css).toContain(`.lform:has(.sf${n} ${chosen}) .sv${n}>[data-o="${k}"]`);
+      expect(css).toContain(`.lform:has(.sf${n} ${chosen}) .rv${n}[data-o="${k}"]`);
     }
-    expect(css).toContain(`.lform:not(:has(.sf${n} input:checked)) .sv${n}>[data-o="0"]`);
+    expect(css).toContain(
+      `.lform:not(:has(.sf${n} :is(input,option[data-o]):checked)) .sv${n}>[data-o="0"]`,
+    );
   });
 
   it('risk options show the acceptance block and swap the risk phrases', () => {

@@ -98,7 +98,7 @@ export const CAPABILITIES: ReadonlyArray<{ text: string; roles: readonly Role[] 
   },
   { text: 'Add and change global access rules', roles: ['admin', 'owner'] },
   { text: 'Download the configuration export', roles: ['admin', 'owner'] },
-  { text: 'People, roles, sign-in policy, admin hosts', roles: ['owner'] },
+  { text: 'Members, roles, sign-in policy', roles: ['owner'] },
   { text: 'Allowed hosts, data retention, re-encrypt secrets', roles: ['owner'] },
 ];
 

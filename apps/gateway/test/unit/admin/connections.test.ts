@@ -6,6 +6,7 @@ import {
   loadConnections,
   UNUSED_AFTER_MS,
 } from '../../../src/admin/connections';
+import { sealedKid } from '../../../src/crypto/envelope';
 import { HOUR_MS } from '../../../src/db/rollups';
 import type { Deps } from '../../../src/deps';
 import type { AppEnv } from '../../../src/env';
@@ -165,16 +166,6 @@ describe('loadConnections', () => {
     expect((await loadConnections(at(T0))).unreadableTokenIds.size).toBe(0);
   });
 
-  it('flags an expired credential as a warning, not as inactive', async () => {
-    await seedRule(github, 'read');
-    await env.DB.prepare('UPDATE credentials SET credential_expires_at = ? WHERE id = ?')
-      .bind(T0 - 1, github)
-      .run();
-    const [edge] = (await loadConnections(at(T0))).rules;
-    expect(edge?.status).toBe('active');
-    expect(edge?.flags).toContainEqual({ status: 'credential_expired_warning' });
-  });
-
   it('flags stored conditions with warnings as risk accepted', async () => {
     await seedCredentialRule(deps, {
       credential_id: github,
@@ -282,6 +273,7 @@ describe('credentialUnreadable', () => {
     ok: true,
     error: null,
     activeKid: 'k1',
+    activeKids: ['k1'],
     missingKids: [],
     changedKids: [],
     notActiveCount: 0,
@@ -305,8 +297,10 @@ describe('credentialUnreadable', () => {
 
   it('follows the missing and changed key ids', async () => {
     const sealed = await storedSealed();
+    const kid = sealedKid(sealed.credential_sealed) as string;
+    expect(kid).toMatch(/^[0-9a-f]{16}$/);
     expect(credentialUnreadable(sealed, { ...healthy, missingKids: ['k9'] })).toBe(false);
-    expect(credentialUnreadable(sealed, { ...healthy, missingKids: ['k1'] })).toBe(true);
-    expect(credentialUnreadable(sealed, { ...healthy, changedKids: ['k1'] })).toBe(true);
+    expect(credentialUnreadable(sealed, { ...healthy, missingKids: [kid] })).toBe(true);
+    expect(credentialUnreadable(sealed, { ...healthy, changedKids: [kid] })).toBe(true);
   });
 });

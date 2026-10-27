@@ -6,7 +6,7 @@ Date: 2026-10-14
 
 ## Status
 
-Accepted
+Superseded by [0030](0030-no-admin-host-list.md)
 
 ## Context
 
@@ -43,7 +43,7 @@ The upstream host allowlist moved from a variable to Settings for the same reaso
 - Until that sign-in, `/admin` answers on every hostname of the Worker except `workers.dev`. Every admin request still needs a valid Access JWT, so nobody reaches the console without Access.
 - Every `/admin` request reads one more D1 row.
 - The admin UI has no canonical origin. Links and snippets show the hostname that the viewer uses.
-- An owner cannot remove the hostname in use. A stored value that is not valid, or a lost domain, closes `/admin` everywhere. Recovery is a `wrangler d1 execute` on the `settings` table ([break-glass](../operations/break-glass.md#lost-admin-host)). Deleting the row opens `/admin` on every non-`workers.dev` hostname again.
+- An owner cannot remove the hostname in use. A stored value that is not valid, or a lost domain, closes `/admin` everywhere. Recovery is a `wrangler d1 execute` on the `settings` table ([break-glass](../operations/break-glass.md)). Deleting the row opens `/admin` on every non-`workers.dev` hostname again.
 - A wildcard admin host also blocks every host below it as an upstream.
 - `wrangler.jsonc` still sets `keep_vars: true`. A blank committed `AUTH_ACCESS_AUD` would turn off admin sign-in, so `apps/gateway/scripts/check-config.sh` still rejects blank variables.
 

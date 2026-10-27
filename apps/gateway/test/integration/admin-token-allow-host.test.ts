@@ -39,6 +39,22 @@ async function actions(): Promise<string[]> {
   return results.map((row) => row.action);
 }
 
+const DESTINATION_SECRET = 'custom-destination-0123456789abcdef';
+
+/** A custom token at an allowed host: only a credential without a type changes its destination. */
+async function customToken(owner: Awaited<ReturnType<typeof session>>) {
+  const res = await adminPost(app, owner, '/admin/credentials', {
+    template: 'custom',
+    slug: 'custom',
+    base_url: 'https://api.github.com/v3',
+    injection_kind: 'bearer',
+    verify_path: '',
+    credential: DESTINATION_SECRET,
+  });
+  expect(res.status, await res.clone().text()).toBe(303);
+  return /svc_[0-9A-Z]{26}/.exec(res.headers.get('location') ?? '')?.[0];
+}
+
 describe('I-SSRF-1: allowing a host from the token form', () => {
   it('a blocked card shows owners a required checkbox and others who to ask, before any typing', async () => {
     const owner = await session('owner');
@@ -171,19 +187,12 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
 
   it('the destination form allows the submitted host only while the box names it', async () => {
     const owner = await session('owner');
-    const id = /svc_[0-9A-Z]{26}/.exec(
-      (
-        await adminPost(app, owner, '/admin/credentials', {
-          template: 'github',
-          credential: 'ghp_destination0123456789abcdefghijkl',
-        })
-      ).headers.get('location') ?? '',
-    )?.[0];
+    const id = await customToken(owner);
     const path = `/admin/credentials/${id}/destination`;
     const stale = await adminPost(app, owner, path, {
       base_url: 'https://api.example.com',
       injection_kind: 'bearer',
-      credential: 'ghp_destination0123456789abcdefghijkl',
+      credential: DESTINATION_SECRET,
       allow_host: 'api.other.example',
     });
     expect(stale.status).toBe(400);
@@ -191,7 +200,7 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
     const saved = await adminPost(app, owner, path, {
       base_url: 'https://api.example.com',
       injection_kind: 'bearer',
-      credential: 'ghp_destination0123456789abcdefghijkl',
+      credential: DESTINATION_SECRET,
       allow_host: 'api.example.com',
     });
     expect(saved.status).toBe(303);
@@ -202,12 +211,13 @@ describe('I-SSRF-1: allowing a host from the token form', () => {
   it('a destination refused for another reason never changes the allowlist', async () => {
     const owner = await session('owner');
     // No stored secret: the host must be confirmed first (I-CRED-2), and that is checked first.
-    const id = await seedService(app.deps, { slug: 'bare' });
+    // A custom credential, so the posted base URL is the one to allow.
+    const id = await seedService(app.deps, { slug: 'bare', base_url: 'https://api.github.com/v3' });
     const sent = network.calls.length;
     const res = await adminPost(app, owner, `/admin/credentials/${id}/destination`, {
       base_url: 'https://api.example.com',
       injection_kind: 'bearer',
-      credential: 'ghp_destination0123456789abcdefghijkl',
+      credential: DESTINATION_SECRET,
       allow_host: 'api.example.com',
     });
     expect(res.status).toBe(422);
@@ -297,20 +307,9 @@ describe('I-SSRF-1: the GitHub uploads token when uploads.github.com is not allo
 });
 
 describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
-  async function githubToken(owner: Awaited<ReturnType<typeof session>>) {
-    return /svc_[0-9A-Z]{26}/.exec(
-      (
-        await adminPost(app, owner, '/admin/credentials', {
-          template: 'github',
-          credential: 'ghp_destination0123456789abcdefghijkl',
-        })
-      ).headers.get('location') ?? '',
-    )?.[0];
-  }
-
   it('an owner gets the box from the start, and one submit allows the host and saves', async () => {
     const owner = await session('owner');
-    const id = await githubToken(owner);
+    const id = await customToken(owner);
     const html = await (
       await adminGet(app, owner, `/admin/credentials/${id}?open=destination`)
     ).text();
@@ -323,7 +322,7 @@ describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
     const res = await adminPost(app, owner, `/admin/credentials/${id}/destination`, {
       base_url: 'https://api.example.com',
       injection_kind: 'bearer',
-      credential: 'ghp_destination0123456789abcdefghijkl',
+      credential: DESTINATION_SECRET,
       allow_host: '1',
     });
     expect(res.status).toBe(303);
@@ -332,7 +331,7 @@ describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
     const again = await adminPost(app, owner, `/admin/credentials/${id}/destination`, {
       base_url: 'https://api.github.com',
       injection_kind: 'bearer',
-      credential: 'ghp_destination0123456789abcdefghijkl',
+      credential: DESTINATION_SECRET,
       allow_host: '1',
     });
     expect(again.status).toBe(303);
@@ -342,7 +341,7 @@ describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
 
   it('a non-owner gets the generated base URL pattern and no box', async () => {
     const owner = await session('owner');
-    const id = await githubToken(owner);
+    const id = await customToken(owner);
     const html = await (
       await adminGet(app, await session('admin'), `/admin/credentials/${id}?open=destination`)
     ).text();
@@ -356,7 +355,7 @@ describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
 
   it('format and allowlist errors come back together, format first', async () => {
     const owner = await session('owner');
-    const id = await githubToken(owner);
+    const id = await customToken(owner);
     const res = await adminPost(
       app,
       await session('admin'),
@@ -364,7 +363,7 @@ describe('I-SSRF-1: Change destination allows a new host in one submit', () => {
       {
         base_url: 'https://blocked.example.com',
         injection_kind: 'header',
-        credential: 'ghp_destination0123456789abcdefghijkl',
+        credential: DESTINATION_SECRET,
       },
     );
     expect(res.status).toBe(400);
@@ -388,12 +387,10 @@ describe('A7.4: create reports every check that sends nothing in one re-render',
       injection_kind: 'header',
       credential: 'custom-secret-0123456789abcdefghij',
       slug: 'foo',
-      credential_expires_at: '31/12/2027',
     });
     expect(res.status).toBe(400);
     const html = await res.text();
     const order = [
-      'Enter the expiry as a date like 2027-01-31',
       'Enter a base URL that starts with https://',
       'Enter the header name in lower case, like x-api-key',
       'Another token already uses foo; leave empty to use foo-2',

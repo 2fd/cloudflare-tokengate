@@ -64,6 +64,72 @@ describe('SideNav', () => {
       '<span class="nav-pill">1 pending<span class="vh">: decide</span></span>',
     );
   });
+
+  it('puts item counts on their own rows in grouped navigation', () => {
+    const grouped = render(
+      <SideNav
+        label="Sections"
+        grouped
+        sections={[
+          {
+            label: 'Credentials',
+            href: '/admin/credentials',
+            items: [
+              { label: 'Credentials', href: '/admin/credentials', count: 6 },
+              { label: 'Allowed hosts', href: '/admin/credentials/hosts' },
+              { label: 'Access Rules', href: '/admin/credential-access-rules', count: 3 },
+            ],
+          },
+        ]}
+      />,
+    );
+    expect(grouped).toContain(
+      '<a class="nav-item" href="/admin/credentials"><span class="nav-text">Credentials</span><span class="nav-count">6</span></a>',
+    );
+    expect(grouped).toContain(
+      '<a class="nav-item" href="/admin/credentials/hosts"><span class="nav-text">Allowed hosts</span></a>',
+    );
+    expect(grouped).toContain(
+      '<span class="nav-text">Access Rules</span><span class="nav-count">3</span>',
+    );
+  });
+
+  it('puts the attention dot after the label, with its meaning for screen readers', () => {
+    const attention = { tone: 'info' as const, srSuffix: ': 1 note' };
+    const grouped = render(
+      <SideNav
+        label="Sections"
+        grouped
+        sections={[
+          {
+            label: 'Settings',
+            href: '/admin/users',
+            pill: { label: '1 pending' },
+            items: [{ label: 'People', href: '/admin/users', attention }],
+          },
+        ]}
+      />,
+    );
+    expect(grouped).toContain(
+      '<span class="nav-text">People</span><span class="dot nav-dot info" aria-hidden="true"></span><span class="vh">: 1 note</span><span class="nav-pill">1 pending</span>',
+    );
+    const flat = render(
+      <SideNav
+        label="Sections"
+        sections={[
+          {
+            label: 'Settings',
+            href: '/admin/users',
+            open: true,
+            items: [{ label: 'People', href: '/admin/users', attention }],
+          },
+        ]}
+      />,
+    );
+    expect(flat).toContain(
+      '<a href="/admin/users">People<span class="dot nav-dot info" aria-hidden="true"></span><span class="vh">: 1 note</span></a>',
+    );
+  });
 });
 
 describe('AppShell', () => {

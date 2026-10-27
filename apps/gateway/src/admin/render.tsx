@@ -23,13 +23,17 @@ import type { AdminActor, AdminViewer } from './auth/types';
 import { adminBrand } from './branding';
 import type { Notice, PendingNotice } from './notice';
 import type { FieldError } from './ops/shared';
+import { paths } from './paths';
 import {
   type HealthProblem,
   type HealthSummary,
   healthSummary,
+  type NavAttention,
+  navAttention,
   stripProblems,
   uncheckedHealth,
 } from './shell-health';
+import { readTheme } from './theme';
 import { ErrorSummary, FocusTargets, focusTarget, NoticeView } from './views/components';
 import { documentTitle, Layout, type SectionKey } from './views/layout';
 
@@ -65,6 +69,8 @@ export interface PageProps {
    * holds the only H1 of the page. Default: a PageHeader with `title` only.
    */
   header?: Child | ((ctx: ViewContext) => Child);
+  /** Seconds after which the browser reloads the page, for a page that shows progress. */
+  refresh?: number;
   /** The Overview's alert data, so the shell does not load it a second time. */
   alertData?: AlertData;
 }
@@ -120,11 +126,13 @@ export async function renderPageFor(
     typeof props.header === 'function'
       ? props.header(view)
       : (props.header ?? <PageHeader title={props.title} />);
+  const brand = await adminBrand(deps.env.DB, url.hostname);
   return c.html(
     <Layout
-      title={documentTitle(props.title, props.section, errors.length > 0)}
+      title={documentTitle(props.title, props.section, errors.length > 0, brand.name)}
+      refresh={props.refresh}
       shell={{
-        brand: await adminBrand(deps.env.DB, url.hostname),
+        brand,
         section: props.section,
         subsection: props.subsection,
         path: url.pathname,
@@ -134,8 +142,14 @@ export async function renderPageFor(
         needsDecision: shell.needsDecision,
         counts: shell.counts,
         health: shell.health,
+        attention: shell.attention,
         // The Overview lists every problem itself.
         problems: props.section === 'monitoring' && url.pathname === '/admin' ? [] : shell.problems,
+        theme: readTheme(c),
+        // The path of a page that rendered, never its query (notices, searches) or an unknown path:
+        // the page echoes no request text. A POST re-render or an error page returns to the Overview.
+        returnTo:
+          c.req.method === 'GET' && (props.status ?? 200) === 200 ? url.pathname : paths.overview(),
       }}
     >
       {header}
@@ -171,6 +185,7 @@ interface Shell {
   needsDecision: number;
   counts: { tokens: number; rules: number; globals: number };
   health: HealthSummary;
+  attention: Record<string, NavAttention>;
   problems: HealthProblem[];
 }
 
@@ -208,7 +223,9 @@ async function loadShell(
         return null;
       }),
   ]);
-  const health = alertData ? shellHealth(alertData) : await fallbackHealth(deps);
+  const health = alertData
+    ? shellHealth(alertData, (permission) => can(role, permission))
+    : await fallbackHealth(deps);
   const holders = (permission: Permission) => {
     const roles = new Set(rolesWith(permission));
     const rows = people.filter((person) => roles.has(person.role));
@@ -247,16 +264,26 @@ async function loadShell(
   };
 }
 
-/** The health line and strip from the alert catalogue. */
-function shellHealth(data: AlertData): Pick<Shell, 'health' | 'problems'> {
-  return { health: healthSummary(overviewAlerts(data)), problems: stripProblems(data) };
+/** The health line, the sidebar dots and the strip from the alert catalogue. */
+function shellHealth(
+  data: AlertData,
+  allowed: (permission: Permission) => boolean,
+): Pick<Shell, 'health' | 'attention' | 'problems'> {
+  const alerts = overviewAlerts(data);
+  return {
+    health: healthSummary(alerts),
+    attention: navAttention(alerts, allowed),
+    problems: stripProblems(data),
+  };
 }
 
 /**
  * The health line and strip without the alert data: the keyring (cached per isolate), the schema
  * status (cached; it reads only `d1_migrations`) and the configuration (pure).
  */
-async function fallbackHealth(deps: Deps): Promise<Pick<Shell, 'health' | 'problems'>> {
+async function fallbackHealth(
+  deps: Deps,
+): Promise<Pick<Shell, 'health' | 'attention' | 'problems'>> {
   const [keyring, schema] = await Promise.all([
     loadKeyring(deps.env),
     schemaStatusByDatabase(deps),
@@ -267,7 +294,7 @@ async function fallbackHealth(deps: Deps): Promise<Pick<Shell, 'health' | 'probl
     config: configErrorsForStatus(parseConfig(deps.env)),
     cron: null,
   });
-  return { health: uncheckedHealth(problems.length), problems };
+  return { health: uncheckedHealth(problems.length), attention: {}, problems };
 }
 
 /** Audit actor for audit rows written during this admin request. */

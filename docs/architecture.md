@@ -15,10 +15,10 @@ tokengate is one Cloudflare Worker with two D1 databases. Each company deploys i
 | Component | Binding or route | Role |
 |---|---|---|
 | Proxy | `ANY /proxy/:slug`, `ANY /proxy/:slug/*` | Verifies the caller token, authorizes the request, injects the credential and forwards. |
-| Admin UI | `/admin/*` | Server-rendered pages in four sections: Monitoring (`/admin`), Credentials (`/admin/credentials`), Credential access rules (`/admin/credential-access-rules`, with issuer access rules at `/admin/issuer-access-rules`) and Users (`/admin/users`), in a sidebar shell built from `@tokengate/ui` ([ADR 0022](adr/0022-admin-ui-on-design-system-d.md)); `apps/gateway/src/admin/paths.ts` builds every URL ([ADR 0019](adr/0019-admin-information-architecture.md)). Every request is authenticated by its Cloudflare Access JWT; there are no gateway sessions and no `/auth` routes ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). |
+| Admin UI | `/admin/*` | Server-rendered pages in three sections: Monitoring (`/admin`), Credentials (credentials at `/admin/credentials`, access rules at `/admin/credential-access-rules` and `/admin/global-access-rules`) and Settings (`/admin/users`), in a sidebar shell built from `@tokengate/ui` ([ADR 0022](adr/0022-admin-ui-on-design-system-d.md)); `apps/gateway/src/admin/paths.ts` builds every URL ([ADR 0019](adr/0019-admin-information-architecture.md)). Every request is authenticated by its Cloudflare Access JWT; there are no gateway sessions and no `/auth` routes ([ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). |
 | Health | `GET /healthz`, `GET /readyz` | Liveness without I/O; readiness as booleans only. See [observability.md](observability.md). |
 | Stylesheets | `GET /static/:file` | The admin stylesheets: `ui.css` of `@tokengate/ui` and `apps/gateway/src/admin/pages.css`, bundled as text and served by the Worker at a hashed URL (`apps/gateway/src/http/static.ts`, [ADR 0022](adr/0022-admin-ui-on-design-system-d.md)). Any other `/static` path is a 404. |
-| Cron | `scheduled`, `7 * * * *` | Rollups, retention purge, credential-expiry notices, heartbeat. |
+| Cron | `scheduled`, `7 * * * *` | Rollups, retention purge, heartbeat. |
 | Queue consumer | `queue`, binding `REQUEST_LOG_QUEUE` (optional) | Batches request records into `TELEMETRY_DB`. |
 | Control plane | D1 binding `DB` | Users, credential access rules, credentials, issuer_access_rules, settings, audit log. |
 | Telemetry | D1 binding `TELEMETRY_DB` | Request log and hourly rollups. |
@@ -39,7 +39,7 @@ All bindings, variables and secrets are listed in [configuration.md](configurati
 
 1. A middleware that builds `Deps` for the request.
 2. Proxy routes (`apps/gateway/src/proxy/routes.ts`). They come before the security middleware because proxy responses carry their own header policy.
-3. The security middleware (`apps/gateway/src/http/security.ts`). It applies to every response outside `/proxy`: CSP without `script-src`, `nosniff`, `no-referrer`, HSTS on https, and `no-store` on `/admin`. It reads the admin hosts from D1 on every `/admin` request. It answers 404 for `/admin` on `workers.dev`, and, once the admin hosts are set, on any hostname that is not listed. A stored list that is not valid closes `/admin` on every hostname ([I-DEPLOY-1](threat-model.md#i-deploy-1)).
+3. The security middleware (`apps/gateway/src/http/security.ts`). It applies to every response outside `/proxy`: CSP without `script-src`, `nosniff`, `no-referrer`, HSTS on https, and `no-store` on `/admin`. It answers 404 for `/admin` on `workers.dev`, and over http on a hostname that is not a loopback host. It reads nothing from D1 for this: the Worker routes and the Access application decide the other hostnames ([I-DEPLOY-1](threat-model.md#i-deploy-1), [ADR 0030](adr/0030-no-admin-host-list.md)).
 4. Health routes (`apps/gateway/src/health.ts`).
 5. The admin middleware (`apps/gateway/src/admin/auth/middleware.tsx`).
 6. Admin pages (`apps/gateway/src/admin/routes/index.ts`).
@@ -92,9 +92,9 @@ Every proxy response carries `x-tokengate-request-id`, `x-tokengate-source` (`ga
 
 A request to `/admin/*` passes these gates (`apps/gateway/src/admin/auth/middleware.tsx`):
 
-1. Host pinning in the security middleware ([I-DEPLOY-1](threat-model.md#i-deploy-1)).
+1. The host rule in the security middleware ([I-DEPLOY-1](threat-model.md#i-deploy-1)).
 2. A verified identity: the `Cf-Access-Jwt-Assertion` header is checked against the team's keys, issuer and AUD, on every request ([I-SESS-1](threat-model.md#i-sess-1)). A missing or invalid token gets 401; unreachable team keys get 503. With no login configured, `/admin` shows the setup page (503). The local development login (`AUTH_ACCESS_DEVELOPMENT`) replaces this step only on requests to `localhost`, `127.0.0.1` or `[::1]`, and only when no Access variable is set: with both, no login works ([I-CFG-1](threat-model.md#i-cfg-1)).
-3. A user for that identity: a linked, active user, or else an invited user linked by the token's email ([I-LINK-1](threat-model.md#i-link-1)), or else the first owner, whose sign-in also stores its hostname as the first admin host ([I-BOOT-1](threat-model.md#i-boot-1)). Otherwise 403. Last-seen times are written at most every 5 minutes.
+3. A user for that identity: a linked, active user, or else an invited user linked by the token's email ([I-LINK-1](threat-model.md#i-link-1)), or else the first owner ([I-BOOT-1](threat-model.md#i-boot-1)). Otherwise 403. Last-seen times are written at most every 5 minutes.
 4. The route must be in the RBAC table in `apps/gateway/src/admin/auth/rbac.ts`. Unknown routes are denied ([I-RBAC-1](threat-model.md#i-rbac-1)).
 5. For unsafe methods, and for routes the RBAC table marks as mutating: body size cap of 64 KiB (413), then the fetch-metadata or `Origin` check and the `_csrf` field check against the `__Host-tokengate_csrf` cookie ([I-CSRF-1](threat-model.md#i-csrf-1)).
 6. The user's role must have the route's permission.
@@ -103,12 +103,11 @@ Every admin mutation lives in `apps/gateway/src/admin/ops/*`. Each op writes its
 
 ## Background work
 
-The hourly cron (`apps/gateway/src/telemetry/cron.ts`) runs these steps. Steps 1 to 3 each run even if an earlier one failed. Step 4 runs only if steps 1 to 3 succeeded.
+The hourly cron (`apps/gateway/src/telemetry/cron.ts`) runs these steps. Steps 1 and 2 each run even if the other failed. Step 3 runs only if steps 1 and 2 succeeded.
 
 1. Rollup: recompute the last 3 closed hours of `request_rollup_hourly` from `request_log`, then up to 24 older hours after the `rollup_watermark` (after a complete run, the hour before those 3). Recomputes never lower stored rollups (`apps/gateway/src/telemetry/rollup.ts`, [observability.md](observability.md#rollups)).
 2. Purge: delete request records, rollups and audit events older than their retention, and enforce `request_log_max_rows` (`apps/gateway/src/telemetry/retention.ts`). Request log deletes run in chunks of 5,000 rows, at most 40 statements per run. Retention floors are re-applied here.
-3. Credential expiry: write a `credential.expiring` audit event for a service when its credential crosses 14 days and again 3 days before `credential_expires_at`. If both thresholds are crossed at once, write one event.
-4. Heartbeat: write `cron_last_success_at`.
+3. Heartbeat: write `cron_last_success_at`.
 
 If any step failed, the cron writes `cron_last_error` and `cron_last_error_at`, logs `cron.failed` and rethrows.
 
@@ -127,7 +126,7 @@ Timestamps are integer milliseconds since the Unix epoch. IDs are `<prefix>_<ULI
 | `users` | Users: email, role (`owner`, `admin`, `token_manager`, `access_manager`, `viewer`), status (`invited`, `pending`, `active`, `suspended`), invite expiry, last refused sign-in. | Triggers `users_last_owner_update` and `users_last_owner_delete` abort any change that removes the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). |
 | `user_identities` | Login identity `(login_provider, subject)` → User. | Created only by invite linking or bootstrap ([I-LINK-1](threat-model.md#i-link-1), [I-BOOT-1](threat-model.md#i-boot-1)). |
 | `credential_access_rules` | Credential, required identity filters, issuer, `jwks_uri`, audience (16 chars or more), profile, allowed algorithms, max token age, tenant pin, anchor claims. | `profile` and credential cannot change after creation. A boundary grants no access by itself. |
-| `credentials` | Slug, base URL, injection (canonical JSON), forwarded headers, timeout, sealed credential, hint, expiry, verify check, template. | `credential_sealed` is bound to `(id, base_url, injection)` ([I-CRED-2](threat-model.md#i-cred-2)). `template_id` is display data only and not part of the binding. |
+| `credentials` | Slug, base URL, injection (canonical JSON), forwarded headers, timeout, sealed credential, hint, verify check, whether the name came from the check, template. | `credential_sealed` is bound to `(id, base_url, injection)` ([I-CRED-2](threat-model.md#i-cred-2)). `template_id` is display data only and not part of the binding. |
 | `issuer_access_rules` | Credential access rule, credential, conditions (JSON), rules (JSON), enabled, expiry. | Partial index `grants_lookup` serves the proxy query. |
 | `claim_labels` | Display label per credential access rule, claim and numeric ID, for example `repository_id` 987654321 → `acme/api`. | Display and form input only: policy evaluation never reads it. |
 | `settings` | Key → JSON value. | Runtime settings and internal state (see below). |
@@ -145,9 +144,9 @@ Runtime settings and their defaults (`apps/gateway/src/db/settings.ts`). Values 
 | `allowed_sample_rate` | 1 | 0 to 1 |
 | `request_log_max_rows` | 5,000,000 | 10,000 to 50,000,000 |
 
-Internal state keys: `bootstrap_completed_at`, `cron_last_success_at`, `cron_last_error`, `cron_last_error_at`, `keyring_kcv`, `credential_expiry_notices`, `rollup_watermark`.
+Internal state keys: `bootstrap_completed_at`, `cron_last_success_at`, `cron_last_error`, `cron_last_error_at`, `keyring_kcv`, `rollup_watermark`.
 
-Host lists: `allowed_upstream_hosts` ([upstream host allowlist](configuration.md#upstream-host-allowlist)) and `admin_hosts` ([admin hosts](configuration.md#admin-hosts)), JSON arrays (`allowed_upstream_hosts` can also be `null`). A stored value that is not a valid list denies every host.
+Host list: `allowed_upstream_hosts` ([upstream host allowlist](configuration.md#upstream-host-allowlist)), a JSON array or `null`. A stored value that is not a valid list denies every host.
 
 ```mermaid
 erDiagram
@@ -182,9 +181,9 @@ apps/gateway/src/
   app.ts                Composes routes in a fixed order. No behavior.
   deps.ts               Deps interface (env, fetch, now, random, waitUntil) and production values.
   env.ts                Typed view of vars, secrets and optional bindings.
-  config.ts             Per-feature config parsing; a malformed feature is disabled (I-CFG-1); admin host pinning predicate (I-DEPLOY-1).
+  config.ts             Per-feature config parsing; a malformed feature is disabled (I-CFG-1); admin host rule predicate (I-DEPLOY-1).
   health.ts             /healthz and /readyz; keyring and cron checks reused by the dashboard.
-  http/security.ts      Browser security headers and host pinning for non-proxy routes (I-DEPLOY-1).
+  http/security.ts      Browser security headers and the admin host rule for non-proxy routes (I-DEPLOY-1).
   http/static.ts        The admin stylesheets at hashed /static URLs (ADR 0022).
   lib/
     errors.ts           gatewayError(): the only builder of proxy error responses; codes are public.
@@ -193,14 +192,15 @@ apps/gateway/src/
     encoding.ts         base64, base64url, UTF-8 helpers.
     json.ts             JSON parsing that never throws; canonical JSON.
   crypto/
-    keyring.ts          Parses TOKENGATE_KEK / TOKENGATE_KEYRING into non-extractable keys bound to the
-                        AUTH_ACCESS_* variables (I-CRED-3); key check values.
+    keyring.ts          Parses TOKENGATE_KEK (current key) and TOKENGATE_KEYRING (next key) into
+                        non-extractable keys bound to the AUTH_ACCESS_* variables (I-CRED-3); key
+                        ids are key check values (ADR 0027).
     envelope.ts         Sealed format v1: AES-256-GCM with a per-seal DEK and destination-bound AAD (I-CRED-2).
     hash.ts             SHA-256, HMAC, constant-time comparison, random tokens.
   identity/
     jwt.ts              Token shape, unverified peek, jose verification, JWKS registry, tenant pin (I-JWT-1, I-JWT-2, I-TEN-1).
     types.ts            IssuerProfile and verified caller types.
-    profiles/           github-actions, gitlab-ci, generic: anchor rules, trusted events, tenant claims, log allowlists (I-AUTHZ-2, I-AUTHZ-3, I-TEN-1).
+    profiles/           github-actions, gitlab-ci, vercel, generic: anchor rules, trusted events, tenant claims, log allowlists (I-AUTHZ-2, I-AUTHZ-3, I-TEN-1).
   policy/
     conditions.ts       Condition evaluation; fails closed on missing or non-scalar claims (I-AUTHZ-4).
     evaluate.ts         First matching grant wins; deny by default; anchors re-checked at request time (I-AUTHZ-1..4).
@@ -262,7 +262,7 @@ Other directories:
 |---|---|
 | `apps/gateway/migrations/`, `apps/gateway/migrations-telemetry/` | D1 schemas. `pnpm run deploy` applies both. |
 | `pipelines/request-log.v1.schema.json` | Archive stream schema. |
-| `apps/gateway/scripts/keyring.ts` | Generates and checks keyring values outside Cloudflare (`pnpm keyring`). |
+| `apps/gateway/scripts/keyring.ts` | Generates and checks keys outside Cloudflare and prints their key ids (`pnpm keyring`). |
 | `apps/gateway/scripts/setup-archive.sh` | Creates the optional R2 archive. |
 | `apps/gateway/scripts/check-config.sh` | Checks `wrangler.jsonc` deployment guardrails. |
 | `scripts/check-threat-ids.sh` | Checks every invariant ID has a test `describe()`. |

@@ -76,10 +76,10 @@ Most of design D is in `ui.css` with a component. A few patterns are used by one
 
 | Page | Page-local classes |
 |---|---|
-| Shell | `#nf-sections .tcards` (the not-found page's four sections as a 2 × 2 grid) |
+| Shell | `#nf-sections .tcards` (the not-found page's three sections in one row) |
 | Monitoring | `.flink` (filter link in a cell), `.find` (Find a request in a page header, a tray header or a panel), `.tray-h > details.disc` (a disclosure as the whole tray header), `#denials .tbl th .arrow` (Top denied callers), `.tbl.log` (one-line request rows), `.notes` (empty install) |
 | Tokens | `.rot-row` (secret · expiry · submit in one row), `#tokens > .tray-h > .filters` |
-| Consumers | `.con-stack` / `.con-fields` (fields 24px apart), `.con-types`, `.con-preset`, `.con-confirm`, `.con-list`, `.con-tenant`, `ul.operations`, `.tbl th .arrow` (arrow rows on a two-line grid), the give-access gating and review (`.ga-*`), `.nw`, `.d-block` |
+| Consumers | `.con-stack` / `.con-fields` (fields 24px apart), `.con-confirm`, `.con-list`, `.con-tenant`, `ul.operations`, `.tbl th .arrow` (arrow rows on a two-line grid), the give-access gating and review (`.ga-*`), `.nw`, `.d-block` |
 | Users | `.u-role-guide` (optional role reference), `.cmap.u-rmap` (the role map: the connections map vocabulary at a 48px pitch), `.trace.u-c3`, `.u-now`, `.u-can` (the yes / no list), `.gain` / `.lose`, `.u-compare`, `.u-person`, `.u-hosts`, `.u-pad`, the `#invite` tray opened by its fragment |
 
 The mechanism: the app keeps them in its own stylesheet (for example `apps/gateway/src/admin/pages.css`), served like `ui.css` with `cssAsset('pages', text)` and linked after it. That stylesheet uses the tokens only (no hard-coded colors, the same `light-dark()` pairs), never restyles a `ui.css` class outside its own page's markup, and keeps the WCAG rules of the system (contrast, forced colors). Promoted already: the grid columns (`Grid`, `Column`), the row menu (`RowMenu`), decision items (`NeedsAttention` `who`), action cards (`ActionCards`), logo radio cards (`RadioCard.logo`), group rows (`GroupRow`), the 7th and 8th live-form fields (`LiveSlot` 1–8), the who-can-use map (`WhoCanUse`), the sparkline (`Sparkline`), compact KPIs (`Kpis columns={2}`), the plan summary (`LiveSummary variant="plan"`), `FieldGrid`, `RailFoot`, `Stack` and the one-button POST form (`ActionForm`).
@@ -149,7 +149,7 @@ Layout review (October 2026):
 
 | Pages | Composition and decision |
 |---|---|
-| People | Notices followed immediately by full-width Accounts; the role map is an optional disclosure below the list, available with or without pending decisions. |
+| Members | Notices followed immediately by full-width Accounts; the role map is an optional disclosure below the list, available with or without pending decisions. |
 | Request detail | One continuous main stack and one summary/related rail, replacing two synchronized grid rows. |
 | Overview, fresh and populated | Main-column content continues independently of the explanatory or activity rail; health checks no longer wait for the taller neighboring panel. |
 | Retention | Request settings beside a stack of summary/audit settings on desktop; one column below the grid breakpoint. |
@@ -159,7 +159,7 @@ Layout review (October 2026):
 | Allowed hosts and Encryption keys | Policy/list first; the key tools already use a parallel grid with no subsequent content forced below a tall rail. |
 | Person, credential and access-rule details | Existing `DetailLayout` columns already flow independently. |
 | New credential, new credential access rule, new issuer access rule | Keep the catalog/form and bounded summary rail; required fields remain visible. |
-| Sign-in | Bounded settings stack; FAQ anchors remain visible and reachable. |
+| FAQ | One bounded panel; its anchors stay reachable from the Members login provider tray. |
 | Not-found, missing-record and export-error pages | Compact messages/actions; export success is a download, not a layout. |
 
 The October review exercised 16 locally available views at 1440px and 390px in light and dark

@@ -46,6 +46,7 @@ export function snippetText(
   const [first, ...others] = slugs;
   const slug = first ?? '<token-slug>';
   const path = call ? call.path : '/<path>';
+  const base = `${origin}/proxy/${slug}`;
   const method = call && call.method !== 'GET' ? ` -X ${call.method}` : '';
   const more = others.length > 0 ? `  # also: ${others.join(', ')}\n` : '';
   if (rule.profile === 'github-actions') {
@@ -69,11 +70,22 @@ ${environment ? `  environment: ${yamlScalar(environment)}\n` : ''}  id_tokens:
     TOKENGATE_TOKEN:
       aud: ${yamlScalar(rule.audience)}
   script:
-    - curl -sS --fail-with-body${method} -H "x-tokengate-token: $TOKENGATE_TOKEN" "${origin}/proxy/${slug}${path}"
+    - curl -sS --fail-with-body${method} -H "x-tokengate-token: $TOKENGATE_TOKEN" "${base}${path}"
 ${more}`;
   }
+  if (rule.profile === 'vercel') {
+    // A function or build of the project; @vercel/oidc exchanges its token for this audience.
+    const init = call && call.method !== 'GET' ? `method: ${JSON.stringify(call.method)}, ` : '';
+    return `import { getVercelOidcToken } from '@vercel/oidc';
+
+const token = await getVercelOidcToken({ audience: ${JSON.stringify(rule.audience)} });
+const response = await fetch(${JSON.stringify(`${base}${path}`)}, {
+  ${init}headers: { 'x-tokengate-token': token },
+});
+${more.replace(/^ {2}#/, '//')}`;
+  }
   return `# Mint an OIDC token with audience ${rule.audience}, then:
-curl -sS --fail-with-body${method} -H "x-tokengate-token: $OIDC_TOKEN" "${origin}/proxy/${slug}${path}"
+curl -sS --fail-with-body${method} -H "x-tokengate-token: $OIDC_TOKEN" "${base}${path}"
 ${more.replace(/^ {2}/, '')}`;
 }
 

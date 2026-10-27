@@ -195,8 +195,10 @@ page. Nothing refreshes by itself: the page says when it was built and has a Ref
   hour not rolled up yet (the current hour, and the previous hour until the job has succeeded in the
   current hour).
 - **Health:** every alert (below), then "All checks": the two database schemas, the hourly job
-  (last success, last error, next run), encryption keys, sign-in, admin hosts, the optional
-  bindings and configuration problems by variable name, never by value.
+  (last success, last error, next run), encryption keys, sign-in, the optional
+  bindings and configuration problems by variable name, never by value. "All checks" is shown only
+  while a check fails; when every check passes the page has no Health section. The empty install
+  shows its errors and warnings under Get started, not its notes.
 - **Get started:** the four first steps (add a credential, add a credential access rule, give a
   issuer access rules, make the first call), shown until all four are done. Each step links to its
   form, or says whom to ask.
@@ -225,20 +227,21 @@ names every affected object. Each item links to the objects it concerns for ever
 link is shown only to the roles that can make the fix, and everyone else is told whom to ask. Owners
 can approve pending people and re-encrypt secrets from the item itself. Schema and hourly-job alerts
 link to their row of "All checks" (`/admin#check-schema`, `#check-telemetry-schema`,
-`#check-maintenance`), which is open while a check fails. Every page except the
-Overview also shows a one-line health strip for errors that are cheap to check (keys not loaded,
+`#check-maintenance`), which exists only while a check fails; the "hourly job has not run yet"
+note links to the docs instead. The sidebar health line links errors and warnings to Needs
+attention, and otherwise says "Healthy" without counting notes. Every page except the Overview also
+shows a one-line health strip for errors that are cheap to check (keys not loaded,
 missing migrations, configuration problems). The texts below are abbreviated.
 
 | Level | Condition | What to do |
 |---|---|---|
 | error | "Encryption keys are not loaded (`<error>`)" | Set or fix `TOKENGATE_KEK` / `TOKENGATE_KEYRING` ([key rotation](operations/key-rotation.md)) |
 | error | Tokens use a key the keyring no longer has | Add the key back ([key rotation](operations/key-rotation.md#remove-the-old-key)) |
-| error | A key id now holds a different key (key check value changed) | [Recover a replaced key](operations/key-rotation.md#recover-from-a-replaced-key) |
+| error | The legacy key id `k1` now holds a different key (key check value changed) | [Recover a replaced key](operations/key-rotation.md#recover-from-a-replaced-key) |
 | error | Stored secrets are damaged (not valid sealed values) | Check the base URL out of band, then set the secret again |
-| error / warning | A secret has expired / expires within 14 days | [Rotate the secret](operations/credential-rotation.md) |
 | warning | A token with issuer access ruleses has no secret | Add the secret on the token page |
 | warning | The upstream rejected a token | At least 5 and at least 50% of forwarded requests got 401/403 in the last 15 minutes. [Rotate the secret](operations/credential-rotation.md) |
-| warning | Tokens point at hosts that Allowed hosts refuses | Change the token or Credentials › Allowed hosts |
+| warning | Tokens point at hosts that Allowed hosts refuses | Change the token or Settings › Allowed hosts |
 | error | "Database `<binding>` is missing migration ..." | `pnpm wrangler d1 migrations apply <binding> --remote` ([upgrades](operations/upgrades.md)) |
 | warning | Database has migrations newer than this deployment | Expected after a rollback ([upgrades](operations/upgrades.md#roll-back)) |
 | warning | Could not read the applied migrations | Check the D1 binding |
@@ -247,7 +250,7 @@ missing migrations, configuration problems). The texts below are abbreviated.
 | warning | The hourly job last succeeded more than 2 hours ago | Same |
 | info | The hourly job has not run yet | Normal for up to an hour after the first deploy |
 | warning | A issuer access rules expires within 14 days | Extend it on the access page |
-| warning | People need a decision (pending approval or a refused sign-in) | Users › People |
+| warning | People need a decision (pending approval or a refused sign-in) | Settings › Members |
 | info | Secrets use a key other than the active key | Re-encrypt them ([key rotation](operations/key-rotation.md)) |
 | info | There is only one active owner | Invite a second owner ([break-glass](operations/break-glass.md)) |
 
@@ -264,7 +267,7 @@ none.
 
 ## Health endpoints
 
-Both endpoints are unauthenticated, are not pinned to the admin hosts, and send `cache-control:
+Both endpoints are unauthenticated, answer on every hostname, and send `cache-control:
 no-store` (`apps/gateway/src/health.ts`).
 
 **`GET /healthz`** returns `200 {"ok":true}`. It does no I/O. Use it for liveness only.
@@ -308,7 +311,7 @@ retention (days)": default 365, never less than 90.
 | Services | `service.create`, `.update`, `.enable`, `.disable`, `.delete`, `service.credential.set`, `service.credential.test` |
 | Issuer access rules | `grant.create`, `.duplicate`, `.update`, `.enable`, `.disable`, `.delete` |
 | Users | `user.invite`, `.resend_invite`, `.update` (also approve and reject), `.reset_login`, `.link`, `.bootstrap`, `.join`, `.join_defaults` |
-| System | `settings.update`, `settings.upstream_hosts`, `settings.admin_hosts`, `keyring.rewrap`, `config.export`, `credential.expiring` (hourly job, actor `system`) |
+| System | `settings.update`, `settings.upstream_hosts`, `keyring.rewrap`, `config.export` |
 
 Changes made directly in D1 (`wrangler d1 execute`) are not audited.
 

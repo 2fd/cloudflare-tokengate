@@ -17,7 +17,7 @@ In the admin UI, open **Credentials**, select **Add a token** and open the **Ant
 | Suggested grant rule | `POST /v1/messages` |
 | Host for the upstream host allowlist | `api.anthropic.com` |
 
-If **Credentials › Allowed hosts** is set and does not include `api.anthropic.com`, the card says so before you type anything. An owner ticks **Also allow api.anthropic.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
+If **Settings › Allowed hosts** is set and does not include `api.anthropic.com`, the card says so before you type anything. An owner ticks **Also allow api.anthropic.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
 
 Reference: <https://docs.anthropic.com/en/api/overview>.
 

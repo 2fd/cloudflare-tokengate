@@ -105,6 +105,7 @@ import {
   withTypedLabels,
 } from '../rule-access';
 import { templateForService } from '../service-templates';
+import { AccessRuleTabs } from '../views/access-rule-tabs';
 import {
   issuerHost,
   issuerLogo,
@@ -267,12 +268,12 @@ async function listPage(c: AdminContext) {
     c,
     {
       title: 'Credential access rules',
-      section: 'rules',
-      subsection: 'credential-rules',
+      section: 'credentials',
+      subsection: 'access-rules',
       notice: notice(c, { rule: null }),
       header: (ctx) => (
         <PageHeader
-          title="Credential access rules"
+          title="Access rules"
           count={anyFilter ? `${filtered.length} of ${total}` : total}
           description={
             <>
@@ -301,7 +302,12 @@ async function listPage(c: AdminContext) {
               </Button>
             ) : undefined
           }
-        />
+        >
+          <AccessRuleTabs
+            current="credential"
+            counts={{ credential: total, global: connections.globals.length }}
+          />
+        </PageHeader>
       ),
     },
     (ctx) => (
@@ -951,7 +957,7 @@ async function tokenBranch(
     pathSuggestions: rulePathSuggestions(shapes),
     prefix,
     ops,
-    credential: credentialText(token, data.connections.unreadableTokenIds, c.get('deps').now()),
+    credential: credentialText(token, data.connections.unreadableTokenIds),
     ...(selected && seed.action === 'add:rule' ? { extraRows: 2 } : {}),
   };
 }
@@ -1089,8 +1095,8 @@ async function renderForm(
       c,
       {
         title: 'Add credential access rule',
-        section: 'rules',
-        subsection: 'credential-rules',
+        section: 'credentials',
+        subsection: 'access-rules',
         status: options.status ?? 200,
         header: plainHeader,
       },
@@ -1150,8 +1156,8 @@ async function renderForm(
     c,
     {
       title: 'Add credential access rule',
-      section: 'rules',
-      subsection: 'credential-rules',
+      section: 'credentials',
+      subsection: 'access-rules',
       errors: seed.errors,
       errorSummary:
         seed.errors.length > 0 ? { title: 'The credential access rule was not saved' } : undefined,
@@ -1304,10 +1310,15 @@ function placeholderSeed(seed: FormSeed): FormSeed | null {
   if (!jobs) return null;
   const orgs = placeholderTenants(form.github_org);
   const groups = placeholderTenants(form.gitlab_group);
-  const ownerId = (type === 'gitlab-ci' ? groups : orgs).ids[0] ?? '1';
+  const teams = placeholderTenants(form.vercel_team, true);
+  const ownerId = (type === 'gitlab-ci' ? groups : type === 'vercel' ? teams : orgs).ids[0] ?? '1';
   const structured = jobs.editor === 'structured';
   const repository =
-    structured && jobs.repository.trim() !== '' ? 'placeholder/repository (2)' : jobs.repository;
+    structured && jobs.repository.trim() !== ''
+      ? type === 'vercel'
+        ? 'placeholder (prj_2)'
+        : 'placeholder/repository (2)'
+      : jobs.repository;
   const owner = structured ? { new_owner: '', owner_id: ownerId } : {};
   if (seed.fields) {
     return {
@@ -1318,6 +1329,7 @@ function placeholderSeed(seed: FormSeed): FormSeed | null {
         'new.github_enterprise_slug': '',
         'new.github_enterprise_id': '',
         'new.gitlab_group': groups.text,
+        'new.vercel_team': teams.text,
         [`${prefix}repository`]: repository,
         ...(structured ? { [`${prefix}new_owner`]: '', [`${prefix}owner_id`]: ownerId } : {}),
       },
@@ -1331,18 +1343,23 @@ function placeholderSeed(seed: FormSeed): FormSeed | null {
       github_enterprise_slug: '',
       github_enterprise_id: '',
       gitlab_group: groups.text,
+      vercel_team: teams.text,
     },
     jobs: { ...jobs, repository, ...owner },
   };
 }
 
-/** The IDs of a tenant field ("4242, acme (5)") as the `name (ID)` list it needs. */
-function placeholderTenants(raw: string): { ids: string[]; text: string } {
+/**
+ * The IDs of a tenant field ("4242, acme (5)") as the `name (ID)` list it needs. Vercel team IDs
+ * are `team_…`.
+ */
+function placeholderTenants(raw: string, vercel = false): { ids: string[]; text: string } {
+  const shape = vercel ? /^team_[A-Za-z0-9]{1,64}$/ : /^\d+$/;
   const typed = raw
     .split(',')
-    .map((item) => /\((\d+)\)\s*$/.exec(item)?.[1] ?? item.trim())
-    .filter((id) => /^\d+$/.test(id));
-  const ids = typed.length > 0 ? typed : ['1'];
+    .map((item) => /\(([A-Za-z0-9_]+)\)\s*$/.exec(item)?.[1] ?? item.trim())
+    .filter((id) => shape.test(id));
+  const ids = typed.length > 0 ? typed : [vercel ? 'team_1' : '1'];
   return { ids, text: ids.map((id) => `placeholder (${id})`).join(', ') };
 }
 
@@ -1376,8 +1393,8 @@ async function prefillFromRequest(c: AdminContext, data: FormData, requestId: st
       c,
       {
         title: 'Cannot give access from this request',
-        section: 'rules',
-        subsection: 'credential-rules',
+        section: 'credentials',
+        subsection: 'access-rules',
         status: 400,
         errors: [
           {
@@ -1467,9 +1484,21 @@ function jobsFromClaims(
   const event = profile.eventClaim ? claim(profile.eventClaim) : null;
   const rowsForEvent =
     reason === 'event_not_trusted' &&
+    profile.id !== 'vercel' &&
     !(profile.id === 'github-actions' && event === 'pull_request');
   if (profile.id === 'generic' || rowsForEvent) {
     return { ...jobs, editor: 'rows', cond: condRows(prefillConditions(profile, rule, claims)) };
+  }
+  if (profile.id === 'vercel') {
+    // The structured environment covers development too: the save asks to accept that opt-in.
+    const project = claim('project');
+    const projectId = claim('project_id');
+    if (project && projectId) jobs.repository = `${project} (${projectId})`;
+    const owner = claim('owner_id');
+    if (owner) jobs.owner_id = owner;
+    jobs.context = 'environment';
+    jobs.environment = claim('environment') ?? 'production';
+    return jobs;
   }
   const gitlab = profile.id === 'gitlab-ci';
   const repository = claim(gitlab ? 'project_path' : 'repository');
@@ -1507,6 +1536,7 @@ function jobsFromClaims(
 const PREFILL_EXTRA_CLAIMS: Record<string, string[]> = {
   'github-actions': ['ref', 'event_name', 'environment'],
   'gitlab-ci': ['ref', 'pipeline_source', 'environment'],
+  vercel: ['environment'],
   generic: [],
 };
 
@@ -1855,10 +1885,12 @@ function ruleErrorField(
   ) {
     if (form.type === 'generic') return 'new.generic_issuer';
     if (form.type === 'gitlab-ci') return 'new.gitlab_url';
+    if (form.type === 'vercel') return 'new.vercel_team';
     return 'new.github_enterprise_slug';
   }
   if (lower.includes('tenant pin') && !lower.includes('outside')) {
     if (form.type === 'generic') return 'new.generic_pin_claim';
+    if (form.type === 'vercel') return 'new.vercel_team';
     return form.type === 'gitlab-ci' ? 'new.gitlab_group' : 'new.github_org';
   }
   if (lower.includes('anchor claim')) return 'new.generic_anchor_claims';
@@ -2144,8 +2176,8 @@ async function renderRulePage(c: AdminContext, loaded: LoadedRule, state: PageSt
     c,
     {
       title: rule.name,
-      section: 'rules',
-      subsection: 'credential-rules',
+      section: 'credentials',
+      subsection: 'access-rules',
       errors,
       status: state.status ?? 200,
       notice: errors.length > 0 ? null : notice(c, { rule }),
@@ -2412,8 +2444,8 @@ function notFound(c: AdminContext) {
     c,
     {
       title: 'Credential access rule not found',
-      section: 'rules',
-      subsection: 'credential-rules',
+      section: 'credentials',
+      subsection: 'access-rules',
       status: 404,
       header: (
         <PageHeader

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Menu, MenuItem, MenuSeparator } from '../../src';
+import { Menu, MenuChoice, MenuItem, MenuSeparator } from '../../src';
 import { render } from '../render';
 
 describe('Menu', () => {
@@ -51,6 +51,27 @@ describe('MenuItem', () => {
   it('escapes labels and urls', () => {
     expect(render(<MenuItem href={'/a?x="1"'}>{'<b>'}</MenuItem>)).toBe(
       '<a class="menu-item" href="/a?x=&quot;1&quot;">&lt;b&gt;</a>',
+    );
+  });
+});
+
+describe('MenuChoice', () => {
+  it('is one POST form whose options are submit buttons, the current one pressed', () => {
+    const html = render(
+      <MenuChoice
+        label="Theme"
+        action="/admin/theme"
+        name="theme"
+        class="z"
+        hidden={{ _csrf: 't', return: '/admin' }}
+        options={[
+          { value: 'system', label: 'System' },
+          { value: 'dark', label: 'Dark', current: true },
+        ]}
+      />,
+    );
+    expect(html).toBe(
+      '<form class="menu-choice z" method="post" action="/admin/theme"><input type="hidden" name="_csrf" value="t"/><input type="hidden" name="return" value="/admin"/><span aria-hidden="true">Theme</span><span class="seg sm" role="group" aria-label="Theme"><button type="submit" name="theme" value="system" aria-pressed="false">System</button><button type="submit" name="theme" value="dark" aria-pressed="true">Dark</button></span></form>',
     );
   });
 });

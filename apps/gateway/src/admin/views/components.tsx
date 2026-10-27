@@ -305,10 +305,17 @@ export function TextArea(
   );
 }
 
-export type IdKind = 'github_repo' | 'github_owner_list' | 'gitlab_project' | 'gitlab_group_list';
+export type IdKind =
+  | 'github_repo'
+  | 'github_owner_list'
+  | 'gitlab_project'
+  | 'gitlab_group_list'
+  | 'vercel_project'
+  | 'vercel_team';
 
 const GITHUB_OWNER = '[A-Za-z0-9\\-]{1,39} \\([0-9]{1,20}\\)';
 const GITLAB_GROUP = '[A-Za-z0-9_.\\-]+(?:/[A-Za-z0-9_.\\-]+)* \\([0-9]{1,20}\\)';
+const VERCEL_TEAM = '[a-z0-9][a-z0-9\\-]{0,47} \\(team_[A-Za-z0-9]{1,64}\\)';
 
 /** The `name (ID)` formats of A7.8, as HTML patterns (compiled with the `v` flag by browsers). */
 export const ID_PATTERNS: Readonly<Record<IdKind, string>> = {
@@ -316,6 +323,8 @@ export const ID_PATTERNS: Readonly<Record<IdKind, string>> = {
   github_owner_list: `${GITHUB_OWNER}(?:, *${GITHUB_OWNER})*`,
   gitlab_project: '[A-Za-z0-9_.\\-]+(?:/[A-Za-z0-9_.\\-]+)+ \\([0-9]{1,20}\\)|[0-9]{1,20}',
   gitlab_group_list: `${GITLAB_GROUP}(?:, *${GITLAB_GROUP})*`,
+  vercel_project: '[a-z0-9][a-z0-9._\\-]{0,99} \\(prj_[A-Za-z0-9]{1,64}\\)|prj_[A-Za-z0-9]{1,64}',
+  vercel_team: `${VERCEL_TEAM}(?:, *${VERCEL_TEAM})*`,
 };
 
 const ID_HINTS: Readonly<Record<IdKind, (command: Child) => Child>> = {
@@ -335,10 +344,22 @@ const ID_HINTS: Readonly<Record<IdKind, (command: Child) => Child>> = {
   gitlab_group_list: (command) => (
     <>Paste the output of {command}. Add every subgroup whose projects call the gateway.</>
   ),
+  vercel_project: (command) => (
+    <>
+      Pick one used before, or run {command} in a linked directory, or copy the Project ID from
+      Project Settings › General.
+    </>
+  ),
+  vercel_team: (command) => (
+    <>
+      The slug is in the dashboard URL (vercel.com/acme); the Team ID is in Team Settings › General,
+      or the output of {command} in a linked directory.
+    </>
+  ),
 };
 
 /**
- * A numeric ID with a human label, typed as `name (ID)` (A7.8). The hint names the command whose
+ * An ID with a human label, typed as `name (ID)` (A7.8). The hint names the command whose
  * output is exactly that format; IDs stay strings end to end (they can exceed 2^53).
  */
 export function IdWithLabelField(
@@ -945,14 +966,13 @@ const SECTION_LINKS: readonly LinkCard[] = [
   {
     href: paths.tokens(),
     title: 'Credentials',
-    description: 'Credentials, allowed hosts and encryption keys',
+    description: 'Credentials, and credential and global access rules',
   },
   {
-    href: paths.accessRules(),
-    title: 'Access rules',
-    description: 'Credential and global access rules',
+    href: paths.users(),
+    title: 'Settings',
+    description: 'Members, allowed hosts, encryption keys, appearance and the FAQ',
   },
-  { href: paths.users(), title: 'Users', description: 'People and sign-in' },
 ];
 
 /** A fact about the missing object: a bold first sentence and inline text. Phrasing only. */

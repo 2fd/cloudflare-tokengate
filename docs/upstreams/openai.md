@@ -17,7 +17,7 @@ In the admin UI, open **Credentials**, select **Add a token** and open the **Ope
 | Suggested grant rules | `POST /responses`, `POST /chat/completions`, `GET /models` |
 | Host for the upstream host allowlist | `api.openai.com` |
 
-If **Credentials › Allowed hosts** is set and does not include `api.openai.com`, the card says so before you type anything. An owner ticks **Also allow api.openai.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
+If **Settings › Allowed hosts** is set and does not include `api.openai.com`, the card says so before you type anything. An owner ticks **Also allow api.openai.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
 
 Use a project API key (`sk-proj-REDACTED`). Reference: <https://platform.openai.com/docs/api-reference/authentication>.
 

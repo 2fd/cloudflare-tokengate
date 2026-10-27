@@ -64,20 +64,22 @@ describe('I-SSRF-1: template fields cannot be overridden from the form', () => {
     expect(network.calls).toEqual([]);
   });
 
-  it('checks a typed slug before the check sends the secret', async () => {
+  it('derives the slug and name of a template card; typed ones are ignored', async () => {
     const admin = await session();
     await adminPost(app, admin, '/admin/credentials', {
       template: 'slack',
       credential: 'xoxb-1111-2222-integritytest0000',
     });
-    const sent = network.calls.length;
     const res = await adminPost(app, admin, '/admin/credentials', {
       template: 'slack',
       credential: 'xoxb-3333-4444-integritytest0000',
       slug: 'slack',
+      name: 'Evil',
     });
-    expect(res.status).toBe(409);
-    expect(network.calls.length).toBe(sent);
+    expect(res.status).toBe(303);
+    const derived = await row('slack-2');
+    expect(derived).toMatchObject({ template_id: 'slack' });
+    expect(derived?.name).not.toBe('Evil');
   });
 
   it('splits a whole webhook URL: the template base stays, only the path secret is sealed', async () => {

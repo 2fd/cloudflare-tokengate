@@ -81,7 +81,7 @@ describe('I-SSRF-1: validateBaseUrl', () => {
     expect(validateBaseUrl(first.normalized, open)).toEqual(first);
   });
 
-  it('rejects the gateway hosts, wildcard admin hosts included', () => {
+  it('rejects the gateway hosts, wildcard entries included', () => {
     const ctx = { gatewayHosts: ['gate.acme.com', '*.admin.acme.com'], allowedUpstreamHosts: null };
     expect(validateBaseUrl('https://Gate.Acme.com/x', ctx).ok).toBe(false);
     expect(validateBaseUrl('https://eu.admin.acme.com/x', ctx).ok).toBe(false);

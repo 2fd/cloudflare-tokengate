@@ -54,16 +54,18 @@ describe('I-CRED-2: the credential only opens for the service, base URL and inje
 
   it('a credential sealed under a key that is no longer in the keyring does not open', async () => {
     const fx = await setupProxy();
-    fx.app.deps.env.TOKENGATE_KEK = undefined;
-    fx.app.deps.env.TOKENGATE_KEYRING = JSON.stringify({
-      active: 'k2',
-      keys: { k2: toBase64(new Uint8Array(32).fill(9)) },
-    });
+    // A replaced TOKENGATE_KEK has another key id (its check value), so the old id is not loaded.
+    fx.app.deps.env.TOKENGATE_KEK = toBase64(new Uint8Array(32).fill(9));
     await expectCredentialUnavailable(fx, 'keyring_missing_key');
   });
 
-  it('a different key under the same kid does not open', async () => {
+  it('a different key under the legacy kid k1 does not open', async () => {
     const fx = await setupProxy();
+    await env.DB.prepare(
+      "UPDATE credentials SET credential_sealed = json_set(credential_sealed, '$.kid', 'k1') WHERE id = ?",
+    )
+      .bind(fx.serviceId)
+      .run();
     fx.app.deps.env.TOKENGATE_KEK = toBase64(new Uint8Array(32).fill(7));
     await expectCredentialUnavailable(fx, 'credential_binding_mismatch');
   });

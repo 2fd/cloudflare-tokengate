@@ -41,10 +41,7 @@ export const UNUSED_AFTER_MS = 30 * DAY_MS;
 
 /** A warning shown next to the status, never instead of it. */
 export interface AccessFlag {
-  status: Extract<
-    StatusKey,
-    'credential_expired_warning' | 'risk_accepted' | 'unused' | 'global_limited'
-  >;
+  status: Extract<StatusKey, 'risk_accepted' | 'unused' | 'global_limited'>;
   detail?: string;
 }
 
@@ -135,13 +132,6 @@ export async function loadConnections(
     const global = globalStatus(rule, globalsByKey.get(rule.issuer_key) ?? [], now);
     const { status, detail } = accessStatus(rule, credential, unreadableTokenIds, now, global);
     const flags: AccessFlag[] = [];
-    if (
-      credential?.credential_sealed != null &&
-      credential.credential_expires_at !== null &&
-      credential.credential_expires_at <= now
-    ) {
-      flags.push({ status: 'credential_expired_warning' });
-    }
     if (global.kind === 'limited') flags.push({ status: 'global_limited' });
     if (hasWarnings(rule, credential)) flags.push({ status: 'risk_accepted' });
     if (

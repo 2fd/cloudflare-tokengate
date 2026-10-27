@@ -515,7 +515,6 @@ async function driveAdmin(): Promise<void> {
     template: 'custom',
     slug: 'svc-form',
     name: 'Form service',
-    description: '',
     base_url: 'https://api.formupstream.test/v2',
     injection_kind: 'bearer',
     forward_headers: '',
@@ -583,10 +582,7 @@ async function driveAdmin(): Promise<void> {
   expect(
     (await adminForm('test (passes, echoes)', `/admin/credentials/${bearerId}/test`, {})).status,
   ).toBe(200);
-  // An expiring credential produces a cron audit event that names the service.
-  await env.DB.prepare('UPDATE credentials SET credential_expires_at = ? WHERE id = ?')
-    .bind(fx.clock.now() + 2 * 86_400_000, bearerId)
-    .run();
+  // The hourly job: its log lines and settings are sinks too.
   await runCron(fx.app.deps);
   expect((await adminForm('rewrap', '/admin/credentials/keys/rewrap', {})).status).toBe(303);
 
@@ -660,7 +656,7 @@ async function driveAdmin(): Promise<void> {
   const tokensVariants = [
     '/admin/credentials/new?template=github',
     '/admin/credentials/new?template=custom',
-    '/admin/credentials?status=expiring',
+    '/admin/credentials?status=no_credential',
     '/admin/credentials?key=k1',
     `/admin/credentials/${formServiceId}?open=destination`,
     `/admin/credentials/${formServiceId}?open=details&notice=created_verified&also=host_added`,

@@ -59,15 +59,20 @@ export const paths = {
   retention: () => '/admin/retention' as const,
   /** The configuration export (POST only, from the account menu; a GET is the 404 page). */
   export: () => '/admin/export' as const,
+  /** The theme preference (POST only, from the account menu). */
+  theme: () => '/admin/theme' as const,
 
   users: (f?: {
     role?: Role;
     status?: 'active' | 'invited' | 'expired' | 'suspended';
     q?: string;
-    hash?: 'decide' | 'invite' | `user-${string}`;
+    hash?: 'decide' | 'invite' | 'login' | `user-${string}`;
   }) => build('/admin/users', { role: f?.role, status: f?.status, q: f?.q }, f?.hash),
   user: (userId: string) => `/admin/users/${id(userId)}`,
-  signIn: (hash?: 'policy' | 'hosts' | 'login') => build('/admin/users/sign-in', undefined, hash),
+  /** The join policy (POST only, from the dialog on Members). */
+  joinPolicy: () => '/admin/users/join-policy' as const,
+  faq: (hash?: 'faq-hostnames' | 'faq-authentication' | 'faq-revoke-session') =>
+    build('/admin/faq', undefined, hash),
 
   tokens: (f?: {
     status?: 'credential_unreadable' | 'expiring' | 'no_credential' | 'outside_hosts' | 'disabled';

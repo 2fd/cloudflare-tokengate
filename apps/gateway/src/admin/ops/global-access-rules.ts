@@ -22,7 +22,7 @@ import {
 import { changedLabels, listClaimLabels, upsertClaimLabelStatement } from '../../db/claim-labels';
 import type { Actor, GlobalAccessRule } from '../../db/types';
 import type { Deps } from '../../deps';
-import { getProfile } from '../../identity/profiles';
+import { getProfile, PROFILES } from '../../identity/profiles';
 import { newId } from '../../lib/ids';
 import { canonicalJson } from '../../lib/json';
 import { type CeilingChange, ceilingChange } from '../../policy/global-status';
@@ -118,7 +118,7 @@ export async function createGlobalAccessRule(
   const db = deps.env.DB;
   const profile = getProfile(String(input.profile));
   if (!profile)
-    return opFailure('invalid', ['profile must be github-actions, gitlab-ci or generic']);
+    return opFailure('invalid', [`profile must be one of ${Object.keys(PROFILES).join(', ')}`]);
   const flagErrors = [
     ...booleanErrors('enabled', input.enabled),
     ...timestampErrors('expiry', input.expires_at),

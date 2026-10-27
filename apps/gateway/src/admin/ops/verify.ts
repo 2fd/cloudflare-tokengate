@@ -14,6 +14,9 @@ const VERIFY_READ_LIMIT_BYTES = 64 * 1024;
 const VERIFY_USER_AGENT = 'cloudflare-tokengate-verify';
 const MASK = '[credential]';
 
+/** What the check reads about the credential's owner: `slack-bot` is the bot behind a Slack token. */
+export type VerifyIdentity = 'slack-bot';
+
 /** Result of calling a service's verify check with a credential. */
 export interface VerifyOutcome {
   /** Upstream HTTP status, or null when no response arrived. */
@@ -21,8 +24,8 @@ export interface VerifyOutcome {
   passed: boolean;
   /** At most VERIFY_PREVIEW_BYTES of the response body, every encoding of the credential masked. */
   bodyPreview: string;
-  /** Token expiry reported by GitHub (`github-authentication-token-expiration`), ms. */
-  expiresAt: number | null;
+  /** Display name of the credential's owner (the Slack bot name), when the check reads one. */
+  identity: string | null;
   /** Admin-facing reason when the check did not pass. */
   error: string | null;
 }
@@ -33,14 +36,20 @@ export interface VerifyOutcome {
  */
 export async function runVerifyCheck(
   deps: Pick<Deps, 'fetch' | 'now'>,
-  target: { base_url: string; injection: Injection; timeout_ms: number; verify: VerifyCheck },
+  target: {
+    base_url: string;
+    injection: Injection;
+    timeout_ms: number;
+    verify: VerifyCheck;
+    identity?: VerifyIdentity | null;
+  },
   secret: string,
 ): Promise<VerifyOutcome> {
   const failed = (error: string): VerifyOutcome => ({
     status: null,
     passed: false,
     bodyPreview: '',
-    expiresAt: null,
+    identity: null,
     error,
   });
   const { verify, injection } = target;
@@ -92,9 +101,10 @@ export async function runVerifyCheck(
     status: response.status,
     passed: error === null,
     bodyPreview: truncateUtf8(maskSecret(body, injection, secret), VERIFY_PREVIEW_BYTES),
-    expiresAt: parseGithubTokenExpiration(
-      response.headers.get('github-authentication-token-expiration'),
-    ),
+    identity:
+      error === null && target.identity === 'slack-bot'
+        ? await slackBotName(deps, { ...target, headers, timeoutMs }, secret, body)
+        : null,
     error,
   };
 }
@@ -129,33 +139,68 @@ export function maskSecret(text: string, injection: Injection, secret: string): 
 }
 
 /**
- * Parses GitHub's token expiry header, e.g. "2026-11-30 18:00:00 UTC" or "… -0800".
- * https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api
+ * The Slack bot's display name: auth.test gives the bot user's name and the bot id; bots.info
+ * (needs the users:read scope) gives the name shown in Slack. Falls back to the user name.
+ * https://docs.slack.dev/reference/methods/auth.test https://docs.slack.dev/reference/methods/bots.info
  */
-export function parseGithubTokenExpiration(value: string | null): number | null {
-  if (value === null) return null;
-  const match = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}) (UTC|[+-]\d{4})$/.exec(
-    value.trim(),
+async function slackBotName(
+  deps: Pick<Deps, 'fetch' | 'now'>,
+  target: { base_url: string; injection: Injection; headers: Headers; timeoutMs: number },
+  secret: string,
+  authTest: string,
+): Promise<string | null> {
+  const auth = jsonObject(authTest);
+  const user = displayName(auth?.user);
+  const botId = typeof auth?.bot_id === 'string' ? auth.bot_id : null;
+  if (botId === null || !/^B[A-Z0-9]{2,30}$/.test(botId)) return user;
+  const url = buildUpstreamUrl({
+    baseUrl: target.base_url,
+    path: '/bots.info',
+    search: `?bot=${botId}`,
+    injection: target.injection,
+    secret,
+  });
+  if (!url.ok) return user;
+  const result = await fetchUpstream({
+    url: url.url,
+    method: 'GET',
+    headers: target.headers,
+    body: null,
+    timeoutMs: target.timeoutMs,
+    fetch: deps.fetch,
+    now: deps.now,
+  });
+  if (!result.ok || result.response.status !== 200) return user;
+  const info = jsonObject(
+    await readBodyPrefix(result.response, VERIFY_READ_LIMIT_BYTES, target.timeoutMs),
   );
-  if (!match) return null;
-  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number) as [
-    number,
-    number,
-    number,
-    number,
-    number,
-    number,
-  ];
-  const zone = match[7] as string;
-  if (hour > 23 || minute > 59 || second > 59) return null;
-  const utc = Date.UTC(year, month - 1, day, hour, minute, second);
-  // Date.UTC rolls over out-of-range days (Feb 30 -> Mar 2); reject those.
-  const date = new Date(utc);
-  if (date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
-  if (zone === 'UTC') return utc;
-  const sign = zone.startsWith('-') ? -1 : 1;
-  const offsetMinutes = Number(zone.slice(1, 3)) * 60 + Number(zone.slice(3, 5));
-  return utc - sign * offsetMinutes * 60_000;
+  const bot = info?.ok === true ? jsonObject(info.bot) : null;
+  return displayName(bot?.name) ?? user;
+}
+
+/** A name fit for the credential name: printable, trimmed, at most 100 characters. */
+function displayName(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const name = value
+    .replace(/[\p{Cc}\p{Cf}]/gu, '')
+    .trim()
+    .slice(0, 100)
+    .trim();
+  return name === '' ? null : name;
+}
+
+function jsonObject(value: unknown): Record<string, unknown> | null {
+  let parsed = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : null;
 }
 
 /**

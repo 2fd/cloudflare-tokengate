@@ -83,6 +83,7 @@ const usersWrite: RoutePermission = { permission: 'users:write', mutates: true }
 const settingsWrite: RoutePermission = { permission: 'settings:write', mutates: true };
 const exportWrite: RoutePermission = { permission: 'config:export', mutates: true };
 const rewrap: RoutePermission = { permission: 'keyring:rewrap', mutates: true };
+const themeWrite: RoutePermission = { permission: 'read', mutates: true };
 
 /**
  * Keys are `"<METHOD> <route pattern>"`, exactly as the route is registered. Each admin section
@@ -100,11 +101,8 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, RoutePermission>> = Obje
   // == users ==
   'GET /admin/users/appearance': read,
   'POST /admin/users/appearance': settingsWrite,
-  'GET /admin/users/sign-in': read,
-  'POST /admin/users/sign-in/policy': usersWrite,
-  // Admin hosts are a deployment setting (I-DEPLOY-1), shown here because they decide where people
-  // sign in.
-  'POST /admin/users/sign-in/hosts': settingsWrite,
+  'GET /admin/faq': read,
+  'POST /admin/users/join-policy': usersWrite,
   'GET /admin/users': read,
   'POST /admin/users': usersWrite,
   'GET /admin/users/:id': read,
@@ -164,6 +162,8 @@ export const ROUTE_PERMISSIONS: Readonly<Record<string, RoutePermission>> = Obje
   // No secrets (I-CRED-1), but every user's email and the full policy: admins and owners only.
   // POST (I-CSRF-1) because it writes an audit row (I-AUDIT-1); a GET could be forged cross-site.
   'POST /admin/export': exportWrite,
+  // The theme is a cookie in the browser, not admin state: every role, CSRF-checked, not audited.
+  'POST /admin/theme': themeWrite,
 });
 
 /** Permission for a registered route, or null when the route is not in the table (deny). */

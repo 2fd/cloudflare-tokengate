@@ -3,7 +3,7 @@
 // the table; test/security/rbac-routes.test.ts checks every registered route against it.
 //
 // Order matters: the admin middleware takes the first matched route (endpointRoute), so static
-// segments come before `:id`. sign-in before users (`/admin/users/sign-in` is not a user id), and
+// segments come before `:id` (users registers `/admin/users/join-policy` before its own `:id`), and
 // token-hosts and token-keys before tokens (`/admin/credentials/hosts` is not a token id).
 // test/integration/admin-route-order.test.ts pins this.
 import type { App } from '../../app';
@@ -11,11 +11,12 @@ import { registerAppearanceRoutes } from './appearance';
 import { registerAuditRoutes } from './audit';
 import { registerCredentialAccessRulesRoutes } from './credential-access-rules';
 import { registerExportRoutes } from './export';
+import { registerFaqRoutes } from './faq';
 import { registerGlobalAccessRulesRoutes } from './global-access-rules';
 import { registerOverviewRoutes } from './overview';
 import { registerRequestsRoutes } from './requests';
 import { registerRetentionRoutes } from './retention';
-import { registerSignInRoutes } from './sign-in';
+import { registerThemeRoutes } from './theme';
 import { registerTokenHostsRoutes } from './token-hosts';
 import { registerTokenKeysRoutes } from './token-keys';
 import { registerTokensRoutes } from './tokens';
@@ -29,7 +30,7 @@ export function registerAdminRoutes(app: App): void {
   registerRetentionRoutes(app);
   // Users
   registerAppearanceRoutes(app);
-  registerSignInRoutes(app);
+  registerFaqRoutes(app);
   registerUsersRoutes(app);
   // Credentials
   registerTokenHostsRoutes(app);
@@ -40,4 +41,5 @@ export function registerAdminRoutes(app: App): void {
   registerGlobalAccessRulesRoutes(app);
   // Global
   registerExportRoutes(app);
+  registerThemeRoutes(app);
 }

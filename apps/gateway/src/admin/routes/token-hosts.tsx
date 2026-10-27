@@ -30,7 +30,7 @@ import { useContext } from 'hono/jsx';
 import type { App } from '../../app';
 import { hostListed } from '../../config';
 import { listServices } from '../../db/credentials';
-import { getAdminHosts, UPSTREAM_HOSTS_KEY } from '../../db/settings';
+import { UPSTREAM_HOSTS_KEY } from '../../db/settings';
 import { upstreamHostsFromValue } from '../../db/settings';
 import type { Service } from '../../db/types';
 import { type NoticeTable, resolveNotice } from '../notice';
@@ -73,10 +73,7 @@ export function registerTokenHostsRoutes(app: App): void {
     const deps = c.get('deps');
     let raw = '';
     if (submitted.mode === 'list') {
-      const gatewayHosts = [
-        ...((await getAdminHosts(deps.env.DB)) ?? []),
-        new URL(c.req.url).hostname,
-      ];
+      const gatewayHosts = [new URL(c.req.url).hostname];
       const errors: FieldError[] = [];
       const picked = submitted.hosts.map(upstreamHostEntry);
       const badPick = picked
@@ -164,7 +161,7 @@ async function hostsPage(
     c,
     {
       title: 'Allowed hosts',
-      section: 'tokens',
+      section: 'settings',
       subsection: 'hosts',
       notice: resolveNotice(NOTICES, c.req.query('notice'), null),
       header: (

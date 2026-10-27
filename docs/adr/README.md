@@ -21,7 +21,7 @@ Each ADR uses the format from [0001](0001-record-architecture-decisions.md): Sta
 | [0013](0013-operator-variables-outside-wrangler-config.md) | Operator variables outside `wrangler.jsonc` | Accepted |
 | [0014](0014-integrity-rules-in-sql.md) | Integrity rules and audit rows enforced in SQL | Accepted |
 | [0015](0015-cloudflare-access-only-admin-login.md) | Cloudflare Access as the only admin login, without gateway sessions | Accepted |
-| [0016](0016-admin-hosts-in-settings.md) | Admin hosts in Settings instead of `PUBLIC_URL` | Accepted |
+| [0016](0016-admin-hosts-in-settings.md) | Admin hosts in Settings instead of `PUBLIC_URL` | Superseded by [0030](0030-no-admin-host-list.md) |
 | [0017](0017-kek-bound-to-login-variables.md) | Key-encryption keys bound to the login variables | Accepted |
 | [0018](0018-role-split-and-field-permissions.md) | Role split (token and access duties) and field permissions | Superseded by [0023](0023-teams-replace-roles.md) |
 | [0019](0019-admin-information-architecture.md) | Admin information architecture and URL scheme | Accepted |
@@ -32,6 +32,10 @@ Each ADR uses the format from [0001](0001-record-architecture-decisions.md): Sta
 | [0024](0024-secret-reveal-over-ecdh.md) | Secret reveal over ECDH and one client script | Accepted |
 | [0025](0025-credential-access-boundaries.md) | Credential access boundaries replace standalone issuers | Superseded by [0026](0026-global-and-credential-access-rules.md) |
 | [0026](0026-global-and-credential-access-rules.md) | Global and credential access rules in one table | Accepted |
+| [0027](0027-two-slot-key-rotation.md) | Two-slot key rotation guided by the admin UI | Accepted |
+| [0028](0028-issuer-profiles-are-code.md) | Issuer profiles are code, not schema; the Vercel profile | Accepted |
+| [0029](0029-access-rules-are-the-only-permission-store.md) | Access rules are the only permission store | Accepted |
+| [0030](0030-no-admin-host-list.md) | No admin host list: Worker routes and the Access application decide where `/admin` answers | Accepted |
 
 ## Adding an ADR
 

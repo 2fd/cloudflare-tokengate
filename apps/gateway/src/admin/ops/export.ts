@@ -11,8 +11,8 @@ import { canonicalJson } from '../../lib/json';
 import type { Condition, Injection, Rule, VerifyCheck } from '../../policy/types';
 import { commitOrConstraintFailure, type OpFailure } from './shared';
 
-/** 4: credential and global access rules in one shape (ADR 0026); labels per rule. */
-export const EXPORT_SCHEMA_VERSION = 4;
+/** 4: credential and global access rules in one shape (ADR 0026); labels per rule. 5: credentials have no expiry. */
+export const EXPORT_SCHEMA_VERSION = 5;
 
 interface ExportedLabel {
   claim: LabelledClaim;
@@ -45,7 +45,6 @@ export interface ExportDocument {
   credentials: Array<{
     slug: string;
     name: string;
-    description: string;
     base_url: string;
     injection: Injection;
     forward_headers: string[];
@@ -57,7 +56,6 @@ export interface ExportDocument {
     credential: {
       hint: string | null;
       updated_at: number | null;
-      expires_at: number | null;
     } | null;
   }>;
   /** `credential` is the credential's slug. */
@@ -124,7 +122,6 @@ export async function buildExport(db: D1Database): Promise<ExportDocument> {
       .map((s) => ({
         slug: s.slug,
         name: s.name,
-        description: s.description,
         base_url: s.base_url,
         injection: s.injection,
         forward_headers: s.forward_headers,
@@ -138,7 +135,6 @@ export async function buildExport(db: D1Database): Promise<ExportDocument> {
             : {
                 hint: s.credential_hint,
                 updated_at: s.credential_updated_at,
-                expires_at: s.credential_expires_at,
               },
       }))
       .sort((a, b) => compare(a.slug, b.slug)),

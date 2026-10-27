@@ -209,46 +209,32 @@ function operationsText(count: number): string {
 
 /** The secret state of a token as words, for column headers, token cards and the fixed bar. */
 export function credentialText(
-  token: Pick<Service, 'id' | 'credential_sealed' | 'credential_expires_at'>,
+  token: Pick<Service, 'id' | 'credential_sealed'>,
   unreadable: ReadonlySet<string>,
-  now: number,
 ): string {
   if (token.credential_sealed === null) return 'No secret yet';
   if (unreadable.has(token.id)) return 'Secret unreadable';
-  if (token.credential_expires_at !== null && token.credential_expires_at <= now) {
-    return `Secret expired ${new Date(token.credential_expires_at).toISOString().slice(0, 10)}`;
-  }
   return 'Secret set';
 }
 
-const DAY_MS = 86_400_000;
-const EXPIRY_WARNING_MS = 14 * DAY_MS;
-
-/** A column's second line: ⏸ Disabled, ⌛ Expires in N days, ✓ Secret set, or the secret problem. */
-function ColumnState(props: { token: Service; connections: Connections; now: number }) {
-  const { token, now } = props;
+/** A column's second line: ⏸ Disabled, ✓ Secret set, or the secret problem. */
+function ColumnState(props: { token: Service; connections: Connections }) {
+  const { token } = props;
   if (!token.enabled) return <>⏸ Disabled</>;
-  const text = credentialText(token, props.connections.unreadableTokenIds, now);
+  const text = credentialText(token, props.connections.unreadableTokenIds);
   if (text !== 'Secret set') return <span class="t-bad">✕ {text}</span>;
-  const expires = token.credential_expires_at;
-  if (expires !== null && expires - now <= EXPIRY_WARNING_MS) {
-    const days = Math.max(1, Math.ceil((expires - now) / DAY_MS));
-    return <span class="t-warn">⌛ Expires in {days === 1 ? '1 day' : `${days} days`}</span>;
-  }
   return <>✓ Secret set</>;
 }
 
 /** One matrix cell per rule: the status in words, the constraint and the operations. */
 function cellOf(edge: RuleEdge, subject: string, now: number): MatrixCell {
   const unused = edge.flags.some((flag) => flag.status === 'unused');
-  const credentialExpired = edge.flags.some((flag) => flag.status === 'credential_expired_warning');
   const expires = edge.rule.expires_at;
   const operations = [
     operationsText(edge.operations.length),
     ...(expires !== null && expires > now
       ? [`until ${formatTime(new Date(expires), 'date')}`]
       : []),
-    ...(credentialExpired ? ['secret expired'] : []),
     ...(unused ? ['unused 30 days'] : []),
   ].join(' · ');
   const lead = leadStatus(edge);
@@ -314,7 +300,7 @@ export function AccessMatrix(props: {
     meta: (
       <>
         <span class="mono d-block">{token.slug}</span>
-        <ColumnState token={token} connections={connections} now={ctx.now} />
+        <ColumnState token={token} connections={connections} />
       </>
     ),
   }));

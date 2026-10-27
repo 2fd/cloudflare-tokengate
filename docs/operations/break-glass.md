@@ -33,12 +33,13 @@ Before you start:
 
 - You can run `pnpm wrangler` against the account (`pnpm wrangler login`), from a clone of the
   repository.
-- Access login works: `https://<admin host>/admin` asks you to sign in with Access, and after that shows
+- Access login works: `https://<your domain>/admin` asks you to sign in with Access, and after that shows
   the console as a viewer or a gateway page such as "Another user already has this email address"
   (not "Set up sign-in" or "Cloudflare Access did not present a valid user identity"). If it does not, fix the Access application or the `AUTH_ACCESS_*`
   variables first ([zone settings](cloudflare-zone-settings.md#cloudflare-access),
-  [configuration](../configuration.md)). If it answers `404 Not Found`, restore the admin hosts first
-  ([lost admin host](#lost-admin-host)).
+  [configuration](../configuration.md)). If it answers `404 Not Found`, use a custom domain of the Worker over https:
+  `/admin` never answers on `workers.dev` or over http
+  ([I-DEPLOY-1](../threat-model.md#i-deploy-1)).
 - Do not change the `AUTH_ACCESS_*` values unless they are wrong, and do not set
   `AUTH_ACCESS_DEVELOPMENT` to get in. The development login signs in no request through Cloudflare,
   it turns off the Access login, and any change of these variables makes every stored credential
@@ -90,7 +91,7 @@ Steps:
              'Break-glass: owner $EMAIL invited with wrangler d1 execute', NULL, NULL, NULL);"
    ```
 
-6. Within the hour, open `https://<admin host>/admin` and sign in with Access. On that first request the
+6. Within the hour, open `https://<your domain>/admin` and sign in with Access. On that first request the
    gateway links the identity, makes the user active and writes a `user.link` audit event.
 
    A login identity that is already linked to a user always signs in as that user
@@ -120,45 +121,6 @@ pnpm wrangler d1 execute DB --remote --command \
   "DELETE FROM users WHERE email = '$EMAIL' AND status = 'invited'"
 ```
 
-## Lost admin host
-
-Use this when `/admin` answers `404 Not Found` on every hostname you can use: for example after a
-domain change, or when the stored list is not valid. `/admin` answers only on the hostnames in the
-`admin_hosts` setting, and a stored value that is not a valid list denies every host
-([I-DEPLOY-1](../threat-model.md#i-deploy-1), [admin hosts](../configuration.md#admin-hosts)).
-
-1. Read the current value:
-
-   ```sh
-   pnpm wrangler d1 execute DB --remote --command \
-     "SELECT value FROM settings WHERE key = 'admin_hosts'"
-   ```
-
-2. Generate an audit event id, as in [step 4](#regain-owner-access) above:
-
-   ```sh
-   AUDIT_ID=$(node -e 'const A="0123456789ABCDEFGHJKMNPQRSTVWXYZ";let t=Date.now(),s="";for(let i=0;i<10;i++){s=A[t%32]+s;t=Math.floor(t/32)}for(const b of crypto.getRandomValues(new Uint8Array(16)))s+=A[b%32];console.log(`aud_${s}`)')
-   ```
-
-3. Set the list to the hostname you use, and write the audit row. The value is a JSON array of
-   lowercase entries, in the format of [admin hosts](../configuration.md#admin-hosts):
-
-   ```sh
-   pnpm wrangler d1 execute DB --remote --command "
-     UPDATE settings SET value = '[\"tokengate.example.com\"]', updated_at = unixepoch() * 1000, updated_by = NULL WHERE key = 'admin_hosts';
-     INSERT INTO audit_log (id, ts, actor_type, actor_id, actor_email, action, target_type, target_id, summary, diff, ip, user_agent)
-     VALUES ('$AUDIT_ID', unixepoch() * 1000, 'system', NULL, NULL, 'settings.admin_hosts', 'settings', NULL,
-             'Break-glass: admin hosts set with wrangler d1 execute', NULL, NULL, NULL);"
-   ```
-
-4. Make sure the hostname is behind your Cloudflare Access application, then open
-   `https://<hostname>/admin` and sign in. Add other hostnames in Users › Sign-in › "Admin hosts".
-
-Deleting the row (`DELETE FROM settings WHERE key = 'admin_hosts'`) also restores access, but it
-opens `/admin` on every hostname except `workers.dev` until an owner pins it in Users › Sign-in ("Answer only on <host>" or "Add host"). Every
-request still needs a valid Access JWT. Bootstrap runs only once, so no later sign-in sets the list
-again.
-
 ## Sign every admin out
 
 Use this when admin access may be stolen and you cannot wait to suspend users one by one. The gateway
@@ -172,7 +134,7 @@ Cloudflare One, not in D1.
 2. If the attacker's identity can still pass the Access policy, change the policy or the identity
    provider account first. Otherwise they sign in again.
 3. Suspend the affected users in Users. A suspended user is refused on the next request, even with a
-   valid Access session. To keep newcomers out meanwhile, set Users > "New users" to "Pending".
+   valid Access session. To keep newcomers out meanwhile, set Settings > "New users" to "Pending".
 
 This does not affect callers on `/proxy/`: they use workload identity tokens, not Access.
 

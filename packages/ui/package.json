@@ -14,7 +14,8 @@
     "./viz": "./src/components/viz/index.ts",
     "./css": "./src/css.ts",
     "./ui.css": "./src/styles/ui.css",
-    "./vite-css-text": "./vite-css-text.ts"
+    "./vite-css-text": "./vite-css-text.ts",
+    "./favicon": "./src/favicon.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

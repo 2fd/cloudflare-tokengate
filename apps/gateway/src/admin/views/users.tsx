@@ -1,5 +1,5 @@
 // Users section views (design D, @tokengate/ui): a person's status words, the state button and the
-// "Change" row menu of the People table, the role cards and dialogs of the Person page, the
+// "Change" row menu of the Members table, the role cards and dialogs of the Person page, the
 // "Needs your decision" tray, the invite tray, Compare roles and the role map. No client script:
 // row menus are `<details name>` disclosures (one open at a time), and dialogs open with invoker
 // commands, never from inside a popover. A dialog that submits another form follows that form in
@@ -48,7 +48,7 @@ import { formatTime, relativeTime } from './format';
 import { CAPABILITIES, ROLE_INFO, ROLE_ORDER, ROLE_POWERS, roleDiff, roleLabel } from './roles';
 import type { StatusKey } from './status';
 
-/** Where a row action returns to: the People list or the Person page (never a URL). */
+/** Where a row action returns to: the Members list or the Person page (never a URL). */
 export type UserReturn = 'list' | 'detail';
 
 const DAY_MS = 86_400_000;
@@ -448,7 +448,7 @@ export function PersonDialogs(props: {
 }
 
 // ---------------------------------------------------------------------------------------------
-// People: one row of the Accounts table
+// Members: one row of the Accounts table
 
 /** The "Change ▾" row menu: role items, then state actions, then View details. */
 function PersonMenu(props: { user: UserListEntry; ctx: ViewContext; error?: string | null }) {
@@ -822,7 +822,7 @@ export function RoleCards(props: { user: UserListEntry; ctx: ViewContext; error?
 }
 
 // ---------------------------------------------------------------------------------------------
-// People: Needs your decision
+// Members: Needs your decision
 
 /** Whether a person's row needs an owner's decision, and which card it gets. */
 export type DecisionCard =
@@ -1032,7 +1032,7 @@ export function DecisionTray(props: {
 }
 
 // ---------------------------------------------------------------------------------------------
-// People: Invite someone
+// Members: Invite someone
 
 /** The email pattern of the invite field (A12.8): the server's normalizeEmail decides. */
 export const EMAIL_PATTERN = '[^\\s@,;<>"]+@[A-Za-z0-9\\-]+(\\.[A-Za-z0-9\\-]+)+';
@@ -1154,7 +1154,7 @@ export function InviteTray(props: {
             <>
               Owners add, suspend and change the role of <b>every person</b>, including you.
             </>,
-            'Owners change sign-in, admin hosts, allowed hosts, data retention and encryption keys.',
+            'Owners change sign-in, allowed hosts, data retention and encryption keys.',
             'A second owner is your recovery path. Pick someone who can sign in when you cannot.',
           ]}
           confirmLabel="Invite as Owner"
@@ -1221,10 +1221,10 @@ export function CanList(props: { role: Role }) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// People: Who can change what (role map)
+// Members: Who can change what (role map)
 
 const MAP_ROLES: readonly Role[] = ['owner', 'admin', 'token_manager', 'access_manager', 'viewer'];
-const MAP_CAPS = ['Credentials', 'Access rules', 'People and settings'] as const;
+const MAP_CAPS = ['Credentials', 'Access rules', 'Members and settings'] as const;
 /** Which capability rows each role reaches (indexes into MAP_CAPS). */
 const MAP_WIRES: Readonly<Record<Role, readonly number[]>> = {
   owner: [0, 1, 2],

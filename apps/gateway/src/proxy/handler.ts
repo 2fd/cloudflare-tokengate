@@ -451,16 +451,16 @@ async function runPipeline(
 
 /**
  * I-SSRF-1 at request time: the stored base URL passes the save-time rules and is already in the
- * normalized form those rules produce. The gateway's own hosts are excluded: the admin hosts and
- * the host this request reached.
+ * normalized form those rules produce. The host this request reached is
+ * excluded: a base URL may not point at this gateway.
  */
 function storedBaseUrlValid(
   baseUrl: string,
   requestUrl: URL,
-  context: Pick<ProxyContext, 'adminHosts' | 'allowedUpstreamHosts'>,
+  context: Pick<ProxyContext, 'allowedUpstreamHosts'>,
 ): boolean {
   const checked = validateBaseUrl(baseUrl, {
-    gatewayHosts: [...(context.adminHosts ?? []), requestUrl.hostname],
+    gatewayHosts: [requestUrl.hostname],
     allowedUpstreamHosts: context.allowedUpstreamHosts,
   });
   return checked.ok && checked.normalized === baseUrl;

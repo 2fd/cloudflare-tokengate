@@ -101,9 +101,12 @@ describe('GET /admin/users', () => {
       T0,
     );
     const html = await page(await sessionFor('viewer'));
-    expect(html).toContain('<title>People – Users – tokengate</title>');
+    expect(html).toContain('<title>Members – Settings – tokengate</title>');
     expect(html).toContain('owner@example.com');
-    expect(html).not.toMatch(/<form\b[^>]*\bmethod="post"/);
+    // The theme row of the account menu is the only form: a cookie, not a change to people.
+    expect(html.replace(/<form class="menu-choice"[\s\S]*?<\/form>/, '')).not.toMatch(
+      /<form\b[^>]*\bmethod="post"/,
+    );
     expect(html).toContain('Only owners can decide.');
     expect(html).toContain('wait@example.com');
     expect(html).not.toContain('id="invite"');
@@ -198,7 +201,7 @@ describe('GET /admin/users', () => {
     const session = await sessionFor('owner');
     await adminPost(app, session, `/admin/users/${admin.id}`, { role: 'viewer' });
     const html = await page(session);
-    expect(html).toContain('<caption class="vh">People (2 shown of 2)</caption>');
+    expect(html).toContain('<caption class="vh">Members (2 shown of 2)</caption>');
     expect(html).toContain(`<tr id="user-${owner.id}"><th scope="row">`);
     expect(html).toContain(
       `href="/admin/audit?actor=${owner.id}">1 change<span class="vh"> by owner@example.com</span></a> in 30 days`,
@@ -230,16 +233,16 @@ describe('GET /admin/users', () => {
     expect(slice(html, 'id="people-h"', '</section>')).toContain(
       '<a href="/admin/users">Clear filters</a>',
     );
-    expect(html).toContain('People (1 shown of 4)');
+    expect(html).toContain('Members (1 shown of 4)');
     const late = await env.DB.prepare('SELECT id FROM users WHERE email = ?')
       .bind('late@example.com')
       .first<{ id: string }>();
     expect(late?.id).toBeTruthy();
     expect(html).not.toContain(`id="user-${late?.id}"`);
     const ignored = await page(session, '/admin/users?status=bogus&role=root');
-    expect(ignored).toContain('People (4 shown of 4)');
+    expect(ignored).toContain('Members (4 shown of 4)');
     const none = await page(session, '/admin/users?role=token_manager');
-    expect(none).toContain('No people match these filters.');
+    expect(none).toContain('No members match these filters.');
   });
 
   it('adds a search with a datalist only above 20 people, matching email and name', async () => {
@@ -251,10 +254,10 @@ describe('GET /admin/users', () => {
     const html = await page(session);
     expect(html).toContain('role="search"');
     expect(html).toContain('<option value="p3@example.com">');
-    expect(await page(session, '/admin/users?q=ZOË')).toContain('People (1 shown of 22)');
-    expect(await page(session, '/admin/users?q=P1')).toContain('People (11 shown of 22)');
+    expect(await page(session, '/admin/users?q=ZOË')).toContain('Members (1 shown of 22)');
+    expect(await page(session, '/admin/users?q=P1')).toContain('Members (11 shown of 22)');
     // `%` is a plain character, not a wildcard.
-    expect(await page(session, '/admin/users?q=%25')).toContain('No people match these filters.');
+    expect(await page(session, '/admin/users?q=%25')).toContain('No members match these filters.');
     const long = await page(session, `/admin/users?q=${'a'.repeat(300)}`);
     expect(long).toContain('Search text too long; showing everyone');
   });
@@ -301,7 +304,9 @@ describe('dialogs and implicit submission (no client script)', () => {
     expect(invokers.length).toBeGreaterThan(5);
     for (const button of invokers) expect(button).toContain('type="button"');
     // A dialog is a popover (the fallback); only its own Cancel may target anything from inside.
+    // Default access is the exception: its elevated options open their sibling confirm dialogs.
     for (const dialog of html.match(/<dialog[\s\S]*?<\/dialog>/g) ?? []) {
+      if (dialog.includes('id="dlg-policy"')) continue;
       expect(dialog).not.toContain('command="show-modal"');
     }
   });
@@ -339,7 +344,7 @@ describe('RBAC on user mutations', () => {
     for (const action of ['delete', 'dismiss-attempt']) {
       expect(routePermission('POST', `/admin/users/:id/${action}`)?.permission).toBe('users:write');
     }
-    expect(routePermission('POST', '/admin/users/sign-in/policy')?.permission).toBe('users:write');
+    expect(routePermission('POST', '/admin/users/join-policy')?.permission).toBe('users:write');
     expect(routePermission('POST', '/admin/users/defaults')).toBeNull();
     const target = await linked('r2@example.com');
     const session = await sessionFor('owner');
@@ -453,7 +458,7 @@ describe('POST /admin/users (invite)', () => {
     });
     expect(res.status).toBe(400);
     const html = await res.text();
-    expect(html).toContain('<title>Error: People – Users – tokengate</title>');
+    expect(html).toContain('<title>Error: Members – Settings – tokengate</title>');
     expect(html).toContain('<a href="#f-email">Enter an email address like alex@acme.com.</a>');
     expect(html).toContain('value="not an email"');
     expect(html).toMatch(/id="f-email"[^>]*aria-invalid="true"/);

@@ -6,6 +6,7 @@ import { env } from 'cloudflare:workers';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { destinationFingerprint } from '../../src/admin/ops/credentials';
 import { SERVICE_TEMPLATES } from '../../src/admin/service-templates';
+import { loadKeyring } from '../../src/crypto/keyring';
 import { getService } from '../../src/db/credentials';
 import type { Role } from '../../src/db/types';
 import { toBase64 } from '../../src/lib/encoding';
@@ -17,17 +18,21 @@ import {
   loginAs,
   resetControlPlane,
 } from '../helpers/admin-auth';
-import { createTestApp, type TestApp } from '../helpers/app';
+import { createTestApp, TEST_ACCESS_ENV, type TestApp } from '../helpers/app';
 
 const KEK = toBase64(new Uint8Array(32).fill(7));
 const SECRET = 'sk-proj-test0123456789abcdefghijWXYZ';
 const BAD_SECRET = 'sk-proj-wrong000000000000000000000';
 const GH_SECRET = 'ghp_ghtest0123456789abcdefghijklmnQRST';
-const GH_EXPIRY = '2031-03-04 05:06:07 UTC';
+const SLACK_SECRET = 'xoxb-1111-2222-abcdefghijklmnopWXYZ';
 
-/** Fake upstreams: OpenAI /models answers 200 only for SECRET; GitHub reports an expiry. */
+/**
+ * Fake upstreams: OpenAI /models answers 200 only for SECRET; GitHub answers 200; Slack's
+ * auth.test names the bot B0123ABC and bots.info its display name, `slackBot.name`.
+ */
 function fakeUpstream() {
   const calls: string[] = [];
+  const slackBot = { name: 'Deploy Bot' };
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     calls.push(url.href);
@@ -37,15 +42,22 @@ function fakeUpstream() {
         ? Response.json({ data: [] })
         : Response.json({ error: 'invalid key' }, { status: 401 });
     }
-    if (url.hostname === 'api.github.com') {
-      return Response.json(
-        {},
-        { headers: { 'github-authentication-token-expiration': GH_EXPIRY } },
-      );
+    if (url.hostname === 'api.github.com') return Response.json({});
+    if (url.hostname === 'slack.com' && auth === `Bearer ${SLACK_SECRET}`) {
+      return url.pathname === '/api/bots.info'
+        ? Response.json({ ok: true, bot: { id: 'B0123ABC', name: slackBot.name } })
+        : Response.json({ ok: true, user: 'deploy-bot', bot_id: 'B0123ABC' });
     }
     return new Response('not found', { status: 404 });
   };
-  return { fetch: fetchImpl, calls };
+  return { fetch: fetchImpl, calls, slackBot };
+}
+
+/** Key id of KEK: its key check value (ADR 0027). */
+async function kekKid(): Promise<string> {
+  const loaded = await loadKeyring({ ...TEST_ACCESS_ENV, TOKENGATE_KEK: KEK });
+  if (!loaded.ok) throw new Error(loaded.error);
+  return loaded.keyring.activeKid;
 }
 
 let app: TestApp;
@@ -75,9 +87,6 @@ async function serviceRow(slug: string) {
     .bind(slug)
     .first<Record<string, unknown>>();
 }
-
-/** Tomorrow as a date field value (an expiring secret). */
-const tomorrow = () => new Date(Date.now() + 86_400_000).toISOString().slice(0, 10);
 
 const CUSTOM_FORM = {
   template: 'custom',
@@ -227,9 +236,10 @@ describe('token list', () => {
     expect(missing).toContain(
       '<a class="btn sm secondary" href="/admin/credentials">Show all tokens</a>',
     );
-    const byKey = await (await adminGet(app, admin, '/admin/credentials?key=k1')).text();
+    const kid = await kekKid();
+    const byKey = await (await adminGet(app, admin, `/admin/credentials?key=${kid}`)).text();
     expect(byKey).toContain('Credentials (1)');
-    expect(byKey).toContain('Key k1');
+    expect(byKey).toContain(`Key ${kid}`);
     const unknown = await (
       await adminGet(app, admin, '/admin/credentials?status=<b>x</b>&key=zz')
     ).text();
@@ -278,12 +288,14 @@ describe('token list', () => {
   it('keeps the key filter in the status links and the search', async () => {
     const admin = await sessionFor('admin');
     await createCustom(admin, { slug: 'api-0' });
-    await createCustom(admin, { slug: 'api-1', credential_expires_at: tomorrow() });
-    const html = await (await adminGet(app, admin, '/admin/credentials?key=k1')).text();
-    expect(html).toContain('href="/admin/credentials?key=k1"');
-    expect(html).toContain('href="/admin/credentials?status=expiring&amp;key=k1"');
+    await createCustom(admin, { slug: 'api-1' });
+    await env.DB.prepare("UPDATE credentials SET enabled = 0 WHERE slug = 'api-1'").run();
+    const kid = await kekKid();
+    const html = await (await adminGet(app, admin, `/admin/credentials?key=${kid}`)).text();
+    expect(html).toContain(`href="/admin/credentials?key=${kid}"`);
+    expect(html).toContain(`href="/admin/credentials?status=disabled&amp;key=${kid}"`);
     const form = /<form class="filters" role="search"[\s\S]*?<\/form>/.exec(html)?.[0] ?? '';
-    expect(form).toContain('<input type="hidden" name="key" value="k1"/>');
+    expect(form).toContain(`<input type="hidden" name="key" value="${kid}"/>`);
     const none = await (await adminGet(app, admin, '/admin/credentials')).text();
     const plain = /<form class="filters" role="search"[\s\S]*?<\/form>/.exec(none)?.[0] ?? '';
     expect(plain).toContain('name="q"');
@@ -398,7 +410,7 @@ describe('create', () => {
     expect(page).not.toContain(SECRET);
   });
 
-  it('derives a free slug and name on a clash, and refuses a typed taken slug before the check', async () => {
+  it('derives a free slug and name on a clash; a template card has no slug or name fields', async () => {
     const admin = await sessionFor('admin');
     await createOpenAi(admin);
     await createOpenAi(admin);
@@ -406,20 +418,12 @@ describe('create', () => {
     const form = await (
       await adminGet(app, admin, '/admin/credentials/new?template=openai')
     ).text();
-    expect(form).toContain('placeholder="openai-3"');
-    expect(form).toContain('placeholder="OpenAI 3"');
+    expect(form).not.toContain('id="f-openai-slug"');
+    expect(form).not.toContain('id="f-openai-name"');
 
-    const calls = upstream.calls.length;
-    const taken = await adminPost(app, admin, '/admin/credentials', {
-      template: 'openai',
-      credential: SECRET,
-      slug: 'openai',
-    });
-    expect(taken.status).toBe(409);
-    const html = await taken.text();
-    expect(html).toContain('Another token already uses openai; leave empty to use openai-3');
-    expect(html).toContain('href="#f-openai-slug"');
-    expect(upstream.calls.length).toBe(calls);
+    await createOpenAi(admin, { slug: 'typed', name: 'Typed' });
+    expect(await serviceRow('openai-3')).toMatchObject({ name: 'OpenAI 3' });
+    expect(await serviceRow('typed')).toBeNull();
   });
 
   it('a custom token maps the per-kind fields and derives its slug from the host', async () => {
@@ -466,20 +470,19 @@ describe('create', () => {
     expect(upstream.calls).toEqual([]);
   });
 
-  it('reports a bad expiry and a taken slug in the same re-render, before anything is sent', async () => {
+  it('reports a taken slug before anything is sent', async () => {
     const admin = await sessionFor('admin');
     await createOpenAi(admin);
     const calls = upstream.calls.length;
     const res = await adminPost(app, admin, '/admin/credentials', {
-      template: 'openai',
+      ...CUSTOM_FORM,
       credential: SECRET,
       slug: 'openai',
-      credential_expires_at: '31/12/2027',
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(409);
     const html = await res.text();
-    expect(html).toContain('href="#f-openai-credential_expires_at"');
     expect(html).toContain('Another token already uses openai; leave empty to use openai-2');
+    expect(html).toContain('href="#f-custom-slug"');
     expect(upstream.calls.length).toBe(calls);
   });
 
@@ -495,15 +498,23 @@ describe('create', () => {
     expect(card).not.toContain('Leave empty to use the placeholder.');
   });
 
-  it('rejects a malformed expiry date', async () => {
-    const res = await adminPost(app, await sessionFor('admin'), '/admin/credentials', {
-      template: 'openai',
-      credential: SECRET,
-      credential_expires_at: '31/12/2027',
+  it('names a Slack token without a typed name after its bot; a typed name is kept', async () => {
+    const admin = await sessionFor('admin');
+    const res = await adminPost(app, admin, '/admin/credentials', {
+      template: 'slack',
+      credential: SLACK_SECRET,
     });
-    expect(res.status).toBe(400);
-    expect(await res.text()).toContain('2027-01-31');
-    expect(await auditActions()).toEqual([]);
+    expect(res.status, await res.clone().text()).toBe(303);
+    expect(await serviceRow('slack')).toMatchObject({ name: 'Deploy Bot', name_from_check: 1 });
+    const page = await (await adminGet(app, admin, `/admin/credentials/${idFrom(res)}`)).text();
+    expect(page).toContain('Deploy Bot');
+
+    // A typed name renames the credential and stops the check from renaming it.
+    const renamed = await adminPost(app, admin, `/admin/credentials/${idFrom(res)}`, {
+      name: 'Alerts',
+    });
+    expect(renamed.status, await renamed.clone().text()).toBe(303);
+    expect(await serviceRow('slack')).toMatchObject({ name: 'Alerts', name_from_check: 0 });
   });
 
   it('keeps the secret as a draft after a failed check; "Save without a passing check" saves', async () => {
@@ -556,8 +567,6 @@ describe('create', () => {
       template_id: 'github-uploads',
       credential_hint: api?.credential_hint,
     });
-    expect(api?.credential_expires_at).toBe(Date.UTC(2031, 2, 4, 5, 6, 7));
-    expect(uploads?.credential_expires_at).toBe(Date.UTC(2031, 2, 4, 5, 6, 7));
     expect(await auditActions()).toEqual(['service.create', 'service.create']);
   });
 
@@ -575,7 +584,7 @@ describe('create', () => {
 
   it('escapes names containing markup', async () => {
     const admin = await sessionFor('admin');
-    const id = await createOpenAi(admin, { name: '<script>alert(1)</script>' });
+    const id = await createCustom(admin, { name: '<script>alert(1)</script>' });
     for (const path of ['/admin/credentials', `/admin/credentials/${id}`]) {
       const html = await (await adminGet(app, admin, path)).text();
       expect(html).not.toContain('<script>alert(1)</script>');
@@ -712,7 +721,6 @@ describe('details form', () => {
       name: 'OpenAI prod',
       timeout_ms: '300000',
       verify_path: '/models',
-      credential_expires_at: '2030-06-01',
       base_url: 'https://evil.example.com',
     });
     expect(res.status).toBe(303);
@@ -721,7 +729,6 @@ describe('details form', () => {
       name: 'OpenAI prod',
       timeout_ms: 300000,
       base_url: 'https://api.openai.com/v1',
-      credential_expires_at: Date.UTC(2030, 5, 1),
     });
     expect(await auditActions()).toEqual(['service.create', 'service.update']);
   });
@@ -741,7 +748,7 @@ describe('details form', () => {
     expect(await auditActions()).toEqual(['service.create']);
   });
 
-  it('refuses a save over a newer change with 409 and keeps the stored time of day', async () => {
+  it('refuses a save over a newer change with 409', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
     const page = await (await adminGet(app, admin, `/admin/credentials/${id}?open=details`)).text();
@@ -757,37 +764,50 @@ describe('details form', () => {
     });
     expect(stale.status).toBe(409);
     expect(await stale.text()).toContain('changed by someone else since you opened this page');
+    expect((await serviceRow('openai'))?.name).toBe('First');
+  });
 
-    const stored = Date.UTC(2030, 0, 15, 13, 45);
-    await env.DB.prepare('UPDATE credentials SET credential_expires_at = ? WHERE id = ?')
-      .bind(stored, id)
-      .run();
-    await adminPost(app, admin, `/admin/credentials/${id}`, {
-      name: 'Renamed',
-      credential_expires_at: '2030-01-15',
+  it('a name typed here stops following the Slack bot name', async () => {
+    const admin = await sessionFor('admin');
+    const id = idFrom(
+      await adminPost(app, admin, '/admin/credentials', {
+        template: 'slack',
+        credential: SLACK_SECRET,
+      }),
+    );
+    expect(await serviceRow('slack')).toMatchObject({ name: 'Deploy Bot', name_from_check: 1 });
+    // The details form posts every field: the Slack check stays as it was.
+    const res = await adminPost(app, admin, `/admin/credentials/${id}`, {
+      name: 'Alerts',
+      verify_method: 'POST',
+      verify_path: '/auth.test',
+      verify_expect_status: '200',
+      verify_expect_ok_field: '1',
     });
-    expect((await serviceRow('openai'))?.credential_expires_at).toBe(stored);
+    expect(res.status).toBe(303);
+    expect(await serviceRow('slack')).toMatchObject({ name: 'Alerts', name_from_check: 0 });
+    upstream.slackBot.name = 'Release Bot';
+    const tested = await adminPost(app, admin, `/admin/credentials/${id}/test`);
+    expect(tested.status).toBe(200);
+    expect(await tested.text()).toContain('The secret belongs to Release Bot.');
+    expect((await serviceRow('slack'))?.name).toBe('Alerts');
   });
 });
 
 describe('rotate (POST /admin/credentials/:id/secret)', () => {
-  it('the inline form has only the secret and the prefilled future expiry', async () => {
+  it('the Replace secret dialog has only the secret and the destination digest', async () => {
     const admin = await sessionFor('admin');
-    const id = await createOpenAi(admin, { credential_expires_at: '2032-01-01' });
+    const id = await createOpenAi(admin);
     const html = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
+    const dialog = /<dialog[^>]*id="dlg-replace"[\s\S]*?<\/dialog>/.exec(html)?.[0] ?? '';
     const form =
       new RegExp(
         `<form method="post" action="/admin/credentials/${id}/secret"[\\s\\S]*?</form>`,
-      ).exec(html)?.[0] ?? '';
+      ).exec(dialog)?.[0] ?? '';
     const names = [...form.matchAll(/ name="([^"]+)"/g)].map((match) => match[1]);
-    expect(names.sort()).toEqual([
-      '_csrf',
-      'credential',
-      'credential_expires_at',
-      'expected_destination',
-    ]);
-    expect(form).toContain('value="2032-01-01"');
-    expect(form).toContain('Sent to api.openai.com. Replaces …WXYZ');
+    expect(names.sort()).toEqual(['_csrf', 'credential', 'expected_destination']);
+    expect(form).toContain('Sent to api.openai.com.');
+    expect(form).toContain('Replaces …WXYZ');
     // A digest of the destination, never the destination itself (I-CRED-2).
     expect(form).toContain(
       `name="expected_destination" value="${(await rotateFields(id)).expected_destination}"`,
@@ -795,27 +815,13 @@ describe('rotate (POST /admin/credentials/:id/secret)', () => {
     expect(form).not.toMatch(/value="https:/);
   });
 
-  it('does not prefill a past or near expiry', async () => {
+  it('keeps the stored destination and ignores a posted base URL', async () => {
     const admin = await sessionFor('admin');
     const id = await createOpenAi(admin);
-    await env.DB.prepare('UPDATE credentials SET credential_expires_at = ? WHERE id = ?')
-      .bind(Date.now() - 86_400_000, id)
-      .run();
-    const html = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
-    const form =
-      new RegExp(`action="/admin/credentials/${id}/secret"[\\s\\S]*?</form>`).exec(html)?.[0] ?? '';
-    expect(form).toMatch(/name="credential_expires_at" type="date" value=""/);
-    expect(html).toContain('The old secret expired on');
-  });
-
-  it('keeps the stored destination, ignores a posted base URL and keeps an unchanged expiry', async () => {
-    const admin = await sessionFor('admin');
-    const id = await createOpenAi(admin, { credential_expires_at: '2032-01-01' });
     const before = await serviceRow('openai');
     const res = await adminPost(app, admin, `/admin/credentials/${id}/secret`, {
       ...(await rotateFields(id)),
       credential: SECRET,
-      credential_expires_at: '2032-01-01',
       base_url: 'https://evil.example.com',
       injection_kind: 'query',
     });
@@ -826,7 +832,6 @@ describe('rotate (POST /admin/credentials/:id/secret)', () => {
     const after = await serviceRow('openai');
     expect(after?.base_url).toBe('https://api.openai.com/v1');
     expect(after?.injection).toBe('{"kind":"bearer"}');
-    expect(after?.credential_expires_at).toBe(Date.UTC(2032, 0, 1));
     expect(after?.credential_sealed).not.toBe(before?.credential_sealed);
     expect(upstream.calls.filter((call) => call.includes('evil'))).toEqual([]);
   });
@@ -834,30 +839,32 @@ describe('rotate (POST /admin/credentials/:id/secret)', () => {
   it('refuses a token repointed since the page was loaded: 409, nothing sent, nothing written, no draft', async () => {
     const admin = await sessionFor('admin');
     const other = await sessionFor('token_manager');
-    const id = await createOpenAi(admin);
+    // Only a custom credential can change its destination.
+    const id = await createCustom(admin, { slug: 'custom' });
     const loaded = await rotateFields(id);
     // Another credential manager repoints it (with a dummy secret of their own) after A loaded the page.
     const repoint = await adminPost(app, other, `/admin/credentials/${id}/destination`, {
       base_url: 'https://api.attacker.example/v1',
       injection_kind: 'bearer',
-      credential: BAD_SECRET,
+      credential: 'attacker-dummy-0123456789abcdef',
       save_anyway: '1',
     });
     expect(repoint.status).toBe(303);
-    const row = await serviceRow('openai');
+    const row = await serviceRow('custom');
     const audits = (await auditActions()).length;
     const calls = upstream.calls.length;
+    const rotated = 'custom-rotated-0123456789abcdefWXYZ';
     const res = await adminPost(app, admin, `/admin/credentials/${id}/secret`, {
       ...loaded,
-      credential: SECRET,
+      credential: rotated,
     });
     expect(res.status).toBe(409);
     const html = await res.text();
     expect(html).toContain('it now sends the secret to api.attacker.example');
     expect(html).not.toContain('name="credential_draft"');
-    expect(html).not.toContain(SECRET);
+    expect(html).not.toContain(rotated);
     expect(upstream.calls.slice(calls)).toEqual([]);
-    expect(await serviceRow('openai')).toEqual(row);
+    expect(await serviceRow('custom')).toEqual(row);
     expect((await auditActions()).length).toBe(audits);
     // The re-rendered form names the new destination and carries its digest.
     expect(html).toContain('Sent to api.attacker.example.');
@@ -875,28 +882,37 @@ describe('rotate (POST /admin/credentials/:id/secret)', () => {
     expect(upstream.calls.slice(calls)).toEqual([]);
   });
 
-  it('reads a GitHub expiry from the check (no expiry field)', async () => {
+  it('a new Slack secret renames a token named after its bot', async () => {
     const admin = await sessionFor('admin');
     const id = idFrom(
       await adminPost(app, admin, '/admin/credentials', {
-        template: 'github',
-        credential: GH_SECRET,
+        template: 'slack',
+        credential: SLACK_SECRET,
       }),
     );
-    const html = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
-    const form =
-      new RegExp(`action="/admin/credentials/${id}/secret"[\\s\\S]*?</form>`).exec(html)?.[0] ?? '';
-    expect(form).not.toContain('credential_expires_at');
-    expect(html).toContain('(read from GitHub)');
-    await env.DB.prepare('UPDATE credentials SET credential_expires_at = NULL WHERE id = ?')
-      .bind(id)
-      .run();
+    upstream.slackBot.name = 'Release Bot';
     const res = await adminPost(app, admin, `/admin/credentials/${id}/secret`, {
       ...(await rotateFields(id)),
-      credential: GH_SECRET,
+      credential: SLACK_SECRET,
     });
     expect(res.status).toBe(303);
-    expect((await serviceRow('github'))?.credential_expires_at).toBe(Date.UTC(2031, 2, 4, 5, 6, 7));
+    expect(await serviceRow('slack')).toMatchObject({ name: 'Release Bot', name_from_check: 1 });
+  });
+
+  it('re-renders the Replace secret dialog open after a failed check', async () => {
+    const admin = await sessionFor('admin');
+    const id = await createOpenAi(admin);
+    const res = await adminPost(app, admin, `/admin/credentials/${id}/secret`, {
+      ...(await rotateFields(id)),
+      credential: BAD_SECRET,
+    });
+    expect(res.status).toBe(422);
+    const html = await res.text();
+    expect(html).toMatch(/<dialog[^>]*id="dlg-replace"[^>]*open=""/);
+    const dialog = /<dialog[^>]*id="dlg-replace"[\s\S]*?<\/dialog>/.exec(html)?.[0] ?? '';
+    expect(dialog).toContain('name="save_anyway" value="1"');
+    expect(dialog).toMatch(/name="credential_draft" value="cd1\./);
+    expect(dialog).not.toContain(BAD_SECRET);
   });
 
   it('is refused with 422 while the stored binding is not attested, pointing to Change destination', async () => {
@@ -986,9 +1002,13 @@ describe('rotate (POST /admin/credentials/:id/secret)', () => {
 describe('change destination (POST /admin/credentials/:id/destination)', () => {
   it('re-seals with a new destination; a failed check keeps a draft for "Save without"', async () => {
     const admin = await sessionFor('admin');
-    const id = await createOpenAi(admin);
-    const before = await serviceRow('openai');
-    const fields = { base_url: 'https://api.openai.com/v2', injection_kind: 'bearer' };
+    const id = await createCustom(admin, {
+      slug: 'custom',
+      verify_path: '/models',
+      credential: SECRET,
+    });
+    const before = await serviceRow('custom');
+    const fields = { base_url: 'https://api.example.com/v2', injection_kind: 'bearer' };
     const failed = await adminPost(app, admin, `/admin/credentials/${id}/destination`, {
       ...fields,
       credential: BAD_SECRET,
@@ -996,10 +1016,10 @@ describe('change destination (POST /admin/credentials/:id/destination)', () => {
     expect(failed.status).toBe(422);
     const html = await failed.text();
     expect(html).toMatch(/<details[^>]*id="destination-edit"[^>]*open=""/);
-    expect(html).toContain('value="https://api.openai.com/v2"');
+    expect(html).toContain('value="https://api.example.com/v2"');
     expect(html).not.toContain(BAD_SECRET);
     const draft = /name="credential_draft" value="([^"]+)"/.exec(html)?.[1] ?? '';
-    expect(await serviceRow('openai')).toEqual(before);
+    expect(await serviceRow('custom')).toEqual(before);
 
     const saved = await adminPost(app, admin, `/admin/credentials/${id}/destination`, {
       ...fields,
@@ -1010,18 +1030,17 @@ describe('change destination (POST /admin/credentials/:id/destination)', () => {
     expect(saved.headers.get('location')).toBe(
       `/admin/credentials/${id}?notice=destination_changed#destination`,
     );
-    const after = await serviceRow('openai');
-    expect(after?.base_url).toBe('https://api.openai.com/v2');
-    // No longer the OpenAI template's destination.
+    const after = await serviceRow('custom');
+    expect(after?.base_url).toBe('https://api.example.com/v2');
     expect(after?.template_id).toBeNull();
     expect(await auditActions()).toEqual(['service.create', 'service.credential.set']);
   });
 
   it('requires the secret', async () => {
     const admin = await sessionFor('admin');
-    const id = await createOpenAi(admin);
+    const id = await createCustom(admin);
     const res = await adminPost(app, admin, `/admin/credentials/${id}/destination`, {
-      base_url: 'https://api.openai.com/v1',
+      base_url: 'https://api.example.com/v1',
       injection_kind: 'header',
       injection_header_name: 'X-Api-Key',
     });
@@ -1030,17 +1049,20 @@ describe('change destination (POST /admin/credentials/:id/destination)', () => {
     expect(await auditActions()).toEqual(['service.create']);
   });
 
-  it('recomputes the template when a destination becomes a template one', async () => {
+  it('recomputes the template when a destination becomes a template one, which fixes it', async () => {
     const admin = await sessionFor('admin');
-    const id = await createCustom(admin, { base_url: 'https://api.github.com' });
-    expect((await serviceRow('github'))?.template_id).toBe('github');
+    const id = await createCustom(admin, { slug: 'gh', base_url: 'https://api.github.com/v3' });
+    expect((await serviceRow('gh'))?.template_id).toBeNull();
     const res = await adminPost(app, admin, `/admin/credentials/${id}/destination`, {
-      base_url: 'https://api.github.com/v3',
+      base_url: 'https://api.github.com',
       injection_kind: 'bearer',
       credential: GH_SECRET,
     });
     expect(res.status).toBe(303);
-    expect((await serviceRow('github'))?.template_id).toBeNull();
+    expect((await serviceRow('gh'))?.template_id).toBe('github');
+    // A type's destination is fixed: the page offers no Change destination any more.
+    const page = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
+    expect(page).not.toContain(`href="/admin/credentials/${id}?open=destination#destination"`);
   });
 });
 
@@ -1057,25 +1079,27 @@ describe('test, toggle, delete', () => {
     expect(await auditActions()).toEqual(['service.create', 'service.credential.test']);
   });
 
-  it('a test that reads a new GitHub expiry saves it as its own audited change', async () => {
+  it('a test that reads a new Slack bot name renames the token as its own audited change', async () => {
     const admin = await sessionFor('admin');
     const id = idFrom(
       await adminPost(app, admin, '/admin/credentials', {
-        template: 'github',
-        credential: GH_SECRET,
+        template: 'slack',
+        credential: SLACK_SECRET,
       }),
     );
-    await env.DB.prepare('UPDATE credentials SET credential_expires_at = 1 WHERE id = ?')
-      .bind(id)
-      .run();
+    upstream.slackBot.name = 'Release Bot';
     const res = await adminPost(app, admin, `/admin/credentials/${id}/test`);
     expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('The secret belongs to Release Bot.');
+    // The page reads the row again: the new name is shown at once.
+    expect(html).toContain('<title>Release Bot');
     expect(await auditActions()).toEqual([
       'service.create',
       'service.credential.test',
       'service.update',
     ]);
-    expect((await serviceRow('github'))?.credential_expires_at).toBe(Date.UTC(2031, 2, 4, 5, 6, 7));
+    expect((await serviceRow('slack'))?.name).toBe('Release Bot');
   });
 
   it('disables with an "Enable again" undo, and enables', async () => {
@@ -1141,7 +1165,8 @@ describe('test, toggle, delete', () => {
 describe('review: forms and notices', () => {
   it('puts a CSRF token in every POST form of the token page', async () => {
     const admin = await sessionFor('admin');
-    const id = await createOpenAi(admin);
+    // A custom credential: a typed one has no destination form.
+    const id = await createCustom(admin, { verify_path: '/models', credential: SECRET });
     // test, rotate, disable, delete (+ the account menu export), and the one edit form that
     // `?open=` draws: destination or details
     for (const open of ['destination', 'details']) {
@@ -1159,7 +1184,7 @@ describe('review: forms and notices', () => {
 
   it('draws the destination and details forms only when their header button opens them', async () => {
     const admin = await sessionFor('admin');
-    const id = await createOpenAi(admin);
+    const id = await createCustom(admin);
     const html = await (await adminGet(app, admin, `/admin/credentials/${id}`)).text();
     expect(html).toContain(`href="/admin/credentials/${id}?open=destination#destination"`);
     expect(html).toContain(`href="/admin/credentials/${id}?open=details#details"`);

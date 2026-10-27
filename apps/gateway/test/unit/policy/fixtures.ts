@@ -49,6 +49,25 @@ export const gitlabProfile: IssuerProfile = {
   display,
 };
 
+export const vercelProfile: IssuerProfile = {
+  id: 'vercel',
+  label: 'Vercel',
+  defaults: {
+    issuer: 'https://oidc.vercel.com',
+    allowedAlgs: ['RS256'],
+    maxTokenAgeSeconds: 7200,
+    maxTokenAgeLimitSeconds: 7200,
+  },
+  eventClaim: 'environment',
+  trustedEvents: ['production', 'preview'],
+  tenantClaims: ['owner_id'],
+  sharedIssuers: ['https://oidc.vercel.com'],
+  anchorRules: () => [['owner_id', 'project_id']],
+  verifyRequiredClaims: () => ['sub', 'iat', 'exp'],
+  logClaimAllowlist: () => ['sub', 'project_id', 'environment'],
+  display,
+};
+
 export const genericProfile: IssuerProfile = {
   id: 'generic',
   label: 'Generic OIDC',

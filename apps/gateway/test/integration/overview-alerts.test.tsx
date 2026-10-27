@@ -24,8 +24,6 @@ const ALL_CODES: readonly AlertCode[] = [
   'key_changed',
   'credential_malformed',
   'key_not_active',
-  'credential_expired',
-  'credential_expiring',
   'credential_missing_used',
   'upstream_auth',
   'outside_hosts',
@@ -51,6 +49,7 @@ function base(): AlertData {
       ok: true,
       error: null,
       activeKid: 'k1',
+      activeKids: ['k1'],
       missingKids: [],
       changedKids: [],
       notActiveCount: 0,
@@ -85,7 +84,6 @@ const service = (
   name,
   enabled: true,
   base_url: `https://${name.toLowerCase()}.example.com`,
-  credential_expires_at: null,
   has_credential: true,
   ...extra,
 });
@@ -115,8 +113,8 @@ function catalogue(): AlertData[] {
   const keys: AlertData = {
     ...base(),
     credentials: [
-      service('svc_A', 'Alpha', { credential_expires_at: NOW - DAY }),
-      service('svc_B', 'Beta', { credential_expires_at: NOW + 3 * DAY }),
+      service('svc_A', 'Alpha'),
+      service('svc_B', 'Beta'),
       service('svc_C', 'Gamma', { has_credential: false }),
       service('svc_D', 'Delta', { base_url: 'https://evil.example.net' }),
     ],
@@ -138,6 +136,7 @@ function catalogue(): AlertData[] {
       ok: false,
       error: null,
       activeKid: 'k1',
+      activeKids: ['k1'],
       missingKids: ['k0'],
       changedKids: ['k1'],
       notActiveCount: 1,
@@ -277,15 +276,12 @@ describe('the alert catalogue', () => {
     const many: AlertData = {
       ...base(),
       credentials: Array.from({ length: 7 }, (_, i) =>
-        service(`svc_${i}`, `Token${i}`, {
-          credential_expires_at: NOW - DAY,
-          base_url: 'https://elsewhere.example.org',
-        }),
+        service(`svc_${i}`, `Token${i}`, { base_url: 'https://elsewhere.example.org' }),
       ),
       allowedHosts: ['*.example.com'],
     };
     const alerts = overviewAlerts(many);
-    expect(alerts.map((a) => a.code)).toEqual(['credential_expired', 'outside_hosts']);
+    expect(alerts.map((a) => a.code)).toEqual(['outside_hosts']);
     expect(alerts[0]?.objects.map((o) => o.label)).toEqual([
       'Token0',
       'Token1',
@@ -293,6 +289,7 @@ describe('the alert catalogue', () => {
       'Token3',
       'Token4',
       '+2 more',
+      'Tokens outside the allowed hosts',
     ]);
     const all = catalogue().flatMap(overviewAlerts);
     const items = toAttentionItems(all, view('owner'));

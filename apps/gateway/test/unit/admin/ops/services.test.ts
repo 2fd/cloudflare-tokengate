@@ -19,7 +19,7 @@ import { credentialAad, openCredential, sealedKid } from '../../../../src/crypto
 import { loadKeyring } from '../../../../src/crypto/keyring';
 import { getAccessRuleRow } from '../../../../src/db/access-rules';
 import { getService } from '../../../../src/db/credentials';
-import { setAdminHosts, setUpstreamHosts, TEST_ACCESS_ENV } from '../../../helpers/app';
+import { setUpstreamHosts, TEST_ACCESS_ENV } from '../../../helpers/app';
 import {
   ACTOR,
   auditCount,
@@ -30,6 +30,7 @@ import {
   opsDeps,
   racingDeps,
   resetControlPlane,
+  ROTATION_ENV,
   seedCredentialRule,
   seedGlobalRule,
   seedService,
@@ -63,7 +64,7 @@ describe('createService', () => {
     const result = await createService(
       opsDeps(),
       ACTOR,
-      serviceInput({ base_url: 'https://api.github.com/', description: '  GitHub API ' }),
+      serviceInput({ base_url: 'https://api.github.com/' }),
       CONTEXT,
     );
     expect(result.ok).toBe(true);
@@ -71,7 +72,6 @@ describe('createService', () => {
     expect(result.service).toMatchObject({
       slug: 'github',
       base_url: 'https://api.github.com',
-      description: 'GitHub API',
       timeout_ms: 120_000,
       enabled: true,
       credential_set: false,
@@ -107,7 +107,6 @@ describe('createService', () => {
         base_url: 'http://127.0.0.1/api',
         injection: { kind: 'header', name: 'authorization' },
         timeout_ms: 5,
-        description: 'a\u0000b',
       }),
       CONTEXT,
     );
@@ -118,7 +117,6 @@ describe('createService', () => {
     expect(result.errors.join('\n')).toMatch(/base URL/);
     expect(result.errors.join('\n')).toMatch(/injection/);
     expect(result.errors.join('\n')).toMatch(/timeout/);
-    expect(result.errors.join('\n')).toMatch(/description/);
     expect(await auditCount()).toBe(0);
   });
 
@@ -130,19 +128,6 @@ describe('createService', () => {
       CONTEXT,
     );
     expect(result.ok).toBe(false);
-  });
-
-  it('refuses a base URL pointing at a stored admin host', async () => {
-    await setAdminHosts(['gw.example.com', '*.admin.example.org']);
-    const result = await createService(
-      opsDeps(),
-      ACTOR,
-      serviceInput({ base_url: 'https://eu.admin.example.org/api' }),
-      { requestHost: 'other.example.net' },
-    );
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.errors.join()).toMatch(/must not point at this gateway/);
   });
 
   it('enforces the upstream host allowlist setting', async () => {
@@ -209,14 +194,8 @@ describe('createService', () => {
     });
   });
 
-  it('takes the credential expiry from GitHub when the check passes', async () => {
-    const network = fakeNetwork(
-      () =>
-        new Response('{}', {
-          status: 200,
-          headers: { 'github-authentication-token-expiration': '2026-12-01 00:00:00 UTC' },
-        }),
-    );
+  it('sends the check to the destination with the credential, without following redirects', async () => {
+    const network = fakeNetwork(() => new Response('{}', { status: 200 }));
     const result = await createService(
       opsDeps({ fetch: network.fetch }),
       ACTOR,
@@ -225,7 +204,6 @@ describe('createService', () => {
     );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.service.credential_expires_at).toBe(Date.UTC(2026, 11, 1));
     expect(network.calls.at(-1)).toMatchObject({
       url: 'https://api.github.com/rate_limit',
       redirect: 'manual',
@@ -307,13 +285,19 @@ describe('updateServiceFields', () => {
 describe('setServiceCredential', () => {
   it('sets credential and destination together, re-sealed with the new AAD', async () => {
     const deps = opsDeps();
-    const id = await seedService(deps, { secret: SECRET });
+    // A custom credential: only a credential without a type can change its destination.
+    const id = await seedService(deps, {
+      slug: 'custom',
+      base_url: 'https://api.example.com',
+      secret: SECRET,
+    });
+    expect((await getService(env.DB, id))?.template_id).toBeNull();
     const result = await setServiceCredential(
       deps,
       ACTOR,
       id,
       {
-        base_url: 'https://uploads.github.com',
+        base_url: 'https://uploads.example.com',
         injection: { kind: 'header', name: 'x-token', prefix: 'token ' },
         secret: 'second-secret-value-123456',
       },
@@ -322,7 +306,7 @@ describe('setServiceCredential', () => {
     expect(result.ok).toBe(true);
     const stored = await getService(env.DB, id);
     expect(stored).toMatchObject({
-      base_url: 'https://uploads.github.com',
+      base_url: 'https://uploads.example.com',
       injection_json: '{"kind":"header","name":"x-token","prefix":"token "}',
       credential_hint: '…3456 (26 chars)',
     });
@@ -330,11 +314,51 @@ describe('setServiceCredential', () => {
     const audit = (await auditRows(id)).at(-1);
     expect(audit?.action).toBe('service.credential.set');
     expect(audit?.summary).toMatch(/changed its destination/);
-    expect(audit?.diff?.before).toMatchObject({ base_url: 'https://api.github.com' });
+    expect(audit?.diff?.before).toMatchObject({ base_url: 'https://api.example.com' });
     expect(audit?.diff?.after).toMatchObject({
-      base_url: 'https://uploads.github.com',
-      credential_kid: 'k1',
+      base_url: 'https://uploads.example.com',
+      credential_kid: expect.stringMatching(/^[0-9a-f]{16}$/),
     });
+  });
+
+  it('keeps a template credential on its own destination and injection', async () => {
+    const network = fakeNetwork();
+    const deps = opsDeps({ fetch: network.fetch });
+    const id = await seedService(deps, { secret: SECRET });
+    const before = await getService(env.DB, id);
+    expect(before?.template_id).toBe('github');
+    const calls = network.calls.length;
+    const audits = await auditCount();
+    for (const destination of [
+      { base_url: 'https://uploads.github.com', injection: { kind: 'bearer' } },
+      { base_url: 'https://api.github.com', injection: { kind: 'header', name: 'x-token' } },
+    ]) {
+      const refused = await setServiceCredential(
+        deps,
+        ACTOR,
+        id,
+        { ...destination, secret: 'second-secret-value-123456' },
+        CONTEXT,
+      );
+      expect(refused, destination.base_url).toMatchObject({ ok: false, reason: 'invalid' });
+      if (refused.ok) return;
+      expect(refused.errors).toContain(
+        'base URL: a GitHub REST API credential always calls https://api.github.com',
+      );
+    }
+    expect(network.calls.length).toBe(calls);
+    expect(await auditCount()).toBe(audits);
+    expect(await getService(env.DB, id)).toEqual(before);
+    // The template's own destination still takes a new secret.
+    const kept = await setServiceCredential(
+      deps,
+      ACTOR,
+      id,
+      { base_url: 'https://api.github.com', injection: { kind: 'bearer' }, secret: `${SECRET}x` },
+      CONTEXT,
+    );
+    expect(kept.ok).toBe(true);
+    expect(await openStored(id)).toBe(`${SECRET}x`);
   });
 
   it('requires a valid credential', async () => {
@@ -351,13 +375,10 @@ describe('setServiceCredential', () => {
     expect((await getService(env.DB, id))?.credential_sealed).toBeNull();
   });
 
-  it('uses the active key of a keyring', async () => {
-    const deps = opsDeps({
-      env: {
-        TOKENGATE_KEK: '',
-        TOKENGATE_KEYRING: JSON.stringify({ active: 'k9', keys: { k9: KEK_1 } }),
-      },
-    });
+  it('uses the next key during a rotation', async () => {
+    const deps = opsDeps({ env: ROTATION_ENV });
+    const loaded = await loadKeyring(deps.env);
+    if (!loaded.ok) throw new Error(loaded.error);
     const id = await seedService(deps);
     await setServiceCredential(
       deps,
@@ -372,7 +393,9 @@ describe('setServiceCredential', () => {
       },
       CONTEXT,
     );
-    expect(sealedKid((await getService(env.DB, id))?.credential_sealed ?? null)).toBe('k9');
+    expect(sealedKid((await getService(env.DB, id))?.credential_sealed ?? null)).toBe(
+      loaded.keyring.nextKid,
+    );
   });
 });
 
@@ -578,21 +601,12 @@ describe('token helpers', () => {
       serviceFieldErrors([
         'base URL must use https',
         'slug must be 1-63 characters',
-        'credential expiry must be a timestamp in milliseconds',
         'credential is empty',
         'injection: header name must be a lower-case HTTP token (max 64 characters)',
         'forward header "authorization" is never forwarded',
         'something else',
       ]).map((error) => error.field),
-    ).toEqual([
-      'base_url',
-      'slug',
-      'credential_expires_at',
-      'credential',
-      'injection_header_name',
-      'forward_headers',
-      null,
-    ]);
+    ).toEqual(['base_url', 'slug', 'credential', 'injection_header_name', 'forward_headers', null]);
   });
 
   it('keeps template check headers and refuses reserved or injected ones', async () => {
@@ -675,35 +689,145 @@ describe('token helpers', () => {
       reason: 'confirmation_required',
     });
   });
+});
 
-  it('testServiceCredential stores a GitHub-reported expiry that differs, as service.update', async () => {
-    const deps = opsDeps({
-      fetch: fakeNetwork(() =>
-        Response.json(
-          {},
-          { headers: { 'github-authentication-token-expiration': '2031-01-02 03:04:05 UTC' } },
-        ),
-      ).fetch,
-    });
-    const id = await seedService(deps, {
-      secret: SECRET,
-      verify: { method: 'GET', path: '/rate_limit', expect_status: 200 },
-    });
-    await env.DB.prepare('UPDATE credentials SET credential_expires_at = NULL WHERE id = ?')
-      .bind(id)
-      .run();
-    const result = await testServiceCredential(deps, ACTOR, id, CONTEXT);
-    expect(result).toMatchObject({ ok: true, expirySaved: true });
-    expect((await getService(env.DB, id))?.credential_expires_at).toBe(
-      Date.UTC(2031, 0, 2, 3, 4, 5),
+describe('Slack bot name from the check', () => {
+  // Other tests leave an allowlist behind; slack.com is not on it.
+  beforeEach(() => setUpstreamHosts(null));
+
+  const SLACK_SECRET = 'xoxb-1111-2222-abcdefghijklmnop';
+  const SLACK_VERIFY = {
+    method: 'POST' as const,
+    path: '/auth.test',
+    expect_status: 200,
+    expect_ok_field: true,
+  };
+
+  /** Slack's auth.test and bots.info; `bot.name` is what Slack shows, and can change. */
+  function slackNetwork() {
+    const state = { botName: 'Deploy Bot' };
+    const network = fakeNetwork((url) =>
+      url.pathname === '/api/bots.info'
+        ? Response.json({ ok: true, bot: { id: 'B0123ABC', name: state.botName } })
+        : Response.json({ ok: true, user: 'deploy-bot', bot_id: 'B0123ABC' }),
     );
-    expect((await auditRows(id)).map((row) => row.action).slice(-2)).toEqual([
+    return { state, network, deps: opsDeps({ fetch: network.fetch }) };
+  }
+
+  function slackInput(overrides: Parameters<typeof serviceInput>[0] = {}) {
+    return serviceInput({
+      slug: 'slack',
+      name: 'Slack',
+      base_url: 'https://slack.com/api',
+      injection: { kind: 'bearer' },
+      forward_headers: [],
+      verify: SLACK_VERIFY,
+      secret: SLACK_SECRET,
+      ...overrides,
+    });
+  }
+
+  it('create: an empty name takes the bot name and follows the check', async () => {
+    const { deps } = slackNetwork();
+    const result = await createService(deps, ACTOR, slackInput({ name_from_check: true }), CONTEXT);
+    expect(result).toMatchObject({
+      ok: true,
+      service: { name: 'Deploy Bot', name_from_check: true, template_id: 'slack' },
+    });
+  });
+
+  it('create: a typed name is kept', async () => {
+    const { deps } = slackNetwork();
+    const result = await createService(deps, ACTOR, slackInput({ name: 'Alerts' }), CONTEXT);
+    expect(result).toMatchObject({
+      ok: true,
+      service: { name: 'Alerts', name_from_check: false },
+    });
+  });
+
+  it('create: keeps the made-up name when the check reads no identity', async () => {
+    const network = fakeNetwork(() => Response.json({ ok: true }));
+    const result = await createService(
+      opsDeps({ fetch: network.fetch }),
+      ACTOR,
+      slackInput({ name_from_check: true }),
+      CONTEXT,
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      service: { name: 'Slack', name_from_check: false },
+    });
+  });
+
+  it('Test renames a name read from the check, as its own service.update', async () => {
+    const { state, deps } = slackNetwork();
+    const id = await seedService(deps, slackInput({ name_from_check: true }));
+    state.botName = 'Release Bot';
+    expect(await testServiceCredential(deps, ACTOR, id, CONTEXT)).toMatchObject({
+      ok: true,
+      verify: { passed: true, identity: 'Release Bot' },
+      nameSaved: true,
+    });
+    expect(await getService(env.DB, id)).toMatchObject({
+      name: 'Release Bot',
+      name_from_check: true,
+    });
+    const rows = await auditRows(id);
+    expect(rows.map((row) => row.action).slice(-2)).toEqual([
       'service.credential.test',
       'service.update',
     ]);
-    // Unchanged expiry: no second row.
+    expect(rows.at(-1)?.diff).toEqual({
+      before: { name: 'Deploy Bot' },
+      after: { name: 'Release Bot' },
+    });
+    // Same name: nothing to save, no second row.
     expect(await testServiceCredential(deps, ACTOR, id, CONTEXT)).toMatchObject({
-      expirySaved: false,
+      nameSaved: false,
+    });
+    expect((await auditRows(id)).at(-1)?.action).toBe('service.credential.test');
+  });
+
+  it('Test keeps a name renamed by hand', async () => {
+    const { state, deps } = slackNetwork();
+    const id = await seedService(deps, slackInput({ name_from_check: true }));
+    const renamed = await updateServiceFields(deps, ACTOR, id, { name: 'Alerts' });
+    expect(renamed.ok).toBe(true);
+    expect((await getService(env.DB, id))?.name_from_check).toBe(false);
+    state.botName = 'Release Bot';
+    expect(await testServiceCredential(deps, ACTOR, id, CONTEXT)).toMatchObject({
+      ok: true,
+      verify: { identity: 'Release Bot' },
+      nameSaved: false,
+    });
+    expect(await getService(env.DB, id)).toMatchObject({ name: 'Alerts', name_from_check: false });
+  });
+
+  it('Test keeps a typed name', async () => {
+    const { state, deps } = slackNetwork();
+    const id = await seedService(deps, slackInput({ name: 'Alerts' }));
+    state.botName = 'Release Bot';
+    expect(await testServiceCredential(deps, ACTOR, id, CONTEXT)).toMatchObject({
+      nameSaved: false,
+    });
+    expect((await getService(env.DB, id))?.name).toBe('Alerts');
+  });
+
+  it('a new secret renames a name read from the check', async () => {
+    const { state, deps } = slackNetwork();
+    const id = await seedService(deps, slackInput({ name_from_check: true }));
+    state.botName = 'Release Bot';
+    const rotated = await rotateServiceSecret(
+      deps,
+      ACTOR,
+      id,
+      { secret: `${SLACK_SECRET}x` },
+      CONTEXT,
+    );
+    expect(rotated).toMatchObject({ ok: true, service: { name: 'Release Bot' } });
+    expect(await getService(env.DB, id)).toMatchObject({
+      name: 'Release Bot',
+      name_from_check: true,
     });
   });
 });

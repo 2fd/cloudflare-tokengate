@@ -1,4 +1,4 @@
-// Display labels for numeric claim IDs (`claim_labels`), per access rule (ADR 0021, ADR 0026): repository_id
+// Display labels for claim IDs (`claim_labels`), per access rule (ADR 0021, ADR 0026): repository_id
 // 987654321 reads as "acme/api". Display and form derivation only; src/policy/* never reads them,
 // so a label can never change what an access rule allows. Written only by access rule saves.
 import type { ClaimLabel, LabelledClaim } from './types';
@@ -8,6 +8,7 @@ export const LABELLED_CLAIMS: readonly LabelledClaim[] = [
   'repository_id',
   'namespace_id',
   'project_id',
+  'owner_id',
 ];
 
 /** Upper bound of every label read, so a page never loads an unbounded list. */
@@ -75,18 +76,20 @@ export async function repositoryLabelOptions(
   });
 }
 
-/** A typed numeric ID with its optional label. The ID stays a string (IDs can exceed 2^53). */
+/** A typed ID with its optional label. The ID stays a string (numeric IDs can exceed 2^53). */
 export interface IdWithLabel {
   id: string;
   label: string | null;
 }
 
-const ID_DIGITS = '([0-9]{1,20})';
+// Digits (GitHub, GitLab) or a prefixed opaque ID (Vercel `team_…`, `prj_…`). Each profile checks
+// the shape of its own claims (rule-access.ts).
+const ID_TEXT = '([0-9]{1,20}|[a-z]{2,8}_[A-Za-z0-9]{1,64})';
 // Suffix-only patterns: the label is whatever precedes the match. A `^(.+?)\s*` prefix would
 // backtrack quadratically on a long run of spaces (form bodies reach 64 KiB).
-const PAREN_SUFFIX = new RegExp(`\\(${ID_DIGITS}\\)$`);
-const HASH_SUFFIX = new RegExp(`\\s#${ID_DIGITS}$`);
-const BARE = new RegExp(`^#?${ID_DIGITS}$`);
+const PAREN_SUFFIX = new RegExp(`\\(${ID_TEXT}\\)$`);
+const HASH_SUFFIX = new RegExp(`\\s#${ID_TEXT}$`);
+const BARE = new RegExp(`^#?${ID_TEXT}$`);
 
 /**
  * Parses the ID input format (A7.8): `acme/api (987654321)`, also `acme/api #987654321` and the

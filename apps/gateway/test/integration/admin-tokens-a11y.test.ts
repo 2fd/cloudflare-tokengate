@@ -221,9 +221,15 @@ describe('A16: credential pages', () => {
         { template: 'openai', credential: 'sk-proj-0123456789abcdefghij' },
       ],
       [
-        'template card, taken slug',
+        'custom card, taken slug',
         '/admin/credentials',
-        { template: 'github', credential: 'ghp_x0123456789abcdefghij', slug: 'github' },
+        {
+          template: 'custom',
+          base_url: 'https://api.example.com/v1',
+          injection_kind: 'bearer',
+          credential: 'custom-secret-0123456789abcdef',
+          slug: 'github',
+        },
       ],
       [
         'details, advanced field',

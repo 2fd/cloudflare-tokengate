@@ -6,6 +6,39 @@ The format follows [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/
 
 ## [Unreleased]
 
+### Issuers
+
+- **Vercel issuer.** Credential and global access rules accept tokens of Vercel functions and builds, as `getVercelOidcToken({ audience })` of @vercel/oidc returns them. A rule pins one team (`owner_id`) and one project (`project_id`). `production` and `preview` are trusted environments; `development` and Custom Environments need an explicit opt-in. The issuer is `https://oidc.vercel.com/<team slug>` (team mode) or `https://oidc.vercel.com` (global mode, shared: the team pin is required). See [callers/vercel.md](docs/callers/vercel.md).
+- **Issuer type select.** "Where do the jobs run?" is a select with a logo and one line per issuer type, in place of the radio cards. It uses the browser's customizable select where available, and a plain select elsewhere.
+- **Issuer profiles are code** ([ADR 0028](docs/adr/0028-issuer-profiles-are-code.md)). The schema no longer lists the profiles or requires numeric claim labels, so a new issuer type needs no migration.
+
+### Credentials
+
+- **Several bots of one service.** A Slack Web API credential created without a name takes the bot's name, read by the secret check (`auth.test`, then `bots.info` with the `users:read` scope). **Test** keeps the name current until you rename the credential. The slug still defaults to `slack`, `slack-2`, ….
+- **Replace secret** moved to the danger zone: one button opens a dialog with the new secret. The check, the sealed draft and the refusal after a repoint are unchanged.
+- **No credential expiry.** The expiry field, the "Expired or expiring" filter, the expiry alerts and status, and the hourly `credential.expiring` audit events are removed. GitHub's reported expiry is no longer read. Limit how long workloads may use a credential with an access rule's expiry. The configuration export drops `credential.expires_at` (schema version 5).
+- **Fixed destination for types.** A credential made from a type (Slack, OpenAI, GitHub, …) can no longer be repointed: its page shows Settings instead of Destination, and the ops refuse another base URL. Custom credentials keep Change destination.
+- **No credential description.** The Description field is removed from the new credential forms and the edit form, and the credential page no longer shows it. Exported credentials have no `description`.
+
+### Schema
+
+- `apps/gateway/migrations/0001_initial.sql` is changed in place and is again the only control-plane migration. `credentials.name_from_check` replaces `credentials.credential_expires_at`, and `credentials.description` is removed. `access_rules.profile` and `claim_labels` accept every issuer profile and claim ID shape that the code accepts. The `audit_log_target` index is `(target_id, id)`, so the audit target filter, object histories and the last secret change of a credential use it.
+- Upgrade note: local databases made before this change must be recreated: run `pnpm run setup`.
+
+### Key rotation
+
+- **Two key secrets** ([ADR 0027](docs/adr/0027-two-slot-key-rotation.md)). `TOKENGATE_KEK` holds the current key. `TOKENGATE_KEYRING` holds the next key during a rotation, as bare base64 of 32 bytes; the JSON keyring format is removed. Setting both is now the normal state of a rotation, no longer an error. A key id is the key check value of the key; credentials sealed before keep the id `k1`, which names `TOKENGATE_KEK`.
+- **Checked next key.** `TOKENGATE_KEYRING` is used only if it is not the public development key, not printable text and has at least 16 distinct byte values. A value that fails is ignored: the proxy keeps working with `TOKENGATE_KEK`. A `TOKENGATE_KEYRING` set alone that fails answers `503 not_configured` with the new reason `key_not_random`, or another keyring reason. `both_kek_and_keyring_set` and `active_kid_missing` are no longer produced.
+- **Settings › Rotate encryption** replaces Encryption keys (same URL, `/admin/credentials/keys`). The key table has one row per secret, with the re-encryption state under it; "Check a key value" is removed. Five steps guide the rotation: add `TOKENGATE_KEYRING`, the check of its value, the re-encryption, its progress, and the move of the value to `TOKENGATE_KEK`. Re-encryption runs in the background: the page shows a progress bar and reloads itself, and a stopped job can be started again.
+- `pnpm keyring check` reads one bare key and prints its key id; `pnpm keyring generate` prints the key id of the new key.
+- Upgrade: a JSON `TOKENGATE_KEYRING` does not load any more, and only the key id `k1` carries over (it names `TOKENGATE_KEK`). If you use `TOKENGATE_KEK` alone, nothing changes. If you use a JSON keyring, then before you deploy set `TOKENGATE_KEK` to the key that sealed your credentials and delete `TOKENGATE_KEYRING`. Credentials sealed under a JSON key id other than `k1` answer `503 credential_unavailable` (`keyring_missing_key`) after the upgrade: undo the JSON rotation back to `k1` before you upgrade, or enter those credentials again.
+
+### Sign-in
+
+- **No admin hosts** ([ADR 0030](docs/adr/0030-no-admin-host-list.md)). The "Admin hosts" section of Users › Sign-in, `POST /admin/users/sign-in/hosts`, the `admin_hosts` setting, the `settings.admin_hosts` audit action and the admin hosts health check are removed. The first sign-in no longer stores its hostname, and the `user.bootstrap` audit diff has no `host`. `/admin` now answers on every hostname that routes to the Worker, except `workers.dev` and plain http on a hostname that is not a loopback host. Your Worker routes and the Access application decide the rest: put every route and custom domain behind the Access application. Allowed hosts (the upstream host allowlist) is the only host list.
+- **SSRF self-exclusion** refuses only the hostname of the current request. Do not add another hostname of this Worker to Allowed hosts ([I-SSRF-1](docs/threat-model.md#i-ssrf-1)).
+- Upgrade: an `admin_hosts` row left in `DB` is ignored. Check that every hostname routed to the Worker is behind your Access application before you deploy.
+
 First public release (0.1.0).
 
 ### Admin UI redesign
@@ -104,7 +137,7 @@ The repository is a pnpm workspace. The Worker moved, unchanged, to `apps/gatewa
 - **Composite GitHub Action** `actions/get-token` that mints the OIDC token and installs the `tokengate-token` helper. See [actions/get-token/README.md](actions/get-token/README.md).
 - **Deploy to Cloudflare** support: binding descriptions in `package.json`, `.dev.vars.example`, and `pnpm run deploy`, which applies both migrations before it deploys.
 - **Upstream host allowlist in Settings.** Owners list the hosts that services may use ("Upstream hosts", audit action `settings.upstream_hosts`). Empty, the default, allows any public https host. See [docs/configuration.md](docs/configuration.md#upstream-host-allowlist).
-- **Admin hosts in Settings.** `/admin` answers only on the hostnames that owners list in Settings > "Admin hosts" (audit action `settings.admin_hosts`). The first sign-in stores its hostname as the first entry. Entries are exact hostnames or `*.<domain>`. A save cannot empty the list or drop the hostname in use. See [docs/configuration.md](docs/configuration.md#admin-hosts) and [ADR 0016](docs/adr/0016-admin-hosts-in-settings.md).
+- **Admin hosts in Settings.** `/admin` answers only on the hostnames that owners list in Settings > "Admin hosts" (audit action `settings.admin_hosts`). The first sign-in stores its hostname as the first entry. Entries are exact hostnames or `*.<domain>`. A save cannot empty the list or drop the hostname in use. See [ADR 0016](docs/adr/0016-admin-hosts-in-settings.md).
 - **`pnpm run setup`** copies `.dev.vars.example` to `.dev.vars` for local development. It also deletes the local D1 databases (`.wrangler/state/v3/d1`) and applies the migrations to new ones. The copy works with `pnpm dev` as is: it sets a public development key in `TOKENGATE_KEK` and `AUTH_ACCESS_DEVELOPMENT=dev@example.com`. The keyring refuses that key (`dev_placeholder_key`) unless `AUTH_ACCESS_DEVELOPMENT` is set and no Access variable is set. See [CONTRIBUTING.md](CONTRIBUTING.md#set-up) and [docs/configuration.md](docs/configuration.md#development-key).
 
 ### Security

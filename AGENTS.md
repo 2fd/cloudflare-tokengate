@@ -1,3 +1,17 @@
+## Access rules are the only permission store
+
+`access_rules` is the only place a workload's permission lives, now and in the future. A rule
+targets one thing: a credential (Slack, OpenAI, any upstream) or a future target.
+The same policy code decides it, and the global access rules of its issuer cap it
+([ADR 0029](docs/adr/0029-access-rules-are-the-only-permission-store.md)).
+
+- Do not add a separate rules table, a per-feature policy repository or a JSON policy column.
+  To support a new target, add a target column to `access_rules`; the first new target also adds
+  the stored `kind` column.
+- Do not put a rule editor on a target's page. Rules are created and edited on the access rule
+  pages. A target's page lists its rules and links to `/admin/credential-access-rules/new` with the
+  target preset.
+
 ## UI changes
 
 Before creating or editing admin pages, forms, or layout components, read

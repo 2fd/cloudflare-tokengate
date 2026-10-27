@@ -97,17 +97,12 @@ async function insertRequest(
   return id;
 }
 
-async function insertService(
-  id: string,
-  slug: string,
-  sealed: string | null,
-  expiresAt: number | null,
-) {
+async function insertService(id: string, slug: string, sealed: string | null) {
   await env.DB.prepare(
-    `INSERT INTO credentials (id, slug, name, base_url, injection, credential_sealed, credential_expires_at, created_at, updated_at)
-     VALUES (?, ?, ?, 'https://api.example.com', '{"kind":"bearer"}', ?, ?, 0, 0)`,
+    `INSERT INTO credentials (id, slug, name, base_url, injection, credential_sealed, created_at, updated_at)
+     VALUES (?, ?, ?, 'https://api.example.com', '{"kind":"bearer"}', ?, 0, 0)`,
   )
-    .bind(id, slug, `${slug} API`, sealed, expiresAt)
+    .bind(id, slug, `${slug} API`, sealed)
     .run();
 }
 
@@ -192,7 +187,7 @@ describe('trafficStats', () => {
 
 describe('loadOverview', () => {
   it('merges 23 hours of rollups with the live current hour when the cron ran this hour', async () => {
-    await insertService('svc_A', 'alpha', null, null);
+    await insertService('svc_A', 'alpha', null);
     await setCronSuccess(H + 7 * 60_000);
     await insertRollups([
       rollup({ hour: H - HOUR_MS, requests: 4, buckets: [4, 0, 0, 0, 0, 0, 0, 0] }),
@@ -309,20 +304,21 @@ describe('loadAlertData', () => {
     });
   });
 
-  it('reports expiring credentials, keyring problems, cron state, schema and owner count', async () => {
+  it('reports keyring problems, cron state, schema and owner count', async () => {
     const sealed = (kid: string) =>
       JSON.stringify({ v: 1, kid, iv: '', wdek: '', dek_iv: '', ct: '' });
-    await insertService('svc_A', 'alpha', sealed('k1'), NOW + 3 * DAY);
-    await insertService('svc_B', 'beta', sealed('k0'), NOW - 1);
-    await insertService('svc_C', 'gamma', 'not json', NOW + 30 * DAY);
-    await insertService('svc_D', 'delta', null, NOW + DAY);
+    await insertService('svc_A', 'alpha', sealed('k1'));
+    await insertService('svc_B', 'beta', sealed('k0'));
+    await insertService('svc_C', 'gamma', 'not json');
+    await insertService('svc_D', 'delta', null);
     await insertOwner('usr_1', 'owner@example.com');
 
     const data = await loadAlertData(deps());
     expect(data.keyring).toEqual({
       ok: false,
       error: null,
-      activeKid: 'k1',
+      activeKid: data.keyring.activeKid,
+      activeKids: [data.keyring.activeKid, 'k1'],
       missingKids: ['k0'],
       changedKids: [],
       notActiveCount: 1,
@@ -335,9 +331,7 @@ describe('loadAlertData', () => {
     const alerts = overviewAlerts(data);
     expect(alerts.map((a) => [a.level, a.code])).toEqual([
       ['error', 'key_missing'],
-      ['error', 'credential_expired'],
       ['error', 'credential_malformed'],
-      ['warning', 'credential_expiring'],
       ['info', 'key_not_active'],
       ['info', 'cron_never'],
       ['info', 'single_owner'],
@@ -351,17 +345,16 @@ describe('loadAlertData', () => {
       href: '/admin/credentials/svc_B',
       label: 'beta API',
     });
-    expect(byCode.get('credential_expiring')?.title).toBe(
-      'The secret of alpha API expires on 16 Oct 2026 (in 3 days).',
-    );
     expect(byCode.get('credential_malformed')?.fix).toMatchObject({
       href: '/admin/credentials/svc_C?open=destination#destination',
       permission: 'tokens:write',
     });
     expect(byCode.get('key_not_active')?.form).toEqual({ kind: 'rewrap', count: 1 });
     expect(byCode.get('single_owner')?.fix).toMatchObject({ permission: 'users:write' });
-    // Cron alerts link to their row of the Overview's "All checks" table.
-    expect(byCode.get('cron_never')?.objects[0]?.href).toBe('/admin#check-maintenance');
+    // cron_never is not a problem: "All checks" stays closed, so it does not link to the row.
+    expect(byCode.get('cron_never')?.objects.map((o) => o.href)).not.toContain(
+      '/admin#check-maintenance',
+    );
     expect(JSON.stringify(alerts)).not.toContain('TOKENGATE_KEK=');
   });
 
@@ -383,8 +376,8 @@ describe('loadAlertData', () => {
   });
 
   it('groups same-code alerts into one item that names every object', async () => {
-    await insertService('svc_A', 'alpha', null, null);
-    await insertService('svc_B', 'beta', null, null);
+    await insertService('svc_A', 'alpha', null);
+    await insertService('svc_B', 'beta', null);
     for (const [id, service, expires] of [
       ['acr_A', 'svc_A', NOW + 2 * DAY],
       ['acr_B', 'svc_B', NOW + 5 * DAY],
@@ -422,12 +415,14 @@ describe('loadAlertData', () => {
   it('alertsFor gives an object page only its own alerts', async () => {
     const sealed = (kid: string) =>
       JSON.stringify({ v: 1, kid, iv: '', wdek: '', dek_iv: '', ct: '' });
-    await insertService('svc_A', 'alpha', sealed('k1'), NOW + 3 * DAY);
-    await insertService('svc_B', 'beta', sealed('k0'), null);
+    await insertService('svc_A', 'alpha', 'not json');
+    await insertService('svc_B', 'beta', sealed('k0'));
+    await insertService('svc_C', 'gamma', sealed('k1'));
     const data: AlertData = await loadAlertData(deps());
     expect(alertsFor(data, { tokenId: 'svc_A' }).map((a) => a.code)).toEqual([
-      'credential_expiring',
+      'credential_malformed',
     ]);
+    expect(alertsFor(data, { tokenId: 'svc_C' })).toEqual([]);
     expect(alertsFor(data, { tokenId: 'svc_B' }).map((a) => a.code)).toEqual([
       'key_missing',
       'key_not_active',
@@ -443,7 +438,7 @@ describe('loadAlertData: keyring key check values', () => {
     putSettingStatement(env.DB, 'keyring_kcv', map, NOW, null).run();
 
   it('flags a kid whose key material changed since credentials were sealed', async () => {
-    await insertService('svc_A', 'alpha', sealed('k1'), null);
+    await insertService('svc_A', 'alpha', sealed('k1'));
     await recordKcv({ k1: '0000000000000000' });
     const data = await loadAlertData(deps());
     expect(data.keyring).toMatchObject({ ok: false, changedKids: ['k1'] });
@@ -458,7 +453,7 @@ describe('loadAlertData: keyring key check values', () => {
   });
 
   it('accepts the recorded key check value and ignores kids without credentials', async () => {
-    await insertService('svc_A', 'alpha', sealed('k1'), null);
+    await insertService('svc_A', 'alpha', sealed('k1'));
     const loaded = await loadKeyring(deps().env);
     if (!loaded.ok) throw new Error(loaded.error);
     await recordKcv({ k1: loaded.keyring.kcv.k1 as string, retired: 'ffffffffffffffff' });
@@ -467,7 +462,7 @@ describe('loadAlertData: keyring key check values', () => {
   });
 
   it('ignores a malformed keyring_kcv value instead of failing the Overview', async () => {
-    await insertService('svc_A', 'alpha', sealed('k1'), null);
+    await insertService('svc_A', 'alpha', sealed('k1'));
     await env.DB.prepare(
       "INSERT INTO settings (key, value, updated_at) VALUES ('keyring_kcv', 'not json', 0)",
     ).run();
@@ -482,9 +477,8 @@ describe('I-CRED-1: Overview data never carries stored credential material', () 
       'svc_A',
       'alpha',
       JSON.stringify({ v: 1, kid: 'k0', iv: canary, wdek: canary, dek_iv: canary, ct: canary }),
-      NOW + DAY,
     );
-    await insertService('svc_B', 'beta', `{"broken": "${canary}"`, NOW - 1);
+    await insertService('svc_B', 'beta', `{"broken": "${canary}"`);
     await insertRequest(NOW - 1000, {
       outcome: 'denied',
       status: 403,

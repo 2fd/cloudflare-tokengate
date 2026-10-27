@@ -209,6 +209,15 @@ describe('access_rules: kinds and checks (ADR 0026, I-AUTHZ-5)', () => {
     await db.prepare("DELETE FROM access_rules WHERE id IN ('acr_ok', 'gar_ok')").run();
   });
 
+  // Profiles are code (ADR 0028): a new one needs no migration; getProfile fails closed on unknown ids.
+  it('takes any profile id and refuses an empty one', async () => {
+    await credentialRule({ id: 'acr_vercel', profile: 'vercel' }).run();
+    expect(await refused(credentialRule({ id: 'acr_empty', profile: '' }))).toMatch(
+      /CHECK constraint/,
+    );
+    await db.prepare("DELETE FROM access_rules WHERE id = 'acr_vercel'").run();
+  });
+
   it('ties the id prefix to the kind', async () => {
     expect(await refused(credentialRule({ id: 'gar_wrong' }))).toMatch(/CHECK constraint/);
     expect(await refused(globalRule({ id: 'acr_wrong' }))).toMatch(/CHECK constraint/);
@@ -420,25 +429,39 @@ describe('claim_labels', () => {
       )
       .bind(value, T);
 
-  it('accepts a numeric ID', async () => {
-    await label('1234567').run();
-    expect(await rows('SELECT value FROM claim_labels')).toEqual([{ value: '1234567' }]);
-  });
+  // The shape of an ID is the profile's (ADR 0028): the table takes digits and prefixed opaque IDs.
+  it.each(['1234567', '123456789012345678901', 'prj_7Gw5ZMBpQA8h9GF832KGp7nwbuh3'])(
+    'accepts the ID %j',
+    async (value) => {
+      await label(value).run();
+      expect(await rows(`SELECT value FROM claim_labels WHERE value = '${value}'`)).toEqual([
+        { value },
+      ]);
+      await db.prepare('DELETE FROM claim_labels').run();
+    },
+  );
 
-  it.each(['12a', '', 'a12', '-1', '123456789012345678901'])(
+  it.each(['', '-1', '12 3', 'acme/api', 'x'.repeat(129)])(
     'refuses the value %j',
     async (value) => {
       expect(await refused(label(value))).toMatch(/CHECK constraint/);
     },
   );
 
-  it('refuses unknown claims and access rules', async () => {
+  it('takes any claim of a profile and refuses an empty one or unknown access rules', async () => {
+    await db
+      .prepare(
+        `INSERT INTO claim_labels (access_rule_id, claim, value, label, updated_at)
+         VALUES ('acr_1', 'owner_id', 'team_1', 'acme', ?)`,
+      )
+      .bind(T)
+      .run();
     expect(
       await refused(
         db
           .prepare(
             `INSERT INTO claim_labels (access_rule_id, claim, value, label, updated_at)
-             VALUES ('acr_1', 'sub', '1', 'x', ?)`,
+             VALUES ('acr_1', '', '1', 'x', ?)`,
           )
           .bind(T),
       ),

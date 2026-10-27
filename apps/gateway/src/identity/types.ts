@@ -1,7 +1,7 @@
 // Workload-identity vocabulary: issuer profiles and the verified caller.
 import type { CredentialAccessRule } from '../db/types';
 
-export type ProfileId = 'github-actions' | 'gitlab-ci' | 'generic';
+export type ProfileId = 'github-actions' | 'gitlab-ci' | 'vercel' | 'generic';
 
 /** Verified JWT payload. Values are untrusted shapes; read them through policy/conditions.ts. */
 export type Claims = Record<string, unknown>;

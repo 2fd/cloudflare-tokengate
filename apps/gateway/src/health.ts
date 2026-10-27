@@ -3,7 +3,12 @@
 // (no kids, counts or errors) and caches its answer briefly so it cannot be used to load D1.
 import type { App } from './app';
 import type { Config, ConfigFeature } from './config';
-import { type KeyringError, type LoadKeyringResult, loadKeyring } from './crypto/keyring';
+import {
+  type KeyringError,
+  LEGACY_KID,
+  type LoadKeyringResult,
+  loadKeyring,
+} from './crypto/keyring';
 import { schemaStatus } from './db/migrations';
 import type { Deps } from './deps';
 import { parseJson } from './lib/json';
@@ -72,17 +77,19 @@ export interface KeyringHealth {
   /** Why the keyring secret could not be loaded; null when it loaded. */
   error: KeyringError | null;
   activeKid: string | null;
+  /** Sealed kids that name the active key: its key check value, and `k1` when TOKENGATE_KEK is active. */
+  activeKids: string[];
   /** Kids used by stored credentials but absent from the keyring: those credentials fail closed. */
   missingKids: string[];
   /**
    * Kids used by stored credentials whose key check value differs from the one recorded in
-   * settings `keyring_kcv` at seal time: the key behind the kid was replaced (e.g. a new
-   * TOKENGATE_KEK, always kid "k1"), so those credentials cannot be opened. Cleared by sealing
+   * settings `keyring_kcv` at seal time: the key behind the kid was replaced (a new
+   * TOKENGATE_KEK under the legacy kid "k1"; other kids are key check values and cannot change), so those credentials cannot be opened. Cleared by sealing
    * when no other credential uses the kid (src/db/settings.ts), or by a rewrap that opens every
    * credential under it (src/admin/ops/keyring.ts).
    */
   changedKids: string[];
-  /** Stored credentials sealed under a kid other than the active one (rewrap pending). */
+  /** Stored credentials sealed under a key other than the active one (rewrap pending). */
   notActiveCount: number;
   /** Stored credential values that are not sealed JSON with a string kid. */
   malformedCount: number;
@@ -127,9 +134,13 @@ export function keyringHealthFrom(
       malformedCount += n;
       continue;
     }
-    if (kid !== keyring?.activeKid) notActiveCount += n;
-    if (!keyring) continue;
-    if (!keyring.kids.includes(kid)) {
+    if (!keyring) {
+      notActiveCount += n;
+      continue;
+    }
+    const loadedKid = keyring.resolve(kid);
+    if (loadedKid !== keyring.activeKid) notActiveCount += n;
+    if (loadedKid === null) {
       missingKids.push(kid);
       continue;
     }
@@ -146,6 +157,9 @@ export function keyringHealthFrom(
       malformedCount === 0,
     error: loaded.ok ? null : loaded.error,
     activeKid: keyring?.activeKid ?? null,
+    activeKids: keyring
+      ? [keyring.activeKid, ...(keyring.currentKid === keyring.activeKid ? [LEGACY_KID] : [])]
+      : [],
     missingKids,
     changedKids,
     notActiveCount,

@@ -31,7 +31,6 @@ export interface NewServiceRow {
   id: string;
   slug: string;
   name: string;
-  description: string;
   base_url: string;
   injection_json: string;
   forward_headers: string[];
@@ -39,8 +38,9 @@ export interface NewServiceRow {
   credential_sealed: string | null;
   credential_hint: string | null;
   credential_updated_at: number | null;
-  credential_expires_at: number | null;
   verify: VerifyCheck | null;
+  /** The name came from the verify check (the Slack bot name); a manual rename clears it. */
+  name_from_check: boolean;
   /** Display and preset data only (templateIdFor), never part of the AAD. */
   template_id: string | null;
   enabled: boolean;
@@ -50,16 +50,15 @@ export interface NewServiceRow {
 export function insertServiceStatement(db: D1Database, row: NewServiceRow): D1PreparedStatement {
   return db
     .prepare(
-      `INSERT INTO credentials (id, slug, name, description, base_url, injection, forward_headers, timeout_ms,
-         credential_sealed, credential_hint, credential_updated_at, credential_expires_at, verify,
+      `INSERT INTO credentials (id, slug, name, base_url, injection, forward_headers, timeout_ms,
+         credential_sealed, credential_hint, credential_updated_at, verify, name_from_check,
          template_id, enabled, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       row.id,
       row.slug,
       row.name,
-      row.description,
       row.base_url,
       row.injection_json,
       JSON.stringify(row.forward_headers),
@@ -67,8 +66,8 @@ export function insertServiceStatement(db: D1Database, row: NewServiceRow): D1Pr
       row.credential_sealed,
       row.credential_hint,
       row.credential_updated_at,
-      row.credential_expires_at,
       verifyJson(row.verify),
+      row.name_from_check ? 1 : 0,
       row.template_id,
       row.enabled ? 1 : 0,
       row.created_at,
@@ -79,12 +78,11 @@ export function insertServiceStatement(db: D1Database, row: NewServiceRow): D1Pr
 /** Fields that do not take part in the credential binding. */
 export interface ServiceFields {
   name: string;
-  description: string;
   forward_headers: string[];
   timeout_ms: number;
   verify: VerifyCheck | null;
   enabled: boolean;
-  credential_expires_at: number | null;
+  name_from_check: boolean;
 }
 
 export function updateServiceFieldsStatement(
@@ -96,18 +94,17 @@ export function updateServiceFieldsStatement(
 ): D1PreparedStatement {
   return db
     .prepare(
-      `UPDATE credentials SET name = ?, description = ?, forward_headers = ?, timeout_ms = ?, verify = ?,
-         enabled = ?, credential_expires_at = ?, updated_at = MAX(?, updated_at + 1)
+      `UPDATE credentials SET name = ?, forward_headers = ?, timeout_ms = ?, verify = ?,
+         enabled = ?, name_from_check = ?, updated_at = MAX(?, updated_at + 1)
        WHERE id = ? AND (${guard.sql})`,
     )
     .bind(
       fields.name,
-      fields.description,
       JSON.stringify(fields.forward_headers),
       fields.timeout_ms,
       verifyJson(fields.verify),
       fields.enabled ? 1 : 0,
-      fields.credential_expires_at,
+      fields.name_from_check ? 1 : 0,
       now,
       id,
       ...guard.binds,
@@ -135,7 +132,6 @@ export interface ServiceCredentialValues {
   injection_json: string;
   credential_sealed: string;
   credential_hint: string | null;
-  credential_expires_at: number | null;
   /** Recomputed from the new destination on every credential save (templateIdFor). */
   template_id: string | null;
 }
@@ -150,7 +146,7 @@ export function updateServiceCredentialStatement(
   return db
     .prepare(
       `UPDATE credentials SET base_url = ?, injection = ?, credential_sealed = ?, credential_hint = ?,
-         credential_updated_at = ?, credential_expires_at = ?, template_id = ?,
+         credential_updated_at = ?, template_id = ?,
          updated_at = MAX(?, updated_at + 1)
        WHERE id = ? AND (${guard.sql})`,
     )
@@ -160,7 +156,6 @@ export function updateServiceCredentialStatement(
       values.credential_sealed,
       values.credential_hint,
       now,
-      values.credential_expires_at,
       values.template_id,
       now,
       id,

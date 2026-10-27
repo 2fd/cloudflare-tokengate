@@ -8,10 +8,10 @@
  */
 
 /* == section: shell == */
-/* Not found: the four sections as a 2 × 2 grid, never three cards and an orphan. */
-@media (min-width: 40rem) {
+/* Not found: the three sections side by side, never two cards and an orphan. */
+@media (min-width: 60rem) {
   #nf-sections .tcards {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -182,11 +182,6 @@
 dialog#retention-edit[open] {
   margin-block-start: var(--sp-2);
 }
-/* The notes of the empty install, one quiet line each under Get started. */
-.notes {
-  display: grid;
-  gap: var(--sp-1);
-}
 
 /* == section: tokens == */
 /* Replace-secret row of a token page (views/token-page.tsx RotateForm): the secret on its own
@@ -241,25 +236,9 @@ dialog#retention-edit[open] {
   gap: var(--sp-6);
   min-width: 0;
 }
-/* Add consumer: the chosen type's fields sit flat under the type cards, 24px apart; the presets
-   badge of a narrow card wraps under its description instead of leaving the card. */
+/* Add consumer: the chosen type's fields sit flat under the issuer type select, 24px apart. */
 .con-fields {
   gap: var(--sp-6);
-}
-.con-preset {
-  margin-top: var(--sp-1);
-}
-/* Three issuer type cards share a 30rem column: "Selected" follows the title instead of sitting
-   in the corner, where it would cover the logo of a narrow card. */
-.con-types .rc-b > .logo ~ .rc-t .sel {
-  position: static;
-}
-.con-types .rc-b .badge {
-  height: auto;
-  min-height: var(--h-badge);
-  padding-block: 2px;
-  white-space: normal;
-  line-height: var(--lh-xs);
 }
 .con-pins,
 .con-confirm ul,
@@ -372,13 +351,14 @@ ul.operations {
 .ga-form .ga-tok {
   gap: var(--sp-4);
 }
-/* The type branches of a new consumer follow its type cards (one `.ga-tf` per form). */
+/* The type branches of a new consumer follow its issuer type select (one `.ga-tf` per form). */
 .ga-form .ga-tbranch[data-o] {
   display: none;
 }
-.ga-form:has(.ga-tf [data-o='1'] input:checked) .ga-tbranch[data-o='1'],
-.ga-form:has(.ga-tf [data-o='2'] input:checked) .ga-tbranch[data-o='2'],
-.ga-form:has(.ga-tf [data-o='3'] input:checked) .ga-tbranch[data-o='3'] {
+.ga-form:has(.ga-tf option[data-o='1']:checked) .ga-tbranch[data-o='1'],
+.ga-form:has(.ga-tf option[data-o='2']:checked) .ga-tbranch[data-o='2'],
+.ga-form:has(.ga-tf option[data-o='3']:checked) .ga-tbranch[data-o='3'],
+.ga-form:has(.ga-tf option[data-o='4']:checked) .ga-tbranch[data-o='4'] {
   display: grid;
 }
 /* Scoped reveals: in a consumer branch (`.ga-scope`), option K of field `.ga-fN` shows the
@@ -658,50 +638,6 @@ ul.operations {
     display: none;
   }
 }
-/* Sign-in: the current policy, its 3-step explainer, the host list. */
-.u-now {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--sp-1) var(--sp-3);
-  margin: 0;
-}
-.u-now .big {
-  font-size: var(--fs-lg);
-  line-height: var(--lh-lg);
-  font-weight: var(--fw-medium);
-}
-.trace.u-c3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-.trace.u-c3 .tstep:not(.is-on) .s {
-  color: var(--text-2);
-}
-@media (max-width: 64rem) {
-  .trace.u-c3 {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .trace.u-c3 .tstep::before {
-    display: none;
-  }
-}
-.u-hosts {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.u-hosts > li {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--sp-2);
-}
-.u-hosts .chip .badge {
-  margin-inline-start: var(--sp-2);
-}
 
 /* == section: appearance == */
 #branding {
@@ -749,30 +685,42 @@ ul.operations {
   outline-offset: var(--sp-1);
 }
 
-/* == section: sign-in information hierarchy == */
-.signin-settings {
+/* == section: FAQ == */
+.faq {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
   max-width: calc(var(--w-form) + var(--w-rail));
 }
-/* Each configured host owns its share link. */
-.signin-host-link {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.signin-host-link .hint {
-  margin-inline-end: var(--sp-2);
-}
-.signin-faq section {
+.faq section {
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
   scroll-margin-top: var(--sp-6);
 }
-.signin-faq h3 {
+.faq h2 {
   font-size: var(--fs-md);
   font-weight: var(--fw-medium);
 }
-.signin-faq p {
+.faq p {
   color: var(--text-2);
   max-width: 70ch;
   overflow-wrap: anywhere;
+}
+
+/* Settings › Rotate encryption: the step list, the progress bar and the hand-over steps. */
+#rotate .rotate-steps {
+  max-width: var(--w-form);
+}
+#rotate .rotate-progress {
+  width: 100%;
+  height: var(--sp-2);
+  accent-color: var(--accent);
+}
+#rotate .rotate-handover {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-left: var(--sp-5);
+  list-style: decimal;
 }

@@ -42,6 +42,7 @@ const PATH_SECRET_SEGMENT = /^[A-Za-z0-9\-._~!$&'()*+,=:@]+$/;
 export const CI_ISSUER_HOSTS: ReadonlyMap<string, ProfileId> = new Map([
   ['token.actions.githubusercontent.com', 'github-actions'],
   ['gitlab.com', 'gitlab-ci'],
+  ['oidc.vercel.com', 'vercel'],
 ]);
 
 /** Events whose workflows run with base-repository secrets on attacker-influenced input. */
@@ -91,7 +92,7 @@ type Result<T> = ({ ok: true } & T) | { ok: false; error: string };
 
 /**
  * Validates an upstream base URL (I-SSRF-1). Also called by the proxy at request time.
- * `gatewayHosts` are `hostListed` entries for this gateway: the admin hosts and the request host.
+ * `gatewayHosts` are `hostListed` entries for this gateway: the request host.
  * `normalized` is origin + pathname without a trailing '/', the form stored and bound into the
  * credential AAD.
  */

@@ -18,6 +18,7 @@ const USE: Record<IconName, string> = {
   layout: 'Docs: Layout',
   table: 'Docs: Data, tables',
   chart: 'Docs: Visualization, charts',
+  help: 'Sidebar: FAQ',
 };
 
 const GLYPHS: ReadonlyArray<[string, string]> = [

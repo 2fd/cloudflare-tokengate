@@ -19,11 +19,10 @@ In the admin UI, open **Credentials**, select **Add a token** and open the **Git
 | Suggested grant rule | `GET /repos/OWNER/REPO/**` | `POST /repos/OWNER/REPO/releases/*/assets` |
 | Host for the upstream host allowlist | `api.github.com` | `uploads.github.com` |
 
-If **Credentials › Allowed hosts** is set and does not include `api.github.com`, the card says so before you type anything. An owner ticks **Also allow api.github.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
+If **Settings › Allowed hosts** is set and does not include `api.github.com`, the card says so before you type anything. An owner ticks **Also allow api.github.com in Allowed hosts** in the same form; anyone else asks an owner ([configuration](../configuration.md#upstream-host-allowlist)).
 
 - Prefer a fine-grained personal access token limited to the repositories and permissions the jobs need (`github_pat_REDACTED`).
-- Release asset uploads use a separate host, so they need the second token. The checkbox stores the same secret in both, and **Replace secret** on either token page offers to replace it in the other too.
-- The form does not ask for the expiry: the secret check reads it from GitHub's `github-authentication-token-expiration` response header, and **Test GitHub secret** on the token page updates it. The Overview warns 14 days before.
+- Release asset uploads use a separate host, so they need the second token. The checkbox stores the same secret in both, and **Replace secret…** (Danger zone) on either token page offers to replace it in the other too.
 - The gateway stores static credentials only. It does not mint GitHub App installation tokens; see [roadmap.md](../roadmap.md).
 
 Reference: <https://docs.github.com/en/rest/authentication/authenticating-to-the-rest-api>.

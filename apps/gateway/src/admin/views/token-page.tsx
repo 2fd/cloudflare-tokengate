@@ -14,6 +14,8 @@ import {
   DangerRow,
   DangerZone,
   DetailLayout,
+  Dialog,
+  DialogClose,
   DialogTrigger,
   Disclosure,
   Entity,
@@ -49,7 +51,7 @@ import type { RuleUsage } from '../../db/rollups';
 import type { AuditEvent, Service } from '../../db/types';
 import type { Injection, VerifyCheck } from '../../policy/types';
 import { CALLER_TOKEN_HEADER } from '../../proxy/caller-token';
-import { EXPIRY_WARNING_MS, type TrafficStats } from '../../telemetry/dashboard';
+import type { TrafficStats } from '../../telemetry/dashboard';
 import { CSRF_FIELD } from '../auth/csrf';
 import type { Permission } from '../auth/rbac';
 import type { RuleEdge } from '../connections';
@@ -78,16 +80,15 @@ import {
   allowlistPattern,
   baseUrlSuggestions,
   CheckResult,
-  dateInput,
   DetailFields,
   EMPTY_VALUES,
-  ExpiryField,
   FormIds,
   type FormState,
   InjectionFields,
   inSentence,
   PATH_WARNING,
   QUERY_WARNING,
+  SAVE_ANYWAY_HINT,
   SecretField,
   SecretSubmits,
   type TokenFormValues,
@@ -104,7 +105,6 @@ import {
 
 export { typeLabel, upstreamHost } from './token-ui';
 
-const DAY_MS = 86_400_000;
 /** The scale rule of the "Who can use" map: issuers drawn, and rules per issuer. */
 const MAP_GROUPS = 3;
 const MAP_ROWS = 3;
@@ -130,25 +130,15 @@ const PAIR_FAILURE_REASONS: Partial<Record<TokenAlso, string>> = {
   pair_failed_check: 'its secret check failed',
 };
 
-/** Days until `at`, rounded up (the "Expires in N days" count). */
-export function daysUntil(at: number, now: number): number {
-  return Math.ceil((at - now) / DAY_MS);
-}
-
 /** One token's status in the A9 vocabulary, most severe first. */
 export function tokenStatus(
-  service: Pick<Service, 'enabled' | 'credential_sealed' | 'credential_expires_at'>,
-  o: { unreadable: boolean; outside: boolean; now: number },
+  service: Pick<Service, 'enabled' | 'credential_sealed'>,
+  o: { unreadable: boolean; outside: boolean },
 ): { status: StatusKey; detail?: string } {
   if (!service.enabled) return { status: 'disabled' };
   if (service.credential_sealed === null) return { status: 'no_credential' };
   if (o.unreadable) return { status: 'credential_unreadable' };
   if (o.outside) return { status: 'outside_hosts' };
-  const expires = service.credential_expires_at;
-  if (expires !== null && expires <= o.now) return { status: 'expired' };
-  if (expires !== null && expires - o.now <= EXPIRY_WARNING_MS) {
-    return { status: 'expiring', detail: String(daysUntil(expires, o.now)) };
-  }
   return { status: 'active' };
 }
 
@@ -234,7 +224,6 @@ export interface TokenPageData {
   /** Every token, for the destination form's suggestions. */
   tokens: readonly Service[];
   proxyOrigin: string;
-  today: string;
   also: TokenAlso | null;
 }
 
@@ -280,7 +269,6 @@ export function TokenHeader(props: { ctx: ViewContext; data: TokenPageData }) {
   const status = tokenStatus(service, {
     unreadable: unreadable(data),
     outside: data.outside,
-    now: ctx.now,
   });
   const attested = data.binding.status === 'attested';
   const giveHref = paths.accessRuleNew({ credential: service.id });
@@ -374,6 +362,9 @@ export function TokenPage(props: { ctx: ViewContext; data: TokenPageData; state:
         <UseTray data={data} />
         <DestinationTray ctx={ctx} data={data} state={state} />
         <Danger ctx={ctx} data={data} />
+        {ctx.can('tokens:write') && data.binding.status === 'attested' ? (
+          <ReplaceDialog ctx={ctx} data={data} state={state.secret} />
+        ) : null}
       </DetailLayout>
       {canDelete ? <DeleteDialog ctx={ctx} data={data} /> : null}
     </>
@@ -447,7 +438,7 @@ function Problems(props: { ctx: ViewContext; data: TokenPageData }) {
       tone: 'bad',
       title: 'Encryption keys are not loaded: the secret cannot be used or changed.',
       more: KEYRING_ERROR_TEXT[data.keyringError],
-      fix: { href: paths.tokenKeys(), label: 'Open encryption keys' },
+      fix: { href: paths.tokenKeys(), label: 'Open rotate encryption' },
     });
   }
   if (storedUpstreamHost(service.base_url) === null) {
@@ -463,47 +454,6 @@ function Problems(props: { ctx: ViewContext; data: TokenPageData }) {
       title: `${upstreamHost(service.base_url)} is not an allowed host, so requests through this credential are refused.`,
       fix: { href: paths.tokenHosts(), label: 'Open allowed hosts', permission: 'settings:write' },
     });
-  }
-  const expires = service.credential_expires_at;
-  if (service.credential_sealed !== null && expires !== null) {
-    const date = uiFormatTime(new Date(expires), 'date');
-    const replace = {
-      href: paths.token(service.id, { hash: 'secret' }),
-      label: 'Replace the secret',
-      permission: 'tokens:write' as const,
-    };
-    if (expires <= ctx.now) {
-      problems.push({
-        tone: 'bad',
-        title: `The secret of ${service.name} expired on ${date}.`,
-        more: 'Upstream calls fail until it is replaced.',
-        fix: replace,
-      });
-    } else if (expires - ctx.now <= EXPIRY_WARNING_MS) {
-      const days = daysUntil(expires, ctx.now);
-      // The consequence, when calls are recorded: who would be refused after that date.
-      const calls = data.usageAvailable && data.sampleRate > 0 ? usage30d(data) : 0;
-      const subjects = [
-        ...new Set(
-          data.rules
-            .filter((edge) => (data.usage.get(edge.rule.id)?.requests ?? 0) > 0)
-            .map((edge) => edge.subject),
-        ),
-      ];
-      const who =
-        subjects.length <= 2
-          ? subjects.join(' and ')
-          : plural(subjects.length, 'repository', 'repositories');
-      problems.push({
-        tone: 'warn',
-        title: `The secret of ${service.name} expires on ${date} (in ${plural(days, 'day')}).`,
-        more:
-          calls > 0
-            ? `${who} made ${formatCount(calls)} ${calls === 1 ? 'call' : 'calls'} through it in the last 30 days. After ${uiFormatTime(new Date(expires), 'day')}, they are refused.`
-            : 'Replace it before then.',
-        fix: replace,
-      });
-    }
   }
   const pairReason = data.also === null ? undefined : PAIR_FAILURE_REASONS[data.also];
   if (pairReason !== undefined) {
@@ -553,7 +503,7 @@ function bindingText(binding: Extract<StoredBinding, { status: 'unattested' }>):
     binding.error === 'credential_binding_mismatch'
       ? binding.keyChanged === false
         ? 'The base URL or the way the secret is sent was changed outside the admin UI: the stored secret no longer matches them, and the encryption key is unchanged.'
-        : 'The stored secret does not match this credential: either its base URL or the way the secret is sent was changed outside the admin UI, or the key behind its key id was replaced (see Encryption keys).'
+        : 'The stored secret does not match this credential: either its base URL or the way the secret is sent was changed outside the admin UI, or the key behind its key id was replaced (see Settings › Rotate encryption).'
       : binding.error === 'keyring_missing_key'
         ? 'The stored secret was encrypted with a key that is no longer in the keyring, so the stored base URL and injection cannot be confirmed.'
         : 'The stored secret is damaged, so the stored base URL and injection cannot be confirmed.';
@@ -817,14 +767,6 @@ function HandOff(props: { ctx: ViewContext; data: TokenPageData }) {
 // ---------------------------------------------------------------------------------------------
 // Secret
 
-/** Rotate prefill: the stored expiry only when it is more than 14 days away (A13.8.2). */
-function rotateExpiry(service: Service, now: number): { value: string; past: string | null } {
-  const expires = service.credential_expires_at;
-  if (expires === null) return { value: '', past: null };
-  if (expires - now > EXPIRY_WARNING_MS) return { value: dateInput(expires), past: null };
-  return { value: '', past: dateInput(expires) };
-}
-
 function secretPlaceholder(template: ServiceTemplate | null) {
   return template?.secret ?? CUSTOM_SECRET;
 }
@@ -847,14 +789,12 @@ function SecretTray(props: { ctx: ViewContext; data: TokenPageData; state: Token
           <p class="hint">Test sends {verifyText(service.verify)} to the upstream now.</p>
         ) : null}
       </Panel>
-      {canWrite ? (
+      {canWrite && !attested ? (
         <Panel variant="pad">
-          {attested ? (
-            <RotateForm ctx={ctx} data={data} state={state.secret} />
-          ) : data.keyringError !== null ? (
+          {data.keyringError !== null ? (
             <p>
               Secrets cannot be changed while the encryption keys are not loaded.{' '}
-              <a href={paths.tokenKeys()}>Open encryption keys</a>
+              <a href={paths.tokenKeys()}>Open rotate encryption</a>
             </p>
           ) : (
             <p>
@@ -882,7 +822,6 @@ function StoredSecret(props: { ctx: ViewContext; data: TokenPageData }) {
   }
   const parts = secretParts(service.credential_hint);
   const kid = sealedKid(service.credential_sealed);
-  const expires = service.credential_expires_at;
   const set = service.credential_updated_at;
   return (
     <Secret
@@ -911,16 +850,7 @@ function StoredSecret(props: { ctx: ViewContext; data: TokenPageData }) {
               </Time>
             </>
           )}{' '}
-          by {data.lastSet?.actor_email ?? 'someone (not recorded)'} ·{' '}
-          {expires === null ? (
-            'does not expire, or not known'
-          ) : (
-            <>
-              {expires <= ctx.now ? 'expired ' : 'expires '}
-              <Time datetime={new Date(expires)} format="date" />
-            </>
-          )}
-          {template?.expiry_from_check ? ' (read from GitHub)' : ''}
+          by {data.lastSet?.actor_email ?? 'someone (not recorded)'}
           {kid ? (
             <>
               {' '}
@@ -933,56 +863,62 @@ function StoredSecret(props: { ctx: ViewContext; data: TokenPageData }) {
   );
 }
 
-function RotateForm(props: { ctx: ViewContext; data: TokenPageData; state?: FormState }) {
+/**
+ * Replacing a secret is rare, so it is a danger zone action: the dialog posts the new secret.
+ * After a failed check or a refused secret the page renders the dialog open, in the page flow.
+ */
+function ReplaceDialog(props: { ctx: ViewContext; data: TokenPageData; state?: FormState }) {
   const { ctx, data, state } = props;
   const { service, template } = data;
   const ids = new FormIds('secret', state?.errors ?? []);
-  const expiry = rotateExpiry(service, ctx.now);
-  const values: TokenFormValues = state?.values ?? {
-    ...EMPTY_VALUES,
-    credential_expires_at: expiry.value,
-  };
   const secret = secretPlaceholder(template);
   const submitted = state ? new Set(state.values.also_replace.split(',')) : null;
   const failedCheck = !!state?.verify;
   const context = `of ${service.name}`;
   return (
-    <PostForm action={`${paths.token(service.id)}/secret`} csrf={ctx.csrf} class="stack-sm">
-      <h3 class="lbl" id="rotate-h">
-        Replace secret
-      </h3>
-      {/* The destination shown here, so a token repointed since is refused (I-CRED-2). */}
-      <input type="hidden" name="expected_destination" value={data.destinationFingerprint} />
-      <div class="rot-row">
-        <SecretField
-          ids={ids}
-          label={`New ${inSentence(secret.label)}`}
-          placeholder={secret.placeholder}
-          hint={`Sent to ${upstreamHost(service.base_url)}. Replaces ${service.credential_hint ?? 'the stored secret'}. Callers keep working, with the new secret from the next request.`}
-          pattern={template?.secret.pattern}
-          draft={state?.draft ?? null}
-        />
-        {template?.expiry_from_check ? null : (
-          <ExpiryField
-            ids={ids}
-            values={values}
-            label="New secret expires on"
-            optional
-            min={data.today}
-            hint={
-              expiry.past
-                ? `The old secret ${(service.credential_expires_at ?? 0) <= ctx.now ? 'expired' : 'expires'} on ${uiFormatTime(new Date(service.credential_expires_at ?? 0), 'date')}. Empty = does not expire.`
-                : 'Empty = does not expire.'
-            }
-          />
-        )}
-        {failedCheck ? null : (
-          <Button type="submit" srSuffix={context}>
-            {service.verify ? 'Check and replace' : 'Replace secret'}
+    <Dialog
+      id="dlg-replace"
+      wide
+      open={state !== undefined}
+      title={`Replace the secret of ${service.name}`}
+      description={`Replaces ${service.credential_hint ?? 'the stored secret'}. Callers keep working, with the new secret from the next request.`}
+      action={`${paths.token(service.id)}/secret`}
+      // The destination shown here, so a token repointed since is refused (I-CRED-2).
+      hidden={ctx.hidden({ expected_destination: data.destinationFingerprint })}
+      footer={
+        <>
+          {state ? (
+            <a class="btn secondary" href={paths.token(service.id)}>
+              Cancel
+            </a>
+          ) : (
+            <DialogClose dialog="dlg-replace" />
+          )}
+          {failedCheck ? (
+            <Button type="submit" name="save_anyway" value="1" srSuffix={context}>
+              Save without a passing check
+            </Button>
+          ) : null}
+          <Button variant="primary" type="submit" srSuffix={context}>
+            {failedCheck
+              ? 'Check again and save'
+              : service.verify
+                ? 'Check and replace'
+                : 'Replace secret'}
           </Button>
-        )}
-      </div>
+        </>
+      }
+    >
+      <SecretField
+        ids={ids}
+        label={`New ${inSentence(secret.label)}`}
+        placeholder={secret.placeholder}
+        hint={`Sent to ${upstreamHost(service.base_url)}.`}
+        pattern={template?.secret.pattern}
+        draft={state?.draft ?? null}
+      />
       {state?.verify ? <CheckResult verify={state.verify} /> : null}
+      {failedCheck ? <p class="hint">{SAVE_ANYWAY_HINT}</p> : null}
       {data.siblings.map((sibling) => (
         <Checkbox
           name="also_replace"
@@ -992,8 +928,7 @@ function RotateForm(props: { ctx: ViewContext; data: TokenPageData; state?: Form
           label={`Also replace in ${sibling.slug} (same secret, ${sibling.credential_hint ?? 'stored'})`}
         />
       ))}
-      {failedCheck ? <SecretSubmits label="Replace secret" context={context} failedCheck /> : null}
-    </PostForm>
+    </Dialog>
   );
 }
 
@@ -1050,7 +985,10 @@ function DestinationTray(props: { ctx: ViewContext; data: TokenPageData; state: 
   const unattested = data.binding.status === 'unattested';
   const none = service.credential_sealed === null;
   const canWrite = ctx.can('tokens:write');
-  const editDestination = unattested || none || !!state.destination || state.open === 'destination';
+  // A type's destination is fixed: its form only sets a secret that is missing or does not open.
+  const fixed = template !== null;
+  const editDestination =
+    unattested || none || !!state.destination || (!fixed && state.open === 'destination');
   const editDetails = !!state.details || state.open === 'details';
   const notConfirmed = unattested ? (
     <>
@@ -1061,14 +999,16 @@ function DestinationTray(props: { ctx: ViewContext; data: TokenPageData; state: 
   return (
     <Tray
       id="destination"
-      title="Destination"
+      title={fixed ? 'Settings' : 'Destination'}
       description={
-        template ? `Set by the ${template.label} type.` : 'Set when the credential was added.'
+        template
+          ? `${template.label}: the destination is fixed.`
+          : 'Set when the credential was added.'
       }
       actions={
         canWrite && !(editDestination && editDetails) ? (
           <>
-            {editDestination ? null : (
+            {editDestination || fixed ? null : (
               <Button
                 size="sm"
                 href={paths.token(service.id, { open: 'destination', hash: 'destination' })}
@@ -1091,24 +1031,29 @@ function DestinationTray(props: { ctx: ViewContext; data: TokenPageData; state: 
       <Panel variant="pad">
         <KeyValue
           items={[
-            {
-              label: 'Base URL',
-              value: (
-                <>
-                  <code>{service.base_url}</code>
-                  {notConfirmed}
-                </>
-              ),
-            },
-            {
-              label: 'Secret sent as',
-              value: (
-                <>
-                  {injectionText(service.injection)}
-                  {notConfirmed}
-                </>
-              ),
-            },
+            // A type's own destination goes unsaid; one that does not open is shown, unconfirmed.
+            ...(fixed && !unattested
+              ? []
+              : [
+                  {
+                    label: 'Base URL',
+                    value: (
+                      <>
+                        <code>{service.base_url}</code>
+                        {notConfirmed}
+                      </>
+                    ),
+                  },
+                  {
+                    label: 'Secret sent as',
+                    value: (
+                      <>
+                        {injectionText(service.injection)}
+                        {notConfirmed}
+                      </>
+                    ),
+                  },
+                ]),
             {
               label: 'Extra forwarded headers',
               value:
@@ -1120,14 +1065,6 @@ function DestinationTray(props: { ctx: ViewContext; data: TokenPageData; state: 
             },
             { label: 'Timeout', value: `${service.timeout_ms / 1000} s` },
             { label: 'Secret check', value: verifyText(service.verify) },
-            {
-              label: 'Description',
-              value: service.description || (
-                <span class="muted">
-                  None. Add one so access managers know which account this is.
-                </span>
-              ),
-            },
           ]}
         />
         {unattested ? (
@@ -1145,8 +1082,12 @@ function DestinationTray(props: { ctx: ViewContext; data: TokenPageData; state: 
           <Disclosure
             id="destination-edit"
             class="lform"
-            summary="Change destination"
-            hint="base URL and how the secret is sent"
+            summary={template ? 'Set the secret' : 'Change destination'}
+            hint={
+              template
+                ? `sent to ${upstreamHost(template.base_url)}`
+                : 'base URL and how the secret is sent'
+            }
             open
           >
             <DestinationForm ctx={ctx} data={data} state={state.destination} />
@@ -1155,7 +1096,7 @@ function DestinationTray(props: { ctx: ViewContext; data: TokenPageData; state: 
       ) : null}
       {canWrite && editDetails ? (
         <Panel variant="pad">
-          <Disclosure id="details" summary="Edit name, description and options" open>
+          <Disclosure id="details" summary="Edit name and options" open>
             <DetailsForm ctx={ctx} data={data} state={state.details} />
           </Disclosure>
         </Panel>
@@ -1171,21 +1112,19 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
   const { ctx, data, state } = props;
   const { service, template } = data;
   const attested = data.binding.status === 'attested';
-  const confirm = data.binding.status === 'unattested' || service.credential_sealed === null;
+  // A type's host is always typed: its form sets a secret only after that confirmation.
+  const confirm =
+    data.binding.status === 'unattested' || service.credential_sealed === null || template !== null;
   const ids = new FormIds('destination', state?.errors ?? []);
-  const stored = valuesFromService(service);
-  const expiry = rotateExpiry(service, ctx.now);
   // An unattested or absent binding is not prefilled: the admin types the destination from an
   // out-of-band source instead of resubmitting a possibly tampered value (I-CRED-2).
-  const defaults: TokenFormValues = attested
-    ? { ...stored, credential_expires_at: expiry.value }
-    : { ...EMPTY_VALUES };
+  const defaults: TokenFormValues = attested ? valuesFromService(service) : { ...EMPTY_VALUES };
   const values = state ? { ...state.values, confirm_destination: '' } : defaults;
   const listed = data.allowlist !== null && data.allowlist.length > 0;
   const canAllow = ctx.can('settings:write');
   // Shown from the start, as on the custom card, so a new host needs one submit: the server
-  // applies it only when the submitted host is not covered (A13.8.3).
-  const showAllow = canAllow && listed;
+  // applies it only when the submitted host is not covered (A13.8.3). A type's host is its own.
+  const showAllow = canAllow && listed && template === null;
   // Unattested or none: only code-sourced suggestions; D1 values could be the attacker's.
   const suggestions = attested
     ? baseUrlSuggestions(data.allowlist, data.tokens)
@@ -1193,36 +1132,45 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
   const secret = secretPlaceholder(template);
   return (
     <PostForm action={`${paths.token(service.id)}/destination`} csrf={ctx.csrf} class="stack-sm">
-      <Field
-        id={ids.id('base_url')}
-        label="Base URL"
-        hint={
-          <>
-            https only, no query string. Changing it requires the secret again: the secret is bound
-            to its destination.
-            {listed ? <> Allowed hosts: {data.allowlist?.join(', ')}.</> : null}
-          </>
-        }
-        error={ids.error('base_url') ?? undefined}
-      >
-        <Input
-          name="base_url"
-          type="url"
-          mono
-          required
-          value={values.base_url}
-          placeholder="https://api.example.com/v1"
-          suggestions={suggestions}
-          // As on the custom card: no generated pattern when the owner may tick allow_host.
-          pattern={listed && !canAllow ? allowlistPattern(data.allowlist ?? []) : undefined}
-        />
-      </Field>
-      <InjectionFields ids={ids} values={values} tokens={data.tokens} />
+      {/* A type's destination comes from the type on the server; only a custom one is typed. */}
+      {template ? null : (
+        <>
+          <Field
+            id={ids.id('base_url')}
+            label="Base URL"
+            hint={
+              <>
+                https only, no query string. Changing it requires the secret again: the secret is
+                bound to its destination.
+                {listed ? <> Allowed hosts: {data.allowlist?.join(', ')}.</> : null}
+              </>
+            }
+            error={ids.error('base_url') ?? undefined}
+          >
+            <Input
+              name="base_url"
+              type="url"
+              mono
+              required
+              value={values.base_url}
+              placeholder="https://api.example.com/v1"
+              suggestions={suggestions}
+              // As on the custom card: no generated pattern when the owner may tick allow_host.
+              pattern={listed && !canAllow ? allowlistPattern(data.allowlist ?? []) : undefined}
+            />
+          </Field>
+          <InjectionFields ids={ids} values={values} tokens={data.tokens} />
+        </>
+      )}
       {confirm ? (
         <Field
           id={ids.id('confirm_destination')}
           label="Confirm destination host"
-          hint="Check the base URL against the provider's docs, then type its host only, without https:// or a path. Nothing is sent upstream until this matches."
+          hint={
+            template
+              ? `Type ${upstreamHost(template.base_url)}, the host the secret is sent to. Nothing is sent upstream until this matches.`
+              : "Check the base URL against the provider's docs, then type its host only, without https:// or a path. Nothing is sent upstream until this matches."
+          }
           error={ids.error('confirm_destination') ?? undefined}
         >
           <Input
@@ -1230,7 +1178,7 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
             mono
             required
             value=""
-            placeholder="api.example.com"
+            placeholder={template ? upstreamHost(template.base_url) : 'api.example.com'}
             pattern={HOST_PATTERN}
           />
         </Field>
@@ -1239,7 +1187,7 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
         ids={ids}
         label={secret.label}
         placeholder={secret.placeholder}
-        hint="Required: a new destination needs the secret again."
+        hint={template ? undefined : 'Required: a new destination needs the secret again.'}
         draft={state?.draft ?? null}
       />
       {state?.verify ? <CheckResult verify={state.verify} /> : null}
@@ -1254,17 +1202,16 @@ function DestinationForm(props: { ctx: ViewContext; data: TokenPageData; state?:
           error={ids.error('allow_host')}
         />
       ) : null}
-      {template?.expiry_from_check ? null : (
-        <ExpiryField
-          ids={ids}
-          values={values}
-          optional
-          min={data.today}
-          hint="Leave empty if it does not expire. GitHub tokens report their expiry when checked."
-        />
-      )}
       <SecretSubmits
-        label={service.verify ? 'Check and change destination' : 'Change destination'}
+        label={
+          template
+            ? service.verify
+              ? 'Check and save the secret'
+              : 'Save the secret'
+            : service.verify
+              ? 'Check and change destination'
+              : 'Change destination'
+        }
         context={`of ${service.name}`}
         failedCheck={!!state?.verify}
       />
@@ -1310,6 +1257,17 @@ function Danger(props: { ctx: ViewContext; data: TokenPageData }) {
   const countText = plural(rules.length, 'credential access rule');
   return (
     <DangerZone id="danger">
+      {data.binding.status === 'attested' ? (
+        <DangerRow
+          title="Replace secret"
+          description="When the secret leaked or the provider issued a new one. Callers keep working, with the new secret from the next request."
+          action={
+            <DialogTrigger dialog="dlg-replace" variant="danger">
+              Replace secret…
+            </DialogTrigger>
+          }
+        />
+      ) : null}
       {service.enabled ? (
         <DangerRow
           title="Disable credential"

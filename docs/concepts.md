@@ -24,28 +24,28 @@ The admin UI uses task names for some terms. The code, the database, the audit l
 
 | Admin UI name | Term in the code and the database | Admin UI page |
 |---|---|---|
-| Credential | [service](#credential), plus its credential | Credentials (`/admin/credentials`) |
+| Credential | [service](#credential), plus its credential | Credentials › Credentials (`/admin/credentials`) |
 | Secret | [secret](#secret) | The credential page |
-| Credential access rule | [credential access rule](#credential-access-rule) | Credential access rules (`/admin/credential-access-rules`) |
+| Credential access rule | [credential access rule](#credential-access-rule) | Credentials › Access Rules › Credential access rules (`/admin/credential-access-rules`) |
 | Issuer type | [profile](#profile) | The credential access rule page |
 | Organization / Group | the values of the [tenant pin](#tenant-pin) | The credential access rule page |
-| Issuer access rules | [issuer access rule](#issuer-access-rule) | Access Rules › Issuer Access Rules (`/admin/issuer-access-rules`) |
+| Issuer access rules | [issuer access rule](#issuer-access-rule) | Credentials › Access Rules › Global access rules (`/admin/global-access-rules`) |
 | Constraints | the grant [conditions](#condition) | The access page |
 | Allowed operations | the grant [rules](#rule) | The access page |
 | Accepted risks | acknowledged grant warnings | The access page |
 | Display label | a row in `claim_labels` ([display label](#display-label)) | The credential access rule and access pages |
 
-The admin UI has four sections, in the order of its sidebar: Monitoring (Overview, Requests, Audit log, Data retention), Credentials (Credentials, Allowed hosts, Encryption keys), Access Rules (Credential Access Rules, Issuer Access Rules) and Users (People, Sign-in). See [ADR 0019](adr/0019-admin-information-architecture.md) and [ADR 0022](adr/0022-admin-ui-on-design-system-d.md).
+The admin UI has three sections, in the order of its sidebar: Monitoring (Overview, Requests, Audit log, Data retention), Credentials (Credentials, Access Rules, with tabs for credential and global access rules) and Settings (People, Sign-in, Allowed hosts, Rotate encryption, Appearance). See [ADR 0019](adr/0019-admin-information-architecture.md) and [ADR 0022](adr/0022-admin-ui-on-design-system-d.md).
 
 ## Glossary
 
 ### Credential
 
-A credential combines a stored secret with the upstream API destination and authentication settings for using it. The database table is `credentials`; some internal helpers retain the historical name `service`. It has a slug, a fixed `https` base URL, an injection, an optional credential, a timeout, an optional list of extra request headers to forward, and an optional credential check. Callers address it as `/proxy/<slug>/<path>`; the gateway appends `<path>` to the base URL and never leaves it ([I-PATH-1](threat-model.md#i-path-1)). The slug is 1 to 63 characters of `a-z`, `0-9` and `-` and cannot change. The base URL must use `https`, must not be an IP address, localhost, a `workers.dev` host or the gateway itself, and must match the upstream host allowlist when an owner has set one (Credentials › Allowed hosts). The gateway checks this when the service is saved and again on every request ([I-SSRF-1](threat-model.md#i-ssrf-1)). Disabling a service refuses its requests from the next request on. IDs start with `svc_`. Admin UI: Credentials (`/admin/credentials`). Code: `apps/gateway/src/admin/ops/credentials.ts`, `apps/gateway/src/db/credentials.ts`.
+A credential combines a stored secret with the upstream API destination and authentication settings for using it. The database table is `credentials`; some internal helpers retain the historical name `service`. It has a slug, a fixed `https` base URL, an injection, an optional credential, a timeout, an optional list of extra request headers to forward, and an optional credential check. Callers address it as `/proxy/<slug>/<path>`; the gateway appends `<path>` to the base URL and never leaves it ([I-PATH-1](threat-model.md#i-path-1)). The slug is 1 to 63 characters of `a-z`, `0-9` and `-` and cannot change. The base URL must use `https`, must not be an IP address, localhost, a `workers.dev` host or the gateway itself, and must match the upstream host allowlist when an owner has set one (Settings › Allowed hosts). The gateway checks this when the service is saved and again on every request ([I-SSRF-1](threat-model.md#i-ssrf-1)). Disabling a service refuses its requests from the next request on. IDs start with `svc_`. Admin UI: Credentials (`/admin/credentials`). Code: `apps/gateway/src/admin/ops/credentials.ts`, `apps/gateway/src/db/credentials.ts`.
 
 ### Secret
 
-A secret is the secret of a service, for example an API key, a bot token or the token part of a webhook URL. The admin UI accepts it once and never shows it again; pages show only its length and last 4 characters. The gateway stores it encrypted with AES-256-GCM envelope encryption: a fresh data key per credential, wrapped by the active key of the keyring. Both layers are bound to the service ID, the base URL and the injection, so a credential only decrypts for the destination it was saved for. Changing the base URL or the injection requires entering the credential again, and a database edit of either makes decryption fail closed ([I-CRED-2](threat-model.md#i-cred-2)). The credential never appears in gateway responses, logs, audit events, the UI or exports ([I-CRED-1](threat-model.md#i-cred-1)). An optional expiry date makes the Overview warn 14 days before; the gateway does not enforce it. Admin UI: Secret, on the credential page. Code: `apps/gateway/src/crypto/envelope.ts`.
+A secret is the secret of a service, for example an API key, a bot token or the token part of a webhook URL. The admin UI accepts it once and never shows it again; pages show only its length and last 4 characters. The gateway stores it encrypted with AES-256-GCM envelope encryption: a fresh data key per credential, wrapped by the active key of the keyring. Both layers are bound to the service ID, the base URL and the injection, so a credential only decrypts for the destination it was saved for. The base URL and injection of a credential made from a type are fixed. Changing them on a custom credential requires entering the credential again, and a database edit of either makes decryption fail closed ([I-CRED-2](threat-model.md#i-cred-2)). The credential never appears in gateway responses, logs, audit events, the UI or exports ([I-CRED-1](threat-model.md#i-cred-1)). Admin UI: Secret, on the credential page. Code: `apps/gateway/src/crypto/envelope.ts`.
 
 ### Injection
 
@@ -75,7 +75,7 @@ Admin UI: Access Rules → Credential Access Rules (`/admin/credential-access-ru
 
 ### Profile
 
-A profile is code-reviewed knowledge about one issuer type. There are three: `github-actions`, `gitlab-ci` and `generic`. A profile defines the default issuer and algorithms, the maximum token age limit, the claim that names the triggering event, the trusted events, the claims a tenant pin may use, the shared issuers, the anchor rules, the claims a token must carry, and the claims copied into request records. Admins choose a profile when they create a credential access rule and cannot change it later. Issuers on `token.actions.githubusercontent.com` or `gitlab.com` must use their platform profile. Admin UI: Issuer type. Code: `apps/gateway/src/identity/profiles/github-actions.ts`, `gitlab-ci.ts`, `generic.ts`.
+A profile is code-reviewed knowledge about one issuer type. There are four: `github-actions`, `gitlab-ci`, `vercel` and `generic`. A new profile is code only: the schema stores the profile ID and claim labels without a fixed list ([ADR 0028](adr/0028-issuer-profiles-are-code.md)). A profile defines the default issuer and algorithms, the maximum token age limit, the claim that names the triggering event, the trusted events, the claims a tenant pin may use, the shared issuers, the anchor rules, the claims a token must carry, and the claims copied into request records. Admins choose a profile when they create a credential access rule and cannot change it later. Issuers on `token.actions.githubusercontent.com`, `gitlab.com` or `oidc.vercel.com` must use their platform profile. Admin UI: Issuer type. Code: `apps/gateway/src/identity/profiles/github-actions.ts`, `gitlab-ci.ts`, `vercel.ts`, `generic.ts`.
 
 ### Tenant pin
 
@@ -121,9 +121,10 @@ An anchor claim is an identity claim that a grant must pin exactly, usually an i
 |---|---|
 | `github-actions` | `repository_owner_id` + `repository_id`, or `repository_owner_id` + `job_workflow_ref` |
 | `gitlab-ci` | `namespace_id` + `project_id`, or `namespace_id` + `ci_config_ref_uri` |
+| `vercel` | `owner_id` + `project_id` |
 | `generic` | any one of the credential access rule's anchor claims |
 
-Numeric IDs are used because names can be renamed and registered again by someone else. The workflow pins `job_workflow_ref` and `ci_config_ref_uri` are the exception: they are path-based, follow repository and project names, and admit every repository or project that runs the pinned file ([policies.md](policies.md#anchor-rules)). The gateway checks anchors when a grant is saved and again on every request; a grant that no longer satisfies them is skipped.
+IDs are used because names can be renamed and registered again by someone else: numeric for GitHub and GitLab, prefixed for Vercel (`team_…`, `prj_…`). The workflow pins `job_workflow_ref` and `ci_config_ref_uri` are the exception: they are path-based, follow repository and project names, and admit every repository or project that runs the pinned file ([policies.md](policies.md#anchor-rules)). The gateway checks anchors when a grant is saved and again on every request; a grant that no longer satisfies them is skipped.
 
 ### Trusted events
 
@@ -133,9 +134,10 @@ Trusted events are triggering events whose workflow file and ref come from the r
 |---|---|---|
 | `github-actions` | `event_name` | `push`, `workflow_dispatch`, `schedule`, `release` |
 | `gitlab-ci` | `pipeline_source` | `push`, `web`, `schedule`, `api`, `trigger` |
+| `vercel` | `environment` | `production`, `preview` |
 | `generic` | none | no event check |
 
-Events such as `pull_request_target`, `workflow_run` or GitLab `merge_request_event` can run code from outside contributors. [policies.md](policies.md) explains when an opt-in is safe.
+Events such as `pull_request_target`, `workflow_run` or GitLab `merge_request_event` can run code from outside contributors. Vercel `development` tokens go to every team member through `vercel env pull`. [policies.md](policies.md) explains when an opt-in is safe.
 
 ### User
 
@@ -156,13 +158,13 @@ There are five roles. Token duties and access duties are separate roles ([ADR 00
 | `token_manager` | `read`, `tokens:write` | Also create, change, disable and delete credentials; enter, rotate and test credentials. Cannot give any caller access to a service. |
 | `access_manager` | `read`, `access:write` | Also create, change and delete credential access rules and issuer_access_rules, for any service. Never sees a credential. |
 | `admin` | `read`, `tokens:write`, `access:write`, `config:export` | Token manager and access manager together, plus the configuration export. |
-| `owner` | The admin's, plus `users:write`, `settings:write`, `keyring:rewrap` | Also invite, approve and reject users, change roles and statuses, reset logins, set the role and status of new users, change settings (including the upstream host allowlist and the admin hosts), re-encrypt credentials. |
+| `owner` | The admin's, plus `users:write`, `settings:write`, `keyring:rewrap` | Also invite, approve and reject users, change roles and statuses, reset logins, set the role and status of new users, change settings (including the upstream host allowlist), re-encrypt credentials. |
 
-Some form fields need a further permission, on top of the route's: allowing a new upstream host while saving a service needs `settings:write`, and deleting a service together with its issuer_access_rules needs `access:write`. Every admin route has an entry in the permission table, and unknown routes are denied ([I-RBAC-1](threat-model.md#i-rbac-1)). The database refuses to remove the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). IDs start with `usr_`. Admin UI: Users › People (`/admin/users`). Code: `apps/gateway/src/admin/auth/rbac.ts`.
+Some form fields need a further permission, on top of the route's: allowing a new upstream host while saving a service needs `settings:write`, and deleting a service together with its issuer_access_rules needs `access:write`. Every admin route has an entry in the permission table, and unknown routes are denied ([I-RBAC-1](threat-model.md#i-rbac-1)). The database refuses to remove the last active owner ([I-OWNER-1](threat-model.md#i-owner-1)). IDs start with `usr_`. Admin UI: Settings › Members (`/admin/users`). Code: `apps/gateway/src/admin/auth/rbac.ts`.
 
 ### Team
 
-A team (an admin team) is a named set of users that holds global permissions and a scope of credentials and consumers. Its members get these powers. Teams replace the roles ([ADR 0023](adr/0023-teams-replace-roles.md)). A team is **not** the Cloudflare Access *team domain*: the docs always write "Access team domain" for that one, and the variable stays `AUTH_ACCESS_TEAM_DOMAIN`. "Team" alone always means an admin team. A user can be in several teams; the effective permissions are the union of the teams. A holder of `users:write` creates custom teams, sets their powers and adds people, but never more power than they hold themselves (I-RBAC-2). Teams are not tenants: slugs, names, issuers, settings and the keyring stay deployment-wide. IDs start with `tea_`. Admin UI: Users › Teams (`/admin/users/teams`).
+A team (an admin team) is a named set of users that holds global permissions and a scope of credentials and consumers. Its members get these powers. Teams replace the roles ([ADR 0023](adr/0023-teams-replace-roles.md)). A team is **not** the Cloudflare Access *team domain*: the docs always write "Access team domain" for that one, and the variable stays `AUTH_ACCESS_TEAM_DOMAIN`. "Team" alone always means an admin team. A user can be in several teams; the effective permissions are the union of the teams. A holder of `users:write` creates custom teams, sets their powers and adds people, but never more power than they hold themselves (I-RBAC-2). Teams are not tenants: slugs, names, issuers, settings and the keyring stay deployment-wide. IDs start with `tea_`. Admin UI: Settings › Teams (`/admin/users/teams`).
 
 ### Built-in team
 
@@ -198,7 +200,7 @@ Reveal (admin UI: "Copy secret") is a flag on a team's access to a token. It inc
 
 ### Default team
 
-The default team is the team that new people join on their first sign-in when the join status is `active` (settings key `join_team`). By default it is Viewers. It must be join-safe: not Owners, and no `users:write`, `settings:write`, `keyring:rewrap` or reveal ([I-LINK-1](threat-model.md#i-link-1)). The default team cannot be deleted. Admin UI: Users › Sign-in.
+The default team is the team that new people join on their first sign-in when the join status is `active` (settings key `join_team`). By default it is Viewers. It must be join-safe: not Owners, and no `users:write`, `settings:write`, `keyring:rewrap` or reveal ([I-LINK-1](threat-model.md#i-link-1)). The default team cannot be deleted. Admin UI: Settings › Members › "Default access…".
 
 ### Receiving team
 
@@ -210,7 +212,7 @@ The secret ends are the first 4 and the last 4 characters of a credential. The c
 
 ### Login provider
 
-Users sign in through Cloudflare Access (login provider `access`), configured with Worker variables, not in the database ([configuration.md](configuration.md), [ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). The gateway keeps no session: it verifies the Access token on every admin request. The token proves a stable subject (`<team domain>|<sub>`) and an email address. On a new login, the gateway links an existing user only when that user is invited, the invitation is not expired, and the email in the token matches ([I-LINK-1](threat-model.md#i-link-1)). Otherwise the first person to sign in becomes the owner, at most once ([I-BOOT-1](threat-model.md#i-boot-1)). Everyone after that joins with the role and status that owners set for new users in Users: by default an active `viewer`; the role can be any role except `owner`, and the status `pending` (wait for approval) or `suspended`. So the Access policy decides who can reach the admin UI, and the join status decides whether they get in at once. An email that already belongs to another user is refused. Admin UI: Users › Sign-in (`/admin/users/sign-in`) shows the login provider and the admin hosts. For local development only, `AUTH_ACCESS_DEVELOPMENT` (login provider `dev`) signs every request to `localhost` in as one email. It never works together with Access: with both set, no login works ([I-CFG-1](threat-model.md#i-cfg-1)). Code: `apps/gateway/src/admin/auth/`.
+Users sign in through Cloudflare Access (login provider `access`), configured with Worker variables, not in the database ([configuration.md](configuration.md), [ADR 0015](adr/0015-cloudflare-access-only-admin-login.md)). The gateway keeps no session: it verifies the Access token on every admin request. The token proves a stable subject (`<team domain>|<sub>`) and an email address. On a new login, the gateway links an existing user only when that user is invited, the invitation is not expired, and the email in the token matches ([I-LINK-1](threat-model.md#i-link-1)). Otherwise the first person to sign in becomes the owner, at most once ([I-BOOT-1](threat-model.md#i-boot-1)). Everyone after that joins with the role and status that owners set for new users in Settings › Members › "Default access…": by default an active `viewer`; the role can be any role except `owner`, and the status `pending` (wait for approval) or `suspended`. So the Access policy decides who can reach the admin UI, and the join status decides whether they get in at once. An email that already belongs to another user is refused. Admin UI: Settings › Members (`/admin/users`) shows the login provider, and its "Default access…" button sets the policy for new people. For local development only, `AUTH_ACCESS_DEVELOPMENT` (login provider `dev`) signs every request to `localhost` in as one email. It never works together with Access: with both set, no login works ([I-CFG-1](threat-model.md#i-cfg-1)). Code: `apps/gateway/src/admin/auth/`.
 
 ### Request record
 
@@ -222,7 +224,7 @@ An audit event is one row in `audit_log` in `DB` for every admin change, and for
 
 ### Keyring
 
-The keyring holds the key-encryption keys (KEKs) that protect credentials. It comes from one of two Worker secrets: `TOKENGATE_KEK` (one base64 32-byte key, key ID `k1`) or `TOKENGATE_KEYRING` (JSON with an active key ID and several keys, for rotation). Setting both is a configuration error. If the keyring is missing or invalid, requests that a grant allows get `503 not_configured` and credential changes are refused; admin sign-in still works ([I-CFG-1](threat-model.md#i-cfg-1)). Generate the KEK outside Cloudflare and keep it in your vault: Worker secrets cannot be read back, and losing the KEK loses every credential. Each key is bound to the login variables `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` and `AUTH_ACCESS_DEVELOPMENT`: a change to any of them makes every stored credential impossible to decrypt ([I-CRED-3](threat-model.md#i-cred-3)). The public development key in `.dev.vars.example` works only for local development (`dev_placeholder_key`). Rotation: [operations/key-rotation.md](operations/key-rotation.md). Admin UI: Credentials › Encryption keys (`/admin/credentials/keys`). Code: `apps/gateway/src/crypto/keyring.ts`.
+The keyring holds the key-encryption keys (KEKs) that protect credentials. It comes from two Worker secrets with one base64 32-byte key each: `TOKENGATE_KEK` holds the current key, and `TOKENGATE_KEYRING` holds the next key during a rotation. While `TOKENGATE_KEYRING` holds a valid random key, it seals new credentials and `TOKENGATE_KEK` still opens the older ones; an invalid `TOKENGATE_KEYRING` is ignored. A key ID is the key check value of the key, so a key keeps its ID when it moves between the two secrets; credentials sealed before [ADR 0027](adr/0027-two-slot-key-rotation.md) use the key ID `k1`, which names `TOKENGATE_KEK`. If the keyring is missing or invalid, requests that a grant allows get `503 not_configured` and credential changes are refused; admin sign-in still works ([I-CFG-1](threat-model.md#i-cfg-1)). Generate keys outside Cloudflare: Worker secrets cannot be read back, and losing the KEK loses every credential. Each key is bound to the login variables `AUTH_ACCESS_TEAM_DOMAIN`, `AUTH_ACCESS_AUD` and `AUTH_ACCESS_DEVELOPMENT`: a change to any of them makes every stored credential impossible to decrypt ([I-CRED-3](threat-model.md#i-cred-3)). The public development key in `.dev.vars.example` works only for local development (`dev_placeholder_key`). Rotation: [operations/key-rotation.md](operations/key-rotation.md). Admin UI: Settings › Rotate encryption (`/admin/credentials/keys`), which guides the rotation in five steps. Code: `apps/gateway/src/crypto/keyring.ts`.
 
 ### Display label
 

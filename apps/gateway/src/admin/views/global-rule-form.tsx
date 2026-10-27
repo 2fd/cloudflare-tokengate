@@ -21,6 +21,7 @@ import type { Child } from 'hono/jsx';
 import type { GlobalAccessRule } from '../../db/types';
 import { GITHUB_ACTIONS_ISSUER } from '../../identity/profiles/github-actions';
 import { GITLAB_COM_ISSUER } from '../../identity/profiles/gitlab-ci';
+import { VERCEL_OIDC_ISSUER } from '../../identity/profiles/vercel';
 import type { ProfileId } from '../../identity/types';
 import { PROXY_METHODS } from '../../policy/types';
 import { ALLOWED_ALGS } from '../../policy/validate';
@@ -29,7 +30,7 @@ import type { FieldError } from '../ops/shared';
 import { ownerFindCommand } from '../rule-access';
 import { issuerHost, issuerLogo } from './access-visuals';
 import { Checkbox, CheckboxGroup, Field, IdWithLabelField, Select, TextArea } from './components';
-import { ISSUER_TYPES, IssuerCards } from './issuer-fields';
+import { ISSUER_TYPES, IssuerType } from './issuer-fields';
 import { RepeatingRows } from './rows';
 
 /** The limit boxes, in GLOBAL_LIMITS order (policy/limits.ts). */
@@ -180,7 +181,7 @@ export function GlobalRuleFormView(props: { model: GlobalRuleFormModel }) {
             title="Issuer"
             description="A global access rule caps every credential access rule of this issuer, on every credential."
           >
-            <IssuerCards
+            <IssuerType
               prefix=""
               value={form.type}
               error={err('type')}
@@ -199,7 +200,7 @@ export function GlobalRuleFormView(props: { model: GlobalRuleFormModel }) {
               hint={
                 edit
                   ? 'To move this ceiling to another issuer, add a new global access rule and delete this one.'
-                  : `Empty: ${GITHUB_ACTIONS_ISSUER} for GitHub Actions, ${GITLAB_COM_ISSUER} for GitLab CI. GitHub Enterprise and self-managed GitLab: their own issuer.`
+                  : `Empty: ${GITHUB_ACTIONS_ISSUER} for GitHub Actions, ${GITLAB_COM_ISSUER} for GitLab CI, ${VERCEL_OIDC_ISSUER} (global mode) for Vercel. GitHub Enterprise, self-managed GitLab and Vercel team mode (${VERCEL_OIDC_ISSUER}/<team slug>): their own issuer.`
               }
               error={err('issuer')}
               autocomplete="off"
@@ -260,6 +261,20 @@ export function GlobalRuleFormView(props: { model: GlobalRuleFormModel }) {
                   example="acme-group (5678901)"
                   findCommand={ownerFindCommand({ id: 'gitlab-ci' })}
                   error={err('tenants.gitlab')}
+                  autocomplete="off"
+                  conditional
+                />
+              </div>
+              <div class="ga-tbranch" data-o={o('vercel')}>
+                <IdWithLabelField
+                  kind="vercel_team"
+                  name="tenants.vercel"
+                  label="Teams"
+                  value={form.type === 'vercel' ? form.tenants : ''}
+                  example="acme (team_7Gw5ZMzpQA8h90F832KGp7nwbuh3)"
+                  findCommand={ownerFindCommand({ id: 'vercel' })}
+                  hint="Separate several with commas."
+                  error={err('tenants.vercel')}
                   autocomplete="off"
                   conditional
                 />

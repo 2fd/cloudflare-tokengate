@@ -82,17 +82,3 @@ export async function setUpstreamHosts(hosts: string[] | null): Promise<void> {
     .bind(JSON.stringify(hosts))
     .run();
 }
-
-/** Sets the admin host allowlist setting (null = not set yet, any host but workers.dev). */
-export async function setAdminHosts(hosts: string[] | null): Promise<void> {
-  if (hosts === null) {
-    await env.DB.prepare("DELETE FROM settings WHERE key = 'admin_hosts'").run();
-    return;
-  }
-  await env.DB.prepare(
-    `INSERT INTO settings (key, value, updated_at, updated_by) VALUES ('admin_hosts', ?, 0, NULL)
-     ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
-  )
-    .bind(JSON.stringify(hosts))
-    .run();
-}

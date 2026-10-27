@@ -76,6 +76,71 @@ describe('the shell on every page', () => {
     expect(anonymous).toContain(`src="${PNG_DATA}"`);
   });
 
+  it('ends every document title with the configured title', async () => {
+    const app = createTestApp();
+    const session = await loginAs(app, ownerUser);
+    expect(await (await adminGet(app, session, '/admin/credentials')).text()).toContain(
+      '<title>Credentials – tokengate</title>',
+    );
+    await env.DB.batch([
+      putSettingStatement(
+        env.DB,
+        ADMIN_BRANDING_KEY,
+        { title: 'Acme <Gateway>', image: null },
+        Date.now(),
+        ownerUser.id,
+      ),
+    ]);
+    expect(await (await adminGet(app, session, '/admin/credentials')).text()).toContain(
+      '<title>Credentials – Acme &lt;Gateway&gt;</title>',
+    );
+    expect(await (await adminGet(app, session, '/admin/users/appearance')).text()).toContain(
+      '<title>Appearance – Settings – Acme &lt;Gateway&gt;</title>',
+    );
+    expect(await (await app.request('/admin')).text()).toContain('– Acme &lt;Gateway&gt;</title>');
+  });
+
+  it('links a favicon made from the brand image, and the shield by default', async () => {
+    const app = createTestApp();
+    const session = await loginAs(app, ownerUser);
+    const faviconHref = (html: string) => {
+      const match =
+        /<link rel="icon" type="image\/svg\+xml" href="(\/static\/favicon\.[0-9a-f]+\.svg)"\/?>/.exec(
+          html,
+        );
+      if (!match) throw new Error('no favicon link');
+      return match[1]!;
+    };
+    const shieldHref = faviconHref(await (await adminGet(app, session, '/admin')).text());
+    const shield = await app.request(shieldHref);
+    expect(shield.status).toBe(200);
+    expect(shield.headers.get('content-type')).toBe('image/svg+xml; charset=utf-8');
+    expect(shield.headers.get('cache-control')).toContain('immutable');
+    const shieldSvg = await shield.text();
+    expect(shieldSvg).toContain('fill="#5746d6"');
+    expect(shieldSvg).not.toContain('<image');
+
+    await env.DB.batch([
+      putSettingStatement(
+        env.DB,
+        ADMIN_BRANDING_KEY,
+        { title: 'tokengate', image: PNG_DATA },
+        Date.now(),
+        ownerUser.id,
+      ),
+    ]);
+    const customHref = faviconHref(await (await adminGet(app, session, '/admin')).text());
+    expect(customHref).not.toBe(shieldHref);
+    // The sign-in screens link the same icon.
+    expect(faviconHref(await (await app.request('/admin')).text())).toBe(customHref);
+    expect(await (await app.request(customHref)).text()).toContain(`<image href="${PNG_DATA}"`);
+    // The replaced icon is gone; the stable URL serves the current one.
+    expect((await app.request(shieldHref)).status).toBe(404);
+    const stable = await app.request('/static/favicon.svg');
+    expect(stable.headers.get('cache-control')).toContain('must-revalidate');
+    expect(await stable.text()).toContain(`<image href="${PNG_DATA}"`);
+  });
+
   it('falls back safely for blank titles and invalid stored images', async () => {
     await env.DB.batch([
       putSettingStatement(
@@ -124,24 +189,22 @@ describe('the shell on every page', () => {
       '/admin/audit',
       '/admin/retention',
       '/admin/credentials',
+      '/admin/credential-access-rules',
+      '/admin/users',
       '/admin/credentials/hosts',
       '/admin/credentials/keys',
-      '/admin/credential-access-rules',
-      '/admin/global-access-rules',
-      '/admin/users',
-      '/admin/users/sign-in',
       '/admin/users/appearance',
+      '/admin/faq',
     ]);
     expect([...nav.matchAll(/class="nav-label">([^<]+)/g)].map((m) => m[1])).toEqual([
       'Monitoring',
       'Credentials',
-      'Access Rules',
-      'Users',
+      'Settings',
     ]);
   });
 
   it('shows the account menu: name, role, email, version, docs of the section and Sign out', async () => {
-    const html = await page(owner, '/admin/credentials/hosts');
+    const html = await page(owner, '/admin/credentials');
     const menu = html.slice(html.indexOf('<div class="acct">'), html.indexOf('</main>'));
     expect(menu).toContain('<b>owner@example.com</b><small>Owner</small>');
     expect(menu).toContain('<span class="vh">, account menu</span>');
@@ -156,18 +219,34 @@ describe('the shell on every page', () => {
     expect(html.indexOf('<div class="acct">')).toBeLessThan(html.indexOf('<main'));
   });
 
-  it('shows the Access Rules section with its two tabs, each current on its own pages', async () => {
+  it('shows Access Rules under Credentials, current on credential and global rule pages', async () => {
     const list = sideNav(await page(owner, '/admin/global-access-rules'));
-    const section = list.slice(list.indexOf('aria-label="Access Rules"'));
+    const section = list.slice(list.indexOf('aria-label="Credentials"'));
     expect([...section.matchAll(/class="nav-text">([^<]+)/g)].map((m) => m[1]).slice(0, 2)).toEqual(
-      ['Credential Access Rules', 'Global Access Rules'],
+      ['Credentials', 'Access Rules'],
     );
-    expect(navLink(list, '/admin/global-access-rules')).toContain('aria-current="page"');
-    expect(navLink(list, '/admin/credential-access-rules')).not.toContain('aria-current');
+    expect(list).not.toContain('href="/admin/global-access-rules"');
+    expect(navLink(list, '/admin/credential-access-rules')).toContain('aria-current="true"');
     const detail = await page(owner, `/admin/global-access-rules/${world.global.id}`);
-    expect(navLink(detail, '/admin/global-access-rules')).toContain('aria-current="true"');
+    expect(navLink(detail, '/admin/credential-access-rules')).toContain('aria-current="true"');
+    const rules = await page(owner, '/admin/credential-access-rules');
+    expect(navLink(rules, '/admin/credential-access-rules')).toContain('aria-current="page"');
     const rule = await page(owner, `/admin/credential-access-rules/${world.rule.id}`);
     expect(navLink(rule, '/admin/credential-access-rules')).toContain('aria-current="true"');
+  });
+
+  it('switches between credential and global access rules with tabs in the header', async () => {
+    const tabs = (html: string) => {
+      const start = html.indexOf('<nav class="tabs" aria-label="Access rule kinds">');
+      expect(start, 'access rule tabs').toBeGreaterThan(-1);
+      return html.slice(start, html.indexOf('</nav>', start));
+    };
+    const credential = tabs(await page(owner, '/admin/credential-access-rules'));
+    expect(credential).toContain('<a href="/admin/credential-access-rules" aria-current="page">');
+    expect(credential).toContain('<a href="/admin/global-access-rules">Global access rules');
+    const global = tabs(await page(owner, '/admin/global-access-rules'));
+    expect(global).toContain('<a href="/admin/global-access-rules" aria-current="page">');
+    expect(global).toContain('<a href="/admin/credential-access-rules">Credential access rules');
   });
 
   it('marks the current page item as the page or as an ancestor (aria-current)', async () => {
@@ -206,7 +285,7 @@ describe('the shell on every page', () => {
     const nav = sideNav(await page(owner, '/admin/requests'));
     expect(nav).toContain('Credentials</span><span class="nav-count">1</span>');
     expect(nav).toContain('Access Rules</span><span class="nav-count">1</span>');
-    expect(nav).not.toMatch(/(Overview|People)<\/span><span class="nav-count">/);
+    expect(nav).not.toMatch(/(Overview|Members)<\/span><span class="nav-count">/);
   });
 
   it('shows owners how many people need a decision, with a text alternative', async () => {
@@ -217,7 +296,8 @@ describe('the shell on every page', () => {
       identity: { loginProvider: 'access', subject: 'pending-subject' },
     });
     const pill =
-      'People</span><span class="nav-pill">1 pending<span class="vh">: a person needs your decision</span></span>';
+      // The only owner also gets the single-owner note.
+      'Members</span><span class="dot nav-dot info" aria-hidden="true"></span><span class="vh">: 1 note</span><span class="nav-pill">1 pending<span class="vh">: a person needs your decision</span></span>';
     expect(await page(owner, '/admin/requests')).toContain(pill);
     const admin = await loginAs(
       world.app,
@@ -234,15 +314,15 @@ describe('the shell on every page', () => {
 
   it('has a health line that links to the Overview and says what it found', async () => {
     const html = await page(owner, '/admin/requests');
-    // One active owner and an hourly job that has not run yet are notes, not warnings.
+    // One active owner and an hourly job that has not run yet are notes: they are not counted.
     expect(html).toContain(
-      '<a class="health" href="/admin#health"><span class="dot" aria-hidden="true"></span>Healthy · 2 notes<span class="vh">. Open Overview, Health</span></a>',
+      '<a class="health" href="/admin"><span class="dot" aria-hidden="true"></span>Healthy<span class="vh">. Open Overview</span></a>',
     );
   });
 });
 
 describe('health strip', () => {
-  it('shows a missing keyring on other pages and links to the encryption keys', async () => {
+  it('shows a missing keyring on other pages and links to rotate encryption', async () => {
     const app = createTestApp({ env: { TOKENGATE_KEK: '', TOKENGATE_KEYRING: '' } });
     const session = await loginAs(app, ownerUser);
     const html = await (await adminGet(app, session, '/admin/requests')).text();
@@ -254,11 +334,13 @@ describe('health strip', () => {
     expect(strip).toContain(
       '<span class="vh">Error: </span>Encryption keys are not loaded.</b> Token requests fail with 503 and secrets cannot change (keyring_absent).',
     );
-    expect(strip).toContain('<a href="/admin/credentials/keys">Open encryption keys</a>');
+    expect(strip).toContain('<a href="/admin/credentials/keys">Open rotate encryption</a>');
     expect(strip).toContain('<a href="/admin#health">Show all problems</a>');
     // It is the first thing in main, and the health line counts the problem.
     expect(html.indexOf('<p class="hstrip">')).toBeGreaterThan(html.indexOf('<main'));
-    expect(html).toContain('1 problem to fix<span class="vh">. Open Overview, Health</span>');
+    expect(html).toContain(
+      '1 problem to fix<span class="vh">. Open Overview, Needs attention</span>',
+    );
     // The Overview lists every problem itself.
     expect(await (await adminGet(app, session, '/admin')).text()).not.toContain('class="hstrip"');
   });
@@ -391,7 +473,7 @@ describe('404 page for unlisted admin URLs', () => {
     '/admin/retention',
     '/admin/credentials/hosts',
     '/admin/credentials/keys',
-    '/admin/users/sign-in',
+    '/admin/users#login',
     '/admin#health',
   ])('GET /admin/settings links %s from "Where each setting is now"', async (href) => {
     const res = await adminGet(world.app, owner, '/admin/settings');
@@ -414,19 +496,14 @@ describe('404 page for unlisted admin URLs', () => {
     }
   });
 
-  it('links to the four sections and shows no hint for other paths', async () => {
+  it('links to the three sections and shows no hint for other paths', async () => {
     const html = await (await adminGet(world.app, owner, '/admin/nope')).text();
     expect(html).toContain('<title>Page not found – tokengate</title>');
     expect(html).toContain(
       '<h1>Page not found</h1><p class="desc">There is no page at this address.</p>',
     );
     expect(html).toContain('<h2 id="nf-sections-h">Go to a section</h2>');
-    for (const href of [
-      '/admin',
-      '/admin/users',
-      '/admin/credentials',
-      '/admin/credential-access-rules',
-    ]) {
+    for (const href of ['/admin', '/admin/credentials', '/admin/users']) {
       expect(html).toContain(`<a class="tcard" href="${href}">`);
     }
     expect(html).not.toContain('are now');

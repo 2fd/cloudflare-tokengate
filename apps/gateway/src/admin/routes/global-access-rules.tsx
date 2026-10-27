@@ -39,6 +39,7 @@ import {
 } from '../render';
 import { all, type Fields, flag, parseOwnerList, text } from '../rule-access';
 import { parseValueList } from '../rule-text';
+import { AccessRuleTabs } from '../views/access-rule-tabs';
 import { NotFound, notFoundText } from '../views/components';
 import {
   blankGlobalForm,
@@ -151,12 +152,12 @@ async function listPage(c: AdminContext) {
     c,
     {
       title: 'Global access rules',
-      section: 'rules',
-      subsection: 'global-rules',
+      section: 'credentials',
+      subsection: 'access-rules',
       notice: notice(c),
       header: (ctx) => (
         <PageHeader
-          title="Global access rules"
+          title="Access rules"
           count={anyFilter ? `${rows.length} of ${all_.length}` : all_.length}
           description={
             <>
@@ -172,7 +173,12 @@ async function listPage(c: AdminContext) {
               </Button>
             ) : undefined
           }
-        />
+        >
+          <AccessRuleTabs
+            current="global"
+            counts={{ credential: connections.rules.length, global: all_.length }}
+          />
+        </PageHeader>
       ),
     },
     (ctx) => (
@@ -235,7 +241,7 @@ function readForm(fields: Fields, editing: GlobalAccessRule | null): GlobalRuleF
     limits: Object.fromEntries(
       LIMIT_COLUMNS.map((column) => [column, flag(fields, `limit.${column}`)]),
     ) as Record<LimitColumn, boolean>,
-    tenants: text(fields, type === 'gitlab-ci' ? 'tenants.gitlab' : 'tenants.github'),
+    tenants: text(fields, tenantsField(type)),
     pin_claim: text(fields, 'pin_claim'),
     pin_values: text(fields, 'pin_values'),
     cond,
@@ -248,6 +254,15 @@ function readForm(fields: Fields, editing: GlobalAccessRule | null): GlobalRuleF
     expires_on: text(fields, 'expires_on'),
     enabled: editing ? editing.enabled : flag(fields, 'enabled'),
   };
+}
+
+/** The tenants input of an issuer type's branch. */
+function tenantsField(type: string): string {
+  return type === 'gitlab-ci'
+    ? 'tenants.gitlab'
+    : type === 'vercel'
+      ? 'tenants.vercel'
+      : 'tenants.github';
 }
 
 /** The op input of the form, or its field errors. Unticked limits are null (no limit). */
@@ -264,7 +279,7 @@ function parseForm(
   if (on('tenant_pin')) {
     const claim = tenantClaimOf(type);
     if (claim !== null) {
-      const field = type === 'gitlab-ci' ? 'tenants.gitlab' : 'tenants.github';
+      const field = tenantsField(type);
       const parsed = parseOwnerList(form.tenants, { id: type });
       if (!parsed.ok) errors.push({ field, message: parsed.message });
       else {
@@ -464,8 +479,8 @@ async function renderNew(c: AdminContext, state: FormState, status: 200 | 409 | 
     c,
     {
       title: 'Add global access rule',
-      section: 'rules',
-      subsection: 'global-rules',
+      section: 'credentials',
+      subsection: 'access-rules',
       errors: state.errors,
       errorSummary:
         state.errors.length > 0 ? { title: 'The global access rule was not saved' } : undefined,
@@ -583,8 +598,8 @@ async function renderDetail(
     c,
     {
       title: rule.name,
-      section: 'rules',
-      subsection: 'global-rules',
+      section: 'credentials',
+      subsection: 'access-rules',
       errors,
       status: state.status ?? 200,
       notice: errors.length > 0 ? null : notice(c),
@@ -696,8 +711,8 @@ function notFound(c: AdminContext) {
     c,
     {
       title: 'Global access rule not found',
-      section: 'rules',
-      subsection: 'global-rules',
+      section: 'credentials',
+      subsection: 'access-rules',
       status: 404,
       header: (
         <PageHeader

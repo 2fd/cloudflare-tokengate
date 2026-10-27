@@ -5,10 +5,12 @@ import type { IssuerProfile, ProfileId } from '../types';
 import { genericProfile } from './generic';
 import { githubActionsProfile } from './github-actions';
 import { gitlabCiProfile } from './gitlab-ci';
+import { vercelProfile } from './vercel';
 
 export const PROFILES: Readonly<Record<ProfileId, IssuerProfile>> = Object.freeze({
   'github-actions': deepFreeze(githubActionsProfile),
   'gitlab-ci': deepFreeze(gitlabCiProfile),
+  vercel: deepFreeze(vercelProfile),
   generic: deepFreeze(genericProfile),
 });
 

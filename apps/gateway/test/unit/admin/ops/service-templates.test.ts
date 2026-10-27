@@ -169,14 +169,16 @@ describe('template secrets', () => {
     },
   );
 
-  it('GitHub types share a family and read the expiry from the check', () => {
+  it('GitHub types share a family', () => {
     expect(SERVICE_TEMPLATES.filter((t) => t.family === 'github').map((t) => t.id)).toEqual([
       'github',
       'github-uploads',
     ]);
-    expect(SERVICE_TEMPLATES.filter((t) => t.expiry_from_check).map((t) => t.id)).toEqual([
-      'github',
-      'github-uploads',
+  });
+
+  it('reads the owner name from the check of Slack bot tokens only', () => {
+    expect(SERVICE_TEMPLATES.filter((t) => t.identity).map((t) => [t.id, t.identity])).toEqual([
+      ['slack', 'slack-bot'],
     ]);
   });
 

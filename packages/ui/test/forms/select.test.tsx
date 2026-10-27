@@ -43,7 +43,7 @@ describe('Select', () => {
             {
               group: 'Settings',
               options: [
-                { value: 'hosts', label: 'Admin hosts' },
+                { value: 'retention', label: 'Data retention' },
                 { value: 'upstreams', label: 'Upstream hosts', disabled: true },
               ],
             },
@@ -52,7 +52,7 @@ describe('Select', () => {
         />,
       ),
     ).toBe(
-      '<select class="select" id="t"><option value="all">All targets</option><optgroup label="Settings"><option value="hosts">Admin hosts</option><option value="upstreams" disabled="">Upstream hosts</option></optgroup><optgroup label="Credentials"><option value="token" selected="">Credential</option></optgroup></select>',
+      '<select class="select" id="t"><option value="all">All targets</option><optgroup label="Settings"><option value="retention">Data retention</option><option value="upstreams" disabled="">Upstream hosts</option></optgroup><optgroup label="Credentials"><option value="token" selected="">Credential</option></optgroup></select>',
     );
   });
 
@@ -76,5 +76,42 @@ describe('Select', () => {
         </Reveal>,
       ),
     ).toThrow(/Select: no required/);
+  });
+});
+
+describe('Select (rich)', () => {
+  const issuers = [
+    {
+      value: 'github',
+      label: 'GitHub Actions',
+      logo: 'github' as const,
+      description: 'Workflows',
+      o: 1,
+    },
+    { value: 'vercel', label: 'Vercel', logo: 'vercel' as const, description: 'Functions', o: 2 },
+    { value: 'oidc', label: 'Generic OIDC', logo: 'oidc' as const, o: 3 },
+  ];
+
+  it('is a customizable select: a button mirroring the chosen option, then the options', () => {
+    const html = render(<Select id="t" name="type" options={issuers} value="vercel" />);
+    expect(html).toMatch(
+      /^<select class="select rich" id="t" name="type"><button type="button" tabindex="-1"><selectedcontent><\/selectedcontent><\/button><option value="github" data-o="1">/,
+    );
+    expect(html).toContain('<option value="vercel" selected="" data-o="2">');
+  });
+
+  it('keeps logo letters out of the option text and the description after a hidden separator', () => {
+    const html = render(<Select id="t" options={issuers} />);
+    // The letters are drawn by CSS (data-l): the option text reads "GitHub Actions: Workflows".
+    expect(html).toContain(
+      '<option value="github" data-o="1"><span class="logo sm lg-github" data-l="GH" aria-hidden="true"></span><span class="sel-b"><span class="sel-t">GitHub Actions</span><span class="sel-d"><span class="sel-sep">: </span>Workflows</span></span></option>',
+    );
+    expect(html).toContain('<span class="logo sm lg-vercel" data-l="▲" aria-hidden="true"></span>');
+    // The OIDC tile is an icon, never text.
+    expect(html).toMatch(/<span class="logo sm lg-oidc" aria-hidden="true"><svg/);
+  });
+
+  it('stays a plain select without logos or descriptions', () => {
+    expect(render(<Select id="r" options={regions} />)).not.toContain('rich');
   });
 });

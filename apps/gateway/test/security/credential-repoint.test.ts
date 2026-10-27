@@ -28,7 +28,7 @@ import {
   CONTEXT,
   fakeNetwork,
   KEK_1,
-  KEYRING_1_2,
+  ROTATION_ENV,
   opsDeps,
   resetControlPlane,
   seedService,
@@ -36,6 +36,8 @@ import {
 
 const SECRET = 'repoint-secret-0123456789abcdef';
 const VERIFY = { method: 'GET' as const, path: '/rate_limit', expect_status: 200 };
+/** A credential without a type: only these can change their destination. */
+const CUSTOM = { slug: 'custom', base_url: 'https://api.example.com', secret: SECRET };
 
 async function keyring() {
   const loaded = await loadKeyring({ ...TEST_ACCESS_ENV, TOKENGATE_KEK: KEK_1 });
@@ -78,14 +80,14 @@ describe('I-CRED-2: updateServiceFields cannot change the binding', () => {
 describe('I-CRED-2: setServiceCredential re-seals with the new AAD', () => {
   it('binds the new ciphertext to the new configuration only', async () => {
     const deps = opsDeps();
-    const id = await seedService(deps, { secret: SECRET });
+    const id = await seedService(deps, CUSTOM);
     const old = await stored(id);
 
     const result = await setServiceCredential(
       deps,
       ACTOR,
       id,
-      { base_url: 'https://uploads.github.com', injection: { kind: 'bearer' }, secret: SECRET },
+      { base_url: 'https://uploads.example.com', injection: { kind: 'bearer' }, secret: SECRET },
       CONTEXT,
     );
     expect(result.ok).toBe(true);
@@ -112,13 +114,13 @@ describe('I-CRED-2: setServiceCredential re-seals with the new AAD', () => {
 
   it('writes only if the binding is unchanged since it was read (compare-and-swap)', async () => {
     const deps = opsDeps();
-    const id = await seedService(deps, { secret: SECRET });
+    const id = await seedService(deps, CUSTOM);
     const snapshot = await stored(id);
     await setServiceCredential(
       deps,
       ACTOR,
       id,
-      { base_url: 'https://uploads.github.com', injection: { kind: 'bearer' }, secret: SECRET },
+      { base_url: 'https://uploads.example.com', injection: { kind: 'bearer' }, secret: SECRET },
       CONTEXT,
     );
     const statement = updateServiceCredentialStatement(
@@ -129,14 +131,13 @@ describe('I-CRED-2: setServiceCredential re-seals with the new AAD', () => {
         injection_json: snapshot.injection_json,
         credential_sealed: snapshot.credential_sealed as string,
         credential_hint: null,
-        credential_expires_at: null,
-        template_id: 'github',
+        template_id: null,
       },
       Date.now(),
       serviceCredentialGuard(snapshot),
     );
     expect((await statement.run()).meta.changes).toBe(0);
-    expect((await stored(id)).base_url).toBe('https://uploads.github.com');
+    expect((await stored(id)).base_url).toBe('https://uploads.example.com');
   });
 });
 
@@ -162,7 +163,7 @@ describe('I-CRED-2: rows edited in D1 fail closed', () => {
       ok: false,
       reason: 'unavailable',
     });
-    const rotated = opsDeps({ env: { TOKENGATE_KEK: '', TOKENGATE_KEYRING: KEYRING_1_2 } });
+    const rotated = opsDeps({ env: { ...ROTATION_ENV } });
     expect(await rewrapCredentials(rotated, ACTOR)).toMatchObject({
       ok: false,
       reason: 'unavailable',
@@ -190,19 +191,23 @@ describe('I-CRED-2: a sealed draft never follows a repoint or another token', ()
   const ATTACKER = 'https://attacker.example';
   const draftOf = (html: string) => /name="credential_draft" value="([^"]+)"/.exec(html)?.[1] ?? '';
 
-  /** Two attested tokens at the same destination; every upstream refuses, so a rotate re-renders. */
-  async function world() {
+  /**
+   * Two attested tokens at the same destination (GitHub, or `custom`'s base URL); every upstream
+   * refuses, so a rotate re-renders.
+   */
+  async function world(custom: { base_url: string; credential: string } | null = null) {
     const network = fakeNetwork(() =>
       Response.json({ message: 'Bad credentials' }, { status: 401 }),
     );
     const app = createTestApp({ fetch: network.fetch, env: { TOKENGATE_KEK: KEK_1 } });
-    const a = await seedService(app.deps, { slug: 'a', secret: SECRET });
-    const b = await seedService(app.deps, { slug: 'b', secret: SECRET });
+    const destination = custom ? { base_url: custom.base_url } : {};
+    const a = await seedService(app.deps, { slug: 'a', secret: SECRET, ...destination });
+    const b = await seedService(app.deps, { slug: 'b', secret: SECRET, ...destination });
     await env.DB.prepare('UPDATE credentials SET verify = ?').bind(JSON.stringify(VERIFY)).run();
     const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
     const first = await adminPost(app, session, `/admin/credentials/${a}/secret`, {
       ...(await rotateFields(a)),
-      credential: 'ghp_draftedSecret0123456789abcdefWXYZ',
+      credential: custom?.credential ?? 'ghp_draftedSecret0123456789abcdefWXYZ',
     });
     expect(first.status).toBe(422);
     const draft = draftOf(await first.text());
@@ -253,10 +258,14 @@ describe('I-CRED-2: a sealed draft never follows a repoint or another token', ()
   });
 
   it('a rotate draft does not open on Change destination with another base URL', async () => {
-    const { network, app, session, a, draft } = await world();
+    // Only a custom credential has Change destination.
+    const { network, app, session, a, draft } = await world({
+      base_url: 'https://api.example.com',
+      credential: 'drafted-secret-0123456789abcdefWXYZ',
+    });
     const before = await stored(a);
     const res = await adminPost(app, session, `/admin/credentials/${a}/destination`, {
-      base_url: 'https://uploads.github.com',
+      base_url: 'https://uploads.example.com',
       injection_kind: 'bearer',
       credential_draft: draft,
       save_anyway: '1',
@@ -264,6 +273,66 @@ describe('I-CRED-2: a sealed draft never follows a repoint or another token', ()
     expect(res.status).toBe(400);
     expect(await res.text()).toContain('again: the destination changed');
     expect((await stored(a)).base_url).toBe(before.base_url);
-    expect(network.calls.filter((call) => call.url.includes('uploads.github.com'))).toEqual([]);
+    expect(network.calls.filter((call) => call.url.includes('uploads.example.com'))).toEqual([]);
+  });
+});
+
+describe('I-CRED-2: a template credential keeps its destination', () => {
+  beforeEach(resetAdminWorld);
+
+  it('setServiceCredential refuses another base URL or injection, sends and writes nothing', async () => {
+    const network = fakeNetwork();
+    const deps = opsDeps({ fetch: network.fetch });
+    const id = await seedService(deps, { secret: SECRET, verify: VERIFY });
+    const before = await stored(id);
+    expect(before.template_id).toBe('github');
+    const sent = network.calls.length;
+    for (const destination of [
+      { base_url: 'https://uploads.github.com', injection: { kind: 'bearer' } },
+      { base_url: 'https://evil.example.net', injection: { kind: 'bearer' } },
+      { base_url: 'https://api.github.com', injection: { kind: 'query', param: 'token' } },
+    ]) {
+      const result = await setServiceCredential(
+        deps,
+        ACTOR,
+        id,
+        { ...destination, secret: SECRET, save_anyway: true },
+        CONTEXT,
+      );
+      expect(result, JSON.stringify(destination)).toMatchObject({ ok: false, reason: 'invalid' });
+      if (result.ok) return;
+      expect(result.errors).toContain(
+        'base URL: a GitHub REST API credential always calls https://api.github.com',
+      );
+    }
+    expect(network.calls.length).toBe(sent);
+    expect(await stored(id)).toEqual(before);
+  });
+
+  it('the destination route ignores a posted base URL: the secret goes to the type only', async () => {
+    const network = fakeNetwork();
+    const app = createTestApp({ fetch: network.fetch, env: { TOKENGATE_KEK: KEK_1 } });
+    const id = await seedService(app.deps, { verify: VERIFY });
+    const session = await loginAs(app, await createUser({ email: 'o@example.com', role: 'owner' }));
+    const res = await adminPost(app, session, `/admin/credentials/${id}/destination`, {
+      base_url: 'https://evil.example.net',
+      injection_kind: 'query',
+      injection_param: 'token',
+      credential: 'ghp_settingTheSecret0123456789abcdefWXYZ',
+      confirm_destination: 'api.github.com',
+    });
+    expect(res.status).toBe(303);
+    const after = await stored(id);
+    expect(after).toMatchObject({
+      base_url: 'https://api.github.com',
+      injection_json: '{"kind":"bearer"}',
+      template_id: 'github',
+    });
+    expect(await openStoredCredential(await keyring(), after)).toEqual({
+      ok: true,
+      plaintext: 'ghp_settingTheSecret0123456789abcdefWXYZ',
+    });
+    expect(network.calls.map((call) => new URL(call.url).host)).not.toContain('evil.example.net');
+    expect(network.calls.at(-1)?.url).toBe('https://api.github.com/rate_limit');
   });
 });
