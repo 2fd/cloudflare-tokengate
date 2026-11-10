@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@tokengate/ui": "workspace:*",
-    "hono": "^4.13.13",
+    "hono": "^4.13.17",
     "jose": "^6.2.12"
   },
   "devDependencies": {
